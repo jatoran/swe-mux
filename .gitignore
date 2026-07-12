@@ -1,0 +1,38 @@
+﻿# === OS Files ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === VS Code ===
+.vscode/
+*.code-workspace
+
+# === Git ===
+.git/
+
+# === Node.js ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+env/
+venv/
+*.egg-info/
+
+# === Logs ===
+*.log
+
+# === Build / Dist ===
+dist/
+build/
+out/
+
+# === JetBrains IDEs ===
+.idea/
+*.iml
