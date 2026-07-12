@@ -36,3 +36,5 @@ out/
 # === JetBrains IDEs ===
 .idea/
 *.iml
+
+_agents-orchestrator/
