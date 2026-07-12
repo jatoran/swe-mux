@@ -1,0 +1,27 @@
+{
+  "name": "swe-mux-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@xterm/addon-clipboard": "^0.1.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-search": "^0.15.0",
+    "@xterm/addon-unicode11": "^0.8.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/addon-webgl": "^0.18.0",
+    "@xterm/xterm": "^5.5.0",
+    "preact": "^10.26.4"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.1",
+    "playwright": "^1.61.1",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.2"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "swe-mux: daemon",
+      "type": "process",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "swe_mux",
+        "--config",
+        "${workspaceFolder}\\.runtime\\config.toml",
+        "--port",
+        "18765"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONUNBUFFERED": "1"
+        }
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "swe-mux",
+        "pattern": {
+          "regexp": "^(.*)$",
+          "message": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": "Running on http://127\\.0\\.0\\.1:18765"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": false,
+        "clear": true,
+        "showReuseMessage": false
+      },
+      "runOptions": {
+        "instanceLimit": 1
+      }
+    }
+  ]
+}

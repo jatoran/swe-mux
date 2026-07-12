@@ -4,7 +4,8 @@ Thumbs.db
 desktop.ini
 
 # === VS Code ===
-.vscode/
+.vscode/*
+!.vscode/tasks.json
 *.code-workspace
 
 # === Git ===
@@ -23,6 +24,7 @@ __pycache__/
 *.pyd
 env/
 venv/
+.venv/
 *.egg-info/
 
 # === Logs ===
@@ -32,6 +34,7 @@ venv/
 dist/
 build/
 out/
+.runtime/
 
 # === JetBrains IDEs ===
 .idea/
