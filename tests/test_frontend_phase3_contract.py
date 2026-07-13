@@ -23,7 +23,8 @@ def test_normal_ui_flows_do_not_use_browser_native_dialogs() -> None:
     assert "alert(" not in source
     assert "confirm(" not in source
     assert "prompt(" not in source
-    assert "Access token required" in source
+    assert "Access token required" not in source
+    assert "mux.token" not in source
     assert "Create worktree + terminal" in source
 
 

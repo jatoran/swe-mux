@@ -14,7 +14,9 @@
   → daemon cwd/default.
 - Project config permits only friendly label, relative default cwd, default shell profile,
   and notes enabled. Auth, bind, ports, secrets, hooks, raw executable, and commands are
-  rejected. The default cwd cannot be absolute or contain a parent traversal.
+  rejected. The default cwd cannot be absolute, contain parent traversal, or resolve through
+  a symlink outside the project root. A profile ID can only select a machine-defined profile
+  when the user explicitly creates a terminal; project files never define an executable.
 - Merely resolving/reading a project creates nothing. The first explicit Settings or note
   save creates the `.swe-mux/` path through atomic replacement.
 
@@ -28,8 +30,11 @@
   not silently delete user-authored files.
 - Reads expose a content revision. Saves require that revision, so external editor or Git
   changes produce a visible conflict instead of being overwritten.
-- Editing, preview, search, export, terminal-selection capture, and insertion are explicit
-  UI actions. A note is never injected into agent context automatically.
+- Notes use one raw Markdown textarea in both modal and docked presentations. No preview
+  mode, WYSIWYG conversion, formatting toolbar, or note-search field exists. Export,
+  terminal-selection capture, and insertion are explicit UI actions. The compact header
+  shows scope/project only; a bottom status light exposes state and revision on hover. A
+  note is never injected into agent context automatically.
 - The quick editor is a centered, Settings-style modal. A live session or space note can
   also be docked as a persistent recursive-layout leaf beside its terminal. Docking defaults
   to a narrower right column, uses the existing draggable divider, and never creates a

@@ -50,6 +50,12 @@ async def test_preview_registration_requires_loopback_and_session_listener() -> 
 
     with pytest.raises(ValueError, match="loopback"):
         await registry.register("session-a", "https://example.com/")
+    with pytest.raises(ValueError, match="literal loopback"):
+        await registry.register("session-a", "http://localhost:4321/")
+    with pytest.raises(ValueError, match="credentials"):
+        await registry.register("session-a", "http://user:pass@127.0.0.1:4321/")
+    with pytest.raises(ValueError, match="query"):
+        await registry.register("session-a", "http://127.0.0.1:4321/?target=other")
     with pytest.raises(ValueError, match="approval"):
         await registry.register("session-a", "http://127.0.0.1:9999/")
     approved = await registry.register(

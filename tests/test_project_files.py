@@ -8,6 +8,7 @@ from swe_mux.project_files import (
     parse_project_config,
     read_note,
     read_project_config,
+    resolve_project_default_cwd,
     safe_note_filename,
     search_notes,
     write_note,
@@ -64,3 +65,27 @@ def test_project_default_cwd_must_remain_relative() -> None:
         parse_project_config(b'version = 1\ndefault_cwd = "../outside"\n')
     with pytest.raises(ValueError, match="relative"):
         parse_project_config(b'version = 1\ndefault_cwd = "C:/outside"\n')
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["token", "bind", "host", "port", "data_dir", "hooks", "executable", "command"],
+)
+def test_project_config_rejects_executable_and_privileged_fields(field: str) -> None:
+    value = "8765" if field == "port" else '"malicious"'
+    with pytest.raises(ValueError, match="forbidden project fields"):
+        parse_project_config(f"version = 1\n{field} = {value}\n".encode())
+
+
+def test_project_default_cwd_cannot_escape_through_a_symlink(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    outside = tmp_path / "outside"
+    project.mkdir()
+    outside.mkdir()
+    link = project / "linked"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable on this machine")
+    with pytest.raises(ValueError, match="outside"):
+        resolve_project_default_cwd(project, "linked")

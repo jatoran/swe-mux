@@ -16,7 +16,13 @@ from swe_mux.launchers import create_agent_shims, resolve_command
 from swe_mux.models import SessionRecord, SpaceRecord
 from swe_mux.pty_host import merge_environment
 from swe_mux.reconcile import reconcile_external_history
-from swe_mux.server import hook_event_payload, validate_session_media
+from swe_mux.server import (
+    SESSION_MEDIA_TTL_SECONDS,
+    cleanup_expired_session_media,
+    hook_event_payload,
+    session_media_directory,
+    validate_session_media,
+)
 from swe_mux.transcript_view import parse_transcript
 
 
@@ -204,6 +210,31 @@ def test_clipboard_media_validation_is_typed_and_signature_checked() -> None:
         validate_session_media("image/svg+xml", b"<svg/>")
     with pytest.raises(ValueError, match="does not match"):
         validate_session_media("image/png", b"not-png")
+
+
+def test_clipboard_media_directory_cannot_escape_its_session(tmp_path: Path) -> None:
+    directory = session_media_directory(tmp_path, "session-a")
+    assert directory == (tmp_path / "media" / "session-a").resolve()
+    with pytest.raises(ValueError, match="media identity"):
+        session_media_directory(tmp_path, "../another-session")
+
+
+def test_clipboard_media_cleanup_removes_only_expired_session_files(tmp_path: Path) -> None:
+    import os
+
+    directory = session_media_directory(tmp_path, "session-a")
+    directory.mkdir(parents=True)
+    expired = directory / "expired.png"
+    current = directory / "current.png"
+    expired.write_bytes(b"old")
+    current.write_bytes(b"new")
+    now = 2_000_000_000.0
+    os.utime(expired, (now - SESSION_MEDIA_TTL_SECONDS - 1,) * 2)
+    os.utime(current, (now,) * 2)
+
+    assert cleanup_expired_session_media(tmp_path, now) == 1
+    assert not expired.exists()
+    assert current.exists()
 
 
 async def test_external_history_reconciliation_and_codex_view(tmp_path: Path) -> None:

@@ -279,15 +279,19 @@ on-screen paste button (mobile clipboard API limits). No separate mobile app.
 
 ## 11. Remote access & security
 
-- Daemon binds `--host` (default `127.0.0.1`; set to Tailscale IP or `0.0.0.0`
-  for tailnet use) and `--port` (default 8765).
-- Bearer token auth on every HTTP route and WS upgrade when bound non-loopback
-  (token generated on first run into `~/.mux/config.toml`; client stores it after
-  a login prompt). Loopback binds may skip auth (config flag).
-- No TLS in-daemon — Tailscale provides the encrypted transport. Document
-  `tailscale serve` as the option for HTTPS if wanted.
+- Daemon binds localhost plus the detected Tailscale IPv4 address by default; `--port`
+  defaults to 8765. `--local-only` and `tailnet_enabled = false` suppress the tailnet
+  listener. Never bind `0.0.0.0` or a LAN interface implicitly.
+- No swe-mux bearer/login layer. Tailscale policy controls direct tailnet access. Browser
+  mutations and WebSocket upgrades still validate Host/Origin against localhost,
+  Tailscale address, or full `*.ts.net` names.
+- No TLS in-daemon. Tailscale encrypts direct node traffic; `tailscale serve` is optional
+  when browser-recognized HTTPS/secure-context APIs are wanted.
 - HookIngress accepts only loopback + a per-session secret injected into hook
   configs, so arbitrary tailnet peers can't spoof session events.
+- The tailnet UI retains localhost feature parity. Development servers stay on workstation
+  loopback and are viewed through a session-owned `/preview/{registration}/…` HTTP and
+  WebSocket/HMR bridge; swe-mux never exposes their raw ports or proxies arbitrary URLs.
 
 ## 12. Git awareness
 

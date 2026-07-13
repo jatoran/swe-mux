@@ -3,15 +3,20 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets
 import shutil
+import time
 import tomllib
+from collections import deque
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
-from aiohttp import WSMsgType, web
+from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
 from .adapters import BackendAdapter, ClaudeAdapter, CodexAdapter, ShellAdapter
@@ -29,6 +34,7 @@ from .profiles import profile_payload, resolve_profile
 from .project_files import (
     read_note,
     read_project_config,
+    resolve_project_default_cwd,
     search_notes,
     write_note,
     write_project_config,
@@ -37,12 +43,23 @@ from .reconcile import reconcile_external_history
 from .session import Session, SessionManager
 from .spaces import SpaceManager
 from .spawn_contract import SpawnRequest
+from .tailscale import is_tailscale_ip, tailscale_status
 from .transcript_view import parse_transcript
 from .usage import UsageManager
 from .win_jobobj import ReaperJob
 
 log = logging.getLogger(__name__)
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
+PREVIEW_HTTP_CONCURRENCY = 32
+PREVIEW_WS_CONCURRENCY = 16
+PREVIEW_REQUEST_BYTES = 10 * 1024 * 1024
+PREVIEW_RESPONSE_BYTES = 20 * 1024 * 1024
+PREVIEW_WS_MESSAGE_BYTES = 4 * 1024 * 1024
+PREVIEW_WS_IDLE_SECONDS = 30 * 60
+PREVIEW_WS_LIFETIME_SECONDS = 12 * 60 * 60
+SESSION_MEDIA_TTL_SECONDS = 24 * 60 * 60
+HOOK_RATE_WINDOW_SECONDS = 10.0
+HOOK_RATE_LIMIT = 500
 
 
 def hook_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -73,48 +90,95 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         return json_response({"error": "internal server error"}, 500)
 
 
+def allowed_browser_host(host: str) -> bool:
+    normalized = host.strip().rstrip(".").casefold()
+    return (
+        normalized in {"localhost", "127.0.0.1", "::1"}
+        or normalized.endswith(".ts.net")
+        or is_tailscale_ip(normalized)
+    )
+
+
+def request_host(request: web.Request) -> str:
+    raw = request.headers.get("Host", "")
+    try:
+        return urlsplit(f"//{raw}").hostname or ""
+    except ValueError:
+        return ""
+
+
+def browser_origin_matches_request(origin: str, raw_host: str) -> bool:
+    try:
+        parsed_origin = urlsplit(origin)
+        parsed_host = urlsplit(f"//{raw_host}")
+        origin_port = parsed_origin.port
+        request_port = parsed_host.port
+    except ValueError:
+        return False
+    if parsed_origin.scheme not in {"http", "https"}:
+        return False
+    if not parsed_origin.hostname or not parsed_host.hostname:
+        return False
+    if parsed_origin.hostname.casefold() != parsed_host.hostname.casefold():
+        return False
+    # Browsers include a non-default port in Origin and Host. A missing port on both sides
+    # also covers Tailscale Serve's ordinary HTTPS authority.
+    return origin_port == request_port
+
+
 @web.middleware
-async def auth_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
-    config: Config = request.app["config"]
-    if (
-        not config.requires_auth
-        or request.path in {"/", "/api/health"}
-        or request.path.startswith("/assets/")
-        or request.path.startswith("/api/hooks/")
-        or request.path.endswith(("/promote", "/demote"))
-    ):
-        return await handler(request)
-    supplied = request.headers.get("Authorization", "").removeprefix("Bearer ")
-    if not supplied:
-        protocols = request.headers.get("Sec-WebSocket-Protocol", "").split(",")
-        supplied = next(
-            (
-                protocol.strip().removeprefix("mux.auth.")
-                for protocol in protocols
-                if protocol.strip().startswith("mux.auth.")
-            ),
-            "",
+async def security_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
+    host = request_host(request)
+    if not allowed_browser_host(host):
+        raise web.HTTPMisdirectedRequest(text="unsupported Host")
+    mutating = request.method not in {"GET", "HEAD", "OPTIONS"}
+    websocket = request.headers.get("Upgrade", "").casefold() == "websocket"
+    origin = request.headers.get("Origin")
+    if origin and (mutating or websocket):
+        sandboxed_preview = request.path.startswith("/preview/") and origin == "null"
+        if not sandboxed_preview and not browser_origin_matches_request(
+            origin, request.headers.get("Host", "")
+        ):
+            raise web.HTTPForbidden(text="cross-origin browser control is not allowed")
+    response = await handler(request)
+    if websocket:
+        return response
+    if request.path.startswith("/preview/"):
+        csp = (
+            "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; "
+            "connect-src * data: blob:; frame-ancestors 'self'"
         )
-    if not supplied:
-        supplied = request.query.get("token", "")
-    if not secrets.compare_digest(supplied, config.token):
-        raise web.HTTPUnauthorized(
-            text=json.dumps({"error": "invalid bearer token"}), content_type="application/json"
+    else:
+        csp = (
+            "default-src 'self'; connect-src 'self' ws: wss:; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+            "frame-src 'self'; frame-ancestors 'none'; base-uri 'self'"
         )
-    return await handler(request)
+    response.headers.setdefault("Content-Security-Policy", csp)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if not request.path.startswith("/preview/"):
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    return response
 
 
 def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Application:
     app = web.Application(
-        middlewares=[error_middleware, auth_middleware], client_max_size=12 * 1024 * 1024
+        middlewares=[error_middleware, security_middleware], client_max_size=12 * 1024 * 1024
     )
     app["config"] = config
     app["frontend_dir"] = frontend_dir or Path(__file__).parent / "static"
+    app["preview_http_semaphore"] = asyncio.Semaphore(PREVIEW_HTTP_CONCURRENCY)
+    app["preview_ws_semaphore"] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
+    app["hook_ingress_windows"] = {}
     app.cleanup_ctx.append(runtime_context)
     app.add_routes(
         [
             web.get("/", index),
             web.get("/api/health", health),
+            web.get("/api/remote/status", remote_status),
             web.get("/api/config", get_config),
             web.patch("/api/config", patch_config),
             web.post("/api/config/reset", reset_config),
@@ -164,6 +228,7 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.get("/api/previews", list_previews),
             web.post("/api/previews", create_preview),
             web.delete("/api/previews/{preview_id}", delete_preview),
+            web.route("*", "/preview/{preview_id}/{tail:.*}", preview_proxy),
             web.post("/api/hooks/{sid}", hook_ingress),
             web.get("/api/git/worktrees", list_worktrees),
             web.post("/api/git/worktrees", create_worktree),
@@ -211,6 +276,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     usage.start()
     process_inspector.start()
     config_watch = asyncio.create_task(_watch_config(app), name="config-watch")
+    media_cleanup_task = asyncio.create_task(
+        _media_cleanup_loop(config.data_dir), name="media-cleanup"
+    )
     reconcile_task: asyncio.Task[int] | None = None
     if config.reconcile_external_history:
         reconcile_task = asyncio.create_task(
@@ -235,6 +303,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         await asyncio.gather(reconcile_task, return_exceptions=True)
     config_watch.cancel()
     await asyncio.gather(config_watch, return_exceptions=True)
+    media_cleanup_task.cancel()
+    await asyncio.gather(media_cleanup_task, return_exceptions=True)
     await hooks.stop()
     await usage.stop()
     await process_inspector.stop()
@@ -314,6 +384,13 @@ async def health(request: web.Request) -> web.Response:
     sessions: SessionManager = request.app.get("sessions")
     live = sum(s.pty.isalive() for s in sessions.sessions.values()) if sessions else 0
     return json_response({"ok": True, "live_sessions": live, "version": "0.1.0"})
+
+
+async def remote_status(request: web.Request) -> web.Response:
+    config: Config = request.app["config"]
+    return json_response(
+        await tailscale_status(config.port, tailnet_enabled=config.tailnet_enabled)
+    )
 
 
 async def get_config(request: web.Request) -> web.Response:
@@ -629,9 +706,12 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
         )
     cwd = spec.cwd or space.default_cwd
     if not cwd and project_values.get("default_cwd"):
-        candidate = Path(str(project_values["default_cwd"]))
         project_root = Path(project_config["project"]["root"])
-        cwd = str(candidate if candidate.is_absolute() else project_root / candidate)
+        cwd = str(
+            resolve_project_default_cwd(
+                project_root, str(project_values["default_cwd"])
+            )
+        )
     cwd = cwd or config.startup_cwd or str(Path.cwd())
     executable = spec.executable
     argv = list(spec.argv)
@@ -695,7 +775,10 @@ async def delete_session(request: web.Request) -> web.Response:
     session = manager.resolve(request.match_info["sid"])
     await manager.stop(session.record.id)
     manager.sessions.pop(session.record.id, None)
-    shutil.rmtree(request.app["config"].data_dir / "media" / session.record.id, ignore_errors=True)
+    shutil.rmtree(
+        session_media_directory(request.app["config"].data_dir, session.record.id),
+        ignore_errors=True,
+    )
     return json_response({"ok": True})
 
 
@@ -764,6 +847,12 @@ _MEDIA_SIGNATURES = {
     "image/webp": (b"RIFF",),
     "image/gif": (b"GIF87a", b"GIF89a"),
 }
+_HOOK_EVENT_TYPES = {
+    "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+    "PostToolUseFailure", "PermissionRequest", "Notification", "Stop", "SessionEnd",
+    "turn_started", "turn_ended", "agent-turn-complete", "approval_needed",
+    "approval-requested", "task_started", "task_complete",
+}
 
 
 def validate_session_media(media_type: str, data: bytes | bytearray) -> str:
@@ -779,7 +868,44 @@ def validate_session_media(media_type: str, data: bytes | bytearray) -> str:
     return suffix
 
 
+def session_media_directory(data_dir: Path, session_id: str) -> Path:
+    root = (data_dir / "media").resolve()
+    directory = (root / session_id).resolve()
+    if directory.parent != root:
+        raise ValueError("invalid session media identity")
+    return directory
+
+
+def cleanup_expired_session_media(data_dir: Path, now: float) -> int:
+    root = (data_dir / "media").resolve()
+    if not root.is_dir():
+        return 0
+    removed = 0
+    cutoff = now - SESSION_MEDIA_TTL_SECONDS
+    for directory in root.iterdir():
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        for path in directory.iterdir():
+            try:
+                if path.is_file() and not path.is_symlink() and path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                continue
+        with suppress(OSError):
+            directory.rmdir()
+    return removed
+
+
+async def _media_cleanup_loop(data_dir: Path) -> None:
+    while True:
+        await asyncio.to_thread(cleanup_expired_session_media, data_dir, time.time())
+        await asyncio.sleep(60 * 60)
+
+
 async def upload_session_media(request: web.Request) -> web.Response:
+    if request.headers.get("X-Mux-User-Gesture") != "clipboard-image":
+        raise web.HTTPForbidden(text="clipboard image upload requires an explicit paste action")
     session = request.app["sessions"].resolve(request.match_info["sid"])
     adapter: BackendAdapter = request.app["sessions"].adapters[session.record.backend]
     if session.record.backend not in {"claude", "codex"}:
@@ -795,8 +921,10 @@ async def upload_session_media(request: web.Request) -> web.Response:
         if len(data) > 10 * 1024 * 1024:
             raise ValueError("clipboard image exceeds the 10 MiB limit")
     suffix = validate_session_media(media_type, data)
-    directory = request.app["config"].data_dir / "media" / session.record.id
+    directory = session_media_directory(request.app["config"].data_dir, session.record.id)
     directory.mkdir(parents=True, exist_ok=True)
+    if sum(1 for item in directory.iterdir() if item.is_file()) >= 32:
+        raise ValueError("this session has reached the 32-image clipboard limit")
     path = directory / f"{uuid4().hex}{suffix}"
     temporary = path.with_suffix(f"{suffix}.tmp")
     temporary.write_bytes(data)
@@ -1087,18 +1215,359 @@ async def delete_preview(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
+_PROXY_RESPONSE_HEADERS = {
+    "accept-ranges",
+    "cache-control",
+    "content-language",
+    "content-type",
+    "etag",
+    "expires",
+    "last-modified",
+}
+_PROXY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
+
+
+def _preview_runtime_bridge(prefix: str) -> str:
+    encoded = json.dumps(prefix)
+    return f"""<script>(function(){{
+const prefix={encoded};
+const route=function(value){{
+  try {{
+    const url=new URL(String(value),location.href);
+    if(url.host===location.host&&!url.pathname.startsWith(prefix)){{
+      url.pathname=prefix+url.pathname.replace(/^\\/+/,"");
+    }}
+    return url.toString();
+  }} catch (_) {{ return value; }}
+}};
+const NativeWebSocket=window.WebSocket;
+window.WebSocket=class extends NativeWebSocket{{
+  constructor(url,protocols){{super(route(url),protocols);}}
+}};
+const nativeFetch=window.fetch.bind(window);
+window.fetch=function(input,init){{
+  if(input instanceof Request) input=new Request(route(input.url),input);
+  else input=route(input);
+  return nativeFetch(input,init);
+}};
+const nativeOpen=XMLHttpRequest.prototype.open;
+XMLHttpRequest.prototype.open=function(method,url){{
+  const args=Array.prototype.slice.call(arguments);args[1]=route(url);
+  return nativeOpen.apply(this,args);
+}};
+}})();</script>"""
+
+
+def rewrite_preview_html(data: bytes, prefix: str) -> bytes:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    text = re.sub(
+        r'(?P<attr>\b(?:src|href|action)\s*=\s*["\'])/',
+        rf'\g<attr>{prefix}',
+        text,
+        flags=re.IGNORECASE,
+    )
+    bridge = _preview_runtime_bridge(prefix)
+    head = re.search(r"<head(?:\s[^>]*)?>", text, flags=re.IGNORECASE)
+    if head:
+        text = text[: head.end()] + bridge + text[head.end() :]
+    else:
+        text = bridge + text
+    return text.encode("utf-8")
+
+
+def rewrite_preview_css(data: bytes, prefix: str) -> bytes:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    text = re.sub(
+        r"(?P<start>url\(\s*[\"']?)/(?P<tail>[^)\"']+)",
+        rf"\g<start>{prefix}\g<tail>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text.encode("utf-8")
+
+
+def rewrite_preview_javascript(data: bytes, prefix: str) -> bytes:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    text = re.sub(
+        r"(?P<start>\b(?:from\s*|import\s*|import\s*\(\s*)[\"'])/",
+        rf"\g<start>{prefix}",
+        text,
+    )
+    return text.encode("utf-8")
+
+
+def preview_target(item: Any, tail: str, query: str = "") -> tuple[str, str]:
+    parsed = urlsplit(item.url)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "::1"}:
+        raise ValueError("preview registration is no longer a valid loopback destination")
+    if parsed.username or parsed.password or parsed.fragment:
+        raise ValueError("preview registration is invalid")
+    path = f"{parsed.path.rstrip('/')}/{tail.lstrip('/')}"
+    target = urlunsplit((parsed.scheme, parsed.netloc, path, query, ""))
+    origin = urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+    return target, origin
+
+
+def _preview_request_headers(request: web.Request, upstream_origin: str) -> dict[str, str]:
+    headers = {
+        name: value
+        for name, value in request.headers.items()
+        if name.casefold() not in _PROXY_HOP_HEADERS
+        and name.casefold()
+        not in {
+            "host",
+            "origin",
+            "referer",
+            "content-length",
+            "x-mux-hook-secret",
+        }
+        and not name.casefold().startswith("sec-websocket-")
+    }
+    headers["Origin"] = upstream_origin
+    headers["Referer"] = f"{upstream_origin}/"
+    return headers
+
+
+async def _acquire_preview_slot(semaphore: asyncio.Semaphore) -> None:
+    try:
+        await asyncio.wait_for(semaphore.acquire(), timeout=0.1)
+    except TimeoutError as exc:
+        raise web.HTTPServiceUnavailable(
+            text="preview proxy is at its concurrency limit",
+            headers={"Retry-After": "1"},
+        ) from exc
+
+
+async def _proxy_websocket(
+    request: web.Request, target: str, origin: str
+) -> web.WebSocketResponse:
+    semaphore: asyncio.Semaphore = request.app["preview_ws_semaphore"]
+    await _acquire_preview_slot(semaphore)
+    offered_protocols = tuple(
+        value.strip()
+        for value in request.headers.get("Sec-WebSocket-Protocol", "").split(",")
+        if value.strip()
+    )
+    client = ClientSession(timeout=ClientTimeout(total=None, sock_connect=10))
+    upstream = None
+    downstream = None
+    try:
+        upstream = await client.ws_connect(
+            target,
+            headers=_preview_request_headers(request, origin),
+            protocols=offered_protocols,
+            autoclose=False,
+            autoping=False,
+            max_msg_size=PREVIEW_WS_MESSAGE_BYTES,
+        )
+        selected = (upstream.protocol,) if upstream.protocol else ()
+        downstream = web.WebSocketResponse(
+            protocols=selected,
+            autoclose=False,
+            autoping=False,
+            max_msg_size=PREVIEW_WS_MESSAGE_BYTES,
+        )
+        await downstream.prepare(request)
+
+        async def relay(source: Any, destination: Any) -> None:
+            while True:
+                message = await asyncio.wait_for(
+                    source.receive(), timeout=PREVIEW_WS_IDLE_SECONDS
+                )
+                if message.type == WSMsgType.TEXT:
+                    await destination.send_str(message.data)
+                elif message.type == WSMsgType.BINARY:
+                    await destination.send_bytes(message.data)
+                elif message.type == WSMsgType.PING:
+                    await destination.ping(message.data)
+                elif message.type == WSMsgType.PONG:
+                    await destination.pong(message.data)
+                elif message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
+                    return
+
+        async with asyncio.timeout(PREVIEW_WS_LIFETIME_SECONDS):
+            tasks = {
+                asyncio.create_task(relay(downstream, upstream)),
+                asyncio.create_task(relay(upstream, downstream)),
+            }
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*done, *pending, return_exceptions=True)
+    except (ClientError, OSError, TimeoutError) as exc:
+        if downstream is None:
+            raise web.HTTPBadGateway(text=f"preview websocket unavailable: {exc}") from exc
+        await downstream.close(code=1011, message=b"preview websocket unavailable")
+    finally:
+        if upstream is not None and not upstream.closed:
+            with suppress(Exception):
+                await upstream.close()
+        if downstream is not None and not downstream.closed:
+            with suppress(Exception):
+                await downstream.close()
+        await client.close()
+        semaphore.release()
+    if downstream is None:  # pragma: no cover - pre-prepare failures raise above
+        raise web.HTTPBadGateway(text="preview websocket unavailable")
+    return downstream
+
+
+async def preview_proxy(request: web.Request) -> web.StreamResponse:
+    if request.method in {"CONNECT", "TRACE"}:
+        raise web.HTTPMethodNotAllowed(
+            request.method, ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+        )
+    preview_id = request.match_info["preview_id"]
+    item = request.app["previews"].items.get(preview_id)
+    if item is None:
+        raise web.HTTPNotFound(text="preview registration not found")
+    if item.session_id not in request.app["sessions"].sessions:
+        raise web.HTTPGone(text="preview session is no longer live")
+    tail = request.match_info.get("tail", "")
+    target, origin = preview_target(item, tail, request.query_string)
+    if request.headers.get("Upgrade", "").casefold() == "websocket":
+        return await _proxy_websocket(request, target, origin)
+    if request.content_length is not None and request.content_length > PREVIEW_REQUEST_BYTES:
+        raise web.HTTPRequestEntityTooLarge(
+            max_size=PREVIEW_REQUEST_BYTES, actual_size=request.content_length
+        )
+    body = await request.read()
+    if len(body) > PREVIEW_REQUEST_BYTES:
+        raise web.HTTPRequestEntityTooLarge(max_size=PREVIEW_REQUEST_BYTES, actual_size=len(body))
+    semaphore: asyncio.Semaphore = request.app["preview_http_semaphore"]
+    await _acquire_preview_slot(semaphore)
+    try:
+        async with ClientSession(timeout=ClientTimeout(total=15)) as client:
+            async with client.request(
+                request.method,
+                target,
+                headers=_preview_request_headers(request, origin),
+                data=body or None,
+                allow_redirects=False,
+            ) as upstream:
+                if (
+                    upstream.content_length is not None
+                    and upstream.content_length > PREVIEW_RESPONSE_BYTES
+                ):
+                    raise web.HTTPRequestEntityTooLarge(
+                        max_size=PREVIEW_RESPONSE_BYTES,
+                        actual_size=upstream.content_length,
+                    )
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in upstream.content.iter_chunked(64 * 1024):
+                    total += len(chunk)
+                    if total > PREVIEW_RESPONSE_BYTES:
+                        raise web.HTTPRequestEntityTooLarge(
+                            max_size=PREVIEW_RESPONSE_BYTES, actual_size=total
+                        )
+                    chunks.append(chunk)
+                data = b"".join(chunks)
+                content_type = upstream.headers.get("Content-Type", "")
+                prefix = f"/preview/{preview_id}/"
+                if "text/html" in content_type.casefold():
+                    data = rewrite_preview_html(data, prefix)
+                elif "text/css" in content_type.casefold():
+                    data = rewrite_preview_css(data, prefix)
+                elif any(
+                    marker in content_type.casefold()
+                    for marker in ("javascript", "ecmascript", "typescript")
+                ):
+                    data = rewrite_preview_javascript(data, prefix)
+                response_headers = {
+                    name: value
+                    for name, value in upstream.headers.items()
+                    if name.casefold() in _PROXY_RESPONSE_HEADERS
+                }
+                location = upstream.headers.get("Location")
+                if location:
+                    resolved = urlsplit(origin)._replace(path="", query="", fragment="")
+                    destination = urlsplit(location)
+                    if destination.hostname and (
+                        destination.hostname != resolved.hostname
+                        or destination.port != resolved.port
+                        or destination.scheme != resolved.scheme
+                    ):
+                        raise web.HTTPBadGateway(
+                            text="preview upstream attempted an external redirect"
+                        )
+                    response_headers["Location"] = prefix + destination.path.lstrip("/")
+                    if destination.query:
+                        response_headers["Location"] += f"?{destination.query}"
+                if request.headers.get("Origin") == "null":
+                    response_headers["Access-Control-Allow-Origin"] = "null"
+                    response_headers["Vary"] = "Origin"
+                    if request.method == "OPTIONS":
+                        response_headers["Access-Control-Allow-Methods"] = (
+                            "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS"
+                        )
+                        requested_headers = request.headers.get(
+                            "Access-Control-Request-Headers", ""
+                        )[:1000]
+                        if requested_headers:
+                            response_headers["Access-Control-Allow-Headers"] = requested_headers
+                return web.Response(
+                    body=data if request.method != "HEAD" else b"",
+                    status=upstream.status,
+                    headers=response_headers,
+                )
+    except (ClientError, OSError, TimeoutError) as exc:
+        raise web.HTTPBadGateway(text=f"preview unavailable: {exc}") from exc
+    finally:
+        semaphore.release()
+
+
 async def hook_ingress(request: web.Request) -> web.Response:
+    if request.content_length is not None and request.content_length > 256 * 1024:
+        raise web.HTTPRequestEntityTooLarge(max_size=256 * 1024, actual_size=request.content_length)
     peer = request.transport.get_extra_info("peername") if request.transport else None
     host = peer[0] if peer else ""
     if host not in {"127.0.0.1", "::1"}:
         raise web.HTTPForbidden(text="hook ingress is loopback-only")
     sid = request.match_info["sid"]
     session = request.app["sessions"].resolve(sid)
+    if session.record.state in {"exited", "crashed"}:
+        raise web.HTTPGone(text="hook session has ended")
     supplied = request.headers.get("X-Mux-Hook-Secret", "")
     if not secrets.compare_digest(supplied, session.hook_secret):
         raise web.HTTPForbidden(text="invalid hook secret")
-    body = await request.json()
+    now = time.monotonic()
+    windows: dict[str, deque[float]] = request.app["hook_ingress_windows"]
+    window = windows.setdefault(session.record.id, deque())
+    while window and now - window[0] >= HOOK_RATE_WINDOW_SECONDS:
+        window.popleft()
+    if len(window) >= HOOK_RATE_LIMIT:
+        raise web.HTTPTooManyRequests(
+            text="hook event burst limit exceeded", headers={"Retry-After": "1"}
+        )
+    window.append(now)
+    raw = await request.read()
+    if len(raw) > 256 * 1024:
+        raise web.HTTPRequestEntityTooLarge(max_size=256 * 1024, actual_size=len(raw))
+    body = json.loads(raw)
+    if not isinstance(body, dict):
+        raise ValueError("hook body must be a JSON object")
     event_type = str(body.get("event") or body.get("type") or "hook")
+    if event_type not in _HOOK_EVENT_TYPES:
+        raise ValueError("unsupported hook event type")
     payload = body.get("payload") or {}
     event_payload = hook_event_payload(payload)
     await request.app["events"].emit(

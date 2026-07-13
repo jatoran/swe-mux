@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
+import subprocess
 import time
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from .config import Config
+from .config import CCUSAGE_PACKAGE, Config
 from .event_bus import EventBus
 
 MAX_USAGE_OUTPUT_BYTES = 10 * 1024 * 1024
@@ -18,6 +21,30 @@ CACHE_VERSION = 1
 
 class UsageAdapterError(ValueError):
     pass
+
+
+def prepare_usage_command(
+    command: list[str], *, windows: bool | None = None
+) -> list[str]:
+    if not command:
+        raise UsageAdapterError("ccusage command is not configured")
+    resolved = shutil.which(command[0])
+    if resolved is None:
+        raise UsageAdapterError(
+            f"ccusage executable unavailable: {command[0]}; "
+            f"install it with: npm install -g {CCUSAGE_PACKAGE}"
+        )
+    windows = os.name == "nt" if windows is None else windows
+    if windows and Path(resolved).suffix.casefold() in {".cmd", ".bat"}:
+        command_line = subprocess.list2cmdline([resolved, *command[1:]])
+        return [
+            os.environ.get("COMSPEC", "cmd.exe"),
+            "/d",
+            "/s",
+            "/c",
+            command_line,
+        ]
+    return [resolved, *command[1:]]
 
 
 def _number(item: dict[str, Any], *names: str) -> float:
@@ -182,6 +209,8 @@ class UsageManager:
     def snapshot(self) -> dict[str, Any]:
         return {
             "enabled": self.config.ccusage_enabled,
+            "package": CCUSAGE_PACKAGE,
+            "install_command": f"npm install -g {CCUSAGE_PACKAGE}",
             "refresh_minutes": self.config.ccusage_refresh_minutes,
             "refreshing": self._lock.locked(),
             "states": {
@@ -226,7 +255,13 @@ class UsageManager:
                 {
                     "adapter": "ccusage-json-v1",
                     "command": command,
-                    "package": next((part for part in command if "ccusage" in part), command[0]),
+                    "package": (
+                        CCUSAGE_PACKAGE
+                        if Path(command[0]).stem.casefold() == "ccusage"
+                        else next(
+                            (part for part in command if "ccusage" in part), command[0]
+                        )
+                    ),
                 },
             )
             now = time.time()
@@ -245,19 +280,18 @@ class UsageManager:
             )
 
     async def _invoke(self, command: list[str]) -> str:
-        if not command:
-            raise UsageAdapterError("ccusage command is not configured")
+        prepared = prepare_usage_command(command)
         try:
             process = await asyncio.create_subprocess_exec(
-                *command,
+                *prepared,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
         except OSError as exc:
             raise UsageAdapterError(
-                "ccusage executable unavailable; install the pinned package or "
-                f"configure its command: {exc}"
+                f"ccusage could not start; install {CCUSAGE_PACKAGE} or configure its "
+                f"command: {exc}"
             ) from exc
         try:
             stdout, stderr = await asyncio.wait_for(

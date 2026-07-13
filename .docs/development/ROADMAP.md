@@ -54,11 +54,10 @@ spec language:
   management, theme-file generation, and ANSI-output rewriting are out of scope.
 - Native Claude/Codex remote-control products are unrelated integrations and remain out of
   scope. swe-mux remote access is its own browser/API/CLI surface.
-- Supported network topology is loopback-first: `muxd` listens on localhost; local clients
-  connect directly; remote clients connect through Tailscale Serve forwarding to that
-  loopback listener. Tailscale supplies transport encryption, device/user authentication,
-  HTTPS, and tailnet policy. swe-mux does not add a second login. Direct LAN/tailnet-IP
-  binding, `0.0.0.0`, Tailscale Funnel, and public exposure are unsupported.
+- Supported network topology is localhost plus direct tailnet: `muxd` listens on localhost
+  and the detected Tailscale IPv4 by default. Tailscale supplies transport encryption and
+  policy; swe-mux does not add a second login. Serve is optional HTTPS for browser secure-
+  context features. Direct LAN binding, `0.0.0.0`, Funnel, and public exposure are unsupported.
 - Splits are explicit actions only. Ordinary terminal creation replaces or fills the
   focused pane while the displaced session remains live in the sidebar.
 - Browser `alert`, `confirm`, and `prompt` dialogs are prohibited. Destructive toolbar
@@ -188,8 +187,8 @@ Cross-cutting test work ships with every phase; it is not deferred to the end.
   - Input: keybindings, middle-click paste, broadcast defaults, clipboard behavior.
   - Git and history: polling cadence, history reconciliation and retention controls.
   - Hooks and notifications: hooks editor/validation, channels, diagnostics.
-  - Remote and security: read-only listener/Tailscale Serve status and guidance until the
-    Phase 5 deployment contract is implemented.
+  - Remote and security: localhost/tailnet listener control and status, plus optional
+    Tailscale Serve guidance.
   - Appearance: one shared font/size/weight control applied uniformly if customization
     is exposed; never per-component typography.
 - [x] Show saved, hot-applied, restart-required, invalid, and externally-modified states.
@@ -444,21 +443,22 @@ args = ["--distribution", "Ubuntu"]
   embedding note bodies in SQLite.
 - [x] Add atomic file replacement, optimistic revisions, external-edit detection, and
   conflict UI so browser autosave never silently overwrites editor/Git changes.
-- [x] Add terminal-styled desktop/mobile note editing, Markdown preview, search, export,
+- [x] Add terminal-styled desktop/mobile raw Markdown editing, export,
   and explicit Insert selection into session / Capture terminal selection actions. Notes
   never enter a prompt or context window without a direct user action. Provide both a
   centered quick-editor modal and a persistent terminal + note split leaf, with dock/pop-out,
   draggable ratio, targeted capture routing, and mobile return-to-terminal behavior.
 - [x] Surface missing, read-only, malformed, disabled, and conflicting `.swe-mux/` states
   without blocking terminal use. Phase 4's schema is data-only and rejects executable,
-  secret, and parent/absolute-cwd fields; repository trust decisions remain Phase 5.
+  secret, and parent/absolute-cwd fields; Phase 5 adds resolved-path and privileged-boundary
+  enforcement.
   Creating `.swe-mux/` is an explicit first write, not a side effect of merely opening a
   project.
 
 ### Usage analytics
 
-- [x] Add an optional ccusage adapter using supported, version-pinned JSON output for
-  Claude and Codex. Validate the external schema, record tool version/provenance, and
+- [x] Add an optional adapter using one supported, version-pinned unified `ccusage` CLI
+  for Claude and Codex. Validate the external schema, record tool version/provenance, and
   normalize aggregates without replacing native transcript observation as live truth.
 - [x] Run usage refresh only on explicit user request or a configurable low-priority
   background schedule. Enforce one concurrent refresh, timeout/cancellation, cached
@@ -467,9 +467,10 @@ args = ["--distribution", "Ubuntu"]
 - [x] Cache normalized daily/monthly/session/model/token/cost aggregates. Treat calculated
   cost and quota-window data as estimates, distinguish them from current context use, and
   provide disable/clear-cache controls.
-- [x] Use fixture-driven adapter tests rather than invoking `npx ...@latest` in the normal
-  test suite. Runtime package download is never implicit; Settings diagnostics explain how
-  to install or configure a supported ccusage executable.
+- [x] Use fixture-driven adapter tests without invoking npm/npx in the normal test suite.
+  Runtime package download is never implicit; Settings provides the pinned one-time global
+  install command. Migrate the former split Claude/Codex commands to provider subcommands
+  of the unified CLI and resolve Windows npm command shims safely.
 
 ### Process and preview awareness
 
@@ -487,9 +488,8 @@ args = ["--distribution", "Ubuntu"]
   refresh, full-screen mobile view, viewport presets, copy/open externally, and clear
   ownership/process status.
 - [x] Keep Phase 4 preview rendering direct/best-effort with copy/open-external fallback
-  and typed unavailable state. The authenticated HTTP/WebSocket/HMR proxy is deliberately
-  a Phase 5 security deliverable; Phase 4 performs no content rewriting or general URL
-  proxying.
+  and typed unavailable state. Phase 5 replaces that path with the bounded registered
+  HTTP/WebSocket/HMR bridge without introducing general URL proxying.
 
 ### Agent observation and attention
 
@@ -560,74 +560,82 @@ args = ["--distribution", "Ubuntu"]
   and reduced-motion contract coverage. Phase 7 retains full real-browser accessibility
   and orientation regression as release-quality validation.
 
-## Phase 5 — Tailscale Serve access and application hardening
+## Phase 5 — Full mobile workspace over direct Tailscale access
+
+Phase 5 is intentionally a single-user, private-tailnet deployment contract. The phone or
+other admitted tailnet device must receive the same swe-mux terminal, session, process,
+notes, and development-preview experience as localhost. Tailscale supplies device/user
+admission and encrypted transport; swe-mux does not add login, bearer tokens, enterprise
+audit infrastructure, or public-ingress machinery.
 
 ### Supported deployment topology
 
-- [ ] Keep `muxd` bound to `127.0.0.1`/`::1` for every supported deployment. Local browser
-  and CLI clients connect directly; remote clients use Tailscale Serve as an HTTPS reverse
-  proxy to the loopback listener. Do not require or encourage direct tailnet-IP binding.
-- [ ] Treat direct LAN binding, `0.0.0.0`, Tailscale Funnel, port forwarding, and public
+- [x] Bind `muxd` to localhost plus the detected Tailscale IPv4 by default. Local and
+  tailnet browser/CLI clients connect directly; detection failure degrades to localhost,
+  and Settings or `--local-only` can disable the tailnet listener.
+- [x] Treat direct LAN binding, `0.0.0.0`, Tailscale Funnel, port forwarding, and public
   ingress as unsupported configurations. Fail closed or require an explicit development-
   only escape hatch carrying a prominent diagnostic; production behavior never silently
   falls back to a network-wide listener.
-- [ ] Remove the generic remote bearer/login product path, including query-string WS
+- [x] Remove the generic remote bearer/login product path, including query-string WS
   tokens, token prompts, rotation/revocation UI, and token-bearing browser URLs. Migrate
   legacy bind/token configuration with a clear diagnostic instead of preserving a second
   authentication system.
-- [ ] Add a Tailscale Serve setup/status workflow: detect Tailscale availability, show the
-  expected tailnet HTTPS URL, validate that Serve targets the loopback mux port, distinguish
-  Serve from Funnel, and provide copyable commands plus `mux doctor` diagnostics. swe-mux
-  does not silently modify tailnet policy or enable Funnel.
-- [ ] Document a least-privilege Tailscale grant restricted to the owning user/devices and
+- [x] Detect and validate the Tailscale address, report the direct tailnet URL/listener
+  state, and expose optional Serve status/setup for browser-recognized HTTPS. Distinguish
+  Serve from Funnel and never silently modify tailnet policy or enable either feature.
+- [x] Document a least-privilege Tailscale grant restricted to the owning user/devices and
   the swe-mux host/service. Document device removal/revocation and the consequence that an
   admitted tailnet peer with access to swe-mux has terminal/code-execution authority.
-- [ ] Optionally verify Tailscale Serve's sanitized identity headers against configured
-  owner identities. Trust those headers only on the loopback listener; direct localhost
-  clients remain valid without Serve headers. Identity mismatch fails closed without a
-  swe-mux login screen.
 
-### Browser and privileged-operation boundaries
+### Browser, project, and privileged-operation boundaries
 
-- [ ] Validate `Host` and browser `Origin` for every mutating HTTP request and WebSocket
-  upgrade. Allow only configured localhost origins and the expected tailnet HTTPS origin;
+- [x] Validate `Host` and browser `Origin` for every mutating HTTP request and WebSocket
+  upgrade. Allow only localhost, validated Tailscale IP, and full tailnet DNS origins;
   reject cross-site browser control even when the browser's device belongs to the tailnet.
-- [ ] Add CSP, request/body/concurrency/rate limits, secure response headers, secret
-  redaction, and audit events containing identities/actions but never hook secrets, media,
-  prompt contents, or terminal bytes.
-- [ ] Harden hook ingress independently of browser access: loopback peer only, constant-
+- [x] Apply secure response headers plus targeted size, duration, and concurrency bounds
+  to expensive or upload/proxy routes. Do not add blanket per-user rate limiting to this
+  single-user tailnet application. Record important privileged actions through the existing
+  EventBus using metadata only; never record hook secrets, uploaded media, prompt contents,
+  or terminal bytes.
+- [x] Harden hook ingress independently of browser access: loopback peer only, constant-
   time per-session secret comparison, event allowlist, body/rate limits, and rejection
   after session expiry.
-- [ ] Define project-config trust boundaries. Opening a repository may read and display
-  `.swe-mux/` state, but untrusted project files cannot silently select executables, run
-  hooks/commands, expose ports, weaken network policy, or introduce secrets. Executable
-  behavior requires an explicit trust decision with revocation and diagnostics.
-- [ ] Harden per-session clipboard-media upload with user-gesture enforcement, MIME
+- [x] Define project-config trust boundaries. Opening a repository may read and display
+  `.swe-mux/` state, but project files cannot define executables, hooks/commands, exposed
+  ports, network policy, or secrets. A project may select only an existing machine-defined
+  shell profile, and that profile runs only after an explicit New terminal action.
+- [x] Harden per-session clipboard-media upload with user-gesture enforcement, MIME
   sniffing/allowlist, byte/count limits, randomized private paths, shell-safe/backend-safe
   path handoff, TTL/session cleanup, ownership checks, and metadata-only audit records.
-- [ ] Add a same-origin preview proxy with strict loopback/session-owned destination
-  validation, explicit exposure approval, HTTP/WebSocket/HMR limits, timeout/cancellation,
-  Origin/CSP handling, and SSRF/DNS-rebinding defenses. Never provide a general arbitrary-
-  URL proxy or make a development server directly reachable from the tailnet.
-- [ ] Keep external-channel credentials and Telegram sender/routing authorization in Phase
-  8. Phase 5 supplies only the safe local event/action boundaries those providers consume.
+- [x] Provide the full development-preview experience through the swe-mux origin. Proxy
+  HTTP plus WebSocket/HMR traffic only to a detected session-owned loopback listener or an
+  explicitly approved literal loopback URL. Preserve request paths, queries, subprotocols,
+  and browser Origin behavior needed by common dev servers; bound concurrent bridges,
+  response size, connection lifetime, and idle time. Sandbox embedded content, reject
+  redirects or destination changes, and never expose raw development-server ports or offer
+  a general network/URL proxy.
+- [x] Keep every process and preview operation available from both localhost and direct
+  tailnet clients through the same API/UI. A phone connects only to swe-mux; dev servers
+  may remain safely bound to loopback on the workstation.
 
 ### Phase 5 exit criteria
 
-- [ ] Localhost browser/CLI access works without login. Remote browser/CLI access through
-  Tailscale Serve works over HTTPS, including terminal/event WebSocket reconnects, without
-  any swe-mux credential prompt.
-- [ ] The supported daemon listener is unreachable directly from LAN or tailnet peers;
-  remote access succeeds only through the configured Serve endpoint and tailnet policy.
-- [ ] Route-by-route Host/Origin/HTTP/WS tests pass for direct localhost and proxied
-  Tailscale Serve requests; spoofed identity/origin/host inputs fail closed.
-- [ ] No generic bearer token remains in URLs, config responses, logs, history, exports,
+- [x] Localhost and direct-tailnet browser/CLI access work without login, including
+  terminal/event WebSocket reconnects, process management, and HTTP/WebSocket/HMR previews.
+  Optional Serve preserves the same flows over HTTPS.
+- [x] The daemon listener is unreachable from LAN peers and reachable only through
+  localhost or the specific Tailscale interface; wildcard binding is never used.
+- [x] Route-family Host/Origin/HTTP/WS tests pass for localhost, direct tailnet, and
+  optional Serve-shaped origins; spoofed origin/host inputs fail closed.
+- [x] No generic bearer token remains in URLs, config responses, logs, history, exports,
   browser storage, or hook payloads. Per-session hook secrets remain loopback-only and
   redacted.
-- [ ] Malicious project config, clipboard uploads, and preview destinations cannot cause
-  command execution, cross-session access, filesystem escape, or arbitrary network proxying.
-- [ ] `mux doctor` and Settings clearly report loopback listener health, Tailscale/Serve
-  availability, expected URL/identity, grant guidance, Funnel/public-exposure warnings,
+- [x] Malicious project config, clipboard uploads, and preview destinations cannot cause
+  command execution, cross-session access, filesystem escape, or arbitrary network
+  proxying. Focused boundary tests cover each case.
+- [x] `mux doctor` and Settings clearly report local/tailnet listener health, direct URL,
+  optional Serve availability, grant guidance, Funnel/public-exposure warnings,
   and actionable misconfiguration errors without modifying tailnet policy.
 
 ## Phase 6 — Cross-OS compatibility
@@ -694,22 +702,22 @@ invariant, and daemon-owned child lifecycle.
 
 - [ ] Add session filters, profile/custom argv support, rename/move/pin, complete space
   management, server-side broadcast, Settings/config, and profile commands.
-- [ ] Load the local or Tailscale Serve URL from config by default while preserving
-  `MUX_URL`; remove the generic `MUX_TOKEN` path with the Phase 5 migration.
+- [ ] Load the local, direct tailnet, or optional Serve URL from config while preserving
+  `MUX_URL`. The generic `MUX_TOKEN` path was removed in Phase 5.
 - [ ] Return a conflict for ambiguous names; add stable structured errors and
   human-table/`--json` output modes.
 - [ ] Add `mux doctor`: platform/PTY backend, shell/profile executable checks, agent
   capabilities, writable global/project `.swe-mux/` paths, ccusage availability/version,
-  process/preview capability, bind/port/auth status, frontend bundle version, and non-
+  process/preview capability, listener/port/tailnet status, frontend bundle version, and non-
   secret diagnostics.
 
 ### Automated quality matrix
 
 - [ ] Expand Python coverage: config/migrations, adapters/state races, session lifecycle,
-  API/auth/WS, spaces/layout, history/resume, events/hooks, Git/worktrees, CLI, and reaper.
+  API/Host/Origin/WS, spaces/layout, history/resume, events/hooks, Git/worktrees, CLI, and reaper.
 - [ ] Add frontend component/Playwright coverage: default/custom creation, non-split
   replacement, inline kill, spaces, pane persistence, palette/input transparency,
-  Settings, history resume, notes, processes/previews, clipboard media, auth,
+  Settings, history resume, notes, processes/previews, clipboard media, tailnet access,
   responsive/touch, and accessibility.
 - [ ] Add real PTY platform integration tests for paths with spaces/Unicode, large output,
   resize, Ctrl+C/signals, bracketed paste, multiple browser input ownership, and forced
@@ -771,9 +779,9 @@ authorization, and alternate transports without changing session ownership or ag
 
 ### SSH and terminal attach
 
-- [ ] Document loopback-first browser access through OpenSSH local forwarding, including
-  WebSocket behavior, key authentication, daemon service lifetime, and why direct network
-  binding remains unsupported beside the Tailscale Serve path.
+- [ ] Document browser access through OpenSSH local forwarding, including WebSocket
+  behavior, key authentication, daemon service lifetime, and how it differs from the
+  supported direct Tailscale listener.
 - [ ] Add `mux attach SESSION` as a native-terminal client over the authenticated PTY
   contract: raw input/output, resize, input ownership, exit status, reconnect, and a
   detach chord that never kills the daemon-owned session.

@@ -6,7 +6,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlsplit, urlunsplit
 
 from .event_bus import EventBus
 from .session import Session, SessionManager
@@ -20,6 +20,7 @@ MAX_PROCESSES_PER_SESSION = 256
 ENDED_RETENTION_SECONDS = 300.0
 HIGH_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 NO_OUTPUT_SECONDS = 300.0
+PREVIEW_LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
 
 
 @dataclass(slots=True)
@@ -291,16 +292,33 @@ class PreviewRegistry:
         self, session_id: str, url: str, *, approved: bool = False
     ) -> PreviewRegistration:
         session = self.sessions.resolve(session_id)
-        parsed = urlparse(url)
+        try:
+            parsed = urlsplit(url)
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except ValueError as exc:
+            raise ValueError("preview URL has an invalid port") from exc
         host = parsed.hostname or ""
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
         if parsed.scheme not in {"http", "https"}:
             raise ValueError("preview URL must use HTTP or HTTPS")
-        if host not in {"127.0.0.1", "::1", "localhost"}:
-            raise ValueError("preview destination must be loopback")
+        if host not in PREVIEW_LOOPBACK_HOSTS:
+            raise ValueError("preview destination must be a literal loopback address")
+        if parsed.username or parsed.password:
+            raise ValueError("preview URL cannot contain credentials")
+        if parsed.fragment:
+            raise ValueError("preview URL cannot contain a fragment")
+        if parsed.query:
+            raise ValueError("preview registration URL cannot contain a query")
+        if not 1 <= port <= 65535:
+            raise ValueError("preview URL has an invalid port")
+        netloc = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+        normalized_url = urlunsplit(
+            (parsed.scheme, netloc, parsed.path.rstrip("/") + "/", "", "")
+        )
         snapshot = await self.inspector.snapshot(session.record.id)
         detected = any(
             listener["port"] == port
+            and listener.get("host") == host
+            and listener.get("loopback") is True
             for process in snapshot["processes"]
             for listener in process["listeners"]
         )
@@ -310,7 +328,7 @@ class PreviewRegistry:
             str(uuid.uuid4()),
             session.record.id,
             session.record.space_id,
-            url,
+            normalized_url,
             host,
             port,
             "detected" if detected else "user-approved",

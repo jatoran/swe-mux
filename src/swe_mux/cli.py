@@ -11,8 +11,6 @@ import urllib.request
 def request(method: str, path: str, body: dict[str, object] | None = None) -> object:
     base = os.environ.get("MUX_URL", "http://127.0.0.1:8765").rstrip("/")
     headers = {"Content-Type": "application/json"}
-    if token := os.environ.get("MUX_TOKEN"):
-        headers["Authorization"] = f"Bearer {token}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
     try:
@@ -44,6 +42,7 @@ def main() -> None:
     sub.add_parser("history")
     sub.add_parser("spaces")
     sub.add_parser("profiles")
+    sub.add_parser("doctor")
     resume = sub.add_parser("resume")
     resume.add_argument("id")
     args = parser.parse_args()
@@ -78,6 +77,8 @@ def main() -> None:
         result = request("GET", "/api/spaces")
     elif args.command == "profiles":
         result = request("GET", "/api/profiles")
+    elif args.command == "doctor":
+        result = request("GET", "/api/remote/status")
     else:
         result = request("POST", f"/api/history/{args.id}/resume", {})
     json.dump(result, sys.stdout, indent=2)

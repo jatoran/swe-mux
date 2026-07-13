@@ -7,10 +7,13 @@
 
 ## HTTP
 
-All JSON routes use `/api`. Non-loopback bindings require `Authorization: Bearer <token>`.
+All JSON routes use `/api`. muxd listens on localhost plus the detected Tailscale IPv4 by
+default. Both use the same credential-free API; Tailscale policy controls remote access.
+Tailscale Serve is an optional HTTPS proxy, not a requirement.
 
 ```text
 GET    /health
+GET    /remote/status
 GET    /config
 PATCH  /config
 POST   /config/reset
@@ -67,9 +70,16 @@ DELETE /git/worktrees
 POST   /reveal
 ```
 
+`/preview/{registration-id}/{path}` is the bounded preview bridge. Ordinary HTTP methods
+proxy bodies/queries to the immutable registered literal-loopback origin; WebSocket
+upgrades bridge text/binary/ping/pong frames and negotiated HMR subprotocols. Root-relative
+HTML/CSS/module and runtime browser URLs are scoped to the registration. External redirects,
+per-request upstream URLs, ended source sessions, oversized bodies/responses/messages, and
+excess bridge concurrency fail closed.
+
 `/hooks/{id}` and `/sessions/{id}/promote|demote` are loopback-only integration surfaces
-authenticated with the per-session `X-Mux-Hook-Secret`; they do not accept the
-ordinary bearer token as a substitute.
+authenticated with the per-session `X-Mux-Hook-Secret`. Hook ingress additionally
+requires a loopback peer, an allowlisted event type, and a bounded request body.
 
 ```ts
 type SpawnSession = {
@@ -87,7 +97,9 @@ Shell spawn precedence: raw executable → request profile → space default pro
 default profile. Request argv appends to profile argv. Resolved session snapshots include
 `shell_profile_id`, effective `exe`, and effective `args`.
 
-Config reads return no bearer or hook secrets and include a revision/ETag. PATCH accepts
+Config reads return no hook secrets and include `tailnet_enabled` plus
+`access_mode: "local+tailnet" | "loopback"` and a revision/ETag. Legacy token fields are
+removed during migration. PATCH accepts
 `If-Match` or `_revision`, returns field errors without mutation, and reports
 `hot_applied` versus `restart_required`. Canonical TOML rewrites are atomic; migration
 creates `config.toml.bak`. Invalid external edits retain the last-known-good runtime
@@ -139,8 +151,11 @@ Only the input owner may write. Other attachments remain read-only until focus/c
 this prevents duplicate xterm device-query responses from becoming visible prompt input.
 The client suppresses xterm-generated input until replay rendering completes, so historical
 device queries cannot generate fresh responses at the shell prompt.
-The browser uses a WebSocket subprotocol for the bearer. Query-token compatibility still
-exists in this phase and is removed by the Phase 5 login/token hardening.
+Browser WebSockets use the current origin and carry no swe-mux bearer or query token.
+Mutating HTTP requests and WebSocket upgrades validate `Host` and the full browser `Origin`
+authority, including explicit ports;
+supported hosts are localhost addresses, Tailscale address ranges, and tailnet
+`*.ts.net` names.
 
 ## Event WebSocket
 
@@ -173,6 +188,7 @@ mux kill ID_OR_NAME
 mux history
 mux resume HISTORY_ID
 mux spaces
+mux doctor
 ```
 
-Configuration: `MUX_URL`; optional `MUX_TOKEN`.
+Configuration: `MUX_URL`.

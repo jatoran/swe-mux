@@ -48,7 +48,7 @@
 - Sidebar/header kill controls use `×` → `✓`; the confirmation expires back to `×`
   after two seconds. Context-menu Kill remains immediate.
 - Context menus and `: menu` close on Escape or any pointer press outside their bounds.
-- Session/space rename, worktree creation, terminal find, and bearer-token entry use
+- Session/space rename, worktree creation, and terminal find use
   terminal-styled panels; browser-native alert/confirm/prompt dialogs are prohibited.
 - Responsive mode moves the sidebar into a `:nav` drawer and shows only the focused pane.
 - Responsive panes expose an on-screen Paste control for mobile clipboard limitations.
@@ -92,6 +92,6 @@
 - Command registry/search: `frontend/src/commands.ts`
 - Layout tree operations: `frontend/src/layout.ts`
 - Terminal contract: `frontend/src/TerminalPane.tsx`
-- API/auth client: `frontend/src/api.ts`
+- API/WebSocket client: `frontend/src/api.ts`
 - Notifications: `frontend/src/Notifications.tsx`
 - Theme/layout: `frontend/src/style.css`

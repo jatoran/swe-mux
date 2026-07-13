@@ -12,7 +12,7 @@
   spaces, agent-only history, events, and cached indexes; project-owned Markdown/TOML in
   `.swe-mux/`.
 - Integrations: ConPTY/pywinpty; Win32 Job Objects; PowerShell/CMD/WSL profiles; Git;
-  Claude Code; Codex CLI; optional locally installed ccusage adapters.
+  Claude Code; Codex CLI; optional locally installed unified ccusage adapter.
 
 ## Doc map
 
@@ -34,6 +34,7 @@
 - Project configuration and notes: `features/projects-and-notes.md`
 - Usage analytics: `features/usage.md`
 - Process ownership and previews: `features/processes-and-previews.md`
+- Remote access and browser boundary: `features/remote-access.md`
 
 ### Active development
 
@@ -52,6 +53,7 @@
 - Plain shells never become agent history. Promotion converts the provisional lifecycle
   in place; demotion updates live state without duplicating its agent history.
 - Reading a project has no filesystem side effect. Only explicit saves create `.swe-mux/`.
+- Network listeners are explicit localhost plus detected Tailscale IPv4; never wildcard LAN.
 
 ## Key trade-offs
 

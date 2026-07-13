@@ -26,6 +26,16 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
                                └── SQLite history/events/spaces
 ```
 
+## Deployment topology
+
+- aiohttp listens on localhost plus the detected Tailscale IPv4 when
+  `tailnet_enabled = true` (default). Failure to detect Tailscale degrades to localhost.
+- Listener selection never uses `0.0.0.0` or a LAN interface. `--local-only` suppresses
+  the tailnet site for one daemon run.
+- Direct tailnet HTTP is the primary remote path. Tailscale provides transport encryption
+  and policy; optional Tailscale Serve adds browser-recognized HTTPS.
+- No swe-mux remote bearer/login path exists.
+
 ## Boundaries
 
 - `src/swe_mux/server.py`: transport composition; no backend-specific CLI knowledge.
@@ -59,7 +69,8 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
 7. Unexpected EOF records `crashed`; explicit stop records `exited`.
 8. Project files are data-only, revision checked, and created only by an explicit write.
 9. Preview registration accepts only a detected session-owned or explicitly approved
-   loopback listener; it is not a general URL proxy.
+   literal-loopback listener. Bounded HTTP/WebSocket traffic retains that immutable
+   destination; raw development ports never become tailnet listeners.
 
 ## Failure modes
 

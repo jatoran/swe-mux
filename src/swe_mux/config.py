@@ -2,22 +2,34 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 import shutil
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {"light", "dark", "system", "solarized-dark", "tokyo-night", "custom"}
 CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "accent", "error"}
-RESTART_FIELDS = {"host", "port", "data_dir", "reconcile_external_history"}
+RESTART_FIELDS = {"host", "port", "data_dir", "reconcile_external_history", "tailnet_enabled"}
 BUILTIN_THEME_PAIRS = {
     "dark": ("#090a0c", "#d9dde2"),
     "light": ("#f5f2e9", "#252821"),
     "solarized-dark": ("#002b36", "#93a1a1"),
     "tokyo-night": ("#1a1b26", "#c0caf5"),
+}
+CCUSAGE_PINNED_VERSION = "20.0.17"
+CCUSAGE_PACKAGE = f"ccusage@{CCUSAGE_PINNED_VERSION}"
+
+
+def default_ccusage_command(provider: str) -> list[str]:
+    return ["ccusage", provider, "daily", "--json"]
+
+
+_LEGACY_CCUSAGE_COMMANDS = {
+    "claude": ["--no-install", "ccusage@17.1.5", "daily", "--json"],
+    "codex": ["--no-install", "@ccusage/codex@0.2.7", "daily", "--json"],
 }
 
 
@@ -56,8 +68,7 @@ class Config:
     revision: int = 1
     host: str = "127.0.0.1"
     port: int = 8765
-    token: str = ""
-    loopback_auth: bool = False
+    tailnet_enabled: bool = True
     default_backend: str = "shell"
     shell_exe: str = "powershell.exe"
     claude_exe: str = "claude.exe"
@@ -82,14 +93,10 @@ class Config:
     ccusage_enabled: bool = False
     ccusage_refresh_minutes: int = 0
     ccusage_claude_command: list[str] = field(
-        default_factory=lambda: [
-            "npx", "--no-install", "ccusage@17.1.5", "daily", "--json"
-        ]
+        default_factory=lambda: default_ccusage_command("claude")
     )
     ccusage_codex_command: list[str] = field(
-        default_factory=lambda: [
-            "npx", "--no-install", "@ccusage/codex@0.2.7", "daily", "--json"
-        ]
+        default_factory=lambda: default_ccusage_command("codex")
     )
     default_shell_profile: str = "default"
     shell_profiles: list[ShellProfile] = field(default_factory=list)
@@ -101,16 +108,12 @@ class Config:
     def database_path(self) -> Path:
         return self.data_dir / "mux.db"
 
-    @property
-    def requires_auth(self) -> bool:
-        return self.loopback_auth or self.host not in {"127.0.0.1", "localhost", "::1"}
-
     def public_dict(self) -> dict[str, object]:
         result = asdict(self)
         result["data_dir"] = str(self.data_dir)
-        result.pop("token", None)
         result.pop("config_path", None)
-        result["requires_auth"] = self.requires_auth
+        result["access_mode"] = "local+tailnet" if self.tailnet_enabled else "loopback"
+        result["requires_auth"] = False
         # The daemon retains exact bytes. Browsers retain an approximate line
         # window using a documented 160-byte average, bounded for xterm.
         result["xterm_scrollback_lines"] = max(
@@ -121,6 +124,11 @@ class Config:
 
 def _validate(config: Config) -> None:
     errors: dict[str, str] = {}
+    if config.host not in LOOPBACK_HOSTS:
+        errors["host"] = (
+            "must be a loopback address (127.0.0.1, localhost, or ::1); "
+            "direct tailnet listening uses the detected Tailscale address automatically"
+        )
     if not 1 <= config.port <= 65535:
         errors["port"] = "must be between 1 and 65535"
     if config.default_backend not in {"shell", "claude", "codex"}:
@@ -224,6 +232,18 @@ def save_config(config: Config, *, backup: bool = False) -> None:
     config.config_path = path
 
 
+def _migrate_legacy_ccusage_commands(config: Config) -> bool:
+    changed = False
+    for provider, legacy_tail in _LEGACY_CCUSAGE_COMMANDS.items():
+        field_name = f"ccusage_{provider}_command"
+        command = getattr(config, field_name)
+        executable = Path(command[0]).stem.casefold() if command else ""
+        if executable == "npx" and command[1:] == legacy_tail:
+            setattr(config, field_name, default_ccusage_command(provider))
+            changed = True
+    return changed
+
+
 def load_config(path: Path | None = None) -> Config:
     path = path or Path.home() / ".mux" / "config.toml"
     cfg = Config(data_dir=path.parent, config_path=path)
@@ -244,9 +264,7 @@ def load_config(path: Path | None = None) -> Config:
         cfg.shell_profiles = [
             ShellProfile("default", "Default shell", cfg.shell_exe, args, marker="ps")
         ]
-    if not cfg.token:
-        cfg.token = secrets.token_urlsafe(32)
-        migrated = True
+    migrated = _migrate_legacy_ccusage_commands(cfg) or migrated
     cfg.schema_version = SCHEMA_VERSION
     _validate(cfg)
     if migrated or not path.exists():
@@ -256,7 +274,7 @@ def load_config(path: Path | None = None) -> Config:
 
 def update_config(config: Config, changes: dict[str, Any]) -> tuple[set[str], set[str]]:
     allowed = set(Config.__dataclass_fields__) - {
-        "schema_version", "revision", "token", "data_dir", "config_path"
+        "schema_version", "revision", "data_dir", "config_path"
     }
     unknown = set(changes) - allowed
     if unknown:

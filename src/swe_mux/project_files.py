@@ -99,6 +99,17 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
     return data
 
 
+def resolve_project_default_cwd(project_root: str | Path, relative_cwd: str) -> Path:
+    root = Path(project_root).resolve()
+    relative = Path(relative_cwd)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("default_cwd must stay relative to the project root")
+    candidate = (root / relative).resolve()
+    if not candidate.is_relative_to(root):
+        raise ValueError("default_cwd resolves outside the project root")
+    return candidate
+
+
 async def read_project_config(cwd: str | Path) -> dict[str, Any]:
     project, mux_dir = await project_status(cwd)
     path = mux_dir / "config.toml"

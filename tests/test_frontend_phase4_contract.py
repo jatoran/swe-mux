@@ -85,3 +85,22 @@ def test_notes_have_quick_modal_and_persistent_split_pane_modes() -> None:
     assert "pop out" in source
     assert ".note-modal" in css
     assert ".note-pane.mobile-active" in css
+
+
+def test_notes_use_one_raw_markdown_text_editor() -> None:
+    notes = (
+        Path(__file__).parents[1] / "frontend" / "src" / "Notes.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "<textarea" in notes
+    assert 'placeholder="Write Markdown…"' in notes
+    assert "contentEditable" not in notes
+    assert "execCommand" not in notes
+    assert "Search project notes" not in notes
+    assert "note?.path || cwd" not in notes
+    assert "notes-state-light" in notes
+    assert "title={statusTitle}" in notes
+    assert "revision::" in notes
+    assert ">Edit</button>" not in notes
+    assert ">Preview</button>" not in notes
+    assert "MarkdownPreview" not in notes

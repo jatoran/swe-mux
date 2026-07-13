@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
-import { api, openWebSocket, setAccessTokenRequester } from './api'
+import { api, openWebSocket } from './api'
 import { TerminalPane } from './TerminalPane'
 import { Notes } from './Notes'
 import { ProcessPanel, type Preview } from './ProcessPanel'
 import { PreviewPane } from './PreviewPane'
 import { Notifications, type NotificationData, type UiNotification } from './Notifications'
+import { UsageDashboard } from './UsageDashboard'
 import type { Session, ShellProfile, Space } from './types'
 import { keyChord } from './keys'
 import { Settings } from './Settings'
@@ -110,6 +111,7 @@ export function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [notificationUnread, setNotificationUnread] = useState(0)
   const [notificationToast, setNotificationToast] = useState<UiNotification | null>(null)
+  const [usageOpen, setUsageOpen] = useState(false)
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [profiles, setProfiles] = useState<ShellProfile[]>([])
   const [defaultProfile, setDefaultProfile] = useState('default')
@@ -118,12 +120,10 @@ export function App() {
   const [browserPath, setBrowserPath] = useState<string | null>(null)
   const [browserDirs, setBrowserDirs] = useState<Array<{name:string;path:string}>>([])
   const [browserParent, setBrowserParent] = useState<string | null>(null)
-  const [accessTokenOpen, setAccessTokenOpen] = useState(false)
-  const [accessTokenValue, setAccessTokenValue] = useState('')
   const spawning = useRef(false)
-  const accessTokenResolve = useRef<((token: string | null) => void) | null>(null)
   const longPressTimer = useRef<number | null>(null)
   const notificationIds = useRef<Set<string>>(new Set())
+  const paletteInput = useRef<HTMLInputElement>(null)
 
   const cancelLongPress = () => {
     if (longPressTimer.current !== null) window.clearTimeout(longPressTimer.current)
@@ -135,20 +135,6 @@ export function App() {
     const {clientX,clientY}=event
     longPressTimer.current=window.setTimeout(()=>{navigator.vibrate?.(20);open(clientX,clientY);longPressTimer.current=null},550)
   }
-
-  useEffect(() => {
-    setAccessTokenRequester(() => new Promise(resolve => {
-      accessTokenResolve.current?.(null)
-      accessTokenResolve.current = resolve
-      setAccessTokenValue('')
-      setAccessTokenOpen(true)
-    }))
-    return () => {
-      setAccessTokenRequester(null)
-      accessTokenResolve.current?.(null)
-      accessTokenResolve.current = null
-    }
-  }, [])
 
   const loadProfiles = () => api<{default_profile_id:string;profiles:ShellProfile[];detected:ShellProfile[]}>('GET','/api/profiles').then(result => { const combined=[...result.profiles,...result.detected.filter(profile=>!result.profiles.some(item=>item.id===profile.id))];setProfiles(combined.filter(profile=>profile.enabled));setDefaultProfile(result.default_profile_id);setLauncherProfile(current=>current||result.default_profile_id) })
 
@@ -285,7 +271,7 @@ export function App() {
   }, [attention])
 
   useEffect(() => {
-    if (!contextMenu && !spaceMenu && !emptyMenu && !mainMenuOpen && !renameTarget && !worktreeCreate && !accessTokenOpen) return
+    if (!contextMenu && !spaceMenu && !emptyMenu && !mainMenuOpen && !renameTarget && !worktreeCreate) return
     const dismissEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       event.preventDefault()
@@ -296,11 +282,10 @@ export function App() {
       setMainMenuOpen(false)
       setRenameTarget(null)
       setWorktreeCreate(null)
-      if (accessTokenOpen) finishAccessToken(null)
     }
     window.addEventListener('keydown', dismissEscape, true)
     return () => window.removeEventListener('keydown', dismissEscape, true)
-  }, [contextMenu, spaceMenu, emptyMenu, mainMenuOpen, renameTarget, worktreeCreate, accessTokenOpen])
+  }, [contextMenu, spaceMenu, emptyMenu, mainMenuOpen, renameTarget, worktreeCreate])
 
   useEffect(() => {
     if (!contextMenu && !spaceMenu && !emptyMenu && !mainMenuOpen) return
@@ -615,14 +600,6 @@ export function App() {
     }
   }
 
-  const finishAccessToken = (token: string | null) => {
-    const resolve = accessTokenResolve.current
-    accessTokenResolve.current = null
-    setAccessTokenOpen(false)
-    if (token) localStorage.setItem('mux.token', token)
-    resolve?.(token)
-  }
-
   const manageWorktrees = async (session: Session) => {
     const items = await api<Worktree[]>('GET', `/api/git/worktrees?cwd=${encodeURIComponent(session.cwd)}`)
     setContextMenu(null)
@@ -651,7 +628,7 @@ export function App() {
     { id: 'history.open', label: 'Browse session history', category: 'view', available: true, run: () => void showHistory() },
     { id: 'settings.open', label: 'Open Settings', category: 'view', available: true, run: () => openSettings() },
     { id: 'settings.project', label: 'Open current project settings', category: 'view', available: !!(active?.cwd||rememberedCwds[0]), disabledReason: 'No project directory is available', run: () => openSettings('Current project') },
-    { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => openSettings('Usage analytics') },
+    { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => {setUsageOpen(true);setMainMenuOpen(false)} },
     { id: 'hooks.open', label: 'Open hooks and notification settings', category: 'view', available: true, run: () => openSettings('Hooks and notifications') },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
     { id: 'notes.open', label: 'Open current space notes', category: 'view', available: !!activeSpace&&!!spaceNoteTarget(activeSpace), disabledReason: 'No project directory is available', run: () => activeSpace&&openSpaceNotes(activeSpace) },
@@ -719,6 +696,7 @@ export function App() {
   ]
   const shownCommands = searchCommands(commands, paletteQuery)
   useEffect(() => setPaletteIndex(0), [paletteQuery, paletteOpen])
+  useEffect(()=>{if(!paletteOpen)return;const frame=requestAnimationFrame(()=>{paletteInput.current?.focus();paletteInput.current?.setSelectionRange(paletteInput.current.value.length,paletteInput.current.value.length)});return()=>cancelAnimationFrame(frame)},[paletteOpen])
 
   function focusRelativePane(offset: number) {
     if (!paneIds.length) return
@@ -893,7 +871,7 @@ export function App() {
     </div>}
 
     {paletteOpen && <div class="palette-layer" onMouseDown={event => event.target === event.currentTarget && setPaletteOpen(false)}>
-      <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette"><input role="combobox" aria-controls="command-results" aria-expanded="true" aria-activedescendant={shownCommands[paletteIndex]?`command-${shownCommands[paletteIndex].id.replaceAll(/[^a-zA-Z0-9_-]/g,'-')}`:undefined} value={paletteQuery} onInput={event => setPaletteQuery(event.currentTarget.value)} onKeyDown={event => {
+      <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette"><input ref={paletteInput} role="combobox" aria-controls="command-results" aria-expanded="true" aria-activedescendant={shownCommands[paletteIndex]?`command-${shownCommands[paletteIndex].id.replaceAll(/[^a-zA-Z0-9_-]/g,'-')}`:undefined} value={paletteQuery} onInput={event => setPaletteQuery(event.currentTarget.value)} onKeyDown={event => {
         if (event.key === 'Escape') setPaletteOpen(false)
         if (event.key === 'ArrowDown') { event.preventDefault(); setPaletteIndex(index => Math.min(index + 1, Math.max(0, shownCommands.length - 1))) }
         if (event.key === 'ArrowUp') { event.preventDefault(); setPaletteIndex(index => Math.max(0, index - 1)) }
@@ -1010,14 +988,6 @@ export function App() {
       </form>
     </div>}
 
-    {accessTokenOpen && <div class="modal-layer">
-      <form class="modal access-token-modal" onSubmit={event => { event.preventDefault(); finishAccessToken(accessTokenValue.trim() || null) }}>
-        <div class="modal-heading"><div><span>AUTH::DAEMON</span><h2>Access token required</h2></div><button type="button" aria-label="Cancel authentication" onClick={() => finishAccessToken(null)}>×</button></div>
-        <label>token<input type="password" autocomplete="current-password" value={accessTokenValue} onInput={event => setAccessTokenValue(event.currentTarget.value)} autofocus /></label>
-        <div class="modal-footer"><span>stored in this browser</span><button type="button" onClick={() => finishAccessToken(null)}>Cancel</button><button class="primary" type="submit" disabled={!accessTokenValue.trim()}>Connect</button></div>
-      </form>
-    </div>}
-
     {worktrees && <div class="worktree-layer" onMouseDown={event => event.target === event.currentTarget && setWorktrees(null)}>
       <section class="worktree-panel">
         <header><div><span>GIT WORKTREES</span><strong>{worktrees.session.cwd}</strong></div><button onClick={() => setWorktrees(null)}>×</button></header>
@@ -1061,7 +1031,9 @@ export function App() {
       </div>
     </div>}
 
-    {settingsOpen && <Settings cwd={active?.cwd||rememberedCwds[0]} initialSection={settingsSection} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles() }} />}
+    {settingsOpen && <Settings cwd={active?.cwd||rememberedCwds[0]} initialSection={settingsSection} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles() }} />}
+
+    {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}
 
     {processSession && <ProcessPanel session={processSession} onClose={() => setProcessSession(null)} onAttached={(preview, space) => {
       setPreviews(current => ({...current, [preview.id]: preview}))
