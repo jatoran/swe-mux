@@ -12,6 +12,7 @@ import { keyChord } from './keys'
 import { Settings } from './Settings'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command } from './commands'
+import { clampContextMenuLeft } from './menuPosition'
 import {
   attachLeaf, emptyLayout, leaves, noteResourceId, parseLayout, parseNoteResourceId,
   reconcileTerminals, removeLeaf, replaceTerminal, resourceLeaf, setSplitRatio,
@@ -885,7 +886,7 @@ export function App() {
       </div>
     </div>}
 
-    {contextMenu && <div class="context-menu" role="menu" aria-label={`Session actions for ${contextMenu.session.name}`} style={{ left: Math.min(contextMenu.x, innerWidth - 205), top: Math.max(4, Math.min(contextMenu.y, innerHeight - 520)) }}>
+    {contextMenu && <div class="context-menu" role="menu" aria-label={`Session actions for ${contextMenu.session.name}`} style={{ left: clampContextMenuLeft(contextMenu.x, innerWidth), top: Math.max(4, Math.min(contextMenu.y, innerHeight - 520)) }}>
       <div class="context-title"><span class={`state-dot ${contextMenu.session.state}`} /><strong>{contextMenu.session.name}</strong></div>
       <button onClick={() => runNamedCommand('session.rename')}>Rename</button>
       <button onClick={() => runNamedCommand('session.open')}>Open in focused pane</button>
@@ -913,7 +914,7 @@ export function App() {
       <button class="danger" onClick={() => runNamedCommand('session.killImmediate')}>Kill session</button>
     </div>}
 
-    {spaceMenu && <div class="context-menu" role="menu" aria-label={`Space actions for ${spaceMenu.space.name}`} style={{ left: Math.min(spaceMenu.x, innerWidth - 205), top: Math.max(4, Math.min(spaceMenu.y, innerHeight - 310)) }}>
+    {spaceMenu && <div class="context-menu" role="menu" aria-label={`Space actions for ${spaceMenu.space.name}`} style={{ left: clampContextMenuLeft(spaceMenu.x, innerWidth), top: Math.max(4, Math.min(spaceMenu.y, innerHeight - 310)) }}>
       <div class="context-title"><strong>{spaceMenu.space.name}</strong></div>
       <button onClick={() => runNamedCommand('space.newTerminal')}>New terminal</button>
       <button onClick={() => runNamedCommand('space.newTerminalCustom')}>New terminal custom…</button>
@@ -930,7 +931,7 @@ export function App() {
       </>}
     </div>}
 
-    {emptyMenu && <div class="context-menu" role="menu" style={{ left: Math.min(emptyMenu.x, innerWidth - 250), top: Math.min(emptyMenu.y, innerHeight - 280) }}>
+    {emptyMenu && <div class="context-menu" role="menu" style={{ left: clampContextMenuLeft(emptyMenu.x, innerWidth), top: Math.min(emptyMenu.y, innerHeight - 280) }}>
       <div class="context-title"><strong>EMPTY PANE</strong></div>
       <button role="menuitem" onClick={() => { setEmptyMenu(null); void spawnTerminal() }}>New terminal</button>
       <button role="menuitem" onClick={() => { setEmptyMenu(null); openLauncher() }}>New terminal custom…</button>

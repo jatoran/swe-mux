@@ -12,6 +12,7 @@ import type { Session } from './types'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
 import { terminalKeyDecision } from './terminalKeys'
+import { clampContextMenuLeft } from './menuPosition'
 
 interface Props { session: Session; onState: (session: Session) => void; broadcast: boolean; keybindings: Record<string, string>; scrollback: number }
 
@@ -306,7 +307,7 @@ export function TerminalPane({ session, onState, broadcast, keybindings, scrollb
     <button class={findCase ? 'active' : ''} title="Match case" aria-pressed={findCase} onClick={() => { setFindCase(value => !value); setFindResult('') }}>Aa</button>
     <span class={findResult === 'no match' ? 'missing' : ''}>{findResult}</span>
     <button title="Close find" onClick={closeFind}>×</button>
-  </div>}<button class="mobile-paste" onClick={() => runCommand('terminal.paste')}>Paste</button>{(session.backend === 'claude' || session.backend === 'codex') && <button class="mobile-paste mobile-paste-image" onClick={() => runCommand('terminal.pasteImage')}>Paste image</button>}{menu && <div class="terminal-menu" role="menu" style={{ left: Math.min(menu.x, innerWidth - 180), top: Math.min(menu.y, innerHeight - 230) }}>
+  </div>}<button class="mobile-paste" onClick={() => runCommand('terminal.paste')}>Paste</button>{(session.backend === 'claude' || session.backend === 'codex') && <button class="mobile-paste mobile-paste-image" onClick={() => runCommand('terminal.pasteImage')}>Paste image</button>}{menu && <div class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
     <button role="menuitem" disabled={!termRef.current?.hasSelection()} onClick={() => runCommand('terminal.copy')}>Copy</button>
     <button role="menuitem" onClick={() => runCommand('terminal.paste')}>Paste</button>
     {(session.backend === 'claude' || session.backend === 'codex') && <button role="menuitem" onClick={() => runCommand('terminal.pasteImage')}>Paste image</button>}

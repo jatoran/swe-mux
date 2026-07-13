@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 import shutil
-import subprocess
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -36,13 +35,12 @@ def prepare_usage_command(
         )
     windows = os.name == "nt" if windows is None else windows
     if windows and Path(resolved).suffix.casefold() in {".cmd", ".bat"}:
-        command_line = subprocess.list2cmdline([resolved, *command[1:]])
         return [
             os.environ.get("COMSPEC", "cmd.exe"),
             "/d",
-            "/s",
             "/c",
-            command_line,
+            resolved,
+            *command[1:],
         ]
     return [resolved, *command[1:]]
 

@@ -40,10 +40,25 @@ spec language:
   promotes in place to Claude or Codex. A history “project” is organizational metadata
   derived from repository/cwd identity, not a return of the retired orchestration Project
   model.
-- Project-specific swe-mux state belongs inside `.swe-mux/` at the resolved project root:
-  the current Git worktree root when available, otherwise the session/space cwd. This
-  includes project overrides, notes, and future project-owned metadata. Machine-wide
-  daemon/runtime configuration remains under the user's mux data directory.
+- Project-specific swe-mux state belongs inside `.swe-mux/` at its recorded project-scope
+  root: the current Git worktree root when available, otherwise the normalized
+  non-repository scope root. This includes project overrides, notes, and future
+  project-owned metadata. Machine-wide daemon/runtime configuration remains under the
+  user's mux data directory.
+- Project scope and space are independent dimensions. A project scope is one concrete
+  worktree/filesystem root that owns `.swe-mux/`; a space is a workflow/layout group that
+  may contain sessions from multiple project scopes. Repository groups exist only for
+  history/display and never own behavior, notes, config, hooks, or space anchors.
+- Every session resolves one immutable project scope at spawn. Spaces carry an optional,
+  explicit anchor used for defaults and future artifact placement, never as a membership
+  constraint. Every project-resident artifact records its owning scope at creation and
+  does not follow later anchor changes.
+- Projects remain durable and browsable after their spaces/sessions close. Every recognized
+  `.swe-mux/` artifact is reachable from a Projects view as linked, detached, unlinked, or
+  conflicting; closing runtime/workflow objects never makes project files invisible.
+- Repository files execute nothing. Project-scoped hooks in the current product are
+  machine-owned `~/.mux/hooks.toml` rules matched against session project scope; repository-
+  owned executable rules and their trust store remain unscheduled.
 - Notes are human-readable Markdown files under `.swe-mux/notes/`, not opaque SQLite note
   bodies or agent transcripts. Space notes are primary; optional session annotations link
   to a space/project and use stable filenames. Notes never enter agent context implicitly.
@@ -60,12 +75,26 @@ spec language:
   context features. Direct LAN binding, `0.0.0.0`, Funnel, and public exposure are unsupported.
 - Splits are explicit actions only. Ordinary terminal creation replaces or fills the
   focused pane while the displaced session remains live in the sidebar.
+- A session is one atomic process; panes and tabs are viewports over sessions. Sessions
+  never contain other sessions. Horizontal split, vertical split, and tab stack are layout
+  container types with no effect on session identity, lifecycle, hooks, or history.
+- The sidebar must make layout membership explicit. Sessions in a split or tab stack appear
+  once beneath that layout hierarchy; live sessions absent from the current layout appear
+  in a distinct unpaned group. A flat list that makes grouped sessions look unrelated is
+  not an acceptable presentation.
 - Browser `alert`, `confirm`, and `prompt` dialogs are prohibited. Destructive toolbar
   actions use inline two-click confirmation; explicit context-menu Kill executes
   immediately.
 - All UI chrome and terminal text share one monospace face, size, and weight matching
   xterm.
   Menus, hints, headings, inputs, history, and settings have no typography exceptions.
+- Windows is the product-proving platform. Phase 5.5 first corrects project/space ownership;
+  Phase 6 then improves Windows capability, diagnostics, automation, and reliability before
+  platform expansion or a public release. Deferred priority is Telegram first, then
+  SSH/native attach, native Linux/macOS support, and public packaging/release.
+- The browser remains the primary product surface. `mux` is a practical controller for
+  automation, diagnostics, and daemon actions; CLI parity covers useful control-plane
+  operations, not presentation-only browser interactions.
 
 ## Implemented baseline
 
@@ -77,22 +106,23 @@ The current application already provides the foundation this roadmap extends:
   observation; agent state/context display.
 - Persistent space records/layout membership, history/events SQLite index, external history
   reconciliation, transcript viewing/resume, Git polling/worktrees, and meta-hooks.
-- Bearer-aware HTTP/WS surfaces, `mux` CLI basics, sidebar spaces/sessions, up to four
+- Credential-free localhost/tailnet HTTP/WS surfaces, `mux` CLI basics, sidebar
+  spaces/sessions, up to four
   panes, explicit splits, detach/zoom, broadcast, palette/keybindings, responsive
   drawer, terminal-aware clipboard, and mobile Paste.
 
 ## Delivery order
 
 ```text
-Runtime contracts
-  -> Configuration service
-    -> Settings + shell profiles
-      -> command/pane/input completion
-        -> history/events/hooks/git + mobile workspace surfaces
-          -> remote-security hardening
-            -> platform abstraction + Linux/macOS
-              -> release matrix and packaging
-                -> optional external channels + SSH attach
+Completed foundation: Phases 0-5
+  -> Phase 5.5: project scopes + space anchors + artifact ownership + layout clarity
+    -> Phase 6: Windows product maturity + practical CLI/diagnostics
+
+Deferred queue:
+  Phase 7: Telegram
+    -> Phase 8: SSH/native attach
+      -> Phase 9: WSL agent bridge + native Linux/macOS
+        -> Phase 10: public packaging and release
 ```
 
 Cross-cutting test work ships with every phase; it is not deferred to the end.
@@ -288,7 +318,8 @@ args = ["--distribution", "Ubuntu"]
 
 - [x] Stage A: interactive WSL profiles open the selected distro and translate Windows
   cwd to a valid distro cwd using `wsl.exe --cd` or a tested equivalent.
-- [ ] Stage B: install/use a distro-side mux bridge for Claude/Codex promotion, hooks,
+- Deferred to Phase 9 — Stage B: install/use a distro-side mux bridge for Claude/Codex
+  promotion, hooks,
   secrets, and transcript access. A Windows `.cmd` shim alone cannot observe Linux-side
   agents.
   - Current Ubuntu probe: no native Claude; `codex` resolves to the Windows npm install
@@ -303,7 +334,8 @@ args = ["--distribution", "Ubuntu"]
   cwd, resize, Unicode, clipboard, and exit behavior.
 - [x] Default creation is zero-dialog/non-split; custom creation starts exactly the chosen
   profile/cwd and persists its identity.
-- [ ] WSL Claude and Codex promotion/state tests pass before WSL profiles are labelled
+- Deferred to Phase 9 — WSL Claude and Codex promotion/state tests must pass before WSL
+  profiles are labelled
   agent-aware.
 
 ## Phase 3 — Commands, panes, terminal input, and interaction parity
@@ -368,7 +400,7 @@ args = ["--distribution", "Ubuntu"]
   active backend adapter. It never sends encoded image bytes through the PTY or changes
   ordinary text/bracketed-paste behavior.
 - [x] Add router/clipboard regression coverage for PowerShell, CMD, pwsh, WSL, Claude,
-  and Codex. Real platform PTY smoke coverage remains in Phase 7's matrix.
+  and Codex. Broader Windows PTY smoke coverage remains in Phase 6's matrix.
 
 ### Phase 3 exit criteria
 
@@ -427,20 +459,23 @@ args = ["--distribution", "Ubuntu"]
 
 ### Project-local configuration and notes
 
-- [x] Resolve one project root for each space/session: current Git worktree root when
-  available, otherwise normalized cwd. Never place project files in a Git common-dir or a
-  parent repository when the session is operating in a distinct worktree.
+- [x] Resolve the concrete project root from cwd for each session and project-file
+  operation: current Git worktree root when available, otherwise normalized cwd. Never
+  place project files in a Git common-dir or parent repository for a distinct worktree.
+  Phase 5.5 replaces repeated cwd-based ownership with durable session scopes, optional
+  space anchors, and artifact-owner records.
 - [x] Define a versioned `.swe-mux/config.toml` containing only project-scoped fields.
   Establish precedence and diagnostics explicitly: request/session override -> space
   override -> project config -> global config -> daemon default. Machine auth, bind,
   secrets, data-directory, and unrelated user preferences are forbidden project fields.
-  Project-bound space defaults live in this project file; global SQLite may index the
-  association/revision but is not the authoritative copy of project configuration.
+  Space overrides remain in global SQLite; project defaults live in this project file.
+  Phase 5.5 makes the scope used for each layer explicit and non-circular.
 - [x] Store human-readable Markdown notes as
   `.swe-mux/notes/spaces/<stable-space-id>.md` and optional
   `.swe-mux/notes/sessions/<stable-session-or-history-id>.md`. Define safe filename
   mapping, metadata, rename/move behavior, orphan handling, and cleanup semantics without
-  embedding note bodies in SQLite.
+  embedding note bodies in SQLite. Phase 5.5 adds durable owning-scope metadata so these
+  paths remain unambiguous in mixed spaces and after re-anchoring.
 - [x] Add atomic file replacement, optimistic revisions, external-edit detection, and
   conflict UI so browser autosave never silently overwrites editor/Git changes.
 - [x] Add terminal-styled desktop/mobile raw Markdown editing, export,
@@ -508,7 +543,7 @@ args = ["--distribution", "Ubuntu"]
 - [x] Add timeout/status/retry policy for `http`; define burst/rate-limit semantics.
 - [x] Keep UI notification delivery complete and add provider-neutral delivery records,
   correlation ids, reply targets, retry state, and sender/channel metadata needed by later
-  external adapters. Telegram itself is deliberately deferred to Phase 8.
+  external adapters. Telegram itself is deliberately deferred to Phase 7.
 
 ### Broadcast and Git
 
@@ -533,7 +568,7 @@ args = ["--distribution", "Ubuntu"]
   input is detected while retaining compact desktop density.
 - [x] Add responsive contract coverage for sidebar, history, Settings, palette, custom
   launcher, notes, process inspector, previews, clipboard-image handoff, and terminal
-  controls at the mobile breakpoint. Phase 7 adds real-browser portrait/landscape visual
+  controls at the mobile breakpoint. Phase 6 adds real-browser portrait/landscape visual
   regression to this source-level contract suite.
 - [x] Add semantic dialog/menu/listbox roles, labelled icon controls, focus trap/restore,
   aria-live errors/state, contrast checks, and reduced-motion support.
@@ -557,7 +592,7 @@ args = ["--distribution", "Ubuntu"]
   session, and process/preview actions cannot target another session accidentally.
 - [x] Awaiting-agent attention is usable from another tab and by screen readers.
 - [x] Core flows have keyboard-router, touch/mobile layout, semantic-role, focus, live-region,
-  and reduced-motion contract coverage. Phase 7 retains full real-browser accessibility
+  and reduced-motion contract coverage. Phase 6 retains full real-browser accessibility
   and orientation regression as release-quality validation.
 
 ## Phase 5 — Full mobile workspace over direct Tailscale access
@@ -634,198 +669,529 @@ audit infrastructure, or public-ingress machinery.
 - [x] Malicious project config, clipboard uploads, and preview destinations cannot cause
   command execution, cross-session access, filesystem escape, or arbitrary network
   proxying. Focused boundary tests cover each case.
-- [x] `mux doctor` and Settings clearly report local/tailnet listener health, direct URL,
-  optional Serve availability, grant guidance, Funnel/public-exposure warnings,
-  and actionable misconfiguration errors without modifying tailnet policy.
+- [x] Settings and the current lightweight `mux doctor` report local/tailnet listener
+  health, direct URL, optional Serve availability, grant guidance, Funnel/public-exposure
+  warnings, and actionable network errors without modifying tailnet policy. Phase 6
+  expands `mux doctor` beyond this remote-status scope.
 
-## Phase 6 — Cross-OS compatibility
+## Phase 5.5 — Project scopes, space anchors, and artifact ownership
 
-WSL profiles are a Windows feature; a native Linux daemon is separate work. Cross-OS
-support must preserve the same API, browser behavior, session identity, attach/detach
-invariant, and daemon-owned child lifecycle.
+Phase 4 shipped project-local config/notes by resolving a cwd at each request. That leaves
+space notes and future project-resident space artifacts ambiguous when one space contains
+sessions from multiple repositories. Phase 5.5 replaces implicit cwd routing with explicit
+scope identities and ownership before more project-local systems are added.
 
-### Platform interfaces
+This phase is corrective and precedes Phase 6. It also closes the layout-model visibility
+gap by adding tab stacks and making split/stack membership explicit in the sidebar. It does
+not turn projects into sidebar containers, constrain mixed spaces, move existing files
+automatically, or introduce repository-owned executable rules.
 
-- [ ] Introduce `PtyHost` protocol/factory implementations:
-  - Windows: ConPTY/pywinpty.
-  - Linux/macOS: POSIX PTY using `forkpty`/`openpty` or a vetted equivalent.
-- [ ] Introduce lifecycle/reaper implementations:
-  - Windows: existing Job Object.
-  - POSIX: a per-session guardian owns the process group and watches a daemon pipe; EOF
-    after clean exit or daemon SIGKILL triggers graceful signal, bounded wait, and group
-    SIGKILL. Linux may add parent-death signals; macOS still uses the guardian contract.
-- [ ] Introduce a cross-platform process-inspection interface for descendant lifecycle,
-  resource snapshots, signals/termination, and listener ownership. Windows Job Objects,
-  POSIX process groups, and WSL bridge data must produce the same bounded public model.
-- [ ] Introduce OS-specific reveal service: Explorer, macOS `open`, Linux `xdg-open`.
-- [ ] Generate agent promotion launchers per OS: `.cmd` on Windows and executable POSIX
-  shims/scripts on Unix, with safe argv/env/hook-secret propagation.
-- [ ] Replace Windows string quoting with structured argv; quote only at the platform
-  process boundary.
-- [ ] Replace lowercased path comparisons with platform-aware normalization/same-file
-  checks; support spaces, Unicode, symlinks, case sensitivity, and UNC/WSL paths.
-- [ ] Make project-root and `.swe-mux/` resolution platform aware across Git worktrees,
-  non-repository cwd, symlinks, case sensitivity, UNC paths, and WSL path translation.
-- [ ] Make all imports platform guarded so package import, config, CLI, and non-PTY tests
-  work on every supported OS.
-- [ ] Make meta-hook `run`, executable discovery, default data directories, transcript
-  locations, and reveal behavior platform aware.
+### Scope identities and persistence
 
-### Rollout
+- [ ] Split the current overloaded project identity into:
+  - `project_scopes`: stable id plus normalized concrete worktree/filesystem root and
+    optional `repo_group_id`; one scope owns one `.swe-mux/` root.
+  - `repo_groups`: Git common-directory/remote-derived history and display grouping only.
+    Config, notes, hooks, anchors, sessions, and artifacts never reference a repo group for
+    behavioral decisions.
+- [ ] Create project-scope records only during session spawn, explicit anchor/artifact
+  selection, migration, or another operation that needs durable identity. Directory
+  listing and project inspection create neither a database identity nor `.swe-mux/` files.
+- [ ] Add immutable `project_scope_id` to live sessions and history. Resolve it from the
+  effective spawn cwd before process creation; shell `cd`, promotion/demotion, rename,
+  space moves, and pane operations never change it. Cross-scope reassignment requires a
+  new session.
+- [ ] Add `anchor_mode: auto | fixed | none` and nullable
+  `anchor_project_scope_id` to spaces with validated combinations:
+  - `auto/null`: eligible for first successful spawn/default-cwd inference.
+  - `auto/id`: inferred once and never re-inferred from later membership changes.
+  - `fixed/id`: explicitly selected by the user.
+  - `none/null`: explicitly unanchored and never inferred.
+- [ ] Add durable ownership metadata for project-resident space artifacts. A space note
+  records its `project_scope_id` when created; future artifact kinds use the same rule.
+  Artifact ownership changes only through an explicit, conflict-safe Move operation.
+- [ ] Preserve artifact records when their originating space or history relationship is
+  removed. Store enough last-known type/id/label metadata to present a detached artifact;
+  never cascade-delete project files or their only discoverability record.
 
-- [ ] Windows regression: preserve ConPTY, Job Object, PowerShell/CMD/pwsh, WSL, agent
-  promotion, worktrees, and crash cleanup.
-- [ ] Linux: PTY/process groups, bash/zsh/pwsh profiles, Claude/Codex promotion and native
-  transcripts, `xdg-open`, packaging, and forced-daemon-death cleanup.
-- [ ] macOS: PTY/process groups, zsh/bash/pwsh profiles, Claude/Codex promotion and native
-  transcripts, `open`, service environment behavior, packaging, and cleanup.
-- [ ] Define and migrate config/data locations consistently; document any Windows
-  `~/.mux` to XDG/platform-directory differences.
-- [ ] Translate clipboard-upload paths and preview listener ownership across native
-  Windows, WSL, Linux, and macOS without exposing a host-only path to a guest agent.
+### Deterministic spawn and configuration resolution
 
-### Cross-OS exit criteria
+- [ ] Resolve session cwd in two non-circular phases:
+  1. Seed cwd: request cwd → space default cwd → anchor scope root → global startup cwd →
+     daemon cwd.
+  2. Resolve `project_scope_id` from the seed, then final cwd: request cwd → space default
+     cwd → resolved scope's relative project `default_cwd` → seed cwd.
+- [ ] Keep project `default_cwd` as a bounded relative refinement inside an already-
+  resolved scope. Reject absolute/parent traversal and symlink escape; if the configured
+  directory is missing or invalid, use the seed cwd and emit a visible diagnostic rather
+  than selecting another scope or failing terminal creation.
+- [ ] Apply remaining spawn/config precedence as request overrides → space overrides →
+  session-scope `.swe-mux/config.toml` → global config. Project shell defaults may select
+  only an existing machine-defined profile and never define an executable or command.
+- [ ] Enrich normalized events, history, process/preview records, notifications, and hook
+  match fields with both `project_scope_id` and display-only `repo_group_id` where relevant.
+  Behavior always selects the immutable session scope.
 
-- [ ] Windows, Linux, and macOS pass the same API/WS/session lifecycle contract suite.
-- [ ] Interactive input, resize, UTF-8, Unicode widths, signals, clipboard/paste,
-  scrollback/replay, shell exit, and agent promotion work on every OS.
-- [ ] Clean termination and an actual daemon SIGKILL close the guardian pipe and leave no
-  owned child/process group in tested platform scenarios.
-- [ ] Reveal, Git/worktrees, history reconciliation/resume, hooks, and default/custom
-  shell profiles behave natively on every supported OS.
-- [ ] Project-local `.swe-mux/` files, process inspection/listeners, notes, previews, and
-  clipboard-image handoff pass equivalent path/ownership tests on every supported OS.
+### Anchor lifecycle and migration
 
-## Phase 7 — CLI parity, diagnostics, packaging, and release quality
+- [ ] In `auto` mode, resolve and store an anchor when an explicit space default cwd is
+  saved or after the first successful session spawn into an empty `auto/null` space.
+  Failed spawns and later mixed membership never alter the anchor.
+- [ ] Space anchor changes affect defaults and placement of future artifacts only. They do
+  not move sessions, change session scopes, retarget existing notes, or rewrite project
+  files. Clearing an anchor sets `none/null`; choosing a scope sets `fixed/id`.
+- [ ] Migrate existing SQLite state without moving project files or forcing choices:
+  - Empty spaces → `auto/null`.
+  - Spaces whose default cwd and existing session/history membership resolve to one scope
+    → `auto/id`.
+  - Mixed or conflicting spaces → `none/null`.
+- [ ] Convert current history project identity into explicit scope plus repository-group
+  fields while preserving filters, labels, worktree roots, native transcript associations,
+  and agent-only history behavior.
+- [ ] Discover existing space-note ownership only across known scopes. Exactly one matching
+  file binds the artifact; multiple matches become a visible conflict; no match remains
+  unbound until explicit note creation. Migration never copies, moves, deletes, or silently
+  chooses between Markdown files.
 
-### CLI and diagnostics
+### Notes and future project artifacts
 
-- [ ] Add session filters, profile/custom argv support, rename/move/pin, complete space
-  management, server-side broadcast, Settings/config, and profile commands.
-- [ ] Load the local, direct tailnet, or optional Serve URL from config while preserving
-  `MUX_URL`. The generic `MUX_TOKEN` path was removed in Phase 5.
-- [ ] Return a conflict for ambiguous names; add stable structured errors and
-  human-table/`--json` output modes.
-- [ ] Add `mux doctor`: platform/PTY backend, shell/profile executable checks, agent
-  capabilities, writable global/project `.swe-mux/` paths, ccusage availability/version,
-  process/preview capability, listener/port/tailnet status, frontend bundle version, and non-
-  secret diagnostics.
+- [ ] Create a space note in its current anchor scope and persist that ownership. Opening
+  or saving the note uses artifact scope, not active cwd, active session, or current space
+  anchor. Session/history notes use the immutable owning session/history scope.
+- [ ] Opening notes on an unanchored space presents a blocking project-scope picker seeded
+  from member-session scopes. No global scratch-note fallback exists; cancelling creates
+  nothing.
+- [ ] Re-anchoring a space with an existing note surfaces that the note belongs to another
+  scope and offers explicit Keep, Move, and Copy actions:
+  - Keep retains the canonical artifact and file in its original scope.
+  - Move performs source/destination revision, collision, writable-root, symlink, and
+    cross-volume checks; it updates ownership only after successful relocation.
+  - Copy creates an explicitly separate file and does not silently change which artifact
+    is canonical.
+- [ ] Preserve external-edit conflicts, atomic writes, intentional orphan recovery, note
+  size limits, disabled/read-only states, and the rule that layout removal never deletes
+  Markdown.
+- [ ] Make durable session notes agent-only. A live plain shell's note action redirects to
+  its space note and explains why; once the shell promotes to Claude/Codex, its stable
+  session/history identity may own a session note. Agent notes remain reachable from both
+  history detail and the owning project after exit.
+- [ ] Index pre-existing plain-shell notes and files whose recorded space/session no longer
+  exists as unlinked or detached artifacts. Never hide, auto-delete, or guess a new owner.
 
-### Automated quality matrix
+### Projects registry and artifact discoverability
 
-- [ ] Expand Python coverage: config/migrations, adapters/state races, session lifecycle,
-  API/Host/Origin/WS, spaces/layout, history/resume, events/hooks, Git/worktrees, CLI, and reaper.
-- [ ] Add frontend component/Playwright coverage: default/custom creation, non-split
-  replacement, inline kill, spaces, pane persistence, palette/input transparency,
-  Settings, history resume, notes, processes/previews, clipboard media, tailnet access,
-  responsive/touch, and accessibility.
-- [ ] Add real PTY platform integration tests for paths with spaces/Unicode, large output,
-  resize, Ctrl+C/signals, bracketed paste, multiple browser input ownership, and forced
-  daemon death.
-- [ ] Add Windows/Linux/macOS CI for ruff, mypy, pytest, frontend typecheck/build,
-  wheel/sdist install smoke, and platform PTY tests.
+- [ ] Add a durable Projects view reachable from `: menu` and the command palette. It is a
+  shelf for active and dormant project scopes, not a replacement sidebar hierarchy.
+- [ ] List each scope with concrete root/worktree, repository group, last activity,
+  active/dormant/missing-root state, anchor/space references, live sessions, agent history,
+  project-config status, and artifact counts.
+- [ ] Add project detail for configuration diagnostics plus every recognized supported
+  `.swe-mux/` artifact. Classify artifacts as:
+  - linked: owning live space or agent history exists;
+  - detached: a recorded owner was closed/deleted;
+  - unlinked: a supported file exists without a known artifact relationship;
+  - conflicting: multiple files/records claim one canonical identity.
+- [ ] Build a bounded, symlink-safe inventory of supported `.swe-mux/` config/note paths
+  inside known scope roots. The filesystem remains authoritative for user-authored files;
+  the index accelerates discovery and records ownership but never treats an absent row as
+  permission to hide or delete a recognized file.
+- [ ] Add project hide/unhide for recent-list hygiene. Add explicit Forget only when no
+  live session, history, anchor, or artifact record references the scope; otherwise return
+  typed blockers. Forget removes machine-owned registry/cache state only and never deletes
+  `.swe-mux/`, Git content, native transcripts, or user notes. Rediscovery is allowed.
+- [ ] Keep missing/offline roots visible with diagnostics while referenced. A missing path
+  cannot silently collapse into another scope or make its indexed artifacts appear owned
+  by a replacement directory.
 
-### Packaging and operations
+### Layout stacks and sidebar hierarchy
 
-- [ ] Guarantee the wheel contains a frontend bundle built from the same source revision;
-  fail release validation on stale assets.
-- [ ] Complete public package metadata and governance: explicit license file, project URLs,
-  supported-platform classifiers, changelog/release policy, security/contact path, and a
-  README that labels the first release Windows-only until Phase 6 exits.
-- [ ] Reserve/publish the `swe-mux` PyPI name only through a tested alpha release. Validate
-  TestPyPI first, then use PyPI Trusted Publishing with short-lived CI identity; never keep
-  a long-lived repository publishing token.
-- [ ] Test `uv tool install swe-mux` and `pipx install swe-mux` from wheel/sdist on clean
-  Windows machines. The installed `mux`/`muxd` commands, embedded frontend, config
-  migration, uninstall, and upgrade paths must work without a source checkout or Node.js.
-- [ ] Provide clean-machine install, upgrade, uninstall, config migration/backup, logging,
-  diagnostics, and recovery documentation.
-- [ ] Add optional service/autostart recipes only after per-platform child lifecycle is
-  proven.
-- [ ] Publish capability/version information through health/config diagnostics.
+- [ ] Preserve the process/view boundary: a session remains one independently addressable,
+  killable, movable, observable process; a pane leaf is its viewport. No API, label, or UI
+  action may imply that a session owns another session.
+- [ ] Extend the versioned recursive layout schema with a stable-id `stack` container. A
+  stack owns ordered terminal leaves plus `active_child_id`, occupies one tiled region, and
+  displays one active child at a time. Stacks compose inside horizontal/vertical splits;
+  the initial stack contract does not require a tab to contain another split subtree.
+- [ ] Add tab-group operations: create from selected/paned sessions, add a new or existing
+  session, activate, reorder, detach, move into a split, and dissolve when fewer than two
+  children remain. All mutations use existing optimistic layout revisions.
+- [ ] Keep lifecycle actions unambiguous. `Remove from tab group` and `Detach from layout`
+  leave the session running and visible as unpaned; `Kill session` terminates it and removes
+  every layout reference. Do not put an ambiguous close control on a tab.
+- [ ] Render each space in the sidebar as a clear presentation hierarchy:
+  - current layout group, with collapsible horizontal-split, vertical-split, and tab-stack
+    rows that mirror the persisted layout tree;
+  - each paned session exactly once beneath its containing layout node, in visual order;
+  - a distinct `unpaned` group containing live sessions absent from the layout tree.
+- [ ] Give layout rows compact terminal-style glyphs/labels, connector lines, child counts,
+  and stable expansion state. Do not repeat cwd, Git, PID, or other pane-header metadata.
+  A split pair and an unrelated third session must be distinguishable without opening or
+  focusing any terminal.
+- [ ] Make sidebar and stage navigation bidirectional. Clicking a paned session activates
+  all ancestor stack tabs, focuses its pane, and reveals it; focusing a pane highlights and
+  reveals its one sidebar row. Clicking an unpaned session follows the existing attach/
+  replacement behavior and updates layout grouping atomically.
+- [ ] Expose the canonical session context menu from every terminal pane header. Right-
+  clicking the session title, status, agent indicator, or otherwise non-interactive header
+  surface opens the same session-scoped commands, ordering, disabled explanations, and
+  inline confirmations as right-clicking that session's sidebar row. Right-clicking the
+  terminal body retains its pane/clipboard context menu.
+- [ ] Add a visible three-dot button to every session pane header that opens that same
+  canonical session menu for mouse, touch, and keyboard users. Anchor the menu to the
+  button, label its purpose accessibly, restore focus on dismissal, and preserve the
+  existing Escape/outside-click dismissal contract. Do not maintain separate sidebar and
+  header menu definitions that can drift.
+- [ ] Show agent working/awaiting/finished attention on both the session row and any
+  collapsed ancestor layout rows. Background tabs retain independent state and badges;
+  stack status is derived from children and never becomes session state.
+- [ ] Add drag/drop and context/command-palette actions for split, stack, unstack, attach,
+  and detach with keyboard equivalents and touch-safe menus. Invalid drops explain why and
+  never silently replace, duplicate, or kill a session.
+- [ ] Make tab strips and the sidebar hierarchy usable on narrow/mobile screens: bounded
+  horizontally scrollable tabs or an overflow picker, minimum touch targets, visible active
+  and attention states, and focus restoration after drawer navigation.
+- [ ] Reconcile stacks after exit, restart, reconnect, or missing sessions without losing
+  surviving sessions. Persist active child by stable id, not array index; choose a
+  deterministic surviving tab when the active child disappears.
+
+### Hooks and project safety
+
+- [ ] Add `project_scope_id` as a match predicate for machine-owned global meta-hooks.
+  Rules fire for matching sessions regardless of which mixed space contains them.
+- [ ] Keep `.swe-mux/config.toml` data-only. Repository-owned `rules.toml`, commands,
+  executables, hooks, secrets, bind policy, and raw preview destinations execute nothing.
+  If repository rules are inspected for diagnostics, label them inert and never feed them
+  into the active hook engine.
+- [ ] Do not add a trust column or trust workflow. A future repository-rule feature must
+  define a separate machine-owned fingerprinted trust store and defaults to untrusted when
+  scope identity changes; that feature is not scheduled by this phase.
+
+### API, UI, and operator behavior
+
+- [ ] Extend session/space/history/note APIs with scope, repo-group, anchor-mode, anchor,
+  and artifact-owner fields. Anchor patches use optimistic revisions; note Move/Copy uses
+  typed conflict responses and never accepts an arbitrary filesystem destination.
+- [ ] Add project-registry list/detail, artifact inventory, hide/unhide, and guarded Forget
+  APIs with pagination/bounds and stable structured statuses. These routes never mutate
+  repository files.
+- [ ] Replace cwd-driven space-note requests with stable space/artifact identity. Retain a
+  bounded compatibility migration path for existing clients without allowing caller cwd to
+  override a recorded artifact owner.
+- [ ] Keep spaces as the canonical workflow containers in the sidebar. Within each space,
+  render the layout hierarchy and unpaned group defined in this phase; these are presentation
+  nodes, not new session owners. Show an anchor badge on each anchored space and a compact
+  foreign-scope marker when a session's scope differs from its space anchor. Mixed spaces
+  remain fully usable.
+- [ ] Add terminal-styled anchor selection/change/clear and note disposition UI to space
+  context actions and Settings. Mobile receives the same operations without introducing a
+  project-containment navigation model.
+- [ ] Add project-oriented filtering/grouping as a view over sessions/history, not a
+  `project → space → session` ownership tree. Labels distinguish concrete scope/worktree
+  from broader repository grouping.
+- [ ] Surface linked/detached/unlinked/conflicting notes in project detail with safe Open,
+  Relink, Move, Copy, or reveal actions as applicable. Closing a space/session requires no
+  cleanup prompt because durable artifacts remain available from the project shelf.
+
+### Phase 5.5 exit criteria
+
+- [ ] Mixed spaces pass spawn, move, note, hook, history, process/preview, reload, and
+  mobile tests without cross-project config or artifact leakage.
+- [ ] Every live/history session has one immutable scope; every project-resident space
+  artifact has one recorded owner; repository groups influence display/history only.
+- [ ] Seed/final cwd precedence and fallback diagnostics pass tests for explicit cwd, space
+  cwd, anchor, project relative default, global default, missing paths, symlinks, Git
+  worktrees, and non-repository directories.
+- [ ] Auto/fixed/none anchors survive restart and migration. Existing mixed spaces and
+  Markdown remain unmoved; ambiguous note ownership requires explicit resolution.
+- [ ] Re-anchor Keep/Move/Copy tests prove no silent note retargeting, overwrite,
+  cross-volume partial move, filesystem escape, or loss after conflict/restart.
+- [ ] Global hook scope predicates follow session scope across mixed spaces, while all
+  repository-owned executable/rule content remains inert.
+- [ ] Closing spaces and agent sessions leaves their notes reachable from Projects/history;
+  plain shells cannot create a soon-to-be-hidden durable session note; legacy shell notes
+  appear as unlinked artifacts.
+- [ ] Inventory tests prove every recognized supported `.swe-mux/` artifact under a known
+  scope appears in project detail despite deleted spaces, deleted index relationships,
+  missing history, duplicate files, malformed content, or daemon restart.
+- [ ] Project hide/Forget/missing-root tests prove registry cleanup cannot cascade into
+  project files, transcripts, anchors, history, or artifact ownership.
+- [ ] Split and stack trees round-trip through persistence and reconnect. Sidebar tests
+  prove grouped sessions are nested exactly once in visual order, unpaned sessions are
+  distinct, collapsed ancestors propagate attention, and focus navigation stays
+  bidirectional across desktop and mobile.
+- [ ] Stack mutation and lifecycle tests prove tab activation/reorder/detach/dissolve never
+  changes session identity, kills a detached session, duplicates a sidebar row, or loses a
+  surviving child when another exits.
+- [ ] Session-menu parity tests prove sidebar right-click, pane-header right-click, and the
+  pane-header three-dot button resolve the same target session and command model across
+  shell/Claude/Codex state changes, split/stack moves, keyboard use, touch, and narrow
+  layouts.
+- [ ] Current design/interface docs are updated to describe the shipped scope, anchor,
+  artifact, spawn-precedence, hook, migration, layout-stack, and sidebar contracts before
+  Phase 5.5 is marked complete.
+
+## Phase 6 — Windows product maturity, CLI control, and diagnostics
+
+Phase 6 follows the corrective Phase 5.5 scope/anchor refactor. It supports a hands-on
+Windows proving period: expand useful control capabilities, make failures diagnosable,
+and harden the desktop/mobile browser experience before any deferred integration or
+release work begins.
+
+### Practical CLI control
+
+- [ ] Expand `mux` from a thin JSON client into a practical daemon controller: filtered
+  session listing; profile/custom-argv spawn; rename/move/pin/kill; complete space
+  and anchor management; project-scope/repository-group inspection; broadcast
+  membership/send; history filters/resume; profile inspection; and safe Settings/config
+  reads and updates.
+- [ ] Keep browser presentation actions out of the CLI. CLI parity means parity for useful
+  daemon control operations, not panes, modal presentation, visual focus, or theme preview.
+- [ ] Resolve localhost, direct-tailnet, or optional Serve URLs from config while
+  preserving explicit `MUX_URL` precedence.
+- [ ] Use stable ids, conflicts for ambiguous names, actionable exit codes, structured
+  errors, human-readable tables, and `--json` output. Scripts never need to parse UI prose.
+- [ ] Route browser, CLI, and future Telegram actions through the same typed daemon
+  operations so behavior and authorization boundaries cannot drift by client.
+
+### Consolidated diagnostics
+
+- [ ] Expand the current remote-status-only `mux doctor` into a read-only diagnostic:
+  daemon/frontend version, ConPTY and Job Object health, shell/profile executables,
+  Claude/Codex promotion capabilities, writable global/project paths, project config,
+  scope/anchor/artifact conflicts, unified ccusage availability/version, process
+  inspection, previews, listener/port, Tailscale/optional Serve, and non-secret hook status.
+- [ ] Publish machine-readable capability/version information through health diagnostics;
+  redact hook secrets, terminal bytes, prompt content, media, and credentials.
+- [ ] Give every failed check a concrete remedy and distinguish unavailable optional
+  features from failures that compromise terminal ownership or session cleanup.
+
+### Windows soak and quality matrix
+
+- [ ] Expand Python coverage for configuration/migrations, adapter state races, session
+  lifecycle, Host/Origin/WS boundaries, spaces/layout, history/resume, events/hooks,
+  project scopes/anchors/artifacts, Git/worktrees, CLI behavior, process ownership,
+  previews, and reaping.
+- [ ] Add real-browser component/Playwright coverage for default/custom creation,
+  non-split replacement, inline kill, spaces/panes, palette/input transparency, Settings,
+  history, notes, processes/previews, clipboard media, direct-tailnet use, responsive/touch,
+  orientation changes, focus management, and accessibility.
+- [ ] Add real Windows ConPTY integration tests for paths with spaces/Unicode, large
+  output, resize, Ctrl+C, bracketed paste, input-owner handoff, browser reconnect, process
+  attribution, and forced daemon death.
+- [ ] Maintain a Windows CI lane for ruff, mypy, pytest, frontend typecheck/test/build, and
+  focused ConPTY/browser smoke tests. Public artifact and multi-OS matrices remain Phase 10.
+- [ ] Use the proving period to record and prioritize observed workflow friction without
+  reopening completed product decisions or silently expanding into orchestration.
+
+### Phase 6 exit criteria
+
+- [ ] `mux` can inspect and automate the important daemon operations with stable human and
+  JSON output while the browser remains the primary interactive interface.
+- [ ] `mux doctor` identifies actionable local configuration, integration, ownership, and
+  tailnet problems without mutating state or exposing secrets.
+- [ ] Windows desktop/mobile core workflows and forced-cleanup scenarios pass the focused
+  automated matrix; unresolved product friction is captured as explicit follow-up work.
+
+## Phase 7 — Deferred 1: Telegram multi-session control
+
+Telegram is first in the deferred queue. It is not part of the current Phase 6 proving
+work, but it should be the next capability integration when external control becomes
+useful. Phase 4/5 event, notification, correlation, and privileged-action boundaries are
+the foundation; Telegram does not create a second session or account model.
+
+### Provider and routing
+
+- [ ] Implement one daemon-owned Telegram adapter per configured bot token. Never start a
+  competing poller in each Claude/Codex session or rely on a backend-native channel plugin
+  for cross-session routing.
+- [ ] Persist opaque mappings from Telegram chat/message/thread/callback identifiers to mux
+  session and space ids. A reply to a notification targets its originating session; an
+  unthreaded message uses an explicit per-chat active-session selection or session picker.
+- [ ] Label every outbound prompt, approval, completion, and response with backend,
+  session, and space identity. Support Select active session, Open, Approve, Reject, Reply,
+  and Clear selection only when the normalized daemon action supports that operation.
+- [ ] Reuse Phase 6 typed actions and structured errors. Telegram never writes directly to
+  a PTY, guesses a target from display names, or invents provider-specific session state.
+
+### Configuration, safety, and reliability
+
+- [ ] Keep Telegram optional and disabled by default. Store bot secrets outside public
+  config responses/exports; provide terminal-styled Settings for enablement, sender
+  allowlists, pairing, revocation, delivery status, and a test notification.
+- [ ] Enforce sender allowlists, pairing/revocation, webhook or polling exclusivity,
+  update-offset persistence, deduplication, body/media limits, retry/backoff, provider
+  rate limits, expired-session rejection, and prompt-injection-safe confirmations.
+- [ ] Preserve one-user history semantics. Telegram never manages or switches Claude/Codex
+  accounts, stores backend OAuth credentials, or creates a separate conversation archive.
+- [ ] Persist correlation/delivery metadata but never bot secrets, terminal bytes, prompt
+  bodies, uploaded media, or backend credentials in general event/audit records.
 
 ### Phase 7 exit criteria
 
-- [ ] A clean machine can install, start `muxd`, open the bundled UI, create the default
-  and a custom shell, promote Claude/Codex, and cleanly stop on each supported OS.
-- [ ] Release artifacts, bundled UI, migrations, and documented commands are validated in
-  CI from the tagged revision.
+- [ ] One bot routes concurrent Claude and Codex notifications, replies, and supported
+  approvals without ambiguous delivery.
+- [ ] Session selection, reply mappings, retries, deduplication, daemon restart recovery,
+  revocation, and expired targets pass provider-adapter and integration tests.
 
-## Phase 8 — Optional external channels and SSH workflows
+## Phase 8 — Deferred 2: SSH and native terminal attach
 
-Phase 8 is intentionally lower priority than core mobile browser use and public package
-quality. Phase 4 creates normalized event/correlation machinery; Phase 5 hardens the local
-event/action boundaries and Tailscale deployment. Phase 8 owns provider secrets,
-authorization, and alternate transports without changing session ownership or agent behavior.
+SSH remains behind Telegram. Direct Tailscale browser access is the supported remote
+product path; this phase adds an optional terminal-native workflow without changing daemon
+ownership, browser replay, or the rule that a daemon restart ends live sessions.
 
-### Telegram
-
-- [ ] Implement one daemon-owned Telegram adapter per configured bot token. Never start a
-  competing poller in each Claude/Codex session and never depend on a backend-native
-  channel plugin for cross-session routing.
-- [ ] Route replies deterministically through persisted opaque mappings from Telegram
-  chat/message/thread/callback identifiers to mux session and space ids. A reply to a mux
-  notification targets its originating session; an unthreaded message uses an explicit
-  per-chat active-session selection or returns a session picker.
-- [ ] Label every outbound prompt, approval, completion, and response with backend,
-  session, and space identity. Provide Select active session, Open, Approve, Reject, and
-  Clear selection actions only where the normalized event/action contract supports them.
-- [ ] Enforce sender allowlists, pairing/revocation, webhook or polling exclusivity,
-  update-offset persistence, deduplication, body/media limits, retry/backoff, rate limits,
-  expired-session rejection, and prompt-injection-safe confirmation boundaries.
-- [ ] Keep Telegram optional and disabled by default. One local user's Claude and Codex
-  sessions share the same routing/history model; Telegram never creates or switches agent
-  accounts and never stores backend OAuth credentials.
-
-### SSH and terminal attach
+### Forwarding and attach
 
 - [ ] Document browser access through OpenSSH local forwarding, including WebSocket
   behavior, key authentication, daemon service lifetime, and how it differs from the
   supported direct Tailscale listener.
-- [ ] Add `mux attach SESSION` as a native-terminal client over the authenticated PTY
-  contract: raw input/output, resize, input ownership, exit status, reconnect, and a
+- [ ] Add `mux attach SESSION` as a native-terminal client over the existing PTY contract:
+  raw input/output, resize, input ownership, exit status, reconnect, and a
   detach chord that never kills the daemon-owned session.
+- [ ] Make browser and native attachments use the same explicit input-owner handoff.
+  Read-only observers never duplicate terminal input or xterm device responses.
 - [ ] Add SSH-driven `mux attach` integration tests for disconnect/reconnect, Unicode,
   resize, Ctrl+C, bracketed paste, input-owner handoff, and daemon/session termination.
   Browser and native attachments must not duplicate input or device responses.
 
 ### Phase 8 exit criteria
 
-- [ ] One Telegram bot routes concurrent Claude and Codex conversations without ambiguous
-  delivery; replies, topics/buttons, retries, restart recovery, revocation, and expired
-  targets have integration coverage.
 - [ ] An SSH disconnect leaves the mux session live, and a later `mux attach` restores an
   interactive terminal without changing browser attach/replay semantics.
+- [ ] Forwarding and attach documentation clearly distinguish daemon-owned session
+  lifetime, SSH transport authentication, Tailscale browser access, and detach versus kill.
+
+## Phase 9 — Deferred 3: WSL agent bridge and native Linux/macOS
+
+Platform expansion begins only after the Windows product and earlier deferred integrations
+justify the maintenance cost. Interactive WSL shells already work; WSL agent awareness and
+native Linux/macOS daemons must preserve the same API, browser behavior, session identity,
+attach/detach invariant, and daemon-owned child lifecycle.
+
+### WSL agent bridge
+
+- [ ] Build a distro-side bridge for native WSL Claude/Codex executable discovery,
+  promotion/demotion, hook-secret delivery, hook execution, transcript discovery, and
+  native-id correlation. Windows-interoperability commands alone do not qualify.
+- [ ] Translate project, transcript, clipboard-media, and preview/listener ownership paths
+  without exposing a Windows-only path to a Linux-side agent or trusting an unowned guest
+  listener.
+- [ ] Keep WSL profiles labelled `agent-bridge-unavailable` until native distro agents and
+  promotion/state/history integration pass the same contract tests as Windows agents.
+
+### Platform interfaces
+
+- [ ] Introduce `PtyHost` protocol/factory implementations: Windows ConPTY/pywinpty and
+  Linux/macOS POSIX PTY using `forkpty`/`openpty` or a vetted equivalent.
+- [ ] Introduce lifecycle/reaper implementations: retain the Windows Job Object; on POSIX,
+  a per-session guardian owns the process group and watches a daemon pipe. EOF after clean
+  exit or daemon SIGKILL triggers graceful signal, bounded wait, then group SIGKILL.
+- [ ] Add a cross-platform process-inspection boundary for descendant lifecycle, resource
+  snapshots, signals/termination, and listener ownership. Windows jobs, POSIX process
+  groups, and the WSL bridge produce the same bounded public model.
+- [ ] Add OS-specific reveal services: Explorer, macOS `open`, and Linux `xdg-open`.
+- [ ] Generate agent promotion launchers per OS: `.cmd` on Windows and executable POSIX
+  shims/scripts on Unix, with safe structured argv/env/hook-secret propagation.
+- [ ] Replace lowercased path comparisons with platform-aware normalization/same-file
+  checks covering spaces, Unicode, symlinks, case sensitivity, UNC, and WSL paths.
+- [ ] Make project-root and `.swe-mux/` resolution platform-aware across Git worktrees,
+  non-repository cwd, symlinks, case sensitivity, UNC paths, and WSL translation.
+- [ ] Guard platform imports so package import, config, CLI, and non-PTY tests work on every
+  supported OS. Make default data directories, executable/transcript discovery, meta-hook
+  `run`, reveal behavior, and config migration platform-aware.
+
+### Native rollout
+
+- [ ] Preserve the complete Windows regression contract while introducing abstractions.
+- [ ] Linux: PTY/process groups, bash/zsh/pwsh profiles, Claude/Codex promotion and native
+  transcripts, `xdg-open`, project files, process/listener ownership, and forced-daemon-
+  death cleanup.
+- [ ] macOS: PTY/process groups, zsh/bash/pwsh profiles, Claude/Codex promotion and native
+  transcripts, `open`, service environment behavior, project files, ownership, and cleanup.
+- [ ] Define and migrate data/config locations consistently, including Windows `~/.mux`
+  versus XDG/macOS platform directories.
+
+### Phase 9 exit criteria
+
+- [ ] Windows, WSL-agent-aware, Linux, and macOS targets pass the applicable shared
+  API/WS/session lifecycle and ownership contract suites.
+- [ ] Interactive input, resize, UTF-8/Unicode widths, signals, clipboard/paste,
+  scrollback/replay, shell exit, agent promotion, and crash cleanup work on each target.
+- [ ] Git/worktrees, history/reconciliation/resume, hooks, profiles, `.swe-mux/` files,
+  notes, processes/listeners, previews, and clipboard-image handoff behave natively without
+  filesystem escape or cross-environment path leakage.
+
+## Phase 10 — Deferred 4: public packaging and release
+
+Public distribution is last. Source-checkout development remains acceptable until the
+product has survived the Windows proving period and the intended platform matrix is known.
+
+### Artifacts and installation
+
+- [ ] Guarantee every wheel contains a frontend bundle built from the same source revision;
+  fail release validation on stale or missing assets.
+- [ ] Complete package metadata and governance: license, project URLs, supported-platform
+  classifiers, changelog/release policy, security/contact path, and accurate capability
+  documentation.
+- [ ] Test wheel/sdist installation, upgrade, uninstall, config migration/backup, embedded
+  frontend, and `mux`/`muxd` entry points on clean supported machines without a source
+  checkout or Node.js.
+- [ ] Validate `uv tool install swe-mux` and `pipx install swe-mux`; provide clean-machine
+  install, upgrade, uninstall, logging, diagnostics, recovery, and backup documentation.
+- [ ] Add service/autostart recipes only after each target's daemon-death child cleanup is
+  proven.
+
+### Release automation
+
+- [ ] Add the final Windows/Linux/macOS CI matrix for ruff, mypy, pytest, frontend
+  typecheck/test/build, artifact install smoke, browser smoke, and platform PTY cleanup.
+- [ ] Validate a TestPyPI alpha before reserving/publishing the `swe-mux` PyPI package.
+  Production publishing uses Trusted Publishing with short-lived CI identity; never store
+  a long-lived repository publishing token.
+- [ ] Validate tagged revision, source, frontend bundle, wheel/sdist metadata, migrations,
+  documented commands, and capability/version diagnostics as one release unit.
+
+### Phase 10 exit criteria
+
+- [ ] A clean supported machine can install, start `muxd`, open the bundled UI, create
+  default/custom shells, promote Claude/Codex, use declared optional capabilities, and
+  stop without leaving owned processes.
+- [ ] Tested artifacts can be upgraded and removed cleanly, and the public documentation
+  matches the exact tagged capabilities and supported platforms.
 
 ## Spec traceability
 
 | Spec section | Remaining delivery |
 |---|---|
-| §1–3 Product/architecture | Phase 0 runtime contracts; Phase 6 platform abstraction |
-| §4 Backend adapters | Phases 0, 2, 4, 6 |
-| §5 Session/state/scrollback | Phase 0 |
-| §6 Events/meta-hooks | Phases 0, 4, and optional Phase 8 channels |
+| §1–3 Product/architecture | Phase 0 runtime contracts; Phase 9 platform expansion |
+| §4 Backend adapters | Phases 0, 2, and 4; Phase 9 platform adapters |
+| §5 Session/state/scrollback | Phase 0; immutable project scope in Phase 5.5 |
+| §6 Events/meta-hooks | Phases 0 and 4; scope predicates in Phase 5.5; optional Phase 7 Telegram |
 | §7 Reserved communication | Keep `links` + `write_pty`; no relay consumer scheduled |
-| §8 HTTP API + CLI | Phases 1, 2, 4, 5, 7, and optional Phase 8 attach |
-| §9 History/resume | Phase 4; amended to agent-only, project-grouped history |
-| §10 Frontend | Phases 1–5; amended UI/mobile workspace decisions in this roadmap prevail |
+| §8 HTTP API + CLI | Phases 1–5; scope/anchor APIs in Phase 5.5; Phase 6 CLI; Phase 8 attach |
+| §9 History/resume | Phase 4 agent-only history; scope/group split in Phase 5.5 |
+| §10 Frontend | Phases 1–5; scope/anchor/artifact UI in Phase 5.5 |
 | §11 Remote/security | Phase 5 |
-| §12 Git/worktrees | Phase 4 |
+| §12 Git/worktrees | Phase 4; concrete worktree scopes in Phase 5.5 |
 | §13 Refactor inventory | Core donor replacement complete; remaining boundary cleanup in Phase 0 |
-| §14 Configuration | Phases 1–2 plus project-local `.swe-mux/` in Phases 4–6 |
-| §15 Non-goals | Preserved; no orchestration, headless agents, live restore, in-daemon TLS, or marketplace |
+| §14 Configuration | Phases 1–4; scope precedence in Phase 5.5; Phase 9 platform adaptation |
+| §15 Non-goals | No orchestration, headless agents, live restore, daemon TLS, or marketplace |
 
 ### Approved extension traceability
 
 | Extension | Delivery |
 |---|---|
-| Project-local config and Markdown notes | Phases 3–6 |
-| Clipboard image handoff | Phases 3–6 |
-| Session-owned processes and frontend previews | Phases 3–6 |
-| Optional ccusage cached analytics | Phases 4 and 7 diagnostics |
-| Public PyPI package | Phase 7 |
-| Telegram multi-session routing | Phase 4/5 foundations; optional Phase 8 provider |
-| SSH browser forwarding and native attach | Optional Phase 8 |
+| Project scopes, space anchors, and artifact ownership | Corrective Phase 5.5 |
+| Durable Projects view and artifact discoverability | Corrective Phase 5.5 |
+| Layout-level tab stacks and explicit sidebar hierarchy | Corrective Phase 5.5 |
+| Project-local config and Markdown notes | Phases 3–5; ownership refactor in Phase 5.5; Phase 9 equivalence |
+| Clipboard image handoff | Phases 3–5; platform equivalence in Phase 9 |
+| Session-owned processes and previews | Phases 3–5; Phase 5.5 scope ownership; Phase 9 parity |
+| Optional ccusage cached analytics | Phase 4; consolidated diagnostics in Phase 6 |
+| Practical CLI control and diagnostics | Phase 6 |
+| Telegram multi-session routing | Phase 4/5 foundations; deferred Phase 7 provider |
+| SSH browser forwarding and native attach | Deferred Phase 8 |
+| WSL agent bridge and native Linux/macOS | Deferred Phase 9 |
+| Public PyPI package | Deferred Phase 10 |
 | Agent account/profile management | Tabled; explicitly out of scope |
 | Native Claude/Codex themes and Remote Control | Explicitly out of scope |
 

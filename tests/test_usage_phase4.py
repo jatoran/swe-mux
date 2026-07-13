@@ -98,9 +98,15 @@ def test_usage_command_resolves_windows_batch_shim_through_comspec(
 
     prepared = prepare_usage_command(default_ccusage_command("codex"), windows=True)
 
-    assert prepared[:4] == [r"C:\Windows\System32\cmd.exe", "/d", "/s", "/c"]
-    assert "ccusage.cmd" in prepared[4]
-    assert "codex daily --json" in prepared[4]
+    assert prepared == [
+        r"C:\Windows\System32\cmd.exe",
+        "/d",
+        "/c",
+        r"C:\Users\me\AppData\Roaming\npm\ccusage.cmd",
+        "codex",
+        "daily",
+        "--json",
+    ]
 
 
 def test_missing_unified_usage_command_has_exact_install_instruction(

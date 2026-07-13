@@ -75,15 +75,16 @@ after its most fragile input (it hooks *events*, not hooks — see §3).
 |---|---|
 | **Universal hooks** | User-facing name for the whole layer: hooks defined once, above the CLI, that fire for any backend and survive CLI updates. The pitch word. |
 | **Rules** | The mechanical tier: trigger → conditions → actions, deterministic, no model call. `hooks.toml` becomes `rules.toml`. |
-| **Observers** | The LLM tier: rules whose action is a cheap model call. Out-of-band, watching, advisory. |
+| **Observers** | The LLM tier: stateless model calls via the `llm` action — read a transcript slice, emit an annotation or notification. No session, no tools, read-only. The titler, summarizer, stall detector are observers. Cheap, safe, plentiful. |
+| **Workers** | Full agent sessions a rule spawns via the `spawn` action + a session template to *do* something (update docs, consolidate memory). Data-plane work, control-plane initiated; once spawned it is an ordinary session with history and a lineage edge back to its cause. Mutates the world, so it sits behind the actuation gate (§9). A "doc agent" is really an observer→worker pipeline: observe cheap, act expensive, human in between until trust is earned. |
 | **Automation layer** | Umbrella term for rules + observers when one word is needed. |
 | **Native hooks** | Reserved exclusively for the CLIs' own hook systems (Claude Code hooks, Codex `notify`). They are an event *source*, nothing more. |
 | **Annotations** | Persisted observer/rule output attached to sessions (titles, summaries, verdicts). |
 | **Universal commands** | Input-side sibling of universal hooks: mux-level canned prompts/commands injectable into any backend (see §11). |
 | **Rulepacks** | Shareable, parameterized bundles of rules + observers + scripts (see §8). |
 
-Clean sentence test: *native hooks feed events, rules match events, observers
-think about them.*
+Clean sentence test: *native hooks feed events, universal hooks fire, rules
+match, observers think, workers act.*
 
 ---
 
