@@ -43,7 +43,7 @@ spec language:
 - Project-specific swe-mux state belongs inside `.swe-mux/` at the resolved project root:
   the current Git worktree root when available, otherwise the session/space cwd. This
   includes project overrides, notes, and future project-owned metadata. Machine-wide
-  daemon/auth/runtime configuration remains under the user's mux data directory.
+  daemon/runtime configuration remains under the user's mux data directory.
 - Notes are human-readable Markdown files under `.swe-mux/notes/`, not opaque SQLite note
   bodies or agent transcripts. Space notes are primary; optional session annotations link
   to a space/project and use stable filenames. Notes never enter agent context implicitly.
@@ -54,6 +54,11 @@ spec language:
   management, theme-file generation, and ANSI-output rewriting are out of scope.
 - Native Claude/Codex remote-control products are unrelated integrations and remain out of
   scope. swe-mux remote access is its own browser/API/CLI surface.
+- Supported network topology is loopback-first: `muxd` listens on localhost; local clients
+  connect directly; remote clients connect through Tailscale Serve forwarding to that
+  loopback listener. Tailscale supplies transport encryption, device/user authentication,
+  HTTPS, and tailnet policy. swe-mux does not add a second login. Direct LAN/tailnet-IP
+  binding, `0.0.0.0`, Tailscale Funnel, and public exposure are unsupported.
 - Splits are explicit actions only. Ordinary terminal creation replaces or fills the
   focused pane while the displaced session remains live in the sidebar.
 - Browser `alert`, `confirm`, and `prompt` dialogs are prohibited. Destructive toolbar
@@ -183,8 +188,8 @@ Cross-cutting test work ships with every phase; it is not deferred to the end.
   - Input: keybindings, middle-click paste, broadcast defaults, clipboard behavior.
   - Git and history: polling cadence, history reconciliation and retention controls.
   - Hooks and notifications: hooks editor/validation, channels, diagnostics.
-  - Remote and security: read-only bind/auth status and Tailscale guidance until the
-    Phase 5 token lifecycle is defined.
+  - Remote and security: read-only listener/Tailscale Serve status and guidance until the
+    Phase 5 deployment contract is implemented.
   - Appearance: one shared font/size/weight control applied uniformly if customization
     is exposed; never per-component typography.
 - [x] Show saved, hot-applied, restart-required, invalid, and externally-modified states.
@@ -555,48 +560,75 @@ args = ["--distribution", "Ubuntu"]
   and reduced-motion contract coverage. Phase 7 retains full real-browser accessibility
   and orientation regression as release-quality validation.
 
-## Phase 5 — Remote access and security hardening
+## Phase 5 — Tailscale Serve access and application hardening
 
-- [ ] Write a threat model that states the single-user remote bearer is code-execution
-  authority because the product can spawn executables, write PTYs, run hooks, and mutate
-  worktrees.
-- [ ] Define the unauthenticated bootstrap boundary for static assets/health and enforce
-  auth consistently on every protected HTTP route and WS upgrade.
-- [ ] Replace query-string WS tokens and blocking token prompts with a proper login/token
-  bootstrap using a secure header/cookie mechanism that does not leak through URLs.
-- [ ] Validate browser Origin for WS and mutating requests; add CSP and request/body/rate
-  limits appropriate to a local single-user application.
-- [ ] Add token rotate/revoke, secure file permissions/ACLs, secret redaction, and audit
-  events that never include secret values.
-- [ ] Add the corresponding Settings login/token rotation/copy/revoke UI only after this
-  lifecycle and storage contract is implemented.
-- [ ] Harden hook ingress: loopback peer only, constant-time secret comparison, event
-  allowlist, body/rate limits, and rejection after session expiry.
+### Supported deployment topology
+
+- [ ] Keep `muxd` bound to `127.0.0.1`/`::1` for every supported deployment. Local browser
+  and CLI clients connect directly; remote clients use Tailscale Serve as an HTTPS reverse
+  proxy to the loopback listener. Do not require or encourage direct tailnet-IP binding.
+- [ ] Treat direct LAN binding, `0.0.0.0`, Tailscale Funnel, port forwarding, and public
+  ingress as unsupported configurations. Fail closed or require an explicit development-
+  only escape hatch carrying a prominent diagnostic; production behavior never silently
+  falls back to a network-wide listener.
+- [ ] Remove the generic remote bearer/login product path, including query-string WS
+  tokens, token prompts, rotation/revocation UI, and token-bearing browser URLs. Migrate
+  legacy bind/token configuration with a clear diagnostic instead of preserving a second
+  authentication system.
+- [ ] Add a Tailscale Serve setup/status workflow: detect Tailscale availability, show the
+  expected tailnet HTTPS URL, validate that Serve targets the loopback mux port, distinguish
+  Serve from Funnel, and provide copyable commands plus `mux doctor` diagnostics. swe-mux
+  does not silently modify tailnet policy or enable Funnel.
+- [ ] Document a least-privilege Tailscale grant restricted to the owning user/devices and
+  the swe-mux host/service. Document device removal/revocation and the consequence that an
+  admitted tailnet peer with access to swe-mux has terminal/code-execution authority.
+- [ ] Optionally verify Tailscale Serve's sanitized identity headers against configured
+  owner identities. Trust those headers only on the loopback listener; direct localhost
+  clients remain valid without Serve headers. Identity mismatch fails closed without a
+  swe-mux login screen.
+
+### Browser and privileged-operation boundaries
+
+- [ ] Validate `Host` and browser `Origin` for every mutating HTTP request and WebSocket
+  upgrade. Allow only configured localhost origins and the expected tailnet HTTPS origin;
+  reject cross-site browser control even when the browser's device belongs to the tailnet.
+- [ ] Add CSP, request/body/concurrency/rate limits, secure response headers, secret
+  redaction, and audit events containing identities/actions but never hook secrets, media,
+  prompt contents, or terminal bytes.
+- [ ] Harden hook ingress independently of browser access: loopback peer only, constant-
+  time per-session secret comparison, event allowlist, body/rate limits, and rejection
+  after session expiry.
 - [ ] Define project-config trust boundaries. Opening a repository may read and display
   `.swe-mux/` state, but untrusted project files cannot silently select executables, run
-  hooks/commands, expose ports, weaken auth, or introduce secrets. Executable behavior
-  requires an explicit trust decision with revocation and diagnostics.
-- [ ] Add authenticated per-session clipboard-media upload with user-gesture enforcement,
-  MIME sniffing/allowlist, byte/count limits, randomized private paths, shell-safe/backend-
-  safe path handoff, TTL/session cleanup, and audit records containing no image bytes.
-- [ ] Add the authenticated preview proxy with strict loopback/session-owned destination
-  validation, explicit exposure approval, HTTP and WebSocket limits, Origin/CSP handling,
-  timeout/cancellation, and SSRF/DNS-rebinding defenses. Never provide a general arbitrary-
-  URL proxy.
-- [ ] Define a channel-secret store and provider-neutral inbound/outbound authorization,
-  sender identity, correlation, retry, deduplication, and revocation contracts. Phase 8
-  Telegram consumes these contracts; Phase 5 does not ship Telegram polling or routing.
-- [ ] Document Tailscale bind/serve/HTTPS flows and the risks of `0.0.0.0`.
+  hooks/commands, expose ports, weaken network policy, or introduce secrets. Executable
+  behavior requires an explicit trust decision with revocation and diagnostics.
+- [ ] Harden per-session clipboard-media upload with user-gesture enforcement, MIME
+  sniffing/allowlist, byte/count limits, randomized private paths, shell-safe/backend-safe
+  path handoff, TTL/session cleanup, ownership checks, and metadata-only audit records.
+- [ ] Add a same-origin preview proxy with strict loopback/session-owned destination
+  validation, explicit exposure approval, HTTP/WebSocket/HMR limits, timeout/cancellation,
+  Origin/CSP handling, and SSRF/DNS-rebinding defenses. Never provide a general arbitrary-
+  URL proxy or make a development server directly reachable from the tailnet.
+- [ ] Keep external-channel credentials and Telegram sender/routing authorization in Phase
+  8. Phase 5 supplies only the safe local event/action boundaries those providers consume.
 
 ### Phase 5 exit criteria
 
-- [ ] Route-by-route HTTP/WS/auth tests pass for loopback and non-loopback configurations.
-- [ ] Tokens never appear in URLs, ordinary config responses, logs, history, exports, or
-  hook payloads.
+- [ ] Localhost browser/CLI access works without login. Remote browser/CLI access through
+  Tailscale Serve works over HTTPS, including terminal/event WebSocket reconnects, without
+  any swe-mux credential prompt.
+- [ ] The supported daemon listener is unreachable directly from LAN or tailnet peers;
+  remote access succeeds only through the configured Serve endpoint and tailnet policy.
+- [ ] Route-by-route Host/Origin/HTTP/WS tests pass for direct localhost and proxied
+  Tailscale Serve requests; spoofed identity/origin/host inputs fail closed.
+- [ ] No generic bearer token remains in URLs, config responses, logs, history, exports,
+  browser storage, or hook payloads. Per-session hook secrets remain loopback-only and
+  redacted.
 - [ ] Malicious project config, clipboard uploads, and preview destinations cannot cause
   command execution, cross-session access, filesystem escape, or arbitrary network proxying.
-- [ ] A clean remote login, expiration/rotation, and reconnect flow works without browser
-  native dialogs.
+- [ ] `mux doctor` and Settings clearly report loopback listener health, Tailscale/Serve
+  availability, expected URL/identity, grant guidance, Funnel/public-exposure warnings,
+  and actionable misconfiguration errors without modifying tailnet policy.
 
 ## Phase 6 — Cross-OS compatibility
 
@@ -662,8 +694,8 @@ invariant, and daemon-owned child lifecycle.
 
 - [ ] Add session filters, profile/custom argv support, rename/move/pin, complete space
   management, server-side broadcast, Settings/config, and profile commands.
-- [ ] Load URL/token from the secure config by default while preserving `MUX_URL` and
-  `MUX_TOKEN` overrides.
+- [ ] Load the local or Tailscale Serve URL from config by default while preserving
+  `MUX_URL`; remove the generic `MUX_TOKEN` path with the Phase 5 migration.
 - [ ] Return a conflict for ambiguous names; add stable structured errors and
   human-table/`--json` output modes.
 - [ ] Add `mux doctor`: platform/PTY backend, shell/profile executable checks, agent
@@ -714,9 +746,9 @@ invariant, and daemon-owned child lifecycle.
 ## Phase 8 — Optional external channels and SSH workflows
 
 Phase 8 is intentionally lower priority than core mobile browser use and public package
-quality. Phase 4 creates normalized event/correlation machinery; Phase 5 creates secret and
-authorization contracts. Phase 8 adds providers and alternate transports without changing
-session ownership or agent behavior.
+quality. Phase 4 creates normalized event/correlation machinery; Phase 5 hardens the local
+event/action boundaries and Tailscale deployment. Phase 8 owns provider secrets,
+authorization, and alternate transports without changing session ownership or agent behavior.
 
 ### Telegram
 
@@ -740,8 +772,8 @@ session ownership or agent behavior.
 ### SSH and terminal attach
 
 - [ ] Document loopback-first browser access through OpenSSH local forwarding, including
-  WebSocket behavior, key authentication, daemon service lifetime, and why direct public
-  bind is not a substitute for Phase 5 security.
+  WebSocket behavior, key authentication, daemon service lifetime, and why direct network
+  binding remains unsupported beside the Tailscale Serve path.
 - [ ] Add `mux attach SESSION` as a native-terminal client over the authenticated PTY
   contract: raw input/output, resize, input ownership, exit status, reconnect, and a
   detach chord that never kills the daemon-owned session.
