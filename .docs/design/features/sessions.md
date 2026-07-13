@@ -8,15 +8,21 @@
 
 - Mux ID: identity of one process lifetime.
 - Native ID: Claude/Codex transcript identity; reused only for manual resume.
-- Scrollback: daemon-memory byte buffer; discarded on daemon exit.
+- Scrollback: exact-tail daemon-memory byte buffer; discarded on daemon exit.
 - State: `starting | running | working | idle | awaiting | exited | crashed`.
 
 ## Operations
 
 - Spawn validates cwd and space before creating the PTY.
-- Default PowerShell sessions use `-NoLogo`; mux never seeds or injects visible text.
+- Default shells use the selected profile's exact executable/argv; mux never seeds or
+  injects visible text and never applies shell-specific flags globally.
 - Shell sessions enter `running`; agent sessions enter `starting` pending adapter observation.
 - Attach replays scrollback without changing process state.
+- Slow subscribers receive a gap frame and deterministic scrollback resync instead of
+  silent permanent output loss.
+- PTY WebSockets receive revisioned full-snapshot updates and a final exit snapshot.
+- Agent state source priority is hook > transcript > PTY; lower-priority transcript
+  inference cannot regress an authoritative hook transition.
 - Detach removes only the WebSocket subscriber.
 - Kill uses adapter exit keys and process-tree fallback.
 

@@ -1,34 +1,36 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
+from swe_mux import agent_launcher
 from swe_mux.adapters import ClaudeAdapter, ShellAdapter, SpawnOptions
 from swe_mux.agent_launcher import _claude, _codex
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
-from swe_mux.launchers import create_agent_shims
+from swe_mux.launchers import create_agent_shims, resolve_command
 from swe_mux.models import SessionRecord, SpaceRecord
 from swe_mux.pty_host import merge_environment
 from swe_mux.reconcile import reconcile_external_history
-from swe_mux.server import hook_event_payload
+from swe_mux.server import hook_event_payload, validate_session_media
 from swe_mux.transcript_view import parse_transcript
 
 
-def test_adapters_keep_executable_out_of_cmdline(tmp_path: Path) -> None:
+def test_adapters_keep_executable_and_arguments_structured(tmp_path: Path) -> None:
     opts = SpawnOptions(tmp_path, args=["--dangerously-skip-permissions"])
-    exe, cmdline = ClaudeAdapter("claude.exe").spawn_cmdline("native-id", opts)
-    assert exe == "claude.exe"
-    assert cmdline == "--session-id native-id --dangerously-skip-permissions"
+    spec = ClaudeAdapter("claude.exe").spawn_spec("native-id", opts)
+    assert spec.executable == "claude.exe"
+    assert spec.argv == ("--session-id", "native-id", "--dangerously-skip-permissions")
 
-    shell_exe, shell_cmdline = ShellAdapter("powershell.exe").spawn_cmdline(
+    shell_spec = ShellAdapter("powershell.exe").spawn_spec(
         "ignored", SpawnOptions(tmp_path)
     )
-    assert shell_exe == "powershell.exe"
-    assert shell_cmdline == "-NoLogo"
+    assert shell_spec.executable == "powershell.exe"
+    assert shell_spec.argv == ()
 
 
 async def test_history_and_event_bus_persist_contract(tmp_path: Path) -> None:
@@ -41,10 +43,10 @@ async def test_history_and_event_bus_persist_contract(tmp_path: Path) -> None:
         "mux-id",
         "test",
         "default",
-        "shell",
+        "claude",
         "native-id",
         str(tmp_path),
-        "powershell.exe",
+        "claude.exe",
         [],
         state="running",
     )
@@ -83,6 +85,91 @@ def test_agent_launchers_inject_mux_wiring(tmp_path: Path, monkeypatch: pytest.M
     env = create_agent_shims(cfg, tmp_path / "hooks.json")
     assert (tmp_path / "bin" / "claude.cmd").is_file()
     assert env["PATH"].startswith(str(tmp_path / "bin"))
+    assert env["MUX_SHIM_DIR"] == str(tmp_path / "bin")
+
+
+def test_agent_launcher_demotes_terminal_when_agent_exits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str] | tuple[str, list[str]]] = []
+    monkeypatch.setattr(sys, "argv", ["launcher", "claude"])
+    monkeypatch.setattr(
+        agent_launcher,
+        "_claude",
+        lambda args: ("claude.exe", ["--session-id", "native"], "native"),
+    )
+    monkeypatch.setattr(
+        agent_launcher,
+        "_promote",
+        lambda backend, native_id: calls.append(("promote", backend, native_id)),
+    )
+    monkeypatch.setattr(
+        agent_launcher,
+        "_demote",
+        lambda backend, native_id: calls.append(("demote", backend, native_id)),
+    )
+    monkeypatch.setattr(
+        agent_launcher.subprocess,
+        "call",
+        lambda command: calls.append(("exec", command)) or 7,
+    )
+    monkeypatch.setattr(agent_launcher.shutil, "which", lambda command: command)
+
+    with pytest.raises(SystemExit, match="7"):
+        agent_launcher.main()
+
+    assert calls == [
+        ("promote", "claude", "native"),
+        ("exec", ["claude.exe", "--session-id", "native"]),
+        ("demote", "claude", "native"),
+    ]
+
+
+def test_command_resolution_falls_back_from_exe_to_windows_shim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "swe_mux.launchers.shutil.which",
+        lambda command: r"C:\npm\codex.cmd" if command == "codex" else None,
+    )
+    assert resolve_command("codex.exe") == r"C:\npm\codex.cmd"
+
+
+def test_agent_launcher_runs_batch_commands_through_comspec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
+    monkeypatch.setattr(
+        agent_launcher.subprocess, "call", lambda command: calls.append(command) or 0
+    )
+
+    assert agent_launcher._launch(r"C:\npm\codex.cmd", ["--version"]) == 0
+    assert calls[0][:4] == [
+        r"C:\Windows\System32\cmd.exe", "/d", "/s", "/c"
+    ]
+    assert "codex.cmd" in calls[0][4]
+
+
+def test_agent_launcher_bypasses_npm_batch_for_structured_codex_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    npm = tmp_path / "npm"
+    shim = npm / "codex.cmd"
+    script = npm / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    node = npm / "node.exe"
+    script.parent.mkdir(parents=True)
+    shim.write_text("@echo off", encoding="utf-8")
+    script.write_text("// fixture", encoding="utf-8")
+    node.write_bytes(b"fixture")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        agent_launcher.subprocess, "call", lambda command: calls.append(command) or 0
+    )
+
+    notify = 'notify=["python.exe", "-m", "swe_mux.hook_client"]'
+    assert agent_launcher._launch(str(shim), ["-c", notify]) == 0
+    assert calls == [[str(node), str(script), "-c", notify]]
 
 
 def test_windows_environment_override_is_case_insensitive() -> None:
@@ -108,6 +195,15 @@ def test_official_claude_hook_envelope_cannot_shadow_mux_metadata() -> None:
         "hook_event_name": "UserPromptSubmit",
         "cwd": r"D:\project",
     }
+
+
+def test_clipboard_media_validation_is_typed_and_signature_checked() -> None:
+    assert validate_session_media("image/png", b"\x89PNG\r\n\x1a\ncontent") == ".png"
+    assert validate_session_media("image/webp", b"RIFF0000WEBPcontent") == ".webp"
+    with pytest.raises(ValueError, match="supported clipboard image types"):
+        validate_session_media("image/svg+xml", b"<svg/>")
+    with pytest.raises(ValueError, match="does not match"):
+        validate_session_media("image/png", b"not-png")
 
 
 async def test_external_history_reconciliation_and_codex_view(tmp_path: Path) -> None:

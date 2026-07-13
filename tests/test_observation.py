@@ -119,3 +119,17 @@ def test_meta_hook_glob_matching(tmp_path: Path) -> None:
     event = SimpleNamespace(type="approval_needed", source="hook", session_id="mux-id", payload={})
     rule = HookRule({"type": "approval_*", "session_name": "builder-*"}, {"kind": "notify"})
     assert engine._matches(rule, cast(Any, event))
+
+
+async def test_semantic_events_are_deduplicated_across_hook_and_transcript() -> None:
+    events = EventBus()
+    queue = events.subscribe()
+    first = await events.emit(
+        "tool_use", session_id="mux-id", source="transcript", tool="Bash"
+    )
+    duplicate = await events.emit(
+        "tool_use", session_id="mux-id", source="hook", tool="Bash"
+    )
+
+    assert duplicate is first
+    assert queue.qsize() == 1

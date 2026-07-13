@@ -4,23 +4,41 @@ import asyncio
 import json
 import logging
 import secrets
+import shutil
+import tomllib
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from aiohttp import WSMsgType, web
+from aiohttp.multipart import BodyPartReader
 
 from .adapters import BackendAdapter, ClaudeAdapter, CodexAdapter, ShellAdapter
-from .config import Config
+from .config import Config, load_config, update_config
 from .event_bus import EventBus
 from .git_monitor import GitMonitor, _git
 from .history import HistoryIndex
+from .keybindings import DEFAULT_KEYBINDINGS, normalize_binding
 from .launchers import create_agent_shims
-from .meta_hooks import MetaHookEngine
+from .layouts import attach_leaf, attach_terminal
+from .meta_hooks import MetaHookEngine, parse_hook_rules
+from .models import SessionState
+from .processes import PreviewRegistry, ProcessInspector
+from .profiles import profile_payload, resolve_profile
+from .project_files import (
+    read_note,
+    read_project_config,
+    search_notes,
+    write_note,
+    write_project_config,
+)
 from .reconcile import reconcile_external_history
-from .session import SessionManager
+from .session import Session, SessionManager
 from .spaces import SpaceManager
+from .spawn_contract import SpawnRequest
 from .transcript_view import parse_transcript
+from .usage import UsageManager
 from .win_jobobj import ReaperJob
 
 log = logging.getLogger(__name__)
@@ -63,10 +81,20 @@ async def auth_middleware(request: web.Request, handler: Handler) -> web.StreamR
         or request.path in {"/", "/api/health"}
         or request.path.startswith("/assets/")
         or request.path.startswith("/api/hooks/")
-        or request.path.endswith("/promote")
+        or request.path.endswith(("/promote", "/demote"))
     ):
         return await handler(request)
     supplied = request.headers.get("Authorization", "").removeprefix("Bearer ")
+    if not supplied:
+        protocols = request.headers.get("Sec-WebSocket-Protocol", "").split(",")
+        supplied = next(
+            (
+                protocol.strip().removeprefix("mux.auth.")
+                for protocol in protocols
+                if protocol.strip().startswith("mux.auth.")
+            ),
+            "",
+        )
     if not supplied:
         supplied = request.query.get("token", "")
     if not secrets.compare_digest(supplied, config.token):
@@ -78,7 +106,7 @@ async def auth_middleware(request: web.Request, handler: Handler) -> web.StreamR
 
 def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Application:
     app = web.Application(
-        middlewares=[error_middleware, auth_middleware], client_max_size=2 * 1024 * 1024
+        middlewares=[error_middleware, auth_middleware], client_max_size=12 * 1024 * 1024
     )
     app["config"] = config
     app["frontend_dir"] = frontend_dir or Path(__file__).parent / "static"
@@ -88,7 +116,24 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.get("/", index),
             web.get("/api/health", health),
             web.get("/api/config", get_config),
+            web.patch("/api/config", patch_config),
+            web.post("/api/config/reset", reset_config),
             web.get("/api/keybindings", get_keybindings),
+            web.put("/api/keybindings", put_keybindings),
+            web.get("/api/hooks", get_hooks),
+            web.get("/api/hooks/status", get_hook_status),
+            web.put("/api/hooks", put_hooks),
+            web.get("/api/profiles", list_profiles),
+            web.get("/api/project/config", get_project_config),
+            web.put("/api/project/config", put_project_config),
+            web.get("/api/project/notes", get_project_note),
+            web.put("/api/project/notes", put_project_note),
+            web.get("/api/project/notes/search", find_project_notes),
+            web.get("/api/directories/pins", list_pinned_directories),
+            web.post("/api/directories/pins", pin_directory),
+            web.delete("/api/directories/pins", unpin_directory),
+            web.get("/api/fs/roots", filesystem_roots),
+            web.get("/api/fs/list", filesystem_list),
             web.get("/api/sessions", list_sessions),
             web.post("/api/sessions", spawn_session),
             web.get("/api/sessions/{sid}", get_session),
@@ -96,16 +141,29 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.delete("/api/sessions/{sid}", delete_session),
             web.post("/api/sessions/{sid}/input", session_input),
             web.post("/api/sessions/{sid}/broadcast-set", broadcast_set),
+            web.post("/api/broadcast/input", broadcast_input_route),
+            web.post("/api/sessions/{sid}/media", upload_session_media),
             web.post("/api/sessions/{sid}/promote", promote_session),
+            web.post("/api/sessions/{sid}/demote", demote_session),
             web.get("/api/spaces", list_spaces),
             web.post("/api/spaces", create_space),
             web.patch("/api/spaces/{sid}", patch_space),
             web.delete("/api/spaces/{sid}", delete_space),
             web.get("/api/history", list_history),
+            web.get("/api/history/projects", list_history_projects),
             web.get("/api/history/{sid}/transcript", history_transcript),
             web.post("/api/history/{sid}/resume", resume_history),
+            web.delete("/api/history/{sid}", delete_history_entry),
             web.get("/api/events", list_events),
             web.get("/api/notifications", list_notifications),
+            web.get("/api/usage", get_usage),
+            web.post("/api/usage/refresh", refresh_usage),
+            web.delete("/api/usage/cache", clear_usage_cache),
+            web.get("/api/processes", list_processes),
+            web.post("/api/processes/action", process_action),
+            web.get("/api/previews", list_previews),
+            web.post("/api/previews", create_preview),
+            web.delete("/api/previews/{preview_id}", delete_preview),
             web.post("/api/hooks/{sid}", hook_ingress),
             web.get("/api/git/worktrees", list_worktrees),
             web.post("/api/git/worktrees", create_worktree),
@@ -130,8 +188,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     reaper = ReaperJob()
     adapters: dict[str, BackendAdapter] = {
         "shell": ShellAdapter(config.shell_exe),
-        "claude": ClaudeAdapter(config.claude_exe, config.data_dir),
-        "codex": CodexAdapter(config.codex_exe, notify=True),
+        "claude": ClaudeAdapter(config.claude_exe, config.data_dir, config.claude_args),
+        "codex": CodexAdapter(config.codex_exe, notify=True, default_args=config.codex_args),
     }
     child_env = create_agent_shims(config, adapters["claude"].settings_path)  # type: ignore[attr-defined]
     sessions = SessionManager(
@@ -145,8 +203,14 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     )
     git_monitor = GitMonitor(sessions, events, config.git_poll_seconds)
     hooks = MetaHookEngine(config.data_dir / "hooks.toml", events, sessions)
+    usage = UsageManager(config, events)
+    process_inspector = ProcessInspector(sessions, events)
+    previews = PreviewRegistry(process_inspector, sessions)
     git_monitor.start()
     hooks.start()
+    usage.start()
+    process_inspector.start()
+    config_watch = asyncio.create_task(_watch_config(app), name="config-watch")
     reconcile_task: asyncio.Task[int] | None = None
     if config.reconcile_external_history:
         reconcile_task = asyncio.create_task(
@@ -160,17 +224,80 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         reaper=reaper,
         git_monitor=git_monitor,
         hooks=hooks,
+        usage=usage,
+        process_inspector=process_inspector,
+        previews=previews,
     )
     yield
     if reconcile_task:
         if not reconcile_task.done():
             reconcile_task.cancel()
         await asyncio.gather(reconcile_task, return_exceptions=True)
+    config_watch.cancel()
+    await asyncio.gather(config_watch, return_exceptions=True)
     await hooks.stop()
+    await usage.stop()
+    await process_inspector.stop()
     await git_monitor.stop()
     await sessions.shutdown()
     history.close()
     reaper.close()
+
+
+async def _watch_config(app: web.Application) -> None:
+    config: Config = app["config"]
+    path = config.config_path
+    if path is None:
+        return
+    modified = path.stat().st_mtime_ns if path.exists() else 0
+    while True:
+        await asyncio.sleep(1)
+        current = path.stat().st_mtime_ns if path.exists() else 0
+        if current == modified:
+            continue
+        modified = current
+        try:
+            loaded = load_config(path)
+            if loaded.public_dict() == config.public_dict():
+                continue
+            changed = {
+                field_name
+                for field_name in Config.__dataclass_fields__
+                if getattr(config, field_name) != getattr(loaded, field_name)
+            }
+            loaded.revision = config.revision + 1
+            for field_name in Config.__dataclass_fields__:
+                setattr(config, field_name, getattr(loaded, field_name))
+            _apply_runtime_config(app, changed)
+            await app["events"].emit(
+                "configuration_changed", source="external_file", revision=config.revision
+            )
+        except (OSError, ValueError, TypeError, tomllib.TOMLDecodeError) as exc:
+            await app["events"].emit(
+                "configuration_error", source="external_file", error=str(exc)
+            )
+
+
+def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
+    config: Config = app["config"]
+    sessions: SessionManager | None = app.get("sessions")
+    if sessions:
+        if "scrollback_bytes" in changed:
+            sessions.max_scrollback = config.scrollback_bytes
+        adapter_config = {
+            "shell": (config.shell_exe, []),
+            "claude": (config.claude_exe, config.claude_args),
+            "codex": (config.codex_exe, config.codex_args),
+        }
+        for backend, (executable, args) in adapter_config.items():
+            relevant = {f"{backend}_exe", f"{backend}_args"}
+            if changed & relevant:
+                sessions.adapters[backend].configure(executable, args)
+                if backend != "shell":
+                    sessions.child_env[f"MUX_{backend.upper()}_ARGS"] = json.dumps(args)
+    git_monitor: GitMonitor | None = app.get("git_monitor")
+    if git_monitor and "git_poll_seconds" in changed:
+        git_monitor.cadence = config.git_poll_seconds
 
 
 async def index(request: web.Request) -> web.StreamResponse:
@@ -191,26 +318,72 @@ async def health(request: web.Request) -> web.Response:
 
 async def get_config(request: web.Request) -> web.Response:
     config: Config = request.app["config"]
-    return json_response(config.public_dict())
+    response = json_response(config.public_dict())
+    response.headers["ETag"] = f'"{config.revision}"'
+    return response
+
+
+async def patch_config(request: web.Request) -> web.Response:
+    config: Config = request.app["config"]
+    supplied = request.headers.get("If-Match", "").strip('"')
+    if supplied and supplied != str(config.revision):
+        return json_response(
+            {"error": "configuration changed externally", "revision": config.revision}, 409
+        )
+    body = await request.json()
+    body_revision = body.pop("_revision", None)
+    if body_revision is not None and int(body_revision) != config.revision:
+        return json_response(
+            {"error": "configuration changed externally", "revision": config.revision}, 409
+        )
+    try:
+        hot, restart = update_config(config, body)
+    except ValueError as exc:
+        detail = exc.args[0]
+        return json_response(
+            {
+                "error": "invalid configuration",
+                "fields": detail if isinstance(detail, dict) else {},
+            },
+            422,
+        )
+    _apply_runtime_config(request.app, hot)
+    await request.app["events"].emit(
+        "configuration_changed", source="settings", changed=sorted(hot | restart)
+    )
+    response = json_response(
+        {**config.public_dict(), "hot_applied": sorted(hot), "restart_required": sorted(restart)}
+    )
+    response.headers["ETag"] = f'"{config.revision}"'
+    return response
+
+
+async def reset_config(request: web.Request) -> web.Response:
+    config: Config = request.app["config"]
+    defaults = Config(data_dir=config.data_dir)
+    fields = {
+        key: getattr(defaults, key)
+        for key in Config.__dataclass_fields__
+        if key
+        not in {
+            "schema_version",
+            "revision",
+            "token",
+            "data_dir",
+            "config_path",
+            "shell_profiles",
+            "default_shell_profile",
+        }
+    }
+    hot, restart = update_config(config, fields)
+    await request.app["events"].emit("configuration_changed", source="settings", reset=True)
+    return json_response(
+        {**config.public_dict(), "hot_applied": sorted(hot), "restart_required": sorted(restart)}
+    )
 
 
 async def get_keybindings(request: web.Request) -> web.Response:
-    defaults = {
-        "ctrl+alt+t": "session.spawnShell",
-        "ctrl+shift+p": "palette.open",
-        "ctrl+shift+f": "terminal.find",
-        "ctrl+alt+arrowright": "pane.next",
-        "ctrl+alt+arrowleft": "pane.previous",
-        "ctrl+alt+1": "space.activate(1)",
-        "ctrl+alt+2": "space.activate(2)",
-        "ctrl+alt+3": "space.activate(3)",
-        "ctrl+alt+4": "space.activate(4)",
-        "ctrl+alt+5": "space.activate(5)",
-        "ctrl+alt+6": "space.activate(6)",
-        "ctrl+alt+7": "space.activate(7)",
-        "ctrl+alt+8": "space.activate(8)",
-        "ctrl+alt+9": "space.activate(9)",
-    }
+    defaults = dict(DEFAULT_KEYBINDINGS)
     path = request.app["config"].data_dir / "keybindings.json"
     rejected: dict[str, str] = {}
     if path.exists():
@@ -219,14 +392,207 @@ async def get_keybindings(request: web.Request) -> web.Response:
         except json.JSONDecodeError as exc:
             raise ValueError(f"invalid keybindings.json: {exc}") from exc
         for chord, command in supplied.items():
-            normalized = str(chord).lower().replace(" ", "")
-            if "+" not in normalized or normalized.split("+")[-1] in {"", "ctrl", "shift", "alt"}:
-                rejected[chord] = "bindings require a modifier and non-modifier key"
-            elif normalized in {"ctrl+w", "ctrl+t", "ctrl+n"}:
-                rejected[chord] = "browser-reserved chord"
-            else:
-                defaults[normalized] = str(command)
+            try:
+                key, command_id = normalize_binding(chord, command)
+                defaults[key] = command_id
+            except ValueError as exc:
+                rejected[str(chord)] = str(exc)
     return json_response({"bindings": defaults, "rejected": rejected})
+
+
+async def put_keybindings(request: web.Request) -> web.Response:
+    body = await request.json()
+    bindings = body.get("bindings", body)
+    if not isinstance(bindings, dict):
+        raise ValueError("bindings must be an object")
+    rejected: dict[str, str] = {}
+    normalized: dict[str, str] = {}
+    for chord, command in bindings.items():
+        try:
+            key, command_id = normalize_binding(chord, command)
+            normalized[key] = command_id
+        except ValueError as exc:
+            rejected[str(chord)] = str(exc)
+    if rejected:
+        return json_response({"error": "invalid keybindings", "fields": rejected}, 422)
+    if request.query.get("validate") == "1":
+        return json_response({"ok": True})
+    path = request.app["config"].data_dir / "keybindings.json"
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(normalized, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+    await request.app["events"].emit("configuration_changed", source="keybindings")
+    return await get_keybindings(request)
+
+
+async def get_hooks(request: web.Request) -> web.Response:
+    path = request.app["config"].data_dir / "hooks.toml"
+    return json_response({"text": path.read_text(encoding="utf-8") if path.exists() else ""})
+
+
+async def get_hook_status(request: web.Request) -> web.Response:
+    hooks: MetaHookEngine = request.app["hooks"]
+    return json_response(
+        {
+            "diagnostic": hooks.diagnostic,
+            "deliveries": [item.snapshot() for item in hooks.deliveries[-100:]],
+        }
+    )
+
+
+async def put_hooks(request: web.Request) -> web.Response:
+    text = str((await request.json()).get("text", ""))
+    try:
+        parse_hook_rules(text)
+    except ValueError as exc:
+        return json_response({"error": "invalid hooks TOML", "fields": {"text": str(exc)}}, 422)
+    if request.query.get("validate") == "1":
+        return json_response({"ok": True})
+    path = request.app["config"].data_dir / "hooks.toml"
+    temporary = path.with_suffix(".toml.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+    await request.app["events"].emit("configuration_changed", source="hooks")
+    return json_response({"text": text})
+
+
+async def list_profiles(request: web.Request) -> web.Response:
+    return json_response(profile_payload(request.app["config"]))
+
+
+async def get_project_config(request: web.Request) -> web.Response:
+    return json_response(await read_project_config(request.query.get("cwd") or str(Path.cwd())))
+
+
+async def put_project_config(request: web.Request) -> web.Response:
+    body = await request.json()
+    try:
+        result = await write_project_config(
+            str(body.get("cwd") or Path.cwd()),
+            dict(body.get("values") or {}),
+            str(body.get("revision") or "missing"),
+        )
+    except ValueError as exc:
+        if "changed externally" in str(exc):
+            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        raise
+    await request.app["events"].emit(
+        "project_configuration_changed", project_id=result["project"]["id"]
+    )
+    if label := result["values"].get("project_label"):
+        await request.app["history"].update_project_label(result["project"]["id"], label)
+        for session in request.app["sessions"].sessions.values():
+            if session.record.project_id == result["project"]["id"]:
+                session.record.project_label = label
+                session.publish_update()
+    return json_response(result)
+
+
+async def get_project_note(request: web.Request) -> web.Response:
+    cwd = request.query.get("cwd") or str(Path.cwd())
+    note = await read_note(
+            cwd,
+            request.query.get("kind") or "spaces",
+            request.query.get("id") or "default",
+        )
+    project_config = await read_project_config(cwd)
+    if project_config["values"].get("notes_enabled") is False:
+        note["status"] = "disabled"
+        note["error"] = "project notes are disabled in .swe-mux/config.toml"
+    return json_response(note)
+
+
+async def put_project_note(request: web.Request) -> web.Response:
+    body = await request.json()
+    cwd = str(body.get("cwd") or Path.cwd())
+    project_config = await read_project_config(cwd)
+    if project_config["values"].get("notes_enabled") is False:
+        return json_response(
+            {"error": "project notes are disabled", "code": "notes_disabled"}, 409
+        )
+    try:
+        result = await write_note(
+            cwd,
+            str(body.get("kind") or "spaces"),
+            str(body.get("id") or "default"),
+            str(body.get("markdown") or ""),
+            str(body.get("revision") or "missing"),
+        )
+    except ValueError as exc:
+        if "changed externally" in str(exc):
+            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        raise
+    await request.app["events"].emit(
+        "project_note_changed",
+        source="user",
+        project_id=result["project"]["id"],
+        note_kind=result["kind"],
+        note_id=result["id"],
+    )
+    return json_response(result)
+
+
+async def find_project_notes(request: web.Request) -> web.Response:
+    return json_response(
+        {
+            "items": await search_notes(
+                request.query.get("cwd") or str(Path.cwd()), request.query.get("q", "")
+            )
+        }
+    )
+
+
+async def list_pinned_directories(request: web.Request) -> web.Response:
+    return json_response({"paths": request.app["config"].pinned_directories})
+
+
+async def pin_directory(request: web.Request) -> web.Response:
+    config: Config = request.app["config"]
+    path = str(Path(str((await request.json()).get("path", ""))).resolve())
+    if not Path(path).is_dir():
+        raise ValueError({"path": "directory does not exist"})
+    values = list(dict.fromkeys([*config.pinned_directories, path]))
+    update_config(config, {"pinned_directories": values})
+    await request.app["events"].emit("configuration_changed", source="directory_pins")
+    return json_response({"paths": values})
+
+
+async def unpin_directory(request: web.Request) -> web.Response:
+    config: Config = request.app["config"]
+    path = str(Path(str((await request.json()).get("path", ""))).resolve())
+    values = [item for item in config.pinned_directories if item.casefold() != path.casefold()]
+    update_config(config, {"pinned_directories": values})
+    await request.app["events"].emit("configuration_changed", source="directory_pins")
+    return json_response({"paths": values})
+
+
+async def filesystem_roots(request: web.Request) -> web.Response:
+    roots = [
+        f"{letter}:\\"
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        if Path(f"{letter}:\\").is_dir()
+    ]
+    return json_response({"roots": roots, "remote": request.remote not in {"127.0.0.1", "::1"}})
+
+
+async def filesystem_list(request: web.Request) -> web.Response:
+    path = Path(request.query.get("path") or Path.cwd()).resolve()
+    if not path.is_dir():
+        raise ValueError({"path": "directory does not exist"})
+    try:
+        directories = sorted(
+            (item for item in path.iterdir() if item.is_dir()),
+            key=lambda item: item.name.casefold(),
+        )[:500]
+    except PermissionError as exc:
+        raise ValueError({"path": "permission denied"}) from exc
+    return json_response(
+        {
+            "path": str(path),
+            "parent": str(path.parent) if path.parent != path else None,
+            "directories": [{"name": item.name, "path": str(item)} for item in directories],
+        }
+    )
 
 
 async def list_sessions(request: web.Request) -> web.Response:
@@ -239,21 +605,64 @@ async def list_sessions(request: web.Request) -> web.Response:
     return json_response(sessions)
 
 
-async def spawn_session(request: web.Request) -> web.Response:
-    body = await request.json()
-    manager: SessionManager = request.app["sessions"]
-    spaces: SpaceManager = request.app["spaces"]
-    space_id = body.get("space") or "default"
+async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Session:
+    spec = SpawnRequest.parse(body)
+    manager: SessionManager = app["sessions"]
+    spaces: SpaceManager = app["spaces"]
+    space_id = spec.space_id
     if space_id not in spaces.spaces:
         raise ValueError(f"unknown space: {space_id}")
-    session = await manager.spawn(
-        backend=body.get("backend", request.app["config"].default_backend),
-        name=body.get("name"),
-        cwd=body.get("cwd"),
-        space_id=space_id,
-        exe=body.get("exe"),
-        args=body.get("exe_args") or [],
+    space = spaces.spaces[space_id]
+    config: Config = app["config"]
+    backend = spec.backend or space.default_backend or config.default_backend
+    seed_cwd = spec.cwd or space.default_cwd or config.startup_cwd or str(Path.cwd())
+    project_config = await read_project_config(seed_cwd)
+    project_values = (
+        project_config["values"] if project_config["status"] in {"ready", "read-only"} else {}
     )
+    if project_config["status"] == "malformed":
+        await app["events"].emit(
+            "project_configuration_error",
+            source="project_file",
+            path=project_config["path"],
+            error=project_config.get("error"),
+        )
+    cwd = spec.cwd or space.default_cwd
+    if not cwd and project_values.get("default_cwd"):
+        candidate = Path(str(project_values["default_cwd"]))
+        project_root = Path(project_config["project"]["root"])
+        cwd = str(candidate if candidate.is_absolute() else project_root / candidate)
+    cwd = cwd or config.startup_cwd or str(Path.cwd())
+    executable = spec.executable
+    argv = list(spec.argv)
+    profile_id: str | None = None
+    profile_env: dict[str, str] | None = None
+    if backend == "shell" and not executable:
+        profile_id = (
+            spec.profile_id
+            or space.default_profile_id
+            or project_values.get("default_shell_profile")
+            or config.default_shell_profile
+        )
+        profile = resolve_profile(config, profile_id, Path(cwd).resolve())
+        executable = profile.executable
+        argv = [*profile.argv, *argv]
+        profile_env = profile.env
+    return await manager.spawn(
+        backend=backend,
+        name=spec.name,
+        cwd=cwd,
+        space_id=space_id,
+        exe=executable,
+        args=argv,
+        shell_profile_id=profile_id,
+        profile_env=profile_env,
+        project_label=str(project_values.get("project_label") or "") or None,
+    )
+
+
+async def spawn_session(request: web.Request) -> web.Response:
+    session = await _spawn_from_body(request.app, await request.json())
     return json_response(session.record.snapshot(), 201)
 
 
@@ -275,6 +684,8 @@ async def patch_session(request: web.Request) -> web.Response:
         session.record.space_id = body["space"]
     if "pin" in body:
         session.record.pinned_attention = bool(body["pin"])
+    await request.app["history"].update_session_metadata(session.record)
+    session.publish_update()
     await request.app["events"].emit("session_updated", session_id=session.record.id)
     return json_response(session.record.snapshot())
 
@@ -284,6 +695,7 @@ async def delete_session(request: web.Request) -> web.Response:
     session = manager.resolve(request.match_info["sid"])
     await manager.stop(session.record.id)
     manager.sessions.pop(session.record.id, None)
+    shutil.rmtree(request.app["config"].data_dir / "media" / session.record.id, ignore_errors=True)
     return json_response({"ok": True})
 
 
@@ -297,7 +709,113 @@ async def session_input(request: web.Request) -> web.Response:
 async def broadcast_set(request: web.Request) -> web.Response:
     session = request.app["sessions"].resolve(request.match_info["sid"])
     session.record.broadcast = bool((await request.json()).get("include", True))
+    session.publish_update()
+    await request.app["events"].emit(
+        "broadcast_membership_changed",
+        session_id=session.record.id,
+        included=session.record.broadcast,
+    )
     return json_response(session.record.snapshot())
+
+
+async def deliver_broadcast(
+    manager: SessionManager,
+    data: str,
+    events: EventBus,
+    *,
+    source_id: str | None = None,
+) -> dict[str, list[str]]:
+    delivered: list[str] = []
+    skipped: list[str] = []
+    for candidate in manager.sessions.values():
+        if candidate.record.id == source_id or not candidate.record.broadcast:
+            continue
+        if not candidate.pty.isalive():
+            skipped.append(candidate.record.id)
+            continue
+        candidate.pty.write(data)
+        delivered.append(candidate.record.id)
+    await events.emit(
+        "broadcast_delivered",
+        session_id=source_id,
+        targets=delivered,
+        skipped=skipped,
+        bytes=len(data.encode("utf-8")),
+    )
+    return {"delivered": delivered, "skipped": skipped}
+
+
+async def broadcast_input_route(request: web.Request) -> web.Response:
+    data = str((await request.json()).get("data", ""))
+    return json_response(
+        await deliver_broadcast(request.app["sessions"], data, request.app["events"])
+    )
+
+
+_MEDIA_TYPES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+_MEDIA_SIGNATURES = {
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/webp": (b"RIFF",),
+    "image/gif": (b"GIF87a", b"GIF89a"),
+}
+
+
+def validate_session_media(media_type: str, data: bytes | bytearray) -> str:
+    suffix = _MEDIA_TYPES.get(media_type)
+    if suffix is None:
+        raise ValueError("supported clipboard image types: PNG, JPEG, WebP, GIF")
+    if len(data) > 10 * 1024 * 1024:
+        raise ValueError("clipboard image exceeds the 10 MiB limit")
+    if not any(data.startswith(signature) for signature in _MEDIA_SIGNATURES[media_type]):
+        raise ValueError("clipboard image content does not match its declared type")
+    if media_type == "image/webp" and data[8:12] != b"WEBP":
+        raise ValueError("clipboard image content does not match its declared type")
+    return suffix
+
+
+async def upload_session_media(request: web.Request) -> web.Response:
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    adapter: BackendAdapter = request.app["sessions"].adapters[session.record.backend]
+    if session.record.backend not in {"claude", "codex"}:
+        raise ValueError("clipboard images are supported only in Claude and Codex sessions")
+    reader = await request.multipart()
+    part = await reader.next()
+    if not isinstance(part, BodyPartReader) or part.name != "file":
+        raise ValueError("multipart field 'file' is required")
+    media_type = str(part.headers.get("Content-Type", "")).split(";", 1)[0].lower()
+    data = bytearray()
+    while chunk := await part.read_chunk(size=64 * 1024):
+        data.extend(chunk)
+        if len(data) > 10 * 1024 * 1024:
+            raise ValueError("clipboard image exceeds the 10 MiB limit")
+    suffix = validate_session_media(media_type, data)
+    directory = request.app["config"].data_dir / "media" / session.record.id
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{uuid4().hex}{suffix}"
+    temporary = path.with_suffix(f"{suffix}.tmp")
+    temporary.write_bytes(data)
+    temporary.replace(path)
+    await request.app["events"].emit(
+        "session_media_uploaded",
+        session_id=session.record.id,
+        media_type=media_type,
+        bytes=len(data),
+    )
+    return json_response(
+        {
+            "path": str(path),
+            "reference": adapter.media_reference(path),
+            "media_type": media_type,
+            "bytes": len(data),
+        },
+        201,
+    )
 
 
 async def promote_session(request: web.Request) -> web.Response:
@@ -312,6 +830,18 @@ async def promote_session(request: web.Request) -> web.Response:
     return json_response(promoted.record.snapshot())
 
 
+async def demote_session(request: web.Request) -> web.Response:
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    supplied = request.headers.get("X-Mux-Hook-Secret", "")
+    if not secrets.compare_digest(supplied, session.hook_secret):
+        raise web.HTTPForbidden(text="invalid hook secret")
+    body = await request.json()
+    demoted = await request.app["sessions"].demote(
+        session.record.id, str(body["backend"]), str(body["native_id"])
+    )
+    return json_response(demoted.record.snapshot())
+
+
 async def list_spaces(request: web.Request) -> web.Response:
     spaces: SpaceManager = request.app["spaces"]
     return json_response([s.snapshot() for s in spaces.spaces.values()])
@@ -324,24 +854,60 @@ async def create_space(request: web.Request) -> web.Response:
 
 
 async def patch_space(request: web.Request) -> web.Response:
-    space = await request.app["spaces"].update(request.match_info["sid"], **await request.json())
+    body = await request.json()
+    profile_id = body.get("default_profile_id")
+    if profile_id is not None and profile_id not in {
+        profile.id for profile in request.app["config"].shell_profiles
+    }:
+        raise ValueError({"default_profile_id": "unknown shell profile"})
+    space = await request.app["spaces"].update(request.match_info["sid"], **body)
     return json_response(space.snapshot())
 
 
 async def delete_space(request: web.Request) -> web.Response:
     sid = request.match_info["sid"]
     manager: SessionManager = request.app["sessions"]
-    if any(s.record.space_id == sid and s.pty.isalive() for s in manager.sessions.values()):
-        raise ValueError("move or kill live sessions before deleting this space")
+    body = await request.json() if request.can_read_body else {}
+    contained = [s for s in manager.sessions.values() if s.record.space_id == sid]
+    disposition = str(body.get("disposition") or "reject")
+    target = str(body.get("target_space") or "default")
+    live = [s for s in contained if s.pty.isalive()]
+    if live and disposition == "reject":
+        raise ValueError("choose disposition=move or disposition=kill for live sessions")
+    if disposition == "move":
+        if target == sid or target not in request.app["spaces"].spaces:
+            raise ValueError("invalid target space")
+        for session in contained:
+            session.record.space_id = target
+            await request.app["history"].update_session_metadata(session.record)
+            session.publish_update()
+    elif disposition == "kill":
+        await asyncio.gather(*(manager.stop(session.record.id) for session in live))
+    elif live:
+        raise ValueError("disposition must be move or kill")
     await request.app["spaces"].delete(sid)
     return json_response({"ok": True})
 
 
 async def list_history(request: web.Request) -> web.Response:
-    rows = await request.app["history"].history(
-        request.query.get("q", ""), request.query.get("backend")
+    external_value = request.query.get("external")
+    page = await request.app["history"].history_page(
+        query=request.query.get("q", ""),
+        backend=request.query.get("backend"),
+        project=request.query.get("project"),
+        state=request.query.get("state"),
+        space=request.query.get("space"),
+        external=(external_value.lower() == "true") if external_value is not None else None,
+        date_from=float(request.query["date_from"]) if request.query.get("date_from") else None,
+        date_to=float(request.query["date_to"]) if request.query.get("date_to") else None,
+        cursor=request.query.get("cursor"),
+        limit=int(request.query.get("limit", min(50, request.app["config"].history_limit))),
     )
-    return json_response(rows)
+    return json_response(page)
+
+
+async def list_history_projects(request: web.Request) -> web.Response:
+    return json_response({"items": await request.app["history"].history_projects()})
 
 
 async def history_transcript(request: web.Request) -> web.Response:
@@ -350,38 +916,175 @@ async def history_transcript(request: web.Request) -> web.Response:
         raise KeyError(request.match_info["sid"])
     transcript = row.get("transcript_path")
     if not transcript or not Path(transcript).is_file():
-        return json_response({"entry": row, "messages": []})
+        return json_response(
+            {"error": "native transcript is unavailable", "code": "transcript_unavailable"},
+            409,
+        )
     messages = parse_transcript(Path(transcript), str(row["backend"]))
     return json_response({"entry": row, "messages": messages})
 
 
 async def resume_history(request: web.Request) -> web.Response:
-    rows = await request.app["history"].history(limit=10000)
-    row = next((r for r in rows if r["id"] == request.match_info["sid"]), None)
+    row = await request.app["history"].history_entry(request.match_info["sid"])
     if not row:
         raise KeyError(request.match_info["sid"])
+    if not row.get("agent_visible") or row.get("backend") not in {"claude", "codex"}:
+        return json_response(
+            {"error": "only Claude and Codex history can be resumed", "code": "not_agent"},
+            422,
+        )
     body = await request.json() if request.can_read_body else {}
+    target_space = str(body.get("space") or "default")
+    requirements = {
+        "native_id_missing": not row.get("native_id"),
+        "cwd_missing": not row.get("cwd") or not Path(str(row["cwd"])).is_dir(),
+        "transcript_unavailable": not row.get("transcript_path")
+        or not Path(str(row["transcript_path"])).is_file(),
+        "target_space_missing": target_space not in request.app["spaces"].spaces,
+        "adapter_missing": row.get("backend") not in request.app["sessions"].adapters,
+    }
+    if code := next((key for key, failed in requirements.items() if failed), None):
+        return json_response(
+            {"error": code.replace("_", " "), "code": code},
+            409 if code == "transcript_unavailable" else 422,
+        )
     session = await request.app["sessions"].spawn(
-        backend=row["backend"],
+        backend=str(row["backend"]),
         name=body.get("name") or f"{row['name']} resumed",
-        cwd=row["cwd"],
-        space_id=body.get("space") or "default",
-        resume_native_id=row["native_id"],
+        cwd=str(row["cwd"]),
+        space_id=target_space,
+        resume_native_id=str(row["native_id"]),
     )
+    space = request.app["spaces"].spaces[target_space]
+    next_layout = attach_terminal(
+        space.layout,
+        session.record.id,
+        target_id=body.get("target_session_id"),
+        direction=body.get("direction"),
+    )
+    try:
+        await request.app["spaces"].update(
+            target_space, layout=next_layout, layout_revision=space.layout_revision
+        )
+    except Exception:
+        await request.app["sessions"].stop(session.record.id)
+        request.app["sessions"].sessions.pop(session.record.id, None)
+        raise
     return json_response(session.record.snapshot(), 201)
+
+
+async def delete_history_entry(request: web.Request) -> web.Response:
+    row = await request.app["history"].history_entry(request.match_info["sid"])
+    if not row or not row.get("agent_visible"):
+        raise KeyError(request.match_info["sid"])
+    await request.app["history"].delete_history_entry(request.match_info["sid"])
+    await request.app["events"].emit(
+        "history_entry_deleted", session_id=request.match_info["sid"], source="user"
+    )
+    return json_response({"ok": True, "native_transcript_deleted": False})
 
 
 async def list_events(request: web.Request) -> web.Response:
     return json_response(
         await request.app["history"].events(
-            float(request.query.get("since", 0)), request.query.get("session")
+            float(request.query.get("since", 0)),
+            request.query.get("session"),
+            min(int(request.query.get("limit", 500)), 2000),
+            int(request.query.get("after_seq", 0)),
         )
     )
 
 
 async def list_notifications(request: web.Request) -> web.Response:
     hooks: MetaHookEngine = request.app["hooks"]
-    return json_response(hooks.notifications)
+    return json_response(
+        {
+            "notifications": hooks.notifications,
+            "deliveries": [item.snapshot() for item in hooks.deliveries[-100:]],
+        }
+    )
+
+
+async def get_usage(request: web.Request) -> web.Response:
+    usage: UsageManager = request.app["usage"]
+    return json_response(usage.snapshot())
+
+
+async def refresh_usage(request: web.Request) -> web.Response:
+    usage: UsageManager = request.app["usage"]
+    body = await request.json() if request.can_read_body else {}
+    return json_response(await usage.refresh(body.get("provider")))
+
+
+async def clear_usage_cache(request: web.Request) -> web.Response:
+    usage: UsageManager = request.app["usage"]
+    await request.app["events"].emit("usage_cache_cleared", source="settings")
+    return json_response(usage.clear())
+
+
+async def list_processes(request: web.Request) -> web.Response:
+    session_id = request.query.get("session")
+    if not session_id:
+        raise ValueError("session query parameter is required")
+    inspector: ProcessInspector = request.app["process_inspector"]
+    return json_response(await inspector.snapshot(session_id))
+
+
+async def process_action(request: web.Request) -> web.Response:
+    body = await request.json()
+    inspector: ProcessInspector = request.app["process_inspector"]
+    return json_response(
+        await inspector.act(str(body["session_id"]), int(body["pid"]), str(body["action"]))
+    )
+
+
+async def list_previews(request: web.Request) -> web.Response:
+    previews: PreviewRegistry = request.app["previews"]
+    return json_response(await previews.list(request.query.get("session")))
+
+
+async def create_preview(request: web.Request) -> web.Response:
+    body = await request.json()
+    previews: PreviewRegistry = request.app["previews"]
+    item = await previews.register(
+        str(body["session_id"]), str(body["url"]), approved=bool(body.get("approved"))
+    )
+    if body.get("attach", True):
+        spaces: SpaceManager = request.app["spaces"]
+        space = spaces.spaces[item.space_id]
+        space.layout = attach_leaf(
+            space.layout,
+            "preview",
+            item.id,
+            target_id=str(body.get("target_session_id") or "") or None,
+            direction=str(body.get("direction") or "horizontal"),
+        )
+        space.layout_revision += 1
+        await spaces.history.upsert_space(space)
+    else:
+        space = request.app["spaces"].spaces[item.space_id]
+    await request.app["events"].emit(
+        "preview_registered",
+        session_id=item.session_id,
+        source="user",
+        preview_id=item.id,
+        url=item.url,
+    )
+    return json_response({"preview": item.snapshot(), "space": space.snapshot()}, 201)
+
+
+async def delete_preview(request: web.Request) -> web.Response:
+    previews: PreviewRegistry = request.app["previews"]
+    preview_id = request.match_info["preview_id"]
+    item = previews.items.get(preview_id)
+    previews.remove(preview_id)
+    await request.app["events"].emit(
+        "preview_removed",
+        session_id=item.session_id if item else None,
+        source="user",
+        preview_id=preview_id,
+    )
+    return json_response({"ok": True})
 
 
 async def hook_ingress(request: web.Request) -> web.Response:
@@ -402,37 +1105,37 @@ async def hook_ingress(request: web.Request) -> web.Response:
         event_type, session_id=session.record.id, source="hook", **event_payload
     )
     previous = session.record.state
+    next_state: SessionState | None = None
+    next_detail: str | None = None
     semantic: str | None = None
     if event_type == "SessionStart":
-        session.record.state = "idle"
-        session.record.state_detail = None
+        next_state = "idle"
     elif event_type in {"UserPromptSubmit", "turn_started"}:
-        session.record.state = "working"
-        session.record.state_detail = None
+        next_state = "working"
         semantic = "turn_started"
     elif event_type == "PreToolUse":
-        session.record.state = "working"
+        next_state = "working"
         tool = payload.get("tool_name") or payload.get("name") or "tool"
-        session.record.state_detail = str(tool)
+        next_detail = str(tool)
         semantic = "tool_use"
     elif event_type in {"PostToolUse", "PostToolUseFailure"}:
-        session.record.state = "working"
-        session.record.state_detail = None
+        next_state = "working"
     elif event_type in {"PermissionRequest", "approval_needed", "approval-requested"}:
-        session.record.state = "awaiting"
+        next_state = "awaiting"
         tool = payload.get("tool_name") or payload.get("message") or "approval"
-        session.record.state_detail = str(tool)
+        next_detail = str(tool)
         semantic = "approval_needed"
     elif event_type == "Notification":
         notification = str(payload.get("notification_type") or "")
         if notification in {"permission_prompt", "elicitation_dialog", "idle_prompt"}:
-            session.record.state = "awaiting"
-            session.record.state_detail = str(payload.get("message") or notification)
+            next_state = "awaiting"
+            next_detail = str(payload.get("message") or notification)
             semantic = "approval_needed"
     elif event_type in {"Stop", "turn_ended", "agent-turn-complete"}:
-        session.record.state = "idle"
-        session.record.state_detail = None
+        next_state = "idle"
         semantic = "turn_ended"
+    if next_state:
+        session.transition(next_state, next_detail, source="hook")
     if semantic and semantic != event_type:
         await request.app["events"].emit(
             semantic, session_id=session.record.id, source="hook", **event_payload
@@ -453,7 +1156,17 @@ async def list_worktrees(request: web.Request) -> web.Response:
     cwd = request.query.get("cwd") or str(Path.cwd())
     code, output = await _git(cwd, "worktree", "list", "--porcelain")
     if code:
-        return json_response([])
+        return json_response(
+            {
+                "error": output or "unable to list Git worktrees",
+                "code": "git_timeout" if code == 124 else "git_error",
+            },
+            504 if code == 124 else 400,
+        )
+    return json_response(_parse_worktrees(output))
+
+
+def _parse_worktrees(output: str) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     current: dict[str, Any] = {}
     for line in [*output.splitlines(), ""]:
@@ -466,12 +1179,30 @@ async def list_worktrees(request: web.Request) -> web.Response:
             current[key] = value
         else:
             current[line] = True
-    return json_response(items)
+    return items
+
+
+async def _listed_worktree_paths(cwd: str) -> dict[str, str]:
+    code, output = await _git(cwd, "worktree", "list", "--porcelain")
+    if code:
+        raise ValueError(output or "unable to inspect repository worktrees")
+    return {
+        str(Path(str(item["worktree"])).resolve()).casefold(): str(item["worktree"])
+        for item in _parse_worktrees(output)
+        if item.get("worktree")
+    }
 
 
 async def create_worktree(request: web.Request) -> web.Response:
     body = await request.json()
     cwd, path = str(body["cwd"]), str(Path(body["path"]).resolve())
+    if not Path(cwd).is_dir():
+        raise ValueError({"cwd": "repository directory does not exist"})
+    if not Path(path).parent.is_dir():
+        raise ValueError({"path": "target parent directory does not exist"})
+    existing = await _listed_worktree_paths(cwd)
+    if path.casefold() in existing:
+        raise ValueError({"path": "target is already a registered worktree"})
     args = ["worktree", "add"]
     if branch := body.get("branch"):
         args.extend(["-b", str(branch)])
@@ -480,19 +1211,78 @@ async def create_worktree(request: web.Request) -> web.Response:
         args.append(str(start_point))
     code, output = await _git(cwd, *args)
     if code:
-        raise ValueError(output or "git worktree add failed")
-    return json_response({"ok": True, "path": path}, 201)
+        return json_response(
+            {
+                "error": output or "git worktree add failed",
+                "code": "git_timeout" if code == 124 else "git_error",
+            },
+            504 if code == 124 else 400,
+        )
+    result: dict[str, Any] = {"ok": True, "path": path, "spawn": {"status": "not_requested"}}
+    spawn = body.get("spawn")
+    if isinstance(spawn, dict):
+        try:
+            spawn_payload = {
+                key: value
+                for key, value in spawn.items()
+                if key not in {"target_session_id", "direction"}
+            }
+            session = await _spawn_from_body(request.app, {**spawn_payload, "cwd": path})
+            spaces: SpaceManager = request.app["spaces"]
+            space = spaces.spaces[session.record.space_id]
+            target = str(spawn.get("target_session_id") or "") or None
+            direction = str(spawn.get("direction") or "") or None
+            space.layout = attach_terminal(
+                space.layout, session.record.id, target_id=target, direction=direction
+            )
+            space.layout_revision += 1
+            await spaces.history.upsert_space(space)
+            result["spawn"] = {
+                "status": "created",
+                "session": session.record.snapshot(),
+                "space": space.snapshot(),
+            }
+        except Exception as exc:
+            log.exception("worktree created but terminal spawn failed")
+            result["spawn"] = {
+                "status": "failed",
+                "error": str(exc),
+                "worktree_retained": True,
+            }
+    await request.app["events"].emit("worktree_created", source="user", cwd=cwd, path=path)
+    return json_response(result, 201)
 
 
 async def remove_worktree(request: web.Request) -> web.Response:
     body = await request.json()
+    cwd = str(body["cwd"])
+    requested = str(Path(str(body["path"])).resolve())
+    listed = await _listed_worktree_paths(cwd)
+    registered = listed.get(requested.casefold())
+    if not registered:
+        return json_response(
+            {
+                "error": "path is not a registered worktree for this repository",
+                "code": "not_registered_worktree",
+            },
+            409,
+        )
     args = ["worktree", "remove"]
     if body.get("force"):
         args.append("--force")
-    args.append(str(body["path"]))
-    code, output = await _git(str(body["cwd"]), *args)
+    args.append(registered)
+    code, output = await _git(cwd, *args)
     if code:
-        raise ValueError(output or "git worktree remove failed")
+        return json_response(
+            {
+                "error": output or "git worktree remove failed",
+                "code": "git_timeout" if code == 124 else "git_error",
+            },
+            504 if code == 124 else 400,
+        )
+    await request.app["events"].emit(
+        "worktree_removed", source="user", cwd=cwd, path=registered
+    )
     return json_response({"ok": True})
 
 
@@ -509,21 +1299,60 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     connection_id = secrets.token_urlsafe(12)
     ws = web.WebSocketResponse(heartbeat=20, max_msg_size=2 * 1024 * 1024)
     await ws.prepare(request)
-    await ws.send_json({"type": "state", "snapshot": session.record.snapshot()})
-    replay = session.scrollback.bytes()
+    snapshot, revision, replay, subscriber = session.replay_and_subscribe()
+    await ws.send_json({"type": "state", "snapshot": snapshot, "revision": revision})
+    await ws.send_json({"type": "replay_start", "reason": "attach"})
     if replay:
-        await ws.send_json({"type": "replay_start"})
         await ws.send_bytes(replay)
-        await ws.send_json({"type": "replay_end"})
-    queue = session.subscribe()
+    await ws.send_json({"type": "replay_end", "reason": "attach"})
 
     async def sender() -> None:
         while True:
-            chunk = await queue.get()
-            if chunk == b"":
-                await ws.send_json({"type": "exit"})
-                return
-            await ws.send_bytes(chunk)
+            message = await subscriber.queue.get()
+            if isinstance(message, bytes):
+                await ws.send_bytes(message)
+            elif message.get("type") == "resync":
+                (
+                    dropped_bytes,
+                    dropped_chunks,
+                    replay_bytes,
+                    current,
+                    current_revision,
+                    exit_frame,
+                ) = session.take_resync(subscriber)
+                await ws.send_json(
+                    {
+                        "type": "gap",
+                        "dropped_bytes": dropped_bytes,
+                        "dropped_chunks": dropped_chunks,
+                    }
+                )
+                await ws.send_json({"type": "replay_start", "reason": "resync"})
+                if replay_bytes:
+                    await ws.send_bytes(replay_bytes)
+                await ws.send_json({"type": "replay_end", "reason": "resync"})
+                await ws.send_json(
+                    {"type": "update", "snapshot": current, "revision": current_revision}
+                )
+                if exit_frame:
+                    await ws.send_json(exit_frame)
+                    return
+            else:
+                await ws.send_json(message)
+                if message.get("type") == "exit":
+                    return
+
+    if snapshot["state"] in {"exited", "crashed"}:
+        await ws.send_json(
+            {
+                "type": "exit",
+                "snapshot": snapshot,
+                "revision": revision,
+                "reason": "already_ended",
+            }
+        )
+        session.unsubscribe(subscriber)
+        return ws
 
     task = asyncio.create_task(sender())
     try:
@@ -540,20 +1369,20 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
                     data = str(frame.get("data", ""))
                     session.pty.write(data)
                     if frame.get("broadcast"):
-                        for other in request.app["sessions"].sessions.values():
-                            if (
-                                other is not session
-                                and other.record.broadcast
-                                and other.pty.isalive()
-                            ):
-                                other.pty.write(data)
+                        await deliver_broadcast(
+                            request.app["sessions"],
+                            data,
+                            request.app["events"],
+                            source_id=session.record.id,
+                        )
                 elif frame.get("type") == "resize":
                     session.pty.resize(int(frame["cols"]), int(frame["rows"]))
     finally:
         task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         if session.input_owner == connection_id:
             session.input_owner = None
-        session.unsubscribe(queue)
+        session.unsubscribe(subscriber)
     return ws
 
 
@@ -562,9 +1391,22 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
     await ws.prepare(request)
     bus: EventBus = request.app["events"]
     queue = bus.subscribe()
+    last_sequence = int(request.query.get("after_seq", 0))
     try:
+        catch_up = await request.app["history"].events(
+            session_id=request.query.get("session"),
+            limit=2000,
+            after_seq=last_sequence,
+        )
+        for event in catch_up:
+            await ws.send_json(event)
+            last_sequence = max(last_sequence, int(event["seq"]))
         while True:
-            await ws.send_json((await queue.get()).snapshot())
+            event = await queue.get()
+            if event.seq <= last_sequence:
+                continue
+            await ws.send_json(event.snapshot())
+            last_sequence = event.seq
     except (asyncio.CancelledError, ConnectionResetError):
         pass
     finally:

@@ -32,6 +32,9 @@ def main() -> None:
     spawn.add_argument("--name")
     spawn.add_argument("--cwd", default=os.getcwd())
     spawn.add_argument("--space", default="default")
+    spawn.add_argument("--profile")
+    spawn.add_argument("--exe")
+    spawn.add_argument("--arg", action="append", default=[])
     send = sub.add_parser("send")
     send.add_argument("session", nargs="?")
     send.add_argument("text")
@@ -40,6 +43,7 @@ def main() -> None:
     kill.add_argument("session")
     sub.add_parser("history")
     sub.add_parser("spaces")
+    sub.add_parser("profiles")
     resume = sub.add_parser("resume")
     resume.add_argument("id")
     args = parser.parse_args()
@@ -49,17 +53,19 @@ def main() -> None:
         result = request(
             "POST",
             "/api/sessions",
-            {"backend": args.backend, "name": args.name, "cwd": args.cwd, "space": args.space},
+            {
+                "backend": args.backend,
+                "name": args.name,
+                "cwd": args.cwd,
+                "space": args.space,
+                "profile_id": args.profile,
+                "executable": args.exe,
+                "argv": args.arg,
+            },
         )
     elif args.command == "send":
         if args.all_broadcast:
-            sessions = request("GET", "/api/sessions")
-            assert isinstance(sessions, list)
-            result = [
-                request("POST", f"/api/sessions/{item['id']}/input", {"data": args.text})
-                for item in sessions
-                if item.get("broadcast")
-            ]
+            result = request("POST", "/api/broadcast/input", {"data": args.text})
         else:
             if not args.session:
                 parser.error("send requires SESSION unless --all-broadcast is used")
@@ -70,6 +76,8 @@ def main() -> None:
         result = request("GET", "/api/history")
     elif args.command == "spaces":
         result = request("GET", "/api/spaces")
+    elif args.command == "profiles":
+        result = request("GET", "/api/profiles")
     else:
         result = request("POST", f"/api/history/{args.id}/resume", {})
     json.dump(result, sys.stdout, indent=2)

@@ -34,7 +34,7 @@ def merge_environment(
 @dataclass
 class PtyHost:
     appname: str
-    cmdline: str | None = None
+    argv: tuple[str, ...] = ()
     cwd: str | None = None
     cols: int = 120
     rows: int = 30
@@ -64,7 +64,10 @@ class PtyHost:
         if self.env_extra:
             merged = merge_environment(os.environ, self.env_extra)
             env = "\0".join(f"{k}={v}" for k, v in merged.items()) + "\0\0"
-        self._pty.spawn(self.appname, cmdline=self.cmdline, cwd=self.cwd, env=env)
+        # ConPTY is the Windows process boundary and therefore owns Windows argv
+        # quoting. Backend adapters keep arguments structured and platform-neutral.
+        cmdline = subprocess.list2cmdline(self.argv) if self.argv else None
+        self._pty.spawn(self.appname, cmdline=cmdline, cwd=self.cwd, env=env)
         if self.reaper:
             try:
                 self.reaper.assign(self.pid)

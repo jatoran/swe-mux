@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":"hello"},"sessionId":"claude-fixture"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","model":"claude-haiku-4-5","usage":{"input_tokens":12,"output_tokens":3}}}

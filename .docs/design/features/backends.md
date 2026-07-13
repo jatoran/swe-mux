@@ -19,9 +19,19 @@
 - Shell child PATH begins with generated shims that resolve the real executable before
   PATH modification, assign/retain the native ID, inject hooks, then POST promotion
   with the inherited per-session secret.
-- Claude receives generated per-daemon hook settings for `SessionStart`,
+- Executable resolution supports native binaries and package-manager shims. A stale
+  configured `codex.exe` falls back through Windows PATHEXT to an installed `codex.cmd`;
+  npm Codex shims resolve to their underlying `node.exe` + `codex.js` entrypoint so JSON
+  config remains one exact argv value; other `.cmd`/`.bat` targets use `COMSPEC`, while
+  `.exe` targets remain direct argv launches. Resolution excludes the mux shim directory,
+  preventing recursive self-launch.
+- Claude receives atomically generated per-session hook settings for `SessionStart`,
   `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
   `PermissionRequest`, `Notification`, `Stop`, and `SessionEnd`.
+  The settings directory is removed when its owning terminal ends.
+- Claude executes hook commands through Bash even on Windows. Generated commands use
+  Bash-safe executable paths (for example `/d/.../python.exe` under Git Bash/MSYS), are
+  written by atomic replacement, and must never use raw Windows `list2cmdline` output.
 - Codex explicit spawn receives a `notify` program; resume uses `codex resume`.
 - Hooks provide low-latency state changes. Native transcripts are authoritative fallbacks,
   including when an agent is launched outside a shim or an agent mode omits a hook.
@@ -37,6 +47,12 @@
 - Transcript cwd/time matching remains a fallback for non-shim or unusual launch paths.
   The primary promotion endpoint requires the unexposed per-session hook secret, so
   unrelated browser/tailnet clients cannot claim a terminal.
+- The shim posts a matching authenticated demotion when the nested CLI exits. The PTY,
+  pane, cwd, and scrollback remain intact, while backend/state/context immediately return
+  to shell values and nested-agent detection resumes for the next launch.
+- Adapters own recent-transcript discovery and native-ID extraction. Codex matches the
+  exact native ID when available and uses bounded cwd/time correlation only for new
+  sessions whose CLI chooses the native ID internally.
 
 ## Key files
 

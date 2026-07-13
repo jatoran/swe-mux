@@ -95,6 +95,14 @@ class ReaperJob:
         finally:
             self._kernel32.CloseHandle(hproc)
 
+    def create_child(self) -> ReaperJob:
+        """Create a nested per-session job beneath the daemon-wide reaper.
+
+        Windows 8+ supports compatible nested jobs. The daemon-wide job remains the
+        final kill-on-close boundary; the child supplies session-level ownership.
+        """
+        return ReaperJob()
+
     def close(self) -> None:
         if getattr(self, "_handle", None):
             self._kernel32.CloseHandle(self._handle)

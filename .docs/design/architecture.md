@@ -10,15 +10,19 @@
 - Daemon: `muxd`; owns PTYs, registries, event bus, persistence, HTTP, and WebSockets.
 - Session: one process hosted by one ConPTY.
 - Adapter: backend-specific spawn/resume/transcript/exit behavior.
-- Pane: browser viewport attached to a session byte stream.
+- Pane: browser layout leaf attached to a terminal, note, or preview resource.
 - Space: persistent named group of sessions and pane layout.
+- Project: organizational identity resolved from Git common identity plus worktree root,
+  or normalized cwd when Git is unavailable.
 
 ## Process model
 
 ```text
 Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell/agent CLI
-                               │       │
-                               │       └── Win32 reaper job
+                               │       │             └── descendants/listeners
+                               │       ├── global + nested Win32 jobs
+                               │       ├── Git/hooks/optional usage workers
+                               │       └── project `.swe-mux/` files
                                └── SQLite history/events/spaces
 ```
 
@@ -32,17 +36,30 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
 - `src/swe_mux/launchers.py` + `agent_launcher.py`: mux-local CLI shims and authenticated in-place shell promotion.
 - `src/swe_mux/history.py`: SQLite schema and serialized access.
 - `src/swe_mux/reconcile.py`: bounded background discovery of external native transcripts.
+- `src/swe_mux/project_files.py` + `projects.py`: project identity and explicit,
+  revisioned project-local config/Markdown notes.
+- `src/swe_mux/processes.py`: bounded descendant reconciliation, ownership-checked
+  actions, loopback listener discovery, and preview registration.
+- `src/swe_mux/usage.py`: optional, cached, non-blocking external usage normalization.
+- `src/swe_mux/meta_hooks.py`: validated last-known-good event actions and delivery records.
 - `frontend/src/`: Preact state and xterm rendering; talks only through public HTTP/WS contracts.
 
 ## Lifecycle invariants
 
 1. `POST /api/sessions` selects an adapter and allocates mux/native IDs.
-2. Adapter returns executable plus argument-only command line.
-3. `PtyHost` spawns inside ConPTY and assigns PID to the shared reaper.
+2. Adapter returns a platform-neutral `SpawnSpec` with executable, argv, and environment.
+   The PTY host owns platform command-line quoting.
+3. `PtyHost` spawns inside ConPTY, assigns PID to the shared reaper and a per-session
+   nested job, then process reconciliation attributes descendant identity by PID and
+   creation time.
 4. A single fanout task appends output to bounded scrollback and subscriber queues.
-5. Each `/pty/{id}` attach receives state, scrollback replay, then live bytes.
+5. Each `/pty/{id}` attach atomically subscribes, then receives revisioned state,
+   replay brackets/bytes, and live bytes/updates without an attach-boundary gap.
 6. Explicit kill attempts adapter-specific graceful exit, then process-tree force kill.
 7. Unexpected EOF records `crashed`; explicit stop records `exited`.
+8. Project files are data-only, revision checked, and created only by an explicit write.
+9. Preview registration accepts only a detected session-owned or explicitly approved
+   loopback listener; it is not a general URL proxy.
 
 ## Failure modes
 
@@ -51,6 +68,8 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
 - Slow browser ⇒ bounded queue drops chunks; reconnect replays current bounded scrollback.
 - Process exit ⇒ EOF sentinel reaches all current subscribers; history exit fields update.
 - Missing frontend build ⇒ `/` returns a build instruction; API remains operational.
+- Missing optional `psutil` or ccusage executable ⇒ the related surface reports a typed
+  unavailable/error status; terminal operation remains unaffected.
 
 ## References
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .event_bus import EventBus
+from .models import SessionState
 from .session import Session
 
 log = logging.getLogger(__name__)
@@ -20,6 +21,12 @@ CLAUDE_CONTEXT_WINDOWS = {
     "claude-haiku-4-5": 200_000,
     "claude-haiku-4-5-20251001": 200_000,
 }
+
+
+def _publish_update(session: Session) -> None:
+    publish = getattr(session, "publish_update", None)
+    if callable(publish):
+        publish()
 
 
 class JsonlTailer:
@@ -61,19 +68,59 @@ class JsonlTailer:
 async def observe_transcript(
     session: Session, path: Path, events: EventBus, stop: asyncio.Event
 ) -> None:
+    unknown = 0
+    session.record.parser_status = "watching"
+    session.record.parser_diagnostic = f"tailing {path.name}"
+    _publish_update(session)
     async for event in JsonlTailer(path).events(stop):
+        recognized = False
         if session.record.backend == "claude":
+            recognized = event.get("type") in {"user", "assistant", "system"}
             await _claude(session, event, events)
         elif session.record.backend == "codex":
+            payload = event.get("payload") or {}
+            recognized = event.get("type") == "session_meta" or payload.get("type") in {
+                "task_started",
+                "user_message",
+                "task_complete",
+                "turn_aborted",
+                "function_call",
+                "custom_tool_call",
+                "exec_approval_request",
+                "apply_patch_approval_request",
+                "request_user_input",
+                "token_count",
+            }
             await _codex(session, event, events)
+        if recognized:
+            session.record.parser_events_seen += 1
+            if session.record.parser_status != "ready":
+                session.record.parser_status = "ready"
+                session.record.parser_diagnostic = "supported transcript events observed"
+                _publish_update(session)
+        else:
+            unknown += 1
+            if session.record.parser_events_seen == 0 and unknown >= 10:
+                session.record.parser_status = "degraded"
+                session.record.parser_diagnostic = (
+                    f"{unknown} transcript events did not match the supported schema"
+                )
+                _publish_update(session)
 
 
 async def _transition(
-    session: Session, events: EventBus, state: str, detail: str | None = None
+    session: Session, events: EventBus, state: SessionState, detail: str | None = None
 ) -> None:
     previous = session.record.state
-    session.record.state = state  # type: ignore[assignment]
-    session.record.state_detail = detail
+    transition = getattr(session, "transition", None)
+    if callable(transition):
+        accepted = transition(state, detail, source="transcript")
+        if not accepted:
+            return
+    else:
+        session.record.state = state
+        session.record.state_detail = detail
+        _publish_update(session)
     if previous != state:
         await events.emit(
             "state_changed",
@@ -125,6 +172,12 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
             window = CLAUDE_CONTEXT_WINDOWS.get(model, 0)
             session.record.context_window = window
             session.record.context_pct = min(1, session.record.tokens_in / window) if window else 0
+            session.record.context_peak_pct = max(
+                session.record.context_peak_pct, session.record.context_pct
+            )
+            session.record.model = model or session.record.model
+            session.record.measurement_source = "claude-transcript"
+            _publish_update(session)
         # Interactive Claude normally appends a turn_duration system record, but
         # print/non-interactive mode can finish at the final assistant message.
         # A text response with end_turn is authoritative; tool-use messages are
@@ -149,6 +202,7 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
     outer_type, payload_type = event.get("type"), payload.get("type")
     if outer_type == "session_meta" and payload.get("id"):
         session.record.native_session_id = str(payload["id"])
+        session.record.model = str(payload.get("model") or "") or session.record.model
         await _transition(session, events, "idle")
     if payload_type in {"task_started", "user_message"}:
         await _transition(session, events, "working")
@@ -180,6 +234,12 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         session.record.context_window = window
         current_input = int(current.get("input_tokens") or 0)
         session.record.context_pct = min(1, current_input / window) if window else 0
+        session.record.context_peak_pct = max(
+            session.record.context_peak_pct, session.record.context_pct
+        )
+        session.record.model = str(info.get("model") or "") or session.record.model
+        session.record.measurement_source = "codex-transcript"
+        _publish_update(session)
 
 
 async def find_codex_transcript(cwd: str, created_at: float, stop: asyncio.Event) -> Path | None:

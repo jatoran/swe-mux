@@ -25,6 +25,7 @@ class SessionRecord:
     cwd: str
     exe: str
     args: list[str]
+    shell_profile_id: str | None = None
     auto_named: bool = True
     pid: int = -1
     created_at: float = field(default_factory=time.time)
@@ -34,6 +35,15 @@ class SessionRecord:
     tokens_out: int = 0
     context_window: int = 0
     context_pct: float = 0.0
+    context_peak_pct: float = 0.0
+    model: str | None = None
+    measurement_source: str | None = None
+    parser_status: str = "not_applicable"
+    parser_diagnostic: str | None = None
+    parser_events_seen: int = 0
+    project_id: str | None = None
+    project_label: str | None = None
+    project_root: str | None = None
     last_activity_ts: float = field(default_factory=time.time)
     git: GitState = field(default_factory=GitState)
     pinned_attention: bool = False
@@ -51,6 +61,8 @@ class SpaceRecord:
     layout: dict[str, Any] | None = None
     default_cwd: str | None = None
     default_backend: str | None = None
+    layout_revision: int = 0
+    default_profile_id: str | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)
@@ -63,6 +75,7 @@ class MuxEvent:
     source: str
     type: str
     payload: dict[str, Any]
+    seq: int = 0
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)

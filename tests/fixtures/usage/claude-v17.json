@@ -1,0 +1,17 @@
+{
+  "daily": [
+    {
+      "date": "2026-07-10",
+      "inputTokens": 1200,
+      "outputTokens": 300,
+      "cacheCreationTokens": 100,
+      "cacheReadTokens": 400,
+      "totalTokens": 2000,
+      "totalCost": 1.25,
+      "modelBreakdowns": [
+        {"modelName": "claude-opus", "inputTokens": 1200, "outputTokens": 300, "totalCost": 1.25}
+      ]
+    }
+  ],
+  "totals": {"inputTokens": 1200, "outputTokens": 300, "totalTokens": 2000, "totalCost": 1.25}
+}

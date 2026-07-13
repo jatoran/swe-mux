@@ -8,8 +8,11 @@
 ## Surfaces
 
 - Runtime: `muxd` aiohttp daemon; Preact browser client; `mux` HTTP CLI.
-- Data: in-memory live sessions + scrollback; SQLite spaces, history, and events.
-- Integrations: ConPTY/pywinpty; PowerShell; Claude Code; Codex CLI.
+- Data: in-memory live sessions, process/preview registrations, and scrollback; SQLite
+  spaces, agent-only history, events, and cached indexes; project-owned Markdown/TOML in
+  `.swe-mux/`.
+- Integrations: ConPTY/pywinpty; Win32 Job Objects; PowerShell/CMD/WSL profiles; Git;
+  Claude Code; Codex CLI; optional locally installed ccusage adapters.
 
 ## Doc map
 
@@ -27,6 +30,10 @@
 - Meta-hooks: `features/meta-hooks.md`
 - Git awareness and worktrees: `features/git.md`
 - Browser interaction model: `features/ui.md`
+- Shell profiles and terminal creation: `features/shell-profiles.md`
+- Project configuration and notes: `features/projects-and-notes.md`
+- Usage analytics: `features/usage.md`
+- Process ownership and previews: `features/processes-and-previews.md`
 
 ### Active development
 
@@ -35,12 +42,16 @@
 
 ## Global invariants
 
-- One daemon owns every ConPTY and assigns child processes to one kill-on-close Win32 job.
+- One daemon owns every ConPTY. A global kill-on-close Win32 job guarantees daemon-exit
+  cleanup; a nested per-session job plus process reconciliation attributes descendants.
 - Browser attach/detach never starts, stops, or resumes a session.
 - Daemon termination kills live children; no live-session restoration occurs.
 - Backend-specific executable flags and transcript locations remain inside adapters.
 - PTY output has one consumer; fanout feeds scrollback and WebSocket subscribers.
 - Native transcripts persist outside mux; mux never deletes transcript files.
+- Plain shells never become agent history. Promotion converts the provisional lifecycle
+  in place; demotion updates live state without duplicating its agent history.
+- Reading a project has no filesystem side effect. Only explicit saves create `.swe-mux/`.
 
 ## Key trade-offs
 

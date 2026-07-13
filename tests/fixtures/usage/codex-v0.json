@@ -1,0 +1,13 @@
+{
+  "data": {
+    "days": [
+      {"date": "2026-07-11", "input_tokens": 500, "output_tokens": 125, "cachedInputTokens": 75, "cost_usd": 0.42}
+    ],
+    "sessions": [
+      {"session_id": "codex-session", "input_tokens": 500, "output_tokens": 125, "cost_usd": 0.42}
+    ],
+    "models": [
+      {"model": "gpt-5", "input_tokens": 500, "output_tokens": 125, "cost_usd": 0.42}
+    ]
+  }
+}
