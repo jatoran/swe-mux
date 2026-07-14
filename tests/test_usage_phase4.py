@@ -18,9 +18,10 @@ FIXTURES = Path(__file__).parent / "fixtures" / "usage"
     [
         ("claude-v17.json", "claude", "claude-opus", 2000),
         ("codex-v0.json", "codex", "gpt-5", 700),
+        ("codex-v20.json", "codex", "gpt-5.2-codex", 700),
     ],
 )
-def test_pinned_usage_fixtures_normalize_without_live_cli(
+def test_versioned_usage_fixtures_normalize_without_live_cli(
     filename: str, provider: str, model: str, total: int
 ) -> None:
     payload = json.loads((FIXTURES / filename).read_text(encoding="utf-8"))
@@ -72,13 +73,33 @@ def test_usage_cache_clear_is_explicit(tmp_path: Path) -> None:
     assert not (tmp_path / "usage-cache.json").exists()
 
 
-def test_usage_snapshot_exposes_the_pinned_unified_install_command(tmp_path: Path) -> None:
+def test_usage_snapshot_exposes_the_latest_unified_install_command(tmp_path: Path) -> None:
     manager = UsageManager(Config(data_dir=tmp_path), EventBus())
 
     snapshot = manager.snapshot()
 
     assert snapshot["package"] == CCUSAGE_PACKAGE
     assert snapshot["install_command"] == f"npm install -g {CCUSAGE_PACKAGE}"
+
+
+def test_current_codex_model_map_is_aggregated_with_proportional_cost() -> None:
+    payload = json.loads((FIXTURES / "codex-v20.json").read_text(encoding="utf-8"))
+
+    normalized = normalize_usage(payload, "codex", {"adapter": "fixture"})
+
+    assert normalized["models"] == [
+        {
+            "model": "gpt-5.2-codex",
+            "cost_is_estimate": True,
+            "input_tokens": 500,
+            "output_tokens": 125,
+            "cache_creation_tokens": 0,
+            "cache_read_tokens": 75,
+            "total_tokens": 700,
+            "cost_usd": 0.42,
+        }
+    ]
+    assert normalized["model_daily"][0]["date"] == "2026-07-11"
 
 
 def test_unified_defaults_select_each_provider_from_one_ccusage_executable() -> None:

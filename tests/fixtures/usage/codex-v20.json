@@ -1,0 +1,34 @@
+{
+  "daily": [
+    {
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 75,
+      "costUSD": 0.42,
+      "date": "2026-07-11",
+      "inputTokens": 500,
+      "models": {
+        "gpt-5.2-codex": {
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 75,
+          "inputTokens": 500,
+          "isFallback": false,
+          "outputTokens": 125,
+          "reasoningOutputTokens": 25,
+          "totalTokens": 700
+        }
+      },
+      "outputTokens": 125,
+      "reasoningOutputTokens": 25,
+      "totalTokens": 700
+    }
+  ],
+  "totals": {
+    "cacheCreationTokens": 0,
+    "cacheReadTokens": 75,
+    "costUSD": 0.42,
+    "inputTokens": 500,
+    "outputTokens": 125,
+    "reasoningOutputTokens": 25,
+    "totalTokens": 700
+  }
+}

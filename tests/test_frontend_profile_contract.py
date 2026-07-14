@@ -12,7 +12,10 @@ def test_default_and_custom_terminal_creation_keep_split_semantics_explicit() ->
     assert "New terminal custom…" in source
     assert "profile_id: profileId || undefined" in source
     assert "New terminal custom in split…" in source
-    assert "openLauncher(commandSession.space_id, 'horizontal')" in source
+    assert (
+        "openLauncher(commandSession.space_id, 'horizontal',workingCwd(commandSession))"
+        in source
+    )
     assert "spawnTerminal(launcherSpace, cwd, launcherSplit, launcherProfile)" in source
     assert "setLayoutMap" in source and "await updateLayout" in source
 

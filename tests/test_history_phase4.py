@@ -96,7 +96,7 @@ async def test_event_cursor_is_monotonic_and_gap_free(tmp_path: Path) -> None:
     history.close()
 
 
-async def test_worktrees_share_project_identity_but_keep_distinct_roots(
+async def test_worktrees_have_distinct_scopes_but_share_repo_group(
     tmp_path: Path, monkeypatch,
 ) -> None:
     first = tmp_path / "first"
@@ -116,7 +116,8 @@ async def test_worktrees_share_project_identity_but_keep_distinct_roots(
     monkeypatch.setattr("swe_mux.projects._git", fake_git)
     left = await resolve_project(first)
     right = await resolve_project(second)
-    assert left.id == right.id
+    assert left.id != right.id
+    assert left.repo_group_id == right.repo_group_id
     assert left.root != right.root
 
 

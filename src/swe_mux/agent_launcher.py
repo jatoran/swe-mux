@@ -28,7 +28,7 @@ def _notify_lifecycle(url_name: str, payload: dict[str, str]) -> None:
 
 def _promote(backend: str, native_id: str) -> None:
     _notify_lifecycle(
-        "MUX_PROMOTE_URL", {"backend": backend, "native_id": native_id}
+        "MUX_PROMOTE_URL", {"backend": backend, "native_id": native_id, "cwd": os.getcwd()}
     )
 
 

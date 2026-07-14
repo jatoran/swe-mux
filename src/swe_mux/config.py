@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {"light", "dark", "system", "solarized-dark", "tokyo-night", "custom"}
 CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "accent", "error"}
@@ -19,8 +19,7 @@ BUILTIN_THEME_PAIRS = {
     "solarized-dark": ("#002b36", "#93a1a1"),
     "tokyo-night": ("#1a1b26", "#c0caf5"),
 }
-CCUSAGE_PINNED_VERSION = "20.0.17"
-CCUSAGE_PACKAGE = f"ccusage@{CCUSAGE_PINNED_VERSION}"
+CCUSAGE_PACKAGE = "ccusage@latest"
 
 
 def default_ccusage_command(provider: str) -> list[str]:
@@ -59,6 +58,7 @@ class ShellProfile:
     cwd_strategy: str = "native"
     marker: str = "sh"
     capabilities: list[str] = field(default_factory=lambda: ["interactive", "agent-aware"])
+    cwd_integration: bool = False
     enabled: bool = True
 
 

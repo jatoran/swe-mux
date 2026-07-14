@@ -20,25 +20,37 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
 from .adapters import BackendAdapter, ClaudeAdapter, CodexAdapter, ShellAdapter
+from .app_notes import list_space_notes, read_space_note, write_space_note
 from .config import Config, load_config, update_config
 from .event_bus import EventBus
 from .git_monitor import GitMonitor, _git
 from .history import HistoryIndex
-from .keybindings import DEFAULT_KEYBINDINGS, normalize_binding
+from .keybindings import (
+    DEFAULT_KEYBINDINGS,
+    KEYBINDING_COMMANDS,
+    keybinding_policy,
+    normalize_binding,
+)
 from .launchers import create_agent_shims
 from .layouts import attach_leaf, attach_terminal
 from .meta_hooks import MetaHookEngine, parse_hook_rules
 from .models import SessionState
+from .note_migration import migrate_space_notes, repair_misbound_project_notes
 from .processes import PreviewRegistry, ProcessInspector
 from .profiles import profile_payload, resolve_profile
 from .project_files import (
     read_note,
     read_project_config,
     resolve_project_default_cwd,
+    safe_note_filename,
     search_notes,
     write_note,
     write_project_config,
 )
+from .project_files import (
+    revision as file_revision,
+)
+from .projects import resolve_project
 from .reconcile import reconcile_external_history
 from .session import Session, SessionManager
 from .spaces import SpaceManager
@@ -192,7 +204,17 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.put("/api/project/config", put_project_config),
             web.get("/api/project/notes", get_project_note),
             web.put("/api/project/notes", put_project_note),
+            web.get("/api/notes", get_project_note),
+            web.put("/api/notes", put_project_note),
             web.get("/api/project/notes/search", find_project_notes),
+            web.get("/api/space-notes", list_app_space_notes),
+            web.get("/api/projects", list_projects),
+            web.post("/api/projects/resolve", resolve_project_scope),
+            web.get("/api/projects/{scope_id}", get_project_scope),
+            web.patch("/api/projects/{scope_id}", patch_project_scope),
+            web.delete("/api/projects/{scope_id}", forget_project_scope),
+            web.get("/api/artifacts", list_artifacts),
+            web.post("/api/artifacts/{artifact_id}/transfer", transfer_artifact),
             web.get("/api/directories/pins", list_pinned_directories),
             web.post("/api/directories/pins", pin_directory),
             web.delete("/api/directories/pins", unpin_directory),
@@ -250,6 +272,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     events = EventBus(history.append_event)
     spaces = SpaceManager(history)
     await spaces.start()
+    await migrate_space_notes(config.data_dir, history, spaces)
+    await repair_misbound_project_notes(history, spaces)
     reaper = ReaperJob()
     adapters: dict[str, BackendAdapter] = {
         "shell": ShellAdapter(config.shell_exe),
@@ -343,9 +367,7 @@ async def _watch_config(app: web.Application) -> None:
                 "configuration_changed", source="external_file", revision=config.revision
             )
         except (OSError, ValueError, TypeError, tomllib.TOMLDecodeError) as exc:
-            await app["events"].emit(
-                "configuration_error", source="external_file", error=str(exc)
-            )
+            await app["events"].emit("configuration_error", source="external_file", error=str(exc))
 
 
 def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
@@ -468,13 +490,33 @@ async def get_keybindings(request: web.Request) -> web.Response:
             supplied = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise ValueError(f"invalid keybindings.json: {exc}") from exc
+        replace_defaults = bool(
+            isinstance(supplied, dict) and supplied.get("replace_defaults") is True
+        )
+        if replace_defaults:
+            supplied = supplied.get("bindings", {})
+            defaults = {}
+        if not isinstance(supplied, dict):
+            raise ValueError("keybindings.json must contain an object")
         for chord, command in supplied.items():
             try:
                 key, command_id = normalize_binding(chord, command)
                 defaults[key] = command_id
             except ValueError as exc:
                 rejected[str(chord)] = str(exc)
-    return json_response({"bindings": defaults, "rejected": rejected})
+    commands = [
+        {"id": command_id, "label": label, "category": category}
+        for command_id, label, category in KEYBINDING_COMMANDS
+    ]
+    return json_response(
+        {
+            "bindings": defaults,
+            "defaults": DEFAULT_KEYBINDINGS,
+            "commands": commands,
+            "policy": keybinding_policy(),
+            "rejected": rejected,
+        }
+    )
 
 
 async def put_keybindings(request: web.Request) -> web.Response:
@@ -496,7 +538,12 @@ async def put_keybindings(request: web.Request) -> web.Response:
         return json_response({"ok": True})
     path = request.app["config"].data_dir / "keybindings.json"
     temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(normalized, indent=2) + "\n", encoding="utf-8")
+    document = {
+        "version": 1,
+        "replace_defaults": True,
+        "bindings": normalized,
+    }
+    temporary.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
     await request.app["events"].emit("configuration_changed", source="keybindings")
     return await get_keybindings(request)
@@ -553,6 +600,8 @@ async def put_project_config(request: web.Request) -> web.Response:
         if "changed externally" in str(exc):
             return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
         raise
+    project = await resolve_project(result["project"]["root"])
+    await request.app["history"].register_project_scope(project)
     await request.app["events"].emit(
         "project_configuration_changed", project_id=result["project"]["id"]
     )
@@ -566,12 +615,19 @@ async def put_project_config(request: web.Request) -> web.Response:
 
 
 async def get_project_note(request: web.Request) -> web.Response:
-    cwd = request.query.get("cwd") or str(Path.cwd())
+    kind = request.query.get("kind") or "spaces"
+    identity = request.query.get("id") or "default"
+    if kind == "spaces":
+        space = request.app["spaces"].spaces.get(identity)
+        label = space.name if space else None
+        return json_response(read_space_note(request.app["config"].data_dir, identity, label))
+    cwd, scope_id = await _note_scope(request, kind, identity, request.query)
     note = await read_note(
-            cwd,
-            request.query.get("kind") or "spaces",
-            request.query.get("id") or "default",
-        )
+        cwd,
+        kind,
+        identity,
+    )
+    note["project_scope_id"] = scope_id
     project_config = await read_project_config(cwd)
     if project_config["values"].get("notes_enabled") is False:
         note["status"] = "disabled"
@@ -579,19 +635,64 @@ async def get_project_note(request: web.Request) -> web.Response:
     return json_response(note)
 
 
+async def _artifact_owner_label(request: web.Request, owner_type: str, owner_id: str) -> str:
+    if owner_type == "project":
+        scope = await request.app["history"].project_scope(owner_id)
+        if scope:
+            return str(scope.get("label") or owner_id)
+    if owner_type == "space":
+        space = request.app["spaces"].spaces.get(owner_id)
+        if space:
+            return str(space.name)
+    if owner_type == "session":
+        session = request.app["sessions"].sessions.get(owner_id)
+        if session:
+            return str(session.record.name)
+        history = await request.app["history"].history_entry(owner_id)
+        if history:
+            return str(history.get("name") or owner_id)
+    return owner_id
+
+
 async def put_project_note(request: web.Request) -> web.Response:
     body = await request.json()
-    cwd = str(body.get("cwd") or Path.cwd())
+    kind = str(body.get("kind") or "spaces")
+    identity = str(body.get("id") or "default")
+    if kind == "spaces":
+        space = request.app["spaces"].spaces.get(identity)
+        existing = read_space_note(request.app["config"].data_dir, identity, None)
+        if not space and not existing["exists"]:
+            raise ValueError("unknown space note")
+        label = space.name if space else str(existing.get("owner_label") or identity)
+        try:
+            result = write_space_note(
+                request.app["config"].data_dir,
+                identity,
+                label,
+                str(body.get("markdown") or ""),
+                str(body.get("revision") or "missing"),
+            )
+        except ValueError as exc:
+            if "changed externally" in str(exc):
+                return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+            raise
+        await request.app["events"].emit(
+            "space_note_changed", source="user", space_id=identity
+        )
+        return json_response(result)
+    cwd, scope_id = await _note_scope(request, kind, identity, body)
+    if not await request.app["history"].project_scope(scope_id):
+        project = await resolve_project(cwd)
+        await request.app["history"].register_project_scope(project)
+        scope_id = project.id
     project_config = await read_project_config(cwd)
     if project_config["values"].get("notes_enabled") is False:
-        return json_response(
-            {"error": "project notes are disabled", "code": "notes_disabled"}, 409
-        )
+        return json_response({"error": "project notes are disabled", "code": "notes_disabled"}, 409)
     try:
         result = await write_note(
             cwd,
-            str(body.get("kind") or "spaces"),
-            str(body.get("id") or "default"),
+            kind,
+            identity,
             str(body.get("markdown") or ""),
             str(body.get("revision") or "missing"),
         )
@@ -605,8 +706,339 @@ async def put_project_note(request: web.Request) -> web.Response:
         project_id=result["project"]["id"],
         note_kind=result["kind"],
         note_id=result["id"],
+        project_scope_id=scope_id,
     )
+    relative = str(Path(result["path"]).resolve().relative_to(Path(cwd).resolve()))
+    artifact = await request.app["history"].bind_artifact(
+        artifact_id=str(uuid4()),
+        kind="note",
+        owner_type=kind.removesuffix("s"),
+        owner_id=identity,
+        owner_label=await _artifact_owner_label(request, kind.removesuffix("s"), identity),
+        project_scope_id=scope_id,
+        relative_path=relative,
+    )
+    result["artifact"] = artifact
+    result["project_scope_id"] = artifact["project_scope_id"]
     return json_response(result)
+
+
+async def _note_scope(
+    request: web.Request,
+    kind: str,
+    identity: str,
+    values: Any,
+) -> tuple[str, str]:
+    history: HistoryIndex = request.app["history"]
+    owner_type = kind.removesuffix("s")
+    bound = next(
+        (
+            item
+            for item in await history.artifacts()
+            if item["kind"] == "note"
+            and item["owner_type"] == owner_type
+            and item["owner_id"] == identity
+        ),
+        None,
+    )
+    if kind == "projects":
+        scope = await history.project_scope(identity)
+        if not scope:
+            raise ValueError("unknown project scope")
+        if bound and bound["project_scope_id"] != identity:
+            await history.delete_artifact_binding(str(bound["id"]))
+        return str(scope["root"]), str(scope["id"])
+    if not bound:
+        relative = (
+            str(Path(".swe-mux") / "notes" / "project.md")
+            if kind == "projects"
+            else str(Path(".swe-mux") / "notes" / kind / f"{safe_note_filename(identity)}.md")
+        )
+        matches = [
+            scope
+            for scope in await history.project_scopes(include_hidden=True)
+            if (Path(scope["root"]) / relative).is_file()
+        ]
+        if len(matches) > 1:
+            raise web.HTTPConflict(
+                text=json.dumps(
+                    {
+                        "error": "multiple project scopes contain this legacy note",
+                        "code": "artifact_conflict",
+                        "project_scope_ids": [item["id"] for item in matches],
+                    }
+                ),
+                content_type="application/json",
+            )
+        if matches:
+            bound = await history.bind_artifact(
+                artifact_id=str(uuid4()),
+                kind="note",
+                owner_type=owner_type,
+                owner_id=identity,
+                owner_label=await _artifact_owner_label(request, owner_type, identity),
+                project_scope_id=matches[0]["id"],
+                relative_path=relative,
+            )
+    requested_scope = values.get("project_scope_id") if hasattr(values, "get") else None
+    scope_id = bound["project_scope_id"] if bound else requested_scope
+    if not scope_id and kind == "sessions":
+        session = request.app["sessions"].sessions.get(identity)
+        if session:
+            if session.record.backend == "shell":
+                raise web.HTTPConflict(
+                    text=json.dumps(
+                        {
+                            "error": (
+                                "plain shells do not own durable notes; choose a space "
+                                "or project note"
+                            ),
+                            "code": "shell_note_redirect",
+                            "space_id": session.record.space_id,
+                        }
+                    ),
+                    content_type="application/json",
+                )
+            scope_id = session.record.project_scope_id
+        else:
+            row = await history.history_entry(identity)
+            scope_id = row.get("project_scope_id") if row else None
+    if scope_id:
+        scope = await history.project_scope(str(scope_id))
+        if not scope:
+            raise ValueError("unknown project scope")
+        return str(scope["root"]), str(scope["id"])
+    cwd = str(values.get("cwd") or Path.cwd())
+    project = await resolve_project(cwd)
+    return project.root, project.id
+
+
+async def list_app_space_notes(request: web.Request) -> web.Response:
+    labels = {item.id: item.name for item in request.app["spaces"].spaces.values()}
+    return json_response(list_space_notes(request.app["config"].data_dir, labels))
+
+
+def _scope_inventory(scope: dict[str, Any], artifacts: list[dict[str, Any]]) -> dict[str, Any]:
+    root = Path(str(scope["root"]))
+    mux = root / ".swe-mux"
+    known = {str((root / item["relative_path"]).resolve()) for item in artifacts}
+    unlinked: list[dict[str, Any]] = []
+    if mux.is_dir() and not mux.is_symlink():
+        notes = mux / "notes"
+        if notes.is_dir() and not notes.is_symlink():
+            note_paths = [*notes.glob("*.md"), *notes.glob("*/*.md")]
+            for path in sorted(note_paths)[:1000]:
+                try:
+                    resolved = path.resolve(strict=True)
+                    if not resolved.is_relative_to(mux.resolve()) or path.is_symlink():
+                        continue
+                except OSError:
+                    continue
+                if str(resolved) not in known:
+                    unlinked.append(
+                        {
+                            "path": str(path),
+                            "kind": "projects" if path.parent == notes else path.parent.name,
+                            "filename": path.name,
+                        }
+                    )
+    return {
+        "root_exists": root.is_dir(),
+        "config_exists": (mux / "config.toml").is_file(),
+        "rules_present_inert": (mux / "rules.toml").is_file(),
+        "unlinked": unlinked,
+        "scan_truncated": len(unlinked) >= 1000,
+    }
+
+
+async def resolve_project_scope(request: web.Request) -> web.Response:
+    """Explicitly confirm/register the project containing a user-selected directory."""
+    body = await request.json()
+    try:
+        cwd = Path(str(body.get("cwd") or "")).resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("cwd must be an existing directory") from exc
+    if not cwd.is_dir():
+        raise ValueError("cwd must be an existing directory")
+    project = await resolve_project(cwd)
+    await request.app["history"].register_project_scope(project)
+    if sid := body.get("session_id"):
+        session = request.app["sessions"].sessions.get(str(sid))
+        if session and session.record.runtime_cwd:
+            try:
+                same = Path(session.record.runtime_cwd).resolve(strict=True) == cwd
+            except OSError:
+                same = False
+            if same:
+                session.record.runtime_project_scope_id = project.id
+                session.publish_update()
+    return json_response(project.__dict__ if hasattr(project, "__dict__") else {
+        "id": project.id,
+        "label": project.label,
+        "root": project.root,
+        "source": project.source,
+        "repo_group_id": project.repo_group_id,
+        "repo_group_label": project.repo_group_label,
+    })
+
+
+async def list_projects(request: web.Request) -> web.Response:
+    history: HistoryIndex = request.app["history"]
+    scopes = await history.project_scopes(include_hidden=request.query.get("include_hidden") == "1")
+    try:
+        offset = max(0, int(request.query.get("offset", "0")))
+        limit = max(1, min(500, int(request.query.get("limit", "200"))))
+    except ValueError as exc:
+        raise ValueError("project offset and limit must be integers") from exc
+    total = len(scopes)
+    scopes = scopes[offset : offset + limit]
+    live = list(request.app["sessions"].sessions.values())
+    for scope in scopes:
+        scope["root_exists"] = Path(scope["root"]).is_dir()
+        scope["live_count"] = sum(item.record.trusted_scope_id == scope["id"] for item in live)
+    next_offset = offset + len(scopes)
+    return json_response(
+        {
+            "items": scopes,
+            "total": total,
+            "next_offset": next_offset if next_offset < total else None,
+        }
+    )
+
+
+async def get_project_scope(request: web.Request) -> web.Response:
+    history: HistoryIndex = request.app["history"]
+    scope = await history.project_scope(request.match_info["scope_id"])
+    if not scope:
+        raise KeyError(request.match_info["scope_id"])
+    artifacts = await history.artifacts(scope["id"])
+    for artifact in artifacts:
+        path = (Path(scope["root"]) / artifact["relative_path"]).resolve()
+        try:
+            artifact["revision"] = file_revision(path.read_bytes())
+        except OSError:
+            artifact["revision"] = "missing"
+    scope["inventory"] = _scope_inventory(scope, artifacts)
+    scope["config"] = await read_project_config(scope["root"])
+    all_scopes = await history.project_scopes(include_hidden=True)
+    conflicts: list[dict[str, Any]] = []
+    for item in scope["inventory"]["unlinked"]:
+        relative = str(Path(item["path"]).resolve().relative_to(Path(scope["root"]).resolve()))
+        peers = [
+            candidate["id"]
+            for candidate in all_scopes
+            if candidate["id"] != scope["id"] and (Path(candidate["root"]) / relative).is_file()
+        ]
+        if peers:
+            conflicts.append({**item, "other_project_scope_ids": peers})
+    scope["inventory"]["conflicting"] = conflicts
+    live_space_ids = set(request.app["spaces"].spaces)
+    scope["detached_artifacts"] = [
+        item
+        for item in artifacts
+        if (item["owner_type"] == "space" and item["owner_id"] not in live_space_ids)
+        or (
+            item["owner_type"] == "session"
+            and not await history.history_entry(item["owner_id"])
+            and item["owner_id"] not in request.app["sessions"].sessions
+        )
+    ]
+    scope["artifacts"] = artifacts
+    scope["blockers"] = await history.project_blockers(scope["id"])
+    scope["sessions"] = [
+        item.record.snapshot()
+        for item in request.app["sessions"].sessions.values()
+        if item.record.trusted_scope_id == scope["id"]
+    ]
+    return json_response(scope)
+
+
+async def patch_project_scope(request: web.Request) -> web.Response:
+    body = await request.json()
+    changed = await request.app["history"].set_project_hidden(
+        request.match_info["scope_id"], bool(body.get("hidden"))
+    )
+    if not changed:
+        raise KeyError(request.match_info["scope_id"])
+    return json_response(await request.app["history"].project_scope(request.match_info["scope_id"]))
+
+
+async def forget_project_scope(request: web.Request) -> web.Response:
+    result = await request.app["history"].forget_project_scope(request.match_info["scope_id"])
+    return json_response(result, 200 if result["forgotten"] else 409)
+
+
+async def list_artifacts(request: web.Request) -> web.Response:
+    return json_response(
+        {"items": await request.app["history"].artifacts(request.query.get("project_scope_id"))}
+    )
+
+
+async def transfer_artifact(request: web.Request) -> web.Response:
+    history: HistoryIndex = request.app["history"]
+    artifact = next(
+        (a for a in await history.artifacts() if a["id"] == request.match_info["artifact_id"]), None
+    )
+    if not artifact:
+        raise KeyError(request.match_info["artifact_id"])
+    body = await request.json()
+    target = await history.project_scope(str(body.get("project_scope_id") or ""))
+    source = await history.project_scope(artifact["project_scope_id"])
+    if not source or not target:
+        raise ValueError("unknown source or target project scope")
+    source_path = (Path(source["root"]) / artifact["relative_path"]).resolve()
+    target_path = (Path(target["root"]) / artifact["relative_path"]).resolve()
+    if not source_path.is_relative_to(
+        Path(source["root"]).resolve()
+    ) or not target_path.is_relative_to(Path(target["root"]).resolve()):
+        raise ValueError("artifact path escapes project scope")
+    action = str(body.get("action") or "keep")
+    if action == "keep":
+        await history.acknowledge_artifact_placement(artifact["id"], target["id"])
+        artifact = next(item for item in await history.artifacts() if item["id"] == artifact["id"])
+        return json_response({"artifact": artifact, "action": action})
+    if not source_path.is_file() or target_path.exists():
+        raise ValueError("source missing or destination already exists")
+    expected_revision = str(body.get("revision") or "")
+    current_revision = file_revision(source_path.read_bytes())
+    if not expected_revision or expected_revision != current_revision:
+        return json_response(
+            {
+                "error": "artifact changed externally; reload before transferring",
+                "code": "revision_conflict",
+                "revision": current_revision,
+            },
+            409,
+        )
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    if action == "copy":
+        shutil.copy2(source_path, target_path)
+        copy = await history.bind_artifact(
+            artifact_id=str(uuid4()),
+            kind=artifact["kind"],
+            owner_type=artifact["owner_type"],
+            owner_id=f"{artifact['owner_id']}-copy-{uuid4().hex[:6]}",
+            owner_label=f"{artifact.get('owner_label') or artifact['owner_id']} (copy)",
+            project_scope_id=target["id"],
+            relative_path=artifact["relative_path"],
+        )
+        return json_response({"artifact": copy, "action": action})
+    if action != "move":
+        raise ValueError("action must be keep, copy, or move")
+    if (
+        source_path.drive
+        and target_path.drive
+        and source_path.drive.casefold() != target_path.drive.casefold()
+    ):
+        raise ValueError("cross-volume note moves are not atomic; use Copy instead")
+    shutil.move(str(source_path), str(target_path))
+    await history.move_artifact_scope(artifact["id"], target["id"], artifact["relative_path"])
+    return json_response(
+        {
+            "artifact": next(a for a in await history.artifacts() if a["id"] == artifact["id"]),
+            "action": action,
+        }
+    )
 
 
 async def find_project_notes(request: web.Request) -> web.Response:
@@ -645,9 +1077,7 @@ async def unpin_directory(request: web.Request) -> web.Response:
 
 async def filesystem_roots(request: web.Request) -> web.Response:
     roots = [
-        f"{letter}:\\"
-        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        if Path(f"{letter}:\\").is_dir()
+        f"{letter}:\\" for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if Path(f"{letter}:\\").is_dir()
     ]
     return json_response({"roots": roots, "remote": request.remote not in {"127.0.0.1", "::1"}})
 
@@ -692,7 +1122,13 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
     space = spaces.spaces[space_id]
     config: Config = app["config"]
     backend = spec.backend or space.default_backend or config.default_backend
-    seed_cwd = spec.cwd or space.default_cwd or config.startup_cwd or str(Path.cwd())
+    seed_cwd = (
+        spec.cwd
+        or space.default_cwd
+        or config.startup_cwd
+        or str(Path.cwd())
+    )
+    project = await resolve_project(seed_cwd)
     project_config = await read_project_config(seed_cwd)
     project_values = (
         project_config["values"] if project_config["status"] in {"ready", "read-only"} else {}
@@ -706,13 +1142,22 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
         )
     cwd = spec.cwd or space.default_cwd
     if not cwd and project_values.get("default_cwd"):
-        project_root = Path(project_config["project"]["root"])
-        cwd = str(
-            resolve_project_default_cwd(
-                project_root, str(project_values["default_cwd"])
+        try:
+            cwd = str(
+                resolve_project_default_cwd(Path(project.root), str(project_values["default_cwd"]))
             )
-        )
-    cwd = cwd or config.startup_cwd or str(Path.cwd())
+            if not Path(cwd).is_dir():
+                raise ValueError("directory does not exist")
+        except ValueError as exc:
+            cwd = seed_cwd
+            await app["events"].emit(
+                "project_default_cwd_rejected",
+                source="project_file",
+                project_scope_id=project.id,
+                value=project_values.get("default_cwd"),
+                error=str(exc),
+            )
+    cwd = cwd or seed_cwd
     executable = spec.executable
     argv = list(spec.argv)
     profile_id: str | None = None
@@ -728,7 +1173,7 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
         executable = profile.executable
         argv = [*profile.argv, *argv]
         profile_env = profile.env
-    return await manager.spawn(
+    spawn_values: dict[str, Any] = dict(
         backend=backend,
         name=spec.name,
         cwd=cwd,
@@ -739,6 +1184,10 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
         profile_env=profile_env,
         project_label=str(project_values.get("project_label") or "") or None,
     )
+    if isinstance(manager, SessionManager):
+        spawn_values["project"] = project
+    session = await manager.spawn(**spawn_values)
+    return session
 
 
 async def spawn_session(request: web.Request) -> web.Response:
@@ -848,10 +1297,22 @@ _MEDIA_SIGNATURES = {
     "image/gif": (b"GIF87a", b"GIF89a"),
 }
 _HOOK_EVENT_TYPES = {
-    "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
-    "PostToolUseFailure", "PermissionRequest", "Notification", "Stop", "SessionEnd",
-    "turn_started", "turn_ended", "agent-turn-complete", "approval_needed",
-    "approval-requested", "task_started", "task_complete",
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PermissionRequest",
+    "Notification",
+    "Stop",
+    "SessionEnd",
+    "turn_started",
+    "turn_ended",
+    "agent-turn-complete",
+    "approval_needed",
+    "approval-requested",
+    "task_started",
+    "task_complete",
 }
 
 
@@ -953,7 +1414,10 @@ async def promote_session(request: web.Request) -> web.Response:
         raise web.HTTPForbidden(text="invalid hook secret")
     body = await request.json()
     promoted = await request.app["sessions"].promote(
-        session.record.id, str(body["backend"]), str(body["native_id"])
+        session.record.id,
+        str(body["backend"]),
+        str(body["native_id"]),
+        str(body["cwd"]) if body.get("cwd") else None,
     )
     return json_response(promoted.record.snapshot())
 
@@ -988,6 +1452,9 @@ async def patch_space(request: web.Request) -> web.Response:
         profile.id for profile in request.app["config"].shell_profiles
     }:
         raise ValueError({"default_profile_id": "unknown shell profile"})
+    if "default_cwd" in body and body["default_cwd"]:
+        project = await resolve_project(str(body["default_cwd"]))
+        await request.app["history"].register_project_scope(project)
     space = await request.app["spaces"].update(request.match_info["sid"], **body)
     return json_response(space.snapshot())
 
@@ -1274,7 +1741,7 @@ def rewrite_preview_html(data: bytes, prefix: str) -> bytes:
         return data
     text = re.sub(
         r'(?P<attr>\b(?:src|href|action)\s*=\s*["\'])/',
-        rf'\g<attr>{prefix}',
+        rf"\g<attr>{prefix}",
         text,
         flags=re.IGNORECASE,
     )
@@ -1356,9 +1823,7 @@ async def _acquire_preview_slot(semaphore: asyncio.Semaphore) -> None:
         ) from exc
 
 
-async def _proxy_websocket(
-    request: web.Request, target: str, origin: str
-) -> web.WebSocketResponse:
+async def _proxy_websocket(request: web.Request, target: str, origin: str) -> web.WebSocketResponse:
     semaphore: asyncio.Semaphore = request.app["preview_ws_semaphore"]
     await _acquire_preview_slot(semaphore)
     offered_protocols = tuple(
@@ -1389,9 +1854,7 @@ async def _proxy_websocket(
 
         async def relay(source: Any, destination: Any) -> None:
             while True:
-                message = await asyncio.wait_for(
-                    source.receive(), timeout=PREVIEW_WS_IDLE_SECONDS
-                )
+                message = await asyncio.wait_for(source.receive(), timeout=PREVIEW_WS_IDLE_SECONDS)
                 if message.type == WSMsgType.TEXT:
                     await destination.send_str(message.data)
                 elif message.type == WSMsgType.BINARY:
@@ -1749,9 +2212,7 @@ async def remove_worktree(request: web.Request) -> web.Response:
             },
             504 if code == 124 else 400,
         )
-    await request.app["events"].emit(
-        "worktree_removed", source="user", cwd=cwd, path=registered
-    )
+    await request.app["events"].emit("worktree_removed", source="user", cwd=cwd, path=registered)
     return json_response({"ok": True})
 
 

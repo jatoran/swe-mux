@@ -33,6 +33,13 @@ PUT    /project/config
 GET    /project/notes?cwd=&kind=&id=
 PUT    /project/notes
 GET    /project/notes/search?cwd=&q=
+GET    /projects[?include_hidden=1&offset=&limit=]
+POST   /projects/resolve
+GET    /projects/{project_scope_id}
+PATCH  /projects/{project_scope_id}
+DELETE /projects/{project_scope_id}
+GET    /artifacts[?project_scope_id=]
+POST   /artifacts/{artifact_id}/transfer
 GET    /sessions[?space=&state=&backend=]
 POST   /sessions
 GET    /sessions/{id-or-name}
@@ -111,13 +118,20 @@ type BroadcastSet = { include: boolean }
 type LayoutLeaf = { type: "leaf"; kind: "terminal" | "note" | "preview"; id: string }
 type LayoutSplit = {
   type: "split"
+  id: string
   direction: "horizontal" | "vertical"
   ratio: number // inclusive 0.1..0.9
   first: LayoutNode
   second: LayoutNode
 }
-type LayoutNode = LayoutLeaf | LayoutSplit
-type SpaceLayout = { version: 2; root: LayoutNode | null }
+type LayoutStack = {
+  type: "stack"
+  id: string
+  active_child_id: string
+  children: Array<LayoutLeaf & { kind: "terminal" }>
+}
+type LayoutNode = LayoutLeaf | LayoutSplit | LayoutStack
+type SpaceLayout = { version: 3; root: LayoutNode | null }
 type PatchSpace = {
   name?: string
   default_profile_id?: string | null
@@ -128,7 +142,28 @@ type PatchSpace = {
 ```
 
 Layout validation limits trees to 64 leaves and depth 24, rejects duplicate resource
-identities, and migrates persisted version-1 `{version:1,panes:string[]}` layouts to v2.
+identities, and migrates persisted version-1 `{version:1,panes:string[]}` plus version-2
+split layouts to v3. Stack children are terminal leaves only and active selection uses a
+stable child ID.
+
+Live session snapshots expose immutable `spawn_cwd`/`spawn_project_scope_id`, untrusted
+display-only `runtime_cwd`/optional known `runtime_project_scope_id`, and active immutable
+`agent_run_id`/`run_cwd`/`run_project_scope_id`. Compatibility `project_scope_id` means the
+active run scope for an agent and spawn scope for a shell. History rows are agent-run owners,
+not PTY owners. Space-note requests use stable space identity and route only to daemon app
+data. Project and agent-run notes use their project-scope owner; caller cwd cannot override
+an existing run-note owner. Plain shells have no durable session-note endpoint.
+
+Note kind `projects` maps a known project scope to `.swe-mux/notes/project.md`; `sessions`
+maps an agent-run/history ID to project-local storage; `spaces` maps a space ID to
+`<data_dir>/notes/spaces/`. Runtime cwd is resolved only after an explicit current-project
+action and never independently authorizes a write.
+
+Project list results are activity ordered and bounded to 500 items per request. Detail
+returns config diagnostics, inert-rules presence, live sessions, reference blockers,
+revisioned artifacts, and bounded linked/detached/unlinked/conflicting inventory. Transfer
+accepts only `keep | move | copy` plus a known target scope and source revision; it accepts
+no arbitrary path. Forget returns typed reference counts and never mutates repository files.
 
 ## Terminal WebSocket
 

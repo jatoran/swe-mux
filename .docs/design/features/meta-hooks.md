@@ -36,6 +36,9 @@ accept a validated, bounded variable set.
   100 UI notifications in an inbox reachable from `: menu` and the command palette.
 - Hook ingress is loopback-only and requires the per-session secret inherited by the child.
 - All hook observations enter the same persisted EventBus as transcript and PTY observations.
+- A plain shell matches `project_scope_id` against its daemon-resolved spawn scope. An active
+  Claude/Codex session matches its immutable run scope. Event payloads and OSC runtime scope
+  cannot override these match fields, and `run` actions execute from trusted spawn/run cwd.
 
 ## Key files
 

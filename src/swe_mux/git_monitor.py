@@ -94,7 +94,7 @@ class GitMonitor:
             ]
             by_cwd: dict[str, list[Session]] = {}
             for session in attached:
-                by_cwd.setdefault(session.record.cwd, []).append(session)
+                by_cwd.setdefault(session.record.git_cwd, []).append(session)
             states = await read_unique_git_states(by_cwd)
             for cwd, sessions in by_cwd.items():
                 state = states[cwd]

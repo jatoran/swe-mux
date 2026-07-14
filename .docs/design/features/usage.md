@@ -12,23 +12,25 @@
   startup and PTY input never wait for it.
 - At most one refresh runs at a time. Each command has a timeout and output cap.
 - Configured defaults invoke `ccusage claude daily --json` and
-  `ccusage codex daily --json`. The pinned `ccusage@20.0.17` package is installed once;
-  swe-mux never downloads or updates it implicitly. Settings reports the exact install
-  command and any execution error.
+  `ccusage codex daily --json`. Settings installs or updates the unified CLI explicitly
+  with `npm install -g ccusage@latest`; the npm tag resolves only during that operator
+  action. Refreshes use the installed executable and never download or update code.
 - Exact legacy defaults using `npx --no-install` and the deprecated separate Codex package
   migrate automatically. Custom commands remain untouched.
 - Executables are resolved before launch. On Windows, npm `.cmd`/`.bat` shims run through
   `COMSPEC`, while Linux and macOS execute the resolved native command directly.
 - Claude/Codex JSON is validated and normalized to daily, monthly, session, model, token,
-  and cost aggregates with source/version provenance. Calculated costs remain labelled
-  estimates.
+  and cost aggregates with source/version provenance. The adapter accepts legacy
+  `modelBreakdowns` arrays and current Codex `models` maps; model rows retain their daily
+  key so range-scoped breakdowns can be derived. Calculated costs remain labelled estimates.
 - A successful refresh atomically replaces the last-known-good cache. Failure preserves
   cached data and exposes stale/error state.
-- `: menu` and the command palette open the dedicated Usage dashboard. It shows combined
-  or provider-specific totals, recent daily use, model use, provider freshness/errors,
-  and immediate progress/completion feedback for refreshes. Settings owns enablement,
-  cadence, command configuration, and a shortcut back to the dashboard.
-- Tests consume pinned JSON fixtures and never invoke external tools.
+- `: menu` and the command palette open the dedicated Usage dashboard. Provider selection
+  composes with Overview, Time series, and Model breakdown views; daily/monthly interval,
+  cached-day range, and token/cost metric controls derive views from daily cache rows.
+  Provider freshness/errors and refresh progress remain visible. Settings owns enablement,
+  cadence, advanced command overrides, and a shortcut back to the dashboard.
+- Tests consume version-labelled JSON fixtures and never invoke external tools.
 
 ## Key files
 

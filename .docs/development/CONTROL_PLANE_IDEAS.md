@@ -1,9 +1,10 @@
 # Universal hooks and the agent control plane — ideas document
 
-Status: brainstorm surface and design reference, not a roadmap. Nothing here is
-scheduled; `ROADMAP.md` remains the delivery plan. This document records the
-conceptual framing, naming decisions, trigger/action inventories, and feature
-ideas for the automation layer that sits above the CLI agents swe-mux hosts.
+Status: brainstorm surface and design reference. The approved read-only control-plane
+subset is scheduled in `ROADMAP.md` Phases 6–7; that roadmap is authoritative for
+OpenRouter-only LLM access, write-only Settings key management, durable agent-run
+annotation ownership, inert repository rules, and the actuation deferrals. The remaining
+catalog stays unscheduled unless promoted into the roadmap explicitly.
 
 ---
 

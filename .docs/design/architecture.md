@@ -12,8 +12,11 @@
 - Adapter: backend-specific spawn/resume/transcript/exit behavior.
 - Pane: browser layout leaf attached to a terminal, note, or preview resource.
 - Space: persistent named group of sessions and pane layout.
-- Project: organizational identity resolved from Git common identity plus worktree root,
-  or normalized cwd when Git is unavailable.
+- Project scope: concrete normalized worktree/filesystem root that owns `.swe-mux/` and
+  behavioral defaults. Repository group: Git common/remote-derived display/history
+  grouping only.
+- Artifact: durable project-resident file relationship with immutable owning scope and
+  last-known logical owner metadata.
 
 ## Process model
 
@@ -23,7 +26,7 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
                                │       ├── global + nested Win32 jobs
                                │       ├── Git/hooks/optional usage workers
                                │       └── project `.swe-mux/` files
-                               └── SQLite history/events/spaces
+                               └── SQLite history/events/spaces/scopes/artifacts
 ```
 
 ## Deployment topology
@@ -46,8 +49,8 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
 - `src/swe_mux/launchers.py` + `agent_launcher.py`: mux-local CLI shims and authenticated in-place shell promotion.
 - `src/swe_mux/history.py`: SQLite schema and serialized access.
 - `src/swe_mux/reconcile.py`: bounded background discovery of external native transcripts.
-- `src/swe_mux/project_files.py` + `projects.py`: project identity and explicit,
-  revisioned project-local config/Markdown notes.
+- `src/swe_mux/project_files.py` + `projects.py`: concrete scope/repository grouping and
+  explicit, revisioned project-local config/Markdown notes.
 - `src/swe_mux/processes.py`: bounded descendant reconciliation, ownership-checked
   actions, loopback listener discovery, and preview registration.
 - `src/swe_mux/usage.py`: optional, cached, non-blocking external usage normalization.
@@ -71,6 +74,11 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
 9. Preview registration accepts only a detected session-owned or explicitly approved
    literal-loopback listener. Bounded HTTP/WebSocket traffic retains that immutable
    destination; raw development ports never become tailnet listeners.
+10. A spawn records immutable spawn scope and agent promotion records immutable run scope.
+    Spaces have no project owner: project/run notes remain project-local while space notes
+    remain app-local, so mixed membership and `cd` never retarget an existing note.
+11. Layout v3 separates process and viewport: split/stack nodes arrange independently
+    killable session leaves, and removing a leaf never terminates its process.
 
 ## Failure modes
 

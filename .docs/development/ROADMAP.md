@@ -3,9 +3,9 @@
 ## Purpose
 
 This roadmap tracks work still required to complete `AGENT_MUX_SPEC.md`, plus the
-approved shell-profile, Settings, project-local workspace, mobile-development, and
-cross-OS additions. It is a gap plan against the current implementation, not a
-restatement of already-delivered behavior.
+approved shell-profile, Settings, project-local workspace, mobile-development,
+control-plane, and cross-OS additions. It is a gap plan against the current
+implementation, not a restatement of already-delivered behavior.
 
 Checkboxes are completion records. A phase is complete only when its exit criteria
 pass in automated tests and the relevant design/interface docs describe the shipped
@@ -26,8 +26,9 @@ spec language:
   semantic colors without restoring texture.
 - The sidebar has no persistent New Terminal row or `+` control. Creation begins from a
   workspace context menu, `: menu`, command palette, or hotkey.
-- `New terminal` immediately creates the configured default shell in the current
-  space and cwd. It does not open a backend picker and does not create a split.
+- `New terminal` immediately creates the configured default shell from the selected
+  space's default cwd (then global fallback). Tabs/splits explicitly inherit the source
+  terminal's live cwd. It does not open a backend picker or create an implicit split.
 - `New terminal custom…` is the explicit route for choosing another shell profile
   and/or cwd. It uses a compact keyboard-operable launcher, not a Claude/Codex tile
   modal.
@@ -40,28 +41,44 @@ spec language:
   promotes in place to Claude or Codex. A history “project” is organizational metadata
   derived from repository/cwd identity, not a return of the retired orchestration Project
   model.
-- Project-specific swe-mux state belongs inside `.swe-mux/` at its recorded project-scope
-  root: the current Git worktree root when available, otherwise the normalized
-  non-repository scope root. This includes project overrides, notes, and future
-  project-owned metadata. Machine-wide daemon/runtime configuration remains under the
-  user's mux data directory.
+- Project-specific state belongs inside `.swe-mux/` at its recorded project-scope root:
+  project overrides, the canonical project note, agent-run notes, and future project-owned
+  metadata. Space notes are not project-specific; they live under the user's mux data
+  directory with other app-owned workflow state.
 - Project scope and space are independent dimensions. A project scope is one concrete
   worktree/filesystem root that owns `.swe-mux/`; a space is a workflow/layout group that
   may contain sessions from multiple project scopes. Repository groups exist only for
-  history/display and never own behavior, notes, config, hooks, or space anchors.
-- Every session resolves one immutable project scope at spawn. Spaces carry an optional,
-  explicit anchor used for defaults and future artifact placement, never as a membership
-  constraint. Every project-resident artifact records its owning scope at creation and
-  does not follow later anchor changes.
+  history/display and never own behavior, notes, config, or hooks.
+- Shells retain immutable spawn scope plus untrusted live location; agent runs retain
+  immutable run scope. Spaces have no project anchor. Every project-resident artifact
+  records its owning scope, while a space note remains app-owned regardless of membership.
 - Projects remain durable and browsable after their spaces/sessions close. Every recognized
   `.swe-mux/` artifact is reachable from a Projects view as linked, detached, unlinked, or
   conflicting; closing runtime/workflow objects never makes project files invisible.
-- Repository files execute nothing. Project-scoped hooks in the current product are
-  machine-owned `~/.mux/hooks.toml` rules matched against session project scope; repository-
-  owned executable rules and their trust store remain unscheduled.
-- Notes are human-readable Markdown files under `.swe-mux/notes/`, not opaque SQLite note
-  bodies or agent transcripts. Space notes are primary; optional session annotations link
-  to a space/project and use stable filenames. Notes never enter agent context implicitly.
+- Repository files execute nothing. Project-scoped matching uses machine-owned global rules
+  against the session project scope; repository-owned executable rules and their trust store
+  remain unscheduled.
+- swe-mux is an out-of-band control plane over Claude Code and Codex as data planes.
+  Universal hooks observe normalized events, annotate durable agent runs, and route
+  attention asynchronously; observers never participate in or block an agent turn.
+- `~/.mux/rules.toml` becomes the canonical machine-owned automation source while legacy
+  `hooks.toml` remains readable through a compatibility path. Repository-owned
+  `.swe-mux/rules.toml` may be parsed and diagnosed but executes nothing until a separate
+  fingerprinted trust-store phase is approved.
+- Observer LLM calls use OpenRouter only. The key is configured through a write-only
+  Settings control, encrypted outside public config with a platform secret-store boundary,
+  and never returned, logged, exported, or written into project files. Model tiers, budgets,
+  concurrency, and privacy status remain operator-visible.
+- LLM observers are stateless and read-only. They consume normalized transcript slices and
+  emit schema-validated data; a model result cannot choose an action kind, execute a command,
+  write a PTY, approve a request, spawn a worker, or select an arbitrary network destination.
+- Control-plane annotations are app-owned derived metadata attached to durable agent-run
+  identities, not PTY lifetimes or project note files. Human-assigned names always outrank
+  generated title annotations.
+- Notes are human-readable Markdown, not opaque SQLite bodies or transcripts. Project and
+  agent-run notes live under project `.swe-mux/notes/`; app-owned space notes live under
+  `<data_dir>/notes/spaces/`. Plain PTYs own no durable note. Notes never enter agent
+  context implicitly.
 - swe-mux does not manage Claude or Codex accounts, credentials, account-specific config
   roots, quota failover, or account switching. Reauthentication remains external to mux;
   all discovered Claude/Codex history remains intermingled for the one local user.
@@ -79,19 +96,20 @@ spec language:
   never contain other sessions. Horizontal split, vertical split, and tab stack are layout
   container types with no effect on session identity, lifecycle, hooks, or history.
 - The sidebar must make layout membership explicit. Sessions in a split or tab stack appear
-  once beneath that layout hierarchy; live sessions absent from the current layout appear
-  in a distinct unpaned group. A flat list that makes grouped sessions look unrelated is
-  not an acceptable presentation.
+  once beneath that layout hierarchy; connector treatment makes the relationship clear
+  without a named container row. Layout-free sessions retain neutral rows in stable creation
+  order. Focus and runtime state never move rows; focus is represented only by highlighting.
 - Browser `alert`, `confirm`, and `prompt` dialogs are prohibited. Destructive toolbar
   actions use inline two-click confirmation; explicit context-menu Kill executes
   immediately.
 - All UI chrome and terminal text share one monospace face, size, and weight matching
   xterm.
   Menus, hints, headings, inputs, history, and settings have no typography exceptions.
-- Windows is the product-proving platform. Phase 5.5 first corrects project/space ownership;
-  Phase 6 then improves Windows capability, diagnostics, automation, and reliability before
-  platform expansion or a public release. Deferred priority is Telegram first, then
-  SSH/native attach, native Linux/macOS support, and public packaging/release.
+- Windows is the product-proving platform. Phases 5.5–5.7 establish layout, runtime, and
+  note ownership; Phases 6–7 add the read-only control plane and fleet intelligence;
+  Phase 8 improves Windows diagnostics, CLI control, and reliability before platform
+  expansion or a public release. Deferred priority is Telegram first, then SSH/native
+  attach, native Linux/macOS support, and public packaging/release.
 - The browser remains the primary product surface. `mux` is a practical controller for
   automation, diagnostics, and daemon actions; CLI parity covers useful control-plane
   operations, not presentation-only browser interactions.
@@ -115,14 +133,18 @@ The current application already provides the foundation this roadmap extends:
 
 ```text
 Completed foundation: Phases 0-5
-  -> Phase 5.5: project scopes + space anchors + artifact ownership + layout clarity
-    -> Phase 6: Windows product maturity + practical CLI/diagnostics
+  -> Phase 5.5: project scopes + layout clarity (anchor-era implementation)
+    -> Phase 5.6: live cwd + agent-run ownership
+      -> Phase 5.7: project-independent spaces + app-owned space notes
+        -> Phase 6: universal hooks + OpenRouter observer kernel
+          -> Phase 7: composite attention + fleet intelligence
+            -> Phase 8: Windows product maturity + practical CLI/diagnostics
 
 Deferred queue:
-  Phase 7: Telegram
-    -> Phase 8: SSH/native attach
-      -> Phase 9: WSL agent bridge + native Linux/macOS
-        -> Phase 10: public packaging and release
+  Phase 9: Telegram
+    -> Phase 10: SSH/native attach
+      -> Phase 11: WSL agent bridge + native Linux/macOS
+        -> Phase 12: public packaging and release
 ```
 
 Cross-cutting test work ships with every phase; it is not deferred to the end.
@@ -209,6 +231,9 @@ Cross-cutting test work ships with every phase; it is not deferred to the end.
 - [x] Add a Settings route/surface reachable from `: menu` and the command palette.
 - [x] Use the established terminal/TUI visual system and the single global typography
   token; no native browser prompts or separate design language.
+- [x] Keep Settings compact with one active TUI tab at a time, label-left/value-right
+  field rows, and a collapsed-by-default terminal-profile master/detail editor. Input is
+  a first-class tab rather than being folded into Agents.
 - [x] Provide sections:
   - General: startup cwd, default space behavior, history/scrollback limits.
   - Terminals: non-profile terminal defaults initially; the profile editor, global
@@ -318,7 +343,7 @@ args = ["--distribution", "Ubuntu"]
 
 - [x] Stage A: interactive WSL profiles open the selected distro and translate Windows
   cwd to a valid distro cwd using `wsl.exe --cd` or a tested equivalent.
-- Deferred to Phase 9 — Stage B: install/use a distro-side mux bridge for Claude/Codex
+- Deferred to Phase 11 — Stage B: install/use a distro-side mux bridge for Claude/Codex
   promotion, hooks,
   secrets, and transcript access. A Windows `.cmd` shim alone cannot observe Linux-side
   agents.
@@ -334,7 +359,7 @@ args = ["--distribution", "Ubuntu"]
   cwd, resize, Unicode, clipboard, and exit behavior.
 - [x] Default creation is zero-dialog/non-split; custom creation starts exactly the chosen
   profile/cwd and persists its identity.
-- Deferred to Phase 9 — WSL Claude and Codex promotion/state tests must pass before WSL
+- Deferred to Phase 11 — WSL Claude and Codex promotion/state tests must pass before WSL
   profiles are labelled
   agent-aware.
 
@@ -350,8 +375,10 @@ args = ["--distribution", "Ubuntu"]
   and unmatched chords always reach the PTY.
 - [x] Complete defaults for pane navigation/split/zoom, space switching, terminal find,
   Settings, custom terminal creation, and palette.
-- [x] Add a Settings keybinding editor with conflict validation and documented unbindable
-  browser chords such as Ctrl+W/T/N.
+- [x] Add a command-first Settings keybinding editor: click a named action to capture its
+  next chord, clear or restore bindings without editing JSON, and show the backend-owned
+  browser/terminal reserved lists. Validate conflicts and reserved chords inline and again
+  server-side before atomic save; keep legacy bare-object binding files readable.
 - [x] Reject unmodified keys, plain typing, and modifier combinations that shadow normal
   terminal input; show the exact validation reason.
 
@@ -400,7 +427,7 @@ args = ["--distribution", "Ubuntu"]
   active backend adapter. It never sends encoded image bytes through the PTY or changes
   ordinary text/bracketed-paste behavior.
 - [x] Add router/clipboard regression coverage for PowerShell, CMD, pwsh, WSL, Claude,
-  and Codex. Broader Windows PTY smoke coverage remains in Phase 6's matrix.
+  and Codex. Broader Windows PTY smoke coverage remains in Phase 8's matrix.
 
 ### Phase 3 exit criteria
 
@@ -462,20 +489,17 @@ args = ["--distribution", "Ubuntu"]
 - [x] Resolve the concrete project root from cwd for each session and project-file
   operation: current Git worktree root when available, otherwise normalized cwd. Never
   place project files in a Git common-dir or parent repository for a distinct worktree.
-  Phase 5.5 replaces repeated cwd-based ownership with durable session scopes, optional
-  space anchors, and artifact-owner records.
+  Phase 5.5 replaces repeated cwd-based ownership with durable run scopes and artifact
+  records; Phase 5.7 keeps workflow-owned space notes outside projects.
 - [x] Define a versioned `.swe-mux/config.toml` containing only project-scoped fields.
   Establish precedence and diagnostics explicitly: request/session override -> space
   override -> project config -> global config -> daemon default. Machine auth, bind,
   secrets, data-directory, and unrelated user preferences are forbidden project fields.
   Space overrides remain in global SQLite; project defaults live in this project file.
   Phase 5.5 makes the scope used for each layer explicit and non-circular.
-- [x] Store human-readable Markdown notes as
-  `.swe-mux/notes/spaces/<stable-space-id>.md` and optional
-  `.swe-mux/notes/sessions/<stable-session-or-history-id>.md`. Define safe filename
-  mapping, metadata, rename/move behavior, orphan handling, and cleanup semantics without
-  embedding note bodies in SQLite. Phase 5.5 adds durable owning-scope metadata so these
-  paths remain unambiguous in mixed spaces and after re-anchoring.
+- [x] Store human-readable Markdown with safe stable filenames and revision checks without
+  embedding note bodies in SQLite. Project/run notes live under project `.swe-mux/notes/`;
+  Phase 5.7 moves workflow-owned space notes to daemon app data.
 - [x] Add atomic file replacement, optimistic revisions, external-edit detection, and
   conflict UI so browser autosave never silently overwrites editor/Git changes.
 - [x] Add terminal-styled desktop/mobile raw Markdown editing, export,
@@ -492,20 +516,24 @@ args = ["--distribution", "Ubuntu"]
 
 ### Usage analytics
 
-- [x] Add an optional adapter using one supported, version-pinned unified `ccusage` CLI
+- [x] Add an optional adapter using one supported unified `ccusage` CLI
   for Claude and Codex. Validate the external schema, record tool version/provenance, and
   normalize aggregates without replacing native transcript observation as live truth.
 - [x] Run usage refresh only on explicit user request or a configurable low-priority
   background schedule. Enforce one concurrent refresh, timeout/cancellation, cached
   last-known-good data, and visible stale/error/refreshing states; startup and terminal
   interaction never wait on ccusage.
-- [x] Cache normalized daily/monthly/session/model/token/cost aggregates. Treat calculated
-  cost and quota-window data as estimates, distinguish them from current context use, and
-  provide disable/clear-cache controls.
+- [x] Cache normalized daily/monthly/session/model/token/cost aggregates. Preserve daily
+  model keys for range-scoped breakdowns and accept both legacy model arrays and current
+  Codex model maps. Treat calculated cost and quota-window data as estimates, distinguish
+  them from current context use, and provide disable/clear-cache controls.
 - [x] Use fixture-driven adapter tests without invoking npm/npx in the normal test suite.
-  Runtime package download is never implicit; Settings provides the pinned one-time global
-  install command. Migrate the former split Claude/Codex commands to provider subcommands
+  Runtime package download is never implicit; Settings provides an explicit global
+  `ccusage@latest` install/update command whose tag resolves only when the operator runs it.
+  Migrate the former split Claude/Codex commands to provider subcommands
   of the unified CLI and resolve Windows npm command shims safely.
+- [x] Provide combined/provider Overview, Time series, and Model breakdown dashboard views
+  with cached-day range, daily/monthly interval, and token/estimated-cost controls.
 
 ### Process and preview awareness
 
@@ -543,7 +571,7 @@ args = ["--distribution", "Ubuntu"]
 - [x] Add timeout/status/retry policy for `http`; define burst/rate-limit semantics.
 - [x] Keep UI notification delivery complete and add provider-neutral delivery records,
   correlation ids, reply targets, retry state, and sender/channel metadata needed by later
-  external adapters. Telegram itself is deliberately deferred to Phase 7.
+  external adapters. Telegram itself is deliberately deferred to Phase 9.
 
 ### Broadcast and Git
 
@@ -568,7 +596,7 @@ args = ["--distribution", "Ubuntu"]
   input is detected while retaining compact desktop density.
 - [x] Add responsive contract coverage for sidebar, history, Settings, palette, custom
   launcher, notes, process inspector, previews, clipboard-image handoff, and terminal
-  controls at the mobile breakpoint. Phase 6 adds real-browser portrait/landscape visual
+  controls at the mobile breakpoint. Phase 8 adds real-browser portrait/landscape visual
   regression to this source-level contract suite.
 - [x] Add semantic dialog/menu/listbox roles, labelled icon controls, focus trap/restore,
   aria-live errors/state, contrast checks, and reduced-motion support.
@@ -587,12 +615,12 @@ args = ["--distribution", "Ubuntu"]
   concurrent/external edits conflict visibly, and no note is injected into an agent
   without an explicit user action.
 - [x] ccusage refresh is optional, cached, non-blocking, manually refreshable, and tested
-  against pinned JSON fixtures for both Claude and Codex.
+  against version-labelled JSON fixtures for legacy/current Claude and Codex shapes.
 - [x] Process ownership survives descendant churn, detected listeners map to the correct
   session, and process/preview actions cannot target another session accidentally.
 - [x] Awaiting-agent attention is usable from another tab and by screen readers.
 - [x] Core flows have keyboard-router, touch/mobile layout, semantic-role, focus, live-region,
-  and reduced-motion contract coverage. Phase 6 retains full real-browser accessibility
+  and reduced-motion contract coverage. Phase 8 retains full real-browser accessibility
   and orientation regression as release-quality validation.
 
 ## Phase 5 — Full mobile workspace over direct Tailscale access
@@ -671,10 +699,19 @@ audit infrastructure, or public-ingress machinery.
   proxying. Focused boundary tests cover each case.
 - [x] Settings and the current lightweight `mux doctor` report local/tailnet listener
   health, direct URL, optional Serve availability, grant guidance, Funnel/public-exposure
-  warnings, and actionable network errors without modifying tailnet policy. Phase 6
+  warnings, and actionable network errors without modifying tailnet policy. Phase 8
   expands `mux doctor` beyond this remote-status scope.
 
 ## Phase 5.5 — Project scopes, space anchors, and artifact ownership
+
+**Status: complete (2026-07-13).** Shipped with layout schema v3, additive SQLite
+migration, the Projects shelf, stable note ownership, scope-aware spawn/config/events,
+and split/stack/sidebar integration. Verification: 142 backend tests (1 skipped), 22
+frontend behavior tests, TypeScript check, Ruff, and production build.
+
+> Historical contract: Phase 5.7 retires the anchor and project-owned space-note portions
+> of this phase. Project scopes, agent artifact ownership, the Projects shelf, and layout
+> work remain active. Legacy columns/files remain only for non-destructive migration.
 
 Phase 4 shipped project-local config/notes by resolving a cwd at each request. That leaves
 space notes and future project-resident space artifacts ambiguous when one space contains
@@ -688,260 +725,601 @@ automatically, or introduce repository-owned executable rules.
 
 ### Scope identities and persistence
 
-- [ ] Split the current overloaded project identity into:
+- [x] Split the current overloaded project identity into:
   - `project_scopes`: stable id plus normalized concrete worktree/filesystem root and
     optional `repo_group_id`; one scope owns one `.swe-mux/` root.
   - `repo_groups`: Git common-directory/remote-derived history and display grouping only.
     Config, notes, hooks, anchors, sessions, and artifacts never reference a repo group for
     behavioral decisions.
-- [ ] Create project-scope records only during session spawn, explicit anchor/artifact
+- [x] Create project-scope records only during session spawn, explicit anchor/artifact
   selection, migration, or another operation that needs durable identity. Directory
   listing and project inspection create neither a database identity nor `.swe-mux/` files.
-- [ ] Add immutable `project_scope_id` to live sessions and history. Resolve it from the
+- [x] Add immutable `project_scope_id` to live sessions and history. Resolve it from the
   effective spawn cwd before process creation; shell `cd`, promotion/demotion, rename,
   space moves, and pane operations never change it. Cross-scope reassignment requires a
   new session.
-- [ ] Add `anchor_mode: auto | fixed | none` and nullable
+- [x] Add `anchor_mode: auto | fixed | none` and nullable
   `anchor_project_scope_id` to spaces with validated combinations:
   - `auto/null`: eligible for first successful spawn/default-cwd inference.
   - `auto/id`: inferred once and never re-inferred from later membership changes.
   - `fixed/id`: explicitly selected by the user.
   - `none/null`: explicitly unanchored and never inferred.
-- [ ] Add durable ownership metadata for project-resident space artifacts. A space note
+- [x] Add durable ownership metadata for project-resident space artifacts. A space note
   records its `project_scope_id` when created; future artifact kinds use the same rule.
   Artifact ownership changes only through an explicit, conflict-safe Move operation.
-- [ ] Preserve artifact records when their originating space or history relationship is
+- [x] Preserve artifact records when their originating space or history relationship is
   removed. Store enough last-known type/id/label metadata to present a detached artifact;
   never cascade-delete project files or their only discoverability record.
 
 ### Deterministic spawn and configuration resolution
 
-- [ ] Resolve session cwd in two non-circular phases:
+- [x] Resolve session cwd in two non-circular phases:
   1. Seed cwd: request cwd → space default cwd → anchor scope root → global startup cwd →
      daemon cwd.
   2. Resolve `project_scope_id` from the seed, then final cwd: request cwd → space default
      cwd → resolved scope's relative project `default_cwd` → seed cwd.
-- [ ] Keep project `default_cwd` as a bounded relative refinement inside an already-
+- [x] Keep project `default_cwd` as a bounded relative refinement inside an already-
   resolved scope. Reject absolute/parent traversal and symlink escape; if the configured
   directory is missing or invalid, use the seed cwd and emit a visible diagnostic rather
   than selecting another scope or failing terminal creation.
-- [ ] Apply remaining spawn/config precedence as request overrides → space overrides →
+- [x] Apply remaining spawn/config precedence as request overrides → space overrides →
   session-scope `.swe-mux/config.toml` → global config. Project shell defaults may select
   only an existing machine-defined profile and never define an executable or command.
-- [ ] Enrich normalized events, history, process/preview records, notifications, and hook
+- [x] Enrich normalized events, history, process/preview records, notifications, and hook
   match fields with both `project_scope_id` and display-only `repo_group_id` where relevant.
   Behavior always selects the immutable session scope.
 
 ### Anchor lifecycle and migration
 
-- [ ] In `auto` mode, resolve and store an anchor when an explicit space default cwd is
+- [x] In `auto` mode, resolve and store an anchor when an explicit space default cwd is
   saved or after the first successful session spawn into an empty `auto/null` space.
   Failed spawns and later mixed membership never alter the anchor.
-- [ ] Space anchor changes affect defaults and placement of future artifacts only. They do
+- [x] Space anchor changes affect defaults and placement of future artifacts only. They do
   not move sessions, change session scopes, retarget existing notes, or rewrite project
   files. Clearing an anchor sets `none/null`; choosing a scope sets `fixed/id`.
-- [ ] Migrate existing SQLite state without moving project files or forcing choices:
+- [x] Migrate existing SQLite state without moving project files or forcing choices:
   - Empty spaces → `auto/null`.
   - Spaces whose default cwd and existing session/history membership resolve to one scope
     → `auto/id`.
   - Mixed or conflicting spaces → `none/null`.
-- [ ] Convert current history project identity into explicit scope plus repository-group
+- [x] Convert current history project identity into explicit scope plus repository-group
   fields while preserving filters, labels, worktree roots, native transcript associations,
   and agent-only history behavior.
-- [ ] Discover existing space-note ownership only across known scopes. Exactly one matching
+- [x] Discover existing space-note ownership only across known scopes. Exactly one matching
   file binds the artifact; multiple matches become a visible conflict; no match remains
   unbound until explicit note creation. Migration never copies, moves, deletes, or silently
   chooses between Markdown files.
 
 ### Notes and future project artifacts
 
-- [ ] Create a space note in its current anchor scope and persist that ownership. Opening
+- [x] Create a space note in its current anchor scope and persist that ownership. Opening
   or saving the note uses artifact scope, not active cwd, active session, or current space
   anchor. Session/history notes use the immutable owning session/history scope.
-- [ ] Opening notes on an unanchored space presents a blocking project-scope picker seeded
+- [x] Opening notes on an unanchored space presents a blocking project-scope picker seeded
   from member-session scopes. No global scratch-note fallback exists; cancelling creates
   nothing.
-- [ ] Re-anchoring a space with an existing note surfaces that the note belongs to another
+- [x] Re-anchoring a space with an existing note surfaces that the note belongs to another
   scope and offers explicit Keep, Move, and Copy actions:
   - Keep retains the canonical artifact and file in its original scope.
   - Move performs source/destination revision, collision, writable-root, symlink, and
     cross-volume checks; it updates ownership only after successful relocation.
   - Copy creates an explicitly separate file and does not silently change which artifact
     is canonical.
-- [ ] Preserve external-edit conflicts, atomic writes, intentional orphan recovery, note
+- [x] Preserve external-edit conflicts, atomic writes, intentional orphan recovery, note
   size limits, disabled/read-only states, and the rule that layout removal never deletes
   Markdown.
-- [ ] Make durable session notes agent-only. A live plain shell's note action redirects to
+- [x] Make durable session notes agent-only. A live plain shell's note action redirects to
   its space note and explains why; once the shell promotes to Claude/Codex, its stable
   session/history identity may own a session note. Agent notes remain reachable from both
   history detail and the owning project after exit.
-- [ ] Index pre-existing plain-shell notes and files whose recorded space/session no longer
+- [x] Index pre-existing plain-shell notes and files whose recorded space/session no longer
   exists as unlinked or detached artifacts. Never hide, auto-delete, or guess a new owner.
 
 ### Projects registry and artifact discoverability
 
-- [ ] Add a durable Projects view reachable from `: menu` and the command palette. It is a
+- [x] Add a durable Projects view reachable from `: menu` and the command palette. It is a
   shelf for active and dormant project scopes, not a replacement sidebar hierarchy.
-- [ ] List each scope with concrete root/worktree, repository group, last activity,
+- [x] List each scope with concrete root/worktree, repository group, last activity,
   active/dormant/missing-root state, anchor/space references, live sessions, agent history,
   project-config status, and artifact counts.
-- [ ] Add project detail for configuration diagnostics plus every recognized supported
+- [x] Add project detail for configuration diagnostics plus every recognized supported
   `.swe-mux/` artifact. Classify artifacts as:
   - linked: owning live space or agent history exists;
   - detached: a recorded owner was closed/deleted;
   - unlinked: a supported file exists without a known artifact relationship;
   - conflicting: multiple files/records claim one canonical identity.
-- [ ] Build a bounded, symlink-safe inventory of supported `.swe-mux/` config/note paths
+- [x] Build a bounded, symlink-safe inventory of supported `.swe-mux/` config/note paths
   inside known scope roots. The filesystem remains authoritative for user-authored files;
   the index accelerates discovery and records ownership but never treats an absent row as
   permission to hide or delete a recognized file.
-- [ ] Add project hide/unhide for recent-list hygiene. Add explicit Forget only when no
+- [x] Add project hide/unhide for recent-list hygiene. Add explicit Forget only when no
   live session, history, anchor, or artifact record references the scope; otherwise return
   typed blockers. Forget removes machine-owned registry/cache state only and never deletes
   `.swe-mux/`, Git content, native transcripts, or user notes. Rediscovery is allowed.
-- [ ] Keep missing/offline roots visible with diagnostics while referenced. A missing path
+- [x] Keep missing/offline roots visible with diagnostics while referenced. A missing path
   cannot silently collapse into another scope or make its indexed artifacts appear owned
   by a replacement directory.
 
 ### Layout stacks and sidebar hierarchy
 
-- [ ] Preserve the process/view boundary: a session remains one independently addressable,
+- [x] Preserve the process/view boundary: a session remains one independently addressable,
   killable, movable, observable process; a pane leaf is its viewport. No API, label, or UI
   action may imply that a session owns another session.
-- [ ] Extend the versioned recursive layout schema with a stable-id `stack` container. A
+- [x] Extend the versioned recursive layout schema with a stable-id `stack` container. A
   stack owns ordered terminal leaves plus `active_child_id`, occupies one tiled region, and
   displays one active child at a time. Stacks compose inside horizontal/vertical splits;
   the initial stack contract does not require a tab to contain another split subtree.
-- [ ] Add tab-group operations: create from selected/paned sessions, add a new or existing
+- [x] Add tab-group operations: create from selected/paned sessions, add a new or existing
   session, activate, reorder, detach, move into a split, and dissolve when fewer than two
   children remain. All mutations use existing optimistic layout revisions.
-- [ ] Keep lifecycle actions unambiguous. `Remove from tab group` and `Detach from layout`
+- [x] Keep lifecycle actions unambiguous. `Remove from tab group` and `Detach from layout`
   leave the session running and visible as unpaned; `Kill session` terminates it and removes
   every layout reference. Do not put an ambiguous close control on a tab.
-- [ ] Render each space in the sidebar as a clear presentation hierarchy:
-  - current layout group, with collapsible horizontal-split, vertical-split, and tab-stack
-    rows that mirror the persisted layout tree;
-  - each paned session exactly once beneath its containing layout node, in visual order;
-  - a distinct `unpaned` group containing live sessions absent from the layout tree.
-- [ ] Give layout rows compact terminal-style glyphs/labels, connector lines, child counts,
-  and stable expansion state. Do not repeat cwd, Git, PID, or other pane-header metadata.
-  A split pair and an unrelated third session must be distinguishable without opening or
-  focusing any terminal.
-- [ ] Make sidebar and stage navigation bidirectional. Clicking a paned session activates
+- [x] Render each space as a session-first layout diagram: no visible `split` or `tabs`
+  implementation rows; nested connector rails, direction glyphs, and tab brackets mirror
+  the persisted layout while each paned session appears exactly once in visual order.
+  Layout-free sessions use the same neutral row treatment and remain in stable creation
+  order; neither focus nor runtime state reorders them.
+- [x] Keep the diagram compact and metadata-free. A tab group used as one branch of a
+  larger split must be visually distinct from the split's other branch without opening or
+  focusing a terminal; cwd, Git, PID, and pane-header metadata remain absent.
+- [x] Make sidebar and stage navigation bidirectional. Clicking a paned session activates
   all ancestor stack tabs, focuses its pane, and reveals it; focusing a pane highlights and
-  reveals its one sidebar row. Clicking an unpaned session follows the existing attach/
-  replacement behavior and updates layout grouping atomically.
-- [ ] Expose the canonical session context menu from every terminal pane header. Right-
+  reveals its one sidebar row. Clicking an unpaned session focuses it in a transient
+  singleton viewport without changing persisted grouping. Only explicit attach, split,
+  tab, detach, and move actions mutate the layout tree.
+- [x] Expose the canonical session context menu from every terminal pane header. Right-
   clicking the session title, status, agent indicator, or otherwise non-interactive header
   surface opens the same session-scoped commands, ordering, disabled explanations, and
   inline confirmations as right-clicking that session's sidebar row. Right-clicking the
   terminal body retains its pane/clipboard context menu.
-- [ ] Add a visible three-dot button to every session pane header that opens that same
+- [x] Add a visible three-dot button to every session pane header that opens that same
   canonical session menu for mouse, touch, and keyboard users. Anchor the menu to the
   button, label its purpose accessibly, restore focus on dismissal, and preserve the
   existing Escape/outside-click dismissal contract. Do not maintain separate sidebar and
   header menu definitions that can drift.
-- [ ] Show agent working/awaiting/finished attention on both the session row and any
-  collapsed ancestor layout rows. Background tabs retain independent state and badges;
-  stack status is derived from children and never becomes session state.
-- [ ] Add drag/drop and context/command-palette actions for split, stack, unstack, attach,
+- [x] Show agent working/awaiting/finished attention on every session row, including
+  background tabs. Connector/group decoration never invents or aggregates session state.
+- [x] Add drag/drop and context/command-palette actions for split, stack, unstack, attach,
   and detach with keyboard equivalents and touch-safe menus. Invalid drops explain why and
   never silently replace, duplicate, or kill a session.
-- [ ] Make tab strips and the sidebar hierarchy usable on narrow/mobile screens: bounded
+- [x] Make tab strips and the sidebar hierarchy usable on narrow/mobile screens: bounded
   horizontally scrollable tabs or an overflow picker, minimum touch targets, visible active
   and attention states, and focus restoration after drawer navigation.
-- [ ] Reconcile stacks after exit, restart, reconnect, or missing sessions without losing
+- [x] Reconcile stacks after exit, restart, reconnect, or missing sessions without losing
   surviving sessions. Persist active child by stable id, not array index; choose a
   deterministic surviving tab when the active child disappears.
 
 ### Hooks and project safety
 
-- [ ] Add `project_scope_id` as a match predicate for machine-owned global meta-hooks.
+- [x] Add `project_scope_id` as a match predicate for machine-owned global meta-hooks.
   Rules fire for matching sessions regardless of which mixed space contains them.
-- [ ] Keep `.swe-mux/config.toml` data-only. Repository-owned `rules.toml`, commands,
+- [x] Keep `.swe-mux/config.toml` data-only. Repository-owned `rules.toml`, commands,
   executables, hooks, secrets, bind policy, and raw preview destinations execute nothing.
   If repository rules are inspected for diagnostics, label them inert and never feed them
   into the active hook engine.
-- [ ] Do not add a trust column or trust workflow. A future repository-rule feature must
+- [x] Do not add a trust column or trust workflow. A future repository-rule feature must
   define a separate machine-owned fingerprinted trust store and defaults to untrusted when
   scope identity changes; that feature is not scheduled by this phase.
 
 ### API, UI, and operator behavior
 
-- [ ] Extend session/space/history/note APIs with scope, repo-group, anchor-mode, anchor,
+- [x] Extend session/space/history/note APIs with scope, repo-group, anchor-mode, anchor,
   and artifact-owner fields. Anchor patches use optimistic revisions; note Move/Copy uses
   typed conflict responses and never accepts an arbitrary filesystem destination.
-- [ ] Add project-registry list/detail, artifact inventory, hide/unhide, and guarded Forget
+- [x] Add project-registry list/detail, artifact inventory, hide/unhide, and guarded Forget
   APIs with pagination/bounds and stable structured statuses. These routes never mutate
   repository files.
-- [ ] Replace cwd-driven space-note requests with stable space/artifact identity. Retain a
+- [x] Replace cwd-driven space-note requests with stable space/artifact identity. Retain a
   bounded compatibility migration path for existing clients without allowing caller cwd to
   override a recorded artifact owner.
-- [ ] Keep spaces as the canonical workflow containers in the sidebar. Within each space,
-  render the layout hierarchy and unpaned group defined in this phase; these are presentation
-  nodes, not new session owners. Show an anchor badge on each anchored space and a compact
+- [x] Keep spaces as the canonical workflow containers in the sidebar. Within each space,
+  render the layout hierarchy and stable layout-free rows defined in this phase; these are
+  presentation details, not new session owners. Show an anchor badge on each anchored space and a compact
   foreign-scope marker when a session's scope differs from its space anchor. Mixed spaces
   remain fully usable.
-- [ ] Add terminal-styled anchor selection/change/clear and note disposition UI to space
+- [x] Add terminal-styled anchor selection/change/clear and note disposition UI to space
   context actions and Settings. Mobile receives the same operations without introducing a
   project-containment navigation model.
-- [ ] Add project-oriented filtering/grouping as a view over sessions/history, not a
+- [x] Add project-oriented filtering/grouping as a view over sessions/history, not a
   `project → space → session` ownership tree. Labels distinguish concrete scope/worktree
   from broader repository grouping.
-- [ ] Surface linked/detached/unlinked/conflicting notes in project detail with safe Open,
+- [x] Surface linked/detached/unlinked/conflicting notes in project detail with safe Open,
   Relink, Move, Copy, or reveal actions as applicable. Closing a space/session requires no
   cleanup prompt because durable artifacts remain available from the project shelf.
 
 ### Phase 5.5 exit criteria
 
-- [ ] Mixed spaces pass spawn, move, note, hook, history, process/preview, reload, and
+- [x] Mixed spaces pass spawn, move, note, hook, history, process/preview, reload, and
   mobile tests without cross-project config or artifact leakage.
-- [ ] Every live/history session has one immutable scope; every project-resident space
+- [x] Every live/history session has one immutable scope; every project-resident space
   artifact has one recorded owner; repository groups influence display/history only.
-- [ ] Seed/final cwd precedence and fallback diagnostics pass tests for explicit cwd, space
+- [x] Seed/final cwd precedence and fallback diagnostics pass tests for explicit cwd, space
   cwd, anchor, project relative default, global default, missing paths, symlinks, Git
   worktrees, and non-repository directories.
-- [ ] Auto/fixed/none anchors survive restart and migration. Existing mixed spaces and
+- [x] Auto/fixed/none anchors survive restart and migration. Existing mixed spaces and
   Markdown remain unmoved; ambiguous note ownership requires explicit resolution.
-- [ ] Re-anchor Keep/Move/Copy tests prove no silent note retargeting, overwrite,
+- [x] Re-anchor Keep/Move/Copy tests prove no silent note retargeting, overwrite,
   cross-volume partial move, filesystem escape, or loss after conflict/restart.
-- [ ] Global hook scope predicates follow session scope across mixed spaces, while all
+- [x] Global hook scope predicates follow session scope across mixed spaces, while all
   repository-owned executable/rule content remains inert.
-- [ ] Closing spaces and agent sessions leaves their notes reachable from Projects/history;
+- [x] Closing spaces and agent sessions leaves their notes reachable from Projects/history;
   plain shells cannot create a soon-to-be-hidden durable session note; legacy shell notes
   appear as unlinked artifacts.
-- [ ] Inventory tests prove every recognized supported `.swe-mux/` artifact under a known
+- [x] Inventory tests prove every recognized supported `.swe-mux/` artifact under a known
   scope appears in project detail despite deleted spaces, deleted index relationships,
   missing history, duplicate files, malformed content, or daemon restart.
-- [ ] Project hide/Forget/missing-root tests prove registry cleanup cannot cascade into
+- [x] Project hide/Forget/missing-root tests prove registry cleanup cannot cascade into
   project files, transcripts, anchors, history, or artifact ownership.
-- [ ] Split and stack trees round-trip through persistence and reconnect. Sidebar tests
-  prove grouped sessions are nested exactly once in visual order, unpaned sessions are
-  distinct, collapsed ancestors propagate attention, and focus navigation stays
-  bidirectional across desktop and mobile.
-- [ ] Stack mutation and lifecycle tests prove tab activation/reorder/detach/dissolve never
+- [x] Split and stack trees round-trip through persistence and reconnect. Sidebar behavior
+  keeps grouped sessions nested exactly once in visual order, layout-free sessions stable,
+  independent attention visible, and focus navigation bidirectional across desktop/mobile
+  without focus or runtime state changing row order.
+- [x] Stack mutation and lifecycle tests prove tab activation/reorder/detach/dissolve never
   changes session identity, kills a detached session, duplicates a sidebar row, or loses a
   surviving child when another exits.
-- [ ] Session-menu parity tests prove sidebar right-click, pane-header right-click, and the
+- [x] Session-menu parity tests prove sidebar right-click, pane-header right-click, and the
   pane-header three-dot button resolve the same target session and command model across
   shell/Claude/Codex state changes, split/stack moves, keyboard use, touch, and narrow
   layouts.
-- [ ] Current design/interface docs are updated to describe the shipped scope, anchor,
+- [x] Current design/interface docs are updated to describe the shipped scope, anchor,
   artifact, spawn-precedence, hook, migration, layout-stack, and sidebar contracts before
   Phase 5.5 is marked complete.
 
-## Phase 6 — Windows product maturity, CLI control, and diagnostics
+## Phase 5.6 — Runtime location, agent-run ownership, and project notes
 
-Phase 6 follows the corrective Phase 5.5 scope/anchor refactor. It supports a hands-on
-Windows proving period: expand useful control capabilities, make failures diagnosable,
-and harden the desktop/mobile browser experience before any deferred integration or
-release work begins.
+Phase 5.6 amends one Phase 5.5 invariant: a terminal is a long-lived PTY that may move
+between projects, while an agent run is the durable unit whose project ownership is fixed.
+The spawn scope remains the trusted identity for a plain shell; live cwd telemetry is
+display/convenience data only. References below to space auto-anchoring are historical and
+superseded by Phase 5.7, which removes project anchors entirely.
+
+### Session and agent-run scope model
+
+- [x] Split session location into immutable `spawn_cwd` / `spawn_project_scope_id`, live
+  `runtime_cwd` / optional `runtime_project_scope_id`, and immutable active-agent
+  `run_cwd` / `run_project_scope_id`. Preserve compatibility fields only where their
+  meaning is explicit in the API.
+- [x] Capture agent-run scope at launch/promotion from the latest validated runtime cwd,
+  falling back to spawn cwd. Promotion creates/updates the durable history owner; demotion
+  closes that run without changing the shell's spawn scope. A later Claude/Codex launch in
+  the same PTY is a new run and may belong to a different project.
+- [x] Keep space auto-anchor inference tied to seed/spawn cwd. Membership changes, `cd`,
+  runtime telemetry, and agent promotion never retarget an anchor.
+
+### Shell integration and live location
+
+- [x] Add per-shell-profile opt-in cwd integration, sharing one escape-sequence parser with
+  future OSC 133 command-boundary support. Do not modify user profiles globally or inject
+  arguments into profiles that have not enabled integration.
+- [x] Parse OSC 7 incrementally across PTY chunks; accept only local file URIs that resolve
+  to an existing directory. Treat all PTY-provided locations as untrusted telemetry and
+  never use them for trust, executable repository rules, process authority, or filesystem
+  writes without an explicit project resolution/selection step.
+- [x] Debounce accepted cwd changes before switching Git polling (1–2 seconds), enforce a
+  per-session target-switch rate limit, and emit bounded diagnostics when hostile or broken
+  programs spam OSC sequences. Git state follows the accepted live cwd and clears outside
+  a repository.
+- [x] Show live cwd distinctly in the pane header. Until telemetry is confirmed, show spawn
+  cwd as a dimmed/marked `last known` value so stale origin data cannot masquerade as a live
+  working directory.
+
+### Trusted hook and rule scope
+
+- [x] Match project-scoped global rules for a plain shell against its daemon-resolved spawn
+  scope, never OSC/runtime scope. Match an active agent session against the immutable agent
+  run scope. Ensure event payload fields cannot override these authoritative match values.
+- [x] Run hook subprocesses from the trusted run cwd for agents or spawn cwd for shells;
+  runtime telemetry may appear in diagnostics/templates only and never selects execution
+  location.
+
+### Explicit project and session notes
+
+- [x] Add the canonical project note at `<project>/.swe-mux/notes/project.md` and surface it
+  in Projects, pane/session menus, and the notes split/modal flow. When spawn/run and current
+  runtime projects differ, label both targets instead of silently choosing one.
+- [x] Keep the user-facing name `Session note`, but allow it only for an agent run/history
+  owner. Plain shells offer Space note and explicitly selected Project note; they never
+  create durable notes owned by an ephemeral PTY.
+- [x] Preserve filesystem truth in Projects: run notes remain reachable through agent
+  history/project inventory, and every recognized note file under a known `.swe-mux/`
+  remains visible even when no live terminal or space references it.
+
+### Phase 5.6 exit criteria
+
+- [x] A shell can `cd` across repositories and the header/Git display follows accepted live
+  cwd without changing its spawn scope or its space anchor; absent integration is visibly
+  stale rather than falsely live.
+- [x] Repeated agent launches in one PTY produce independently scoped durable history/note
+  owners, and demotion immediately restores shell presentation and spawn-scope rule matching.
+- [x] OSC fragmentation, invalid hosts, missing paths, symlinks, escape spam, debounce, and
+  rate-limit tests prove runtime telemetry cannot gain authority or thrash Git subprocesses.
+- [x] Hook tests prove shells match spawn scope, agents match run scope, payload spoofing
+  cannot override either, and subprocess cwd is always daemon-trusted.
+- [x] Project-note and shell-note UI/API tests prove target selection is explicit, durable
+  agent notes remain discoverable, and no note write is routed by an untrusted OSC path.
+- [x] Current design/interface docs describe the amended terminal/run/location and note
+  contracts before Phase 5.6 is marked complete.
+
+## Phase 5.7 — Project-independent spaces and explicit note ownership
+
+**Status: complete (2026-07-13).** This corrective pass removes the remaining coupling that
+made a space appear to be a project and made note destinations confusing.
+
+### Ownership and migration
+
+- [x] Retire space anchors from spawn, config precedence, notes, API snapshots, Settings,
+  sidebar badges, project blockers, and project detail. Preserve legacy SQLite columns only
+  long enough to migrate safely; reject new anchor writes.
+- [x] Store space notes at `<data_dir>/notes/spaces/<safe-space-id>.md`. Keep project notes
+  at `<project>/.swe-mux/notes/project.md` and agent-run notes at
+  `<project>/.swe-mux/notes/sessions/<run-id>.md`.
+- [x] On startup, copy a uniquely identified legacy project-owned space note to app data,
+  preserve its original Markdown as a backup, release its project artifact binding, and
+  clear the space's legacy anchor. Never overwrite, move, or delete the source.
+- [x] Keep deleted-space notes reachable in a distinct App-owned space notes section of the
+  durable shelf. Label old project-local space files as legacy backups, not active notes.
+
+### Explicit note UX
+
+- [x] Remove the note-scope toggle. Every editor opens one immutable target and names both
+  its semantic owner and storage owner in the header/status: Space · App data, Project, or
+  Agent run · Project.
+- [x] Make the shell pane note action open the explicitly resolved current project note.
+  Make Claude/Codex note actions open the immutable agent-run note. Plain shells cannot own
+  a session note; project and space notes remain separately available in menus/palette.
+- [x] Keep run project notes bound to run scope. Resolve/register shell live cwd only after
+  the user explicitly requests Current project note; never route a write from OSC alone.
+- [x] Nest docked note rows under their semantic sidebar owner: space note under space;
+  agent-run/project note under the associated session. Keep unmatched notes visibly marked
+  instead of rendering anonymous `note` layout rows or hiding them.
+- [x] Make terminal navigation authoritative. Selecting a session clears mobile note focus;
+  if its persisted layout contains resources but no terminal leaf, restore the selected
+  terminal beside the resource without discarding either one.
+- [x] Resolve a shell's Current project note from its effective cwd on every explicit open,
+  and label the pane action with that project. Project editor headers name the project once,
+  without redundant `NOTE::PROJECT::x · PROJECT::x` chrome.
+- [x] Drive space-note sidebar presence from the app-owned saved-note inventory, not only
+  pane layout. Distinguish a saved note from an open pane and keep both states navigable.
+- [x] Enforce `project-note owner id == owning project scope id`. Release early-build
+  cross-project bindings during startup and remove their stale viewport leaves without
+  deleting or moving the real project Markdown.
+
+### Terminal creation
+
+- [x] Make space-level New terminal use explicit request → space default → global/daemon
+  fallback. It never inherits an unrelated active terminal merely because it has focus.
+- [x] Keep tab/split creation intentional and pass the source terminal's accepted live cwd,
+  so related viewports open in the working directory the user expects.
+
+### Exit criteria
+
+- [x] Mixed-project spaces require no anchor and space-note identity never changes after
+  `cd`, membership changes, new sessions, restart, or space-default edits.
+- [x] Project, space, shell-current-project, and agent-run note actions open distinct,
+  correctly labelled destinations in modal and split modes.
+- [x] Legacy space-note migration is idempotent, revision-safe, non-destructive, and removes
+  project Forget blockers created only by the retired ownership model.
+- [x] Ruff, the complete backend suite, frontend behavior tests, TypeScript, production
+  build, and canonical design/interface documentation pass against the new contract.
+
+## Phase 6 — Universal hooks and OpenRouter observers
+
+Phase 6 turns the current event/meta-hook foundation into a durable, read-only agent
+control plane. The daemon observes Claude Code and Codex out of band, evaluates rules
+asynchronously, and records annotations without entering an agent turn or steering a PTY.
+The first release proves one complete observer path while keeping terminal ownership and
+ordinary agent operation independent of OpenRouter availability.
+
+### Universal rule contract and compatibility
+
+- [ ] Retire “Meta-hooks” as user-facing terminology. Use Universal hooks for the layer,
+  Rules for deterministic trigger/condition/action evaluation, Observers for stateless LLM
+  calls, and Annotations for persisted derived output.
+- [ ] Make machine-owned `~/.mux/rules.toml` the canonical source with a versioned
+  `[[rule]] { on, when[], do[] }` schema. Continue reading legacy `~/.mux/hooks.toml` and
+  preserve its last-known-good behavior; migration requires an explicit successful save
+  and never silently deletes the legacy file.
+- [ ] Preserve existing guarded global `notify`, `run`, `http`, and `write_pty` behavior only
+  through the deterministic compatibility path. Do not make those actions reachable from
+  LLM results or expand their authority during this phase.
+- [ ] Limit newly authored Phase 6 rules/observers to `annotate`, provider-neutral `notify`,
+  and OpenRouter `llm` with a reviewed fixed annotation/notification result mapping. The
+  ordinary editor does not offer `run`, `http`, `write_pty`, `spawn`, approval, or relay.
+- [ ] Parse repository-owned `.swe-mux/rules.toml` for diagnostics only. It executes no
+  rules, scripts, HTTP, model calls, PTY writes, or workers. Keep executable project rules
+  and the required machine-owned fingerprinted trust store unscheduled.
+- [ ] Validate the complete canonical rules file before atomic replacement. Stable rule ids
+  and definition-revision hashes survive reorder/format edits and identify firing, budget,
+  checkpoint, and annotation provenance.
+
+### Normalized events, capabilities, and transcript slices
+
+- [ ] Define versioned normalized event envelopes with event sequence, agent-run/session
+  identity, backend, trusted run/spawn project scope, source, confidence, capability level,
+  timestamp, chain id/depth, and a trigger-specific bounded payload.
+- [ ] Add an allowlisted event-schema registry. Rules and observers consume only normalized
+  fields; native transcript schemas, paths, hook names, and adapter flags never escape the
+  adapter/normalization boundary.
+- [ ] Publish per-adapter observation capabilities and runtime degradation diagnostics.
+  Hook silence, parser drift, missing transcript data, and PTY-only fallback emit typed
+  `capability_degraded` events and disable observers whose declared minimum fidelity is
+  unavailable.
+- [ ] Implement normalized transcript slices over the existing read-only transcript viewer:
+  `last_turn`, `last_n_messages`, `since_event`, and `since_annotation`. Bound message count,
+  bytes, tokens, and parsing time; never copy a native transcript into mux persistence.
+- [ ] Add daemon-declared composite-trigger state with bounded windows, beginning with
+  `stalled`, `unattended_attention`, `runaway`, and `claim_unverified`. Users may condition
+  on exposed primitive fields but do not define arbitrary state machines in v1.
+
+### Persistence and asynchronous execution
+
+- [ ] Add app-owned SQLite annotations keyed to durable `agent_run_id`/history identity,
+  with tag, content, source event, rule id/revision, provenance, requested/resolved model,
+  usage/cost, confidence, and creation time. PTY ids and project note files never own
+  observer annotations.
+- [ ] Add rule-firing, condition-trace, action-result, observer-call, checkpoint/debounce,
+  and budget-ledger records. Persist no rendered prompt or transcript slice by default;
+  retain hashes, sizes, status, errors, and resulting annotation content for diagnosis.
+- [ ] Run automation through a bounded queue and worker pool after EventBus persistence.
+  PTY fanout, input, state updates, process ownership, daemon startup, and agent exit never
+  wait for rule evaluation or network calls.
+- [ ] Make firing idempotent by event sequence plus rule revision. Implement uniform
+  debounce/coalescing, threshold hysteresis, intervals, rate guards, quiet hours, annotation
+  guards, cancellation, queue overflow diagnostics, and a hard chain-depth/loop cap.
+- [ ] Permit automatic observers only for live mux-owned agent runs initially. Explicit
+  user dry-runs may target external reconciled history; startup reconciliation never causes
+  retroactive model spend.
+
+### OpenRouter provider and secret handling
+
+- [ ] Implement one daemon-owned OpenRouter client with `aiohttp`, a fixed
+  `https://openrouter.ai/api/v1` origin, Bearer authentication, bounded non-streaming
+  requests, strict timeouts/body limits, retry policy, cancellation, and redacted errors.
+  Do not add arbitrary LLM base URLs or an SDK dependency.
+- [ ] Add a platform `SecretStore` boundary. On the Windows proving platform, protect the
+  OpenRouter key with current-user DPAPI and keep only encrypted material in a separate
+  machine-owned secrets file. Support an explicit `OPENROUTER_API_KEY` environment source
+  for headless use; public config/API/export/log/event paths expose only configured/source
+  status and never key material.
+- [ ] Add write-only Settings/API operations to Set/Replace, Test, and Clear the key.
+  Mutations retain the existing Host/Origin/Tailscale boundary and never echo the submitted
+  secret. A failed test does not discard the previous working key.
+- [ ] Cache OpenRouter model metadata with explicit refresh and stale/error state. Filter
+  the picker to text models capable of strict structured output; store exact model ids under
+  operator-controlled `cheap` and `standard` tiers, with an expert per-rule exact-model
+  override. Do not silently select a newly cheapest or newly popular model.
+- [ ] Send strict `response_format: json_schema`, require provider support for requested
+  parameters, validate returned JSON again locally, and reject extra/invalid fields. The
+  configured rule fixes `on_result`; model output is data and can never name or construct an
+  action.
+- [ ] Record response generation id, requested/resolved model, native token usage, latency,
+  and reported cost. Reconcile cost asynchronously through OpenRouter generation stats when
+  necessary; model-catalog pricing provides only a conservative preflight estimate.
+
+### Economics, privacy, and control UI
+
+- [ ] Add a global automation kill switch, default-off OpenRouter observers, per-rule
+  enablement, shadow mode, bounded concurrency, maximum input/output tokens, call-rate caps,
+  and global/per-rule daily token and dollar budgets. Budget exhaustion fails visibly and
+  cannot fall through to another model or action.
+- [ ] Show the privacy boundary before enabling an observer: the selected normalized
+  transcript slice is sent to OpenRouter and its routed model provider. Project files are
+  included only when already represented in that explicit transcript slice; no background
+  repository crawl occurs.
+- [ ] Give Settings a dedicated Automation tab for provider status, write-only key controls,
+  `cheap`/`standard` model selection, model refresh, budgets, concurrency, retention,
+  kill switch, and non-secret diagnostics. OpenRouter observer spend remains distinct from
+  Claude/Codex ccusage analytics.
+- [ ] Add an Automation dashboard for rules, enabled/shadow/error state, last firing,
+  condition traces, action/observer results, spend by rule/model, annotations, capability
+  degradation, and dry-run against a selected historical event. Keep canonical TOML
+  available as an advanced two-way editor rather than requiring it for ordinary review.
+
+### First end-to-end observers
+
+- [ ] Ship a session titler over the first stable completed turn. Store the generated title
+  as an annotation and render it in live/history surfaces without replacing an explicit
+  user-assigned name.
+- [ ] Ship a bounded one-line turn summarizer. Later observers consume summary annotations
+  instead of repeatedly sending full transcript windows.
+- [ ] Render observer provenance, model, timestamp, confidence, and cost on demand while
+  keeping default sidebar/history presentation compact. Annotation creation emits a
+  normalized `annotation_created` event subject to chain/loop limits.
+
+### Phase 6 exit criteria
+
+- [ ] Legacy global hooks retain last-known-good behavior while canonical global rules
+  validate, reload, shadow, dry-run, debounce, budget, fire, and diagnose deterministically.
+- [ ] OpenRouter key set/test/replace/clear, DPAPI persistence, environment override,
+  redaction, structured-output validation, model-catalog caching, timeout/retry, and budget
+  failure paths pass tests without any real paid call in the normal suite.
+- [ ] Titler and summarizer complete event → slice → OpenRouter fixture → schema validation
+  → annotation → UI display end to end. Provider failure never blocks or changes an agent
+  turn, PTY, transcript, note, or history lifecycle.
+- [ ] Repository rules remain inert; LLM results cannot execute deterministic actions; no
+  key, prompt, transcript slice, or backend credential appears in public config, exports,
+  logs, events, firing records, or browser reads.
+
+## Phase 7 — Composite attention and fleet intelligence
+
+Phase 7 compounds the read-only Phase 6 substrate into capabilities only a neutral
+multi-agent control plane can provide. Deterministic telemetry is preferred whenever it
+can answer the question; OpenRouter observers classify or summarize only when semantics are
+required. Actuation remains user-initiated or explicitly unscheduled.
+
+### Attention observers and digests
+
+- [ ] Implement stall/spiral detection from turn summaries, repeated tool/command failures,
+  PTY silence/output rate, process-tree CPU, and progress windows. Expose the evidence and
+  confidence behind every annotation; never equate ordinary idle time with a stall.
+- [ ] Implement approval triage that summarizes and prioritizes normalized approval events,
+  then annotates or notifies. It never approves, rejects, types, or modifies an allowlist.
+- [ ] Add context-pressure/handoff suggestions from native context telemetry plus summary
+  chains. Generate a draft annotation or exportable handoff; do not inject it automatically.
+- [ ] Add interval attention digests and an absence report across spaces/sessions since the
+  user's last attach/input activity. Browser/mobile notification and inbox delivery ship
+  first; Telegram later consumes the same provider-neutral records.
+
+### Fleet-level deterministic intelligence
+
+- [ ] Add cross-session environment interlocks using trusted scope, Git/worktree state,
+  owned descendant processes, listeners, and registered previews: same-branch concurrent
+  work, port collisions, and one session consuming another session's dev server.
+- [ ] Persist session lineage for resume, explicit handoff, continuation, and review edges.
+  History may group a work thread across backends while retaining atomic agent-run records.
+- [ ] Add a user-initiated cross-vendor second-opinion command: select a completed/current
+  agent run, review the generated diff/context prompt, then explicitly spawn the other
+  backend in the chosen cwd/worktree. This is an ordinary session plus lineage edge, not a
+  rule `spawn` action.
+- [ ] Add actual-workload scaffold telemetry: turn/stall/approval rates, duration, context,
+  cost, completion evidence, and backend/model dimensions. Clearly label observational
+  correlation; do not claim benchmark causality without paired user-initiated runs.
+
+### Compounding knowledge
+
+- [ ] Build an experience index from error/resolution annotations across Claude and Codex
+  history. Retrieval may suggest a prior resolution to a live run as an annotation; it does
+  not write memory/project files or inject guidance automatically.
+- [ ] Add explicit, budgeted batch observers over selected ended sessions for repeated
+  failures/procedures, doc-drift candidates, convention findings, and regression/eval
+  candidates. Default to preview/export; never mutate a repository overnight.
+- [ ] Keep knowledge-graph extraction and instruction/memory synchronization outside the
+  initial Phase 7 exit criteria until the simpler experience index proves useful.
+
+### Deliberate actuation gate
+
+- [ ] Define and test a future safe-to-inject predicate from daemon PTY-mode/composer state
+  plus adapter-specific etiquette. Completing the predicate is research/diagnostic work and
+  does not itself authorize actuation.
+- [ ] Keep observer-triggered `write_pty`, approval response, worker/spawn, arbitrary HTTP,
+  project scripts, executable rulepacks, and model-directed actions unscheduled. Enabling
+  any one requires a separate product decision, reviewed policy, confirmation/allowlist,
+  audit trail, and—where repository-owned—a fingerprinted machine trust store.
+
+### Phase 7 exit criteria
+
+- [ ] Stall, approval, context, digest, and absence observers are explainable, budgeted,
+  bounded, provider-failure tolerant, and useful on both Claude and Codex fixture histories.
+- [ ] Fleet interlocks and lineage operate across mixed-project spaces without trusting OSC
+  runtime cwd or conflating PTY sessions, agent runs, worktrees, and repository groups.
+- [ ] A user can explicitly create a cross-vendor review session with a visible prompt and
+  lineage edge; no rule or model can initiate that session.
+- [ ] Read-only guarantees remain intact: control-plane intelligence annotates, notifies,
+  summarizes, suggests, and reports, but never commands an agent or mutates a project.
+
+## Phase 8 — Windows product maturity, CLI control, and diagnostics
+
+Phase 8 follows the corrective ownership refactors and read-only control-plane phases. It
+supports a hands-on Windows proving period: expand useful control capabilities, make
+failures diagnosable, and harden the desktop/mobile browser experience before any deferred
+integration or release work begins.
 
 ### Practical CLI control
 
 - [ ] Expand `mux` from a thin JSON client into a practical daemon controller: filtered
   session listing; profile/custom-argv spawn; rename/move/pin/kill; complete space
-  and anchor management; project-scope/repository-group inspection; broadcast
+  management; project-scope/repository-group inspection; broadcast
   membership/send; history filters/resume; profile inspection; and safe Settings/config
   reads and updates.
 - [ ] Keep browser presentation actions out of the CLI. CLI parity means parity for useful
@@ -952,14 +1330,20 @@ release work begins.
   errors, human-readable tables, and `--json` output. Scripts never need to parse UI prose.
 - [ ] Route browser, CLI, and future Telegram actions through the same typed daemon
   operations so behavior and authorization boundaries cannot drift by client.
+- [ ] Add read-only CLI inspection for automation status, normalized capabilities, rules,
+  firings, annotations, observer spend/budgets, and provider health. Permit explicit
+  enable/disable/shadow/dry-run operations through typed APIs, but never accept or print an
+  OpenRouter key through ordinary CLI output or `--json` diagnostics.
 
 ### Consolidated diagnostics
 
 - [ ] Expand the current remote-status-only `mux doctor` into a read-only diagnostic:
   daemon/frontend version, ConPTY and Job Object health, shell/profile executables,
   Claude/Codex promotion capabilities, writable global/project paths, project config,
-  scope/anchor/artifact conflicts, unified ccusage availability/version, process
-  inspection, previews, listener/port, Tailscale/optional Serve, and non-secret hook status.
+  scope/artifact and legacy-migration conflicts, unified ccusage availability/version, process
+  inspection, previews, listener/port, Tailscale/optional Serve, normalized observer
+  capabilities, rule-engine queue/last-known-good state, OpenRouter configured/model-catalog
+  status, budget exhaustion, and non-secret automation diagnostics.
 - [ ] Publish machine-readable capability/version information through health diagnostics;
   redact hook secrets, terminal bytes, prompt content, media, and credentials.
 - [ ] Give every failed check a concrete remedy and distinguish unavailable optional
@@ -969,8 +1353,8 @@ release work begins.
 
 - [ ] Expand Python coverage for configuration/migrations, adapter state races, session
   lifecycle, Host/Origin/WS boundaries, spaces/layout, history/resume, events/hooks,
-  project scopes/anchors/artifacts, Git/worktrees, CLI behavior, process ownership,
-  previews, and reaping.
+  rules/annotations/budgets/OpenRouter fixtures, project scopes/artifacts, app-owned space
+  notes, Git/worktrees, CLI behavior, process ownership, previews, and reaping.
 - [ ] Add real-browser component/Playwright coverage for default/custom creation,
   non-split replacement, inline kill, spaces/panes, palette/input transparency, Settings,
   history, notes, processes/previews, clipboard media, direct-tailnet use, responsive/touch,
@@ -979,25 +1363,26 @@ release work begins.
   output, resize, Ctrl+C, bracketed paste, input-owner handoff, browser reconnect, process
   attribution, and forced daemon death.
 - [ ] Maintain a Windows CI lane for ruff, mypy, pytest, frontend typecheck/test/build, and
-  focused ConPTY/browser smoke tests. Public artifact and multi-OS matrices remain Phase 10.
+  focused ConPTY/browser smoke tests. Public artifact and multi-OS matrices remain Phase 12.
 - [ ] Use the proving period to record and prioritize observed workflow friction without
   reopening completed product decisions or silently expanding into orchestration.
 
-### Phase 6 exit criteria
+### Phase 8 exit criteria
 
 - [ ] `mux` can inspect and automate the important daemon operations with stable human and
   JSON output while the browser remains the primary interactive interface.
 - [ ] `mux doctor` identifies actionable local configuration, integration, ownership, and
-  tailnet problems without mutating state or exposing secrets.
+  tailnet/automation/provider problems without mutating state or exposing secrets.
 - [ ] Windows desktop/mobile core workflows and forced-cleanup scenarios pass the focused
   automated matrix; unresolved product friction is captured as explicit follow-up work.
 
-## Phase 7 — Deferred 1: Telegram multi-session control
+## Phase 9 — Deferred 1: Telegram multi-session control
 
-Telegram is first in the deferred queue. It is not part of the current Phase 6 proving
-work, but it should be the next capability integration when external control becomes
-useful. Phase 4/5 event, notification, correlation, and privileged-action boundaries are
-the foundation; Telegram does not create a second session or account model.
+Telegram is first in the deferred queue. It is not part of the Phase 6–8 control-plane and
+Windows proving work, but it should be the next integration when external control becomes
+useful. Phase 4/5 event and notification boundaries plus Phase 6/7 annotations, digests,
+and typed attention records are the foundation; Telegram does not create a second session,
+observer, or account model.
 
 ### Provider and routing
 
@@ -1010,8 +1395,9 @@ the foundation; Telegram does not create a second session or account model.
 - [ ] Label every outbound prompt, approval, completion, and response with backend,
   session, and space identity. Support Select active session, Open, Approve, Reject, Reply,
   and Clear selection only when the normalized daemon action supports that operation.
-- [ ] Reuse Phase 6 typed actions and structured errors. Telegram never writes directly to
-  a PTY, guesses a target from display names, or invents provider-specific session state.
+- [ ] Reuse Phase 8 typed daemon actions and structured errors plus Phase 6/7 provider-
+  neutral notification/annotation records. Telegram never writes directly to a PTY,
+  guesses a target from display names, or invents provider-specific session state.
 
 ### Configuration, safety, and reliability
 
@@ -1026,14 +1412,14 @@ the foundation; Telegram does not create a second session or account model.
 - [ ] Persist correlation/delivery metadata but never bot secrets, terminal bytes, prompt
   bodies, uploaded media, or backend credentials in general event/audit records.
 
-### Phase 7 exit criteria
+### Phase 9 exit criteria
 
 - [ ] One bot routes concurrent Claude and Codex notifications, replies, and supported
   approvals without ambiguous delivery.
 - [ ] Session selection, reply mappings, retries, deduplication, daemon restart recovery,
   revocation, and expired targets pass provider-adapter and integration tests.
 
-## Phase 8 — Deferred 2: SSH and native terminal attach
+## Phase 10 — Deferred 2: SSH and native terminal attach
 
 SSH remains behind Telegram. Direct Tailscale browser access is the supported remote
 product path; this phase adds an optional terminal-native workflow without changing daemon
@@ -1053,14 +1439,14 @@ ownership, browser replay, or the rule that a daemon restart ends live sessions.
   resize, Ctrl+C, bracketed paste, input-owner handoff, and daemon/session termination.
   Browser and native attachments must not duplicate input or device responses.
 
-### Phase 8 exit criteria
+### Phase 10 exit criteria
 
 - [ ] An SSH disconnect leaves the mux session live, and a later `mux attach` restores an
   interactive terminal without changing browser attach/replay semantics.
 - [ ] Forwarding and attach documentation clearly distinguish daemon-owned session
   lifetime, SSH transport authentication, Tailscale browser access, and detach versus kill.
 
-## Phase 9 — Deferred 3: WSL agent bridge and native Linux/macOS
+## Phase 11 — Deferred 3: WSL agent bridge and native Linux/macOS
 
 Platform expansion begins only after the Windows product and earlier deferred integrations
 justify the maintenance cost. Interactive WSL shells already work; WSL agent awareness and
@@ -1110,7 +1496,7 @@ attach/detach invariant, and daemon-owned child lifecycle.
 - [ ] Define and migrate data/config locations consistently, including Windows `~/.mux`
   versus XDG/macOS platform directories.
 
-### Phase 9 exit criteria
+### Phase 11 exit criteria
 
 - [ ] Windows, WSL-agent-aware, Linux, and macOS targets pass the applicable shared
   API/WS/session lifecycle and ownership contract suites.
@@ -1120,7 +1506,7 @@ attach/detach invariant, and daemon-owned child lifecycle.
   notes, processes/listeners, previews, and clipboard-image handoff behave natively without
   filesystem escape or cross-environment path leakage.
 
-## Phase 10 — Deferred 4: public packaging and release
+## Phase 12 — Deferred 4: public packaging and release
 
 Public distribution is last. Source-checkout development remains acceptable until the
 product has survived the Windows proving period and the intended platform matrix is known.
@@ -1150,7 +1536,7 @@ product has survived the Windows proving period and the intended platform matrix
 - [ ] Validate tagged revision, source, frontend bundle, wheel/sdist metadata, migrations,
   documented commands, and capability/version diagnostics as one release unit.
 
-### Phase 10 exit criteria
+### Phase 12 exit criteria
 
 - [ ] A clean supported machine can install, start `muxd`, open the bundled UI, create
   default/custom shells, promote Claude/Codex, use declared optional capabilities, and
@@ -1162,36 +1548,39 @@ product has survived the Windows proving period and the intended platform matrix
 
 | Spec section | Remaining delivery |
 |---|---|
-| §1–3 Product/architecture | Phase 0 runtime contracts; Phase 9 platform expansion |
-| §4 Backend adapters | Phases 0, 2, and 4; Phase 9 platform adapters |
+| §1–3 Product/architecture | Phase 0 runtime contracts; Phase 11 platform expansion |
+| §4 Backend adapters | Phases 0, 2, and 4; Phase 6 observer capabilities; Phase 11 platform adapters |
 | §5 Session/state/scrollback | Phase 0; immutable project scope in Phase 5.5 |
-| §6 Events/meta-hooks | Phases 0 and 4; scope predicates in Phase 5.5; optional Phase 7 Telegram |
+| §6 Events/meta-hooks | Phases 0 and 4; scope predicates in Phase 5.5; universal rules/observers in Phases 6–7; optional Phase 9 Telegram |
 | §7 Reserved communication | Keep `links` + `write_pty`; no relay consumer scheduled |
-| §8 HTTP API + CLI | Phases 1–5; scope/anchor APIs in Phase 5.5; Phase 6 CLI; Phase 8 attach |
-| §9 History/resume | Phase 4 agent-only history; scope/group split in Phase 5.5 |
-| §10 Frontend | Phases 1–5; scope/anchor/artifact UI in Phase 5.5 |
+| §8 HTTP API + CLI | Phases 1–5; scope APIs in Phase 5.5 and note ownership in Phase 5.7; automation APIs in Phases 6–7; Phase 8 CLI; Phase 10 attach |
+| §9 History/resume | Phase 4 agent-only history; scope/group split in Phase 5.5; annotations/lineage in Phases 6–7 |
+| §10 Frontend | Phases 1–5; scope/layout UI in Phase 5.5; explicit note UI in Phase 5.7; Automation Settings/dashboard in Phases 6–7 |
 | §11 Remote/security | Phase 5 |
 | §12 Git/worktrees | Phase 4; concrete worktree scopes in Phase 5.5 |
 | §13 Refactor inventory | Core donor replacement complete; remaining boundary cleanup in Phase 0 |
-| §14 Configuration | Phases 1–4; scope precedence in Phase 5.5; Phase 9 platform adaptation |
+| §14 Configuration | Phases 1–4; scope precedence in Phase 5.5; rule/secret/model settings in Phase 6; Phase 11 platform adaptation |
 | §15 Non-goals | No orchestration, headless agents, live restore, daemon TLS, or marketplace |
 
 ### Approved extension traceability
 
 | Extension | Delivery |
 |---|---|
-| Project scopes, space anchors, and artifact ownership | Corrective Phase 5.5 |
+| Project scopes and agent artifact ownership | Corrective Phase 5.5 |
+| Project-independent spaces and app-owned space notes | Corrective Phase 5.7 |
 | Durable Projects view and artifact discoverability | Corrective Phase 5.5 |
 | Layout-level tab stacks and explicit sidebar hierarchy | Corrective Phase 5.5 |
-| Project-local config and Markdown notes | Phases 3–5; ownership refactor in Phase 5.5; Phase 9 equivalence |
-| Clipboard image handoff | Phases 3–5; platform equivalence in Phase 9 |
-| Session-owned processes and previews | Phases 3–5; Phase 5.5 scope ownership; Phase 9 parity |
-| Optional ccusage cached analytics | Phase 4; consolidated diagnostics in Phase 6 |
-| Practical CLI control and diagnostics | Phase 6 |
-| Telegram multi-session routing | Phase 4/5 foundations; deferred Phase 7 provider |
-| SSH browser forwarding and native attach | Deferred Phase 8 |
-| WSL agent bridge and native Linux/macOS | Deferred Phase 9 |
-| Public PyPI package | Deferred Phase 10 |
+| Project-local config/run notes plus app-owned space notes | Phases 3–5; ownership finalized in Phase 5.7; Phase 11 equivalence |
+| Clipboard image handoff | Phases 3–5; platform equivalence in Phase 11 |
+| Session-owned processes and previews | Phases 3–5; Phase 5.5 scope ownership; Phase 11 parity |
+| Optional ccusage cached analytics | Phase 4; consolidated diagnostics in Phase 8 |
+| Universal hooks, OpenRouter observers, annotations, and budgets | Phase 6 |
+| Composite attention, lineage, fleet interlocks, and experience index | Phase 7 |
+| Practical CLI control and diagnostics | Phase 8 |
+| Telegram multi-session routing | Phase 4–7 foundations; deferred Phase 9 provider |
+| SSH browser forwarding and native attach | Deferred Phase 10 |
+| WSL agent bridge and native Linux/macOS | Deferred Phase 11 |
+| Public PyPI package | Deferred Phase 12 |
 | Agent account/profile management | Tabled; explicitly out of scope |
 | Native Claude/Codex themes and Remote Control | Explicitly out of scope |
 

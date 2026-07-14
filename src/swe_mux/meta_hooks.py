@@ -208,13 +208,28 @@ class MetaHookEngine:
 
     def _matches(self, rule: HookRule, event: MuxEvent) -> bool:
         session = self.sessions.sessions.get(event.session_id or "")
+        record = session.record if session else None
+        run_id = getattr(record, "agent_run_id", None)
+        trusted_scope = (
+            getattr(record, "run_project_scope_id", None)
+            if run_id
+            else getattr(record, "spawn_project_scope_id", None)
+            or getattr(record, "project_scope_id", None)
+        )
         fields: dict[str, Any] = {
+            **event.payload,
             "type": event.type,
             "source": event.source,
             "session_id": event.session_id,
             "backend": session.record.backend if session else None,
             "session_name": session.record.name if session else None,
-            **event.payload,
+            "project_scope_id": trusted_scope,
+            "repo_group_id": (
+                getattr(record, "run_repo_group_id", None)
+                if run_id
+                else getattr(record, "spawn_repo_group_id", None)
+                or getattr(record, "repo_group_id", None)
+            ),
         }
         return all(
             fnmatch.fnmatch(str(fields.get(key, "")), pattern)
@@ -241,12 +256,26 @@ class MetaHookEngine:
 
     def _values(self, event: MuxEvent) -> dict[str, Any]:
         session = self.sessions.sessions.get(event.session_id or "")
+        record = session.record if session else None
+        run_id = getattr(record, "agent_run_id", None)
         return {
             "session_id": event.session_id or "",
             "session_name": session.record.name if session else "",
             "type": event.type,
             "source": event.source,
             "seq": event.seq,
+            "project_scope_id": (
+                getattr(record, "run_project_scope_id", None)
+                if run_id
+                else getattr(record, "spawn_project_scope_id", None)
+                or getattr(record, "project_scope_id", "")
+            ),
+            "repo_group_id": (
+                getattr(record, "run_repo_group_id", None)
+                if run_id
+                else getattr(record, "spawn_repo_group_id", None)
+                or getattr(record, "repo_group_id", "")
+            ),
         }
 
     def _new_delivery(
@@ -310,7 +339,12 @@ class MetaHookEngine:
         self, action: dict[str, Any], values: dict[str, Any], event: MuxEvent
     ) -> None:
         session = self.sessions.sessions.get(event.session_id or "")
-        cwd = session.record.cwd if session else None
+        record = session.record if session else None
+        cwd = (
+            getattr(record, "run_cwd", None)
+            if getattr(record, "agent_run_id", None)
+            else getattr(record, "spawn_cwd", None)
+        ) or getattr(record, "cwd", None)
         argv = action.get("argv")
         if isinstance(argv, list):
             command = [str(part).format_map(values) for part in argv]

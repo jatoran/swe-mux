@@ -12,9 +12,10 @@ from typing import Any
 from .adapters import BackendAdapter, SpawnOptions
 from .event_bus import EventBus
 from .history import HistoryIndex
-from .models import SessionRecord, SessionState
-from .projects import resolve_project
+from .models import GitState, SessionRecord, SessionState
+from .projects import ProjectIdentity, resolve_project
 from .pty_host import PtyHost
+from .runtime_cwd import Osc7Parser, local_directory_from_osc7
 from .win_jobobj import ReaperJob
 
 
@@ -88,6 +89,10 @@ class Session:
         self.agent_stop_event = asyncio.Event()
         self.observer_task: asyncio.Task[Any] | None = None
         self.detection_task: asyncio.Task[Any] | None = None
+        self.osc7 = Osc7Parser()
+        self.cwd_debounce_task: asyncio.Task[Any] | None = None
+        self.cwd_switches: deque[float] = deque()
+        self.cwd_telemetry_dropped = 0
 
     def subscribe(self, maxsize: int = 1024) -> PtySubscriber:
         subscriber = PtySubscriber(asyncio.Queue(maxsize=maxsize))
@@ -163,9 +168,7 @@ class Session:
                 self._schedule_resync(subscriber)
                 subscriber.exit_pending = frame
 
-    def transition(
-        self, state: SessionState, detail: str | None, *, source: str
-    ) -> bool:
+    def transition(self, state: SessionState, detail: str | None, *, source: str) -> bool:
         """Apply a state transition only when its observation source is authoritative."""
         priority = {"pty": 0, "transcript": 1, "hook": 2}.get(source, 0)
         if priority < self.state_source_priority:
@@ -229,6 +232,7 @@ class SessionManager:
         shell_profile_id: str | None = None,
         profile_env: dict[str, str] | None = None,
         project_label: str | None = None,
+        project: ProjectIdentity | None = None,
     ) -> Session:
         if backend not in self.adapters:
             raise ValueError(f"unknown backend: {backend}")
@@ -257,10 +261,24 @@ class SessionManager:
             auto_named=name is None,
             state="running" if backend == "shell" else "starting",
         )
-        project = await resolve_project(resolved_cwd)
+        project = project or await resolve_project(resolved_cwd)
         record.project_id = project.id
         record.project_label = project_label or project.label
         record.project_root = project.root
+        record.project_scope_id = project.id
+        record.repo_group_id = project.repo_group_id
+        record.spawn_cwd = str(resolved_cwd)
+        record.spawn_project_scope_id = project.id
+        record.spawn_repo_group_id = project.repo_group_id
+        record.spawn_project_label = record.project_label
+        record.spawn_project_root = project.root
+        record.runtime_cwd = str(resolved_cwd)
+        if backend in {"claude", "codex"}:
+            record.agent_run_id = sid
+            record.agent_run_started_at = record.created_at
+            record.run_cwd = str(resolved_cwd)
+            record.run_project_scope_id = project.id
+            record.run_repo_group_id = project.repo_group_id
         hook_secret = secrets.token_urlsafe(24)
         pty = PtyHost(
             spawn_spec.executable,
@@ -286,6 +304,7 @@ class SessionManager:
         )
         pty.spawn()
         record.pid = pty.pid
+        await self.history.register_project_scope(project)
         ownership_job: ReaperJob | None = None
         ownership_error: str | None = None
         create_child = getattr(self.reaper, "create_child", None)
@@ -309,7 +328,14 @@ class SessionManager:
         self.sessions[sid] = session
         transcript = adapter.transcript_path(native_id, resolved_cwd)
         await self.history.session_started(record, str(transcript) if transcript else None)
-        await self.events.emit("session_spawned", session_id=sid, backend=backend, name=record.name)
+        await self.events.emit(
+            "session_spawned",
+            session_id=sid,
+            backend=backend,
+            name=record.name,
+            project_scope_id=record.project_scope_id,
+            repo_group_id=record.repo_group_id,
+        )
         if ownership_error:
             await self.events.emit(
                 "process_ownership_degraded",
@@ -356,7 +382,8 @@ class SessionManager:
             # prompt text, so exact ``> claude`` matching is not reliable. Native
             # transcript cwd/time matching below is the ownership guard.
             launched = [
-                adapter for name, adapter in self.adapters.items()
+                adapter
+                for name, adapter in self.adapters.items()
                 if name != "shell" and name.encode() in terminal_text
             ]
             if not launched:
@@ -369,11 +396,13 @@ class SessionManager:
                 (modified, adapter.name, path, native_id)
                 for adapter in launched
                 for modified, path, native_id in adapter.recent_transcripts(
-                    Path(session.record.cwd), session.record.created_at
+                    Path(session.record.runtime_cwd or session.record.cwd),
+                    session.record.created_at,
                 )
             ]
             if candidates:
                 _, backend, path, native_id = max(candidates)
+                await self._begin_agent_run(session)
                 session.adapter = self.adapters[backend]
                 session.pty.graceful_exit = session.adapter.graceful_exit_keys()
                 session.record.backend = backend
@@ -397,12 +426,15 @@ class SessionManager:
             except TimeoutError:
                 pass
 
-    async def promote(self, sid: str, backend: str, native_id: str) -> Session:
+    async def promote(
+        self, sid: str, backend: str, native_id: str, launch_cwd: str | None = None
+    ) -> Session:
         if backend not in {"claude", "codex"}:
             raise ValueError(f"cannot promote session to {backend}")
         session = self.resolve(sid)
         if session.record.backend == backend and session.record.native_session_id == native_id:
             return session
+        await self._begin_agent_run(session, launch_cwd)
         adapter = self.adapters[backend]
         session.adapter = adapter
         session.pty.graceful_exit = adapter.graceful_exit_keys()
@@ -415,9 +447,11 @@ class SessionManager:
         session.record.state_detail = None
         session.state_source_priority = -1
         if session.record.auto_named:
-            session.record.name = Path(session.record.cwd).name or backend
+            session.record.name = Path(session.record.run_cwd or session.record.cwd).name or backend
         session.publish_update()
-        transcript = adapter.transcript_path(native_id, Path(session.record.cwd))
+        transcript = adapter.transcript_path(
+            native_id, Path(session.record.run_cwd or session.record.cwd)
+        )
         await self.history.session_promoted(session.record, str(transcript) if transcript else "")
         await self.events.emit(
             "backend_detected",
@@ -431,12 +465,10 @@ class SessionManager:
 
     async def demote(self, sid: str, backend: str, native_id: str) -> Session:
         session = self.resolve(sid)
-        if (
-            session.record.backend != backend
-            or session.record.native_session_id != native_id
-        ):
+        if session.record.backend != backend or session.record.native_session_id != native_id:
             return session
         await self.history.update_agent_summary(session.record)
+        await self.history.agent_run_ended(session.record, "agent_exit")
         session.agent_stop_event.set()
         if session.observer_task and not session.observer_task.done():
             session.observer_task.cancel()
@@ -453,6 +485,16 @@ class SessionManager:
         session.record.parser_status = "not_applicable"
         session.record.parser_diagnostic = None
         session.record.parser_events_seen = 0
+        session.record.agent_run_id = None
+        session.record.agent_run_started_at = None
+        session.record.run_cwd = None
+        session.record.run_project_scope_id = None
+        session.record.run_repo_group_id = None
+        session.record.project_id = session.record.spawn_project_scope_id
+        session.record.project_label = session.record.spawn_project_label
+        session.record.project_root = session.record.spawn_project_root
+        session.record.project_scope_id = session.record.spawn_project_scope_id
+        session.record.repo_group_id = session.record.spawn_repo_group_id
         session.state_source_priority = -1
         if session.record.auto_named:
             session.record.name = f"shell-{session.record.id[:6]}"
@@ -477,7 +519,7 @@ class SessionManager:
         if path is None or not path.exists():
             path = await adapter.await_transcript(
                 session.record.native_session_id,
-                Path(session.record.cwd),
+                Path(session.record.run_cwd or session.record.cwd),
                 session.record.created_at,
                 stop_event,
             )
@@ -496,8 +538,109 @@ class SessionManager:
                     await self._mark_ended(session, "process_exit")
                 return
             session.record.last_activity_ts = time.time()
+            for uri in session.osc7.feed(chunk):
+                self._queue_runtime_cwd(session, uri)
             session.scrollback.append(chunk)
             session.publish_output(chunk)
+
+    def _queue_runtime_cwd(self, session: Session, uri: str) -> None:
+        path = local_directory_from_osc7(uri)
+        if path is None:
+            self._drop_runtime_cwd(session)
+            return
+        now = time.monotonic()
+        while session.cwd_switches and now - session.cwd_switches[0] >= 60:
+            session.cwd_switches.popleft()
+        if len(session.cwd_switches) >= 12:
+            self._drop_runtime_cwd(session)
+            return
+        if session.cwd_debounce_task and not session.cwd_debounce_task.done():
+            session.cwd_debounce_task.cancel()
+        task = asyncio.create_task(
+            self._accept_runtime_cwd(session, path), name=f"cwd-telemetry-{session.record.id}"
+        )
+        session.cwd_debounce_task = task
+        session.tasks.add(task)
+
+    async def _accept_runtime_cwd(self, session: Session, path: Path) -> None:
+        try:
+            await asyncio.sleep(1.25)
+            if session.stop_event.is_set() or not path.is_dir():
+                return
+            value = str(path)
+            if session.record.runtime_cwd_live and session.record.runtime_cwd == value:
+                return
+            now = time.monotonic()
+            while session.cwd_switches and now - session.cwd_switches[0] >= 60:
+                session.cwd_switches.popleft()
+            if len(session.cwd_switches) >= 12:
+                self._drop_runtime_cwd(session)
+                return
+            project = await resolve_project(path)
+            known = await self.history.project_scope(project.id)
+            session.cwd_switches.append(now)
+            session.record.runtime_cwd = value
+            session.record.runtime_cwd_live = True
+            session.record.runtime_cwd_source = "osc7"
+            session.record.runtime_cwd_updated_at = time.time()
+            session.record.runtime_project_scope_id = project.id if known else None
+            session.record.git = GitState()
+            session.publish_update()
+            await self.events.emit(
+                "runtime_cwd_changed",
+                session_id=session.record.id,
+                source="pty",
+                cwd=value,
+                project_scope_id=session.record.runtime_project_scope_id,
+                dropped=session.cwd_telemetry_dropped,
+            )
+        except asyncio.CancelledError:
+            raise
+
+    @staticmethod
+    def _drop_runtime_cwd(session: Session) -> None:
+        session.cwd_telemetry_dropped = min(session.cwd_telemetry_dropped + 1, 1_000_000)
+        session.record.runtime_cwd_dropped = session.cwd_telemetry_dropped
+
+    async def _begin_agent_run(self, session: Session, launch_cwd: str | None = None) -> None:
+        """Capture immutable ownership for one agent invocation."""
+        if session.record.agent_run_id:
+            return
+        cwd = Path(
+            launch_cwd
+            or session.record.runtime_cwd
+            or session.record.spawn_cwd
+            or session.record.cwd
+        )
+        if not cwd.is_dir():
+            cwd = Path(session.record.spawn_cwd or session.record.cwd)
+        project = await resolve_project(cwd)
+        await self.history.register_project_scope(project)
+        session.record.agent_run_id = str(uuid.uuid4())
+        session.record.agent_run_started_at = time.time()
+        session.record.run_cwd = str(cwd.resolve())
+        session.record.run_project_scope_id = project.id
+        session.record.run_repo_group_id = project.repo_group_id
+        session.record.tokens_in = 0
+        session.record.tokens_out = 0
+        session.record.context_window = 0
+        session.record.context_pct = 0
+        session.record.context_peak_pct = 0
+        session.record.model = None
+        session.record.measurement_source = None
+        if launch_cwd:
+            session.record.runtime_cwd = session.record.run_cwd
+            session.record.runtime_cwd_live = True
+            session.record.runtime_cwd_source = "agent-launcher"
+            session.record.runtime_cwd_updated_at = time.time()
+            session.record.runtime_project_scope_id = project.id
+        # Compatibility fields describe the active authoritative owner. Explicit
+        # spawn/runtime/run fields remove the old ambiguity for new clients.
+        session.record.project_id = project.id
+        session.record.project_label = project.label
+        session.record.project_root = project.root
+        session.record.project_scope_id = project.id
+        session.record.repo_group_id = project.repo_group_id
 
     async def _ticker(self, session: Session) -> None:
         while not session.stopping and session.record.state not in {"exited", "crashed"}:
@@ -512,6 +655,11 @@ class SessionManager:
         session.record.state = "exited" if session.stopping else "crashed"
         session.record.last_activity_ts = time.time()
         session.agent_stop_event.set()
+        if session.cwd_debounce_task and not session.cwd_debounce_task.done():
+            session.cwd_debounce_task.cancel()
+        if session.record.agent_run_id:
+            await self.history.update_agent_summary(session.record)
+            await self.history.agent_run_ended(session.record, reason)
         for adapter in self.adapters.values():
             adapter.cleanup(session.record.id)
         if session.ownership_job:

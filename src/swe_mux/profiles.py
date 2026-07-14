@@ -135,8 +135,29 @@ def resolve_profile(config: Config, profile_id: str, cwd: Path) -> ResolvedProfi
     if not Path(executable).is_file() and not _available(executable):
         raise ValueError({"profile_id": f"executable not found: {profile.executable}"})
     argv = list(profile.args)
+    capabilities = list(profile.capabilities)
+    executable_name = Path(executable).name.casefold()
+    if profile.cwd_integration and executable_name in {
+        "powershell", "powershell.exe", "pwsh", "pwsh.exe"
+    }:
+        if any(item.casefold() in {"-command", "-c", "-file", "-f"} for item in argv):
+            raise ValueError(
+                {"profile_id": "cwd integration cannot wrap a profile with Command/File arguments"}
+            )
+        script = (
+            "$global:__swe_mux_prompt=$function:prompt;"
+            "function global:prompt {"
+            "try {$u=[System.Uri]::new((Get-Location).ProviderPath).AbsoluteUri;"
+            "[Console]::Write(\"$([char]27)]7;$u$([char]7)\")} catch {};"
+            "if($global:__swe_mux_prompt){& $global:__swe_mux_prompt}"
+            "else {\"PS $($executionContext.SessionState.Path.CurrentLocation)> \"}}"
+        )
+        if not any(item.casefold() == "-noexit" for item in argv):
+            argv.append("-NoExit")
+        argv.extend(["-Command", script])
+        capabilities.append("cwd-osc7")
     if profile.cwd_strategy == "wsl":
         argv.extend(["--cd", _wsl_cwd(executable, argv, cwd)])
     return ResolvedProfile(
-        profile.id, executable, tuple(argv), dict(profile.env), tuple(profile.capabilities)
+        profile.id, executable, tuple(argv), dict(profile.env), tuple(dict.fromkeys(capabilities))
     )

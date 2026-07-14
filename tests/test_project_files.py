@@ -35,23 +35,23 @@ async def test_project_config_is_explicit_versioned_and_conflict_safe(tmp_path: 
 
 
 async def test_notes_round_trip_as_markdown_and_detect_external_edits(tmp_path: Path) -> None:
-    missing = await read_note(tmp_path, "spaces", "space:unsafe")
+    missing = await read_note(tmp_path, "sessions", "session:unsafe")
     assert missing["revision"] == "missing"
     saved = await write_note(
-        tmp_path, "spaces", "space:unsafe", "# Plan\n\nKeep this local.\n", "missing"
+        tmp_path, "sessions", "session:unsafe", "# Plan\n\nKeep this local.\n", "missing"
     )
     path = Path(saved["path"])
-    assert path.parent == tmp_path / ".swe-mux" / "notes" / "spaces"
+    assert path.parent == tmp_path / ".swe-mux" / "notes" / "sessions"
     assert "# Plan" in path.read_text(encoding="utf-8")
     assert ":" not in path.name
 
     path.write_text(path.read_text(encoding="utf-8") + "external\n", encoding="utf-8")
     with pytest.raises(ValueError, match="changed externally"):
         await write_note(
-            tmp_path, "spaces", "space:unsafe", "overwrite", saved["revision"]
+            tmp_path, "sessions", "session:unsafe", "overwrite", saved["revision"]
         )
     results = await search_notes(tmp_path, "external")
-    assert results[0]["kind"] == "spaces"
+    assert results[0]["kind"] == "sessions"
 
 
 def test_note_filename_mapping_is_stable_and_traversal_safe() -> None:

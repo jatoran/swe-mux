@@ -3,12 +3,12 @@ import { api } from './api'
 import { useModalFocus } from './modalFocus'
 
 type UsageRow = {
-  date?:string;month?:string;session_id?:string;model?:string
+  date?:string;month?:string;session_id?:string;model?:string;provider?:string
   input_tokens:number;output_tokens:number;cache_creation_tokens:number;cache_read_tokens:number
   total_tokens:number;cost_usd:number;cost_is_estimate?:boolean
 }
 type ProviderUsage = {
-  provider:string;daily:UsageRow[];monthly:UsageRow[];sessions:UsageRow[];models:UsageRow[]
+  provider:string;daily:UsageRow[];monthly:UsageRow[];sessions:UsageRow[];models:UsageRow[];model_daily?:UsageRow[]
   totals:UsageRow;provenance?:{adapter?:string;package?:string;command?:string[]}
 }
 export type UsageStatus = {
@@ -35,6 +35,12 @@ function mergeDaily(providers:ProviderUsage[]):UsageRow[] {
   return [...grouped.entries()].filter(([date])=>date).map(([date,rows])=>({...sumRows(rows),date})).sort((a,b)=>(b.date||'').localeCompare(a.date||''))
 }
 
+function aggregateRows(rows:UsageRow[],key:'month'|'provider'|'model',value:(row:UsageRow)=>string):UsageRow[] {
+  const grouped=new Map<string,UsageRow[]>()
+  for(const row of rows){const label=value(row);if(!label)continue;const items=grouped.get(label)||[];items.push(row);grouped.set(label,items)}
+  return [...grouped.entries()].map(([label,items])=>({...sumRows(items),[key]:label})).sort((a,b)=>(b[key]||'').localeCompare(a[key]||''))
+}
+
 function Summary({totals}:{totals:UsageRow}) {
   return <div class="usage-summary">
     <article><span>estimated cost</span><strong>{money.format(totals.cost_usd||0)}</strong></article>
@@ -46,13 +52,25 @@ function Summary({totals}:{totals:UsageRow}) {
   </div>
 }
 
-function UsageTable({title,rows,label}:{title:string;rows:UsageRow[];label:'date'|'model'}) {
+function UsageTable({title,rows,label}:{title:string;rows:UsageRow[];label:'date'|'month'|'model'|'provider'}) {
   return <section class="usage-table"><h3>{title}</h3>{rows.length?<div class="usage-table-scroll"><table><thead><tr><th>{label}</th><th>tokens</th><th>input</th><th>output</th><th>cache</th><th>cost est.</th></tr></thead><tbody>{rows.map(row=><tr><td>{row[label]||'unknown'}</td><td>{integer.format(row.total_tokens||0)}</td><td>{integer.format(row.input_tokens||0)}</td><td>{integer.format(row.output_tokens||0)}</td><td>{integer.format((row.cache_read_tokens||0)+(row.cache_creation_tokens||0))}</td><td>{money.format(row.cost_usd||0)}</td></tr>)}</tbody></table></div>:<p>No {title.toLowerCase()} data is cached.</p>}</section>
+}
+
+function UsageSeries({rows,label,metric}:{rows:UsageRow[];label:'date'|'month';metric:'tokens'|'cost'}) {
+  const values=rows.map(row=>metric==='tokens'?row.total_tokens:row.cost_usd)
+  const maximum=Math.max(...values,1)
+  return <section class="usage-series" aria-label={`${label} ${metric} time series`}>
+    {[...rows].reverse().map(row=>{const value=metric==='tokens'?row.total_tokens:row.cost_usd;return <div class="usage-series-row"><span>{row[label]}</span><i><b style={{width:`${Math.max(1,value/maximum*100)}%`}}/></i><strong>{metric==='tokens'?integer.format(value):money.format(value)}</strong></div>})}
+  </section>
 }
 
 export function UsageDashboard({onClose,onConfigure}:{onClose:()=>void;onConfigure:()=>void}) {
   const [usage,setUsage]=useState<UsageStatus|null>(null)
   const [selected,setSelected]=useState<'all'|Provider>('all')
+  const [view,setView]=useState<'overview'|'timeline'|'models'>('overview')
+  const [resolution,setResolution]=useState<'daily'|'monthly'>('daily')
+  const [range,setRange]=useState<'7'|'30'|'90'|'all'>('30')
+  const [metric,setMetric]=useState<'tokens'|'cost'>('tokens')
   const [refreshing,setRefreshing]=useState<Provider|null>(null)
   const [message,setMessage]=useState('Loading usage cache…')
   const [error,setError]=useState('')
@@ -66,9 +84,16 @@ export function UsageDashboard({onClose,onConfigure}:{onClose:()=>void;onConfigu
 
   const providers=usage?.cache?.providers||{}
   const visibleProviders=useMemo(()=>selected==='all'?[providers.claude,providers.codex].filter((item):item is ProviderUsage=>!!item):providers[selected]?[providers[selected]!]:[],[providers,selected])
-  const totals=sumRows(visibleProviders.map(provider=>provider.totals))
-  const daily=mergeDaily(visibleProviders).slice(0,30)
-  const models=visibleProviders.flatMap(provider=>provider.models.map(row=>({...row,model:selected==='all'?`[${provider.provider}] ${row.model}`:row.model}))).sort((a,b)=>(b.total_tokens||0)-(a.total_tokens||0))
+  const allDaily=mergeDaily(visibleProviders)
+  const daily=range==='all'?allDaily:allDaily.slice(0,Number(range))
+  const monthly=aggregateRows(daily,'month',row=>(row.date||'').slice(0,7))
+  const timeline=resolution==='daily'?daily:monthly
+  const visibleDates=new Set(daily.map(row=>row.date))
+  const providerTotals=visibleProviders.map(provider=>({...sumRows(provider.daily.filter(row=>visibleDates.has(row.date))),provider:provider.provider}))
+  const models=visibleProviders.flatMap(provider=>{
+    const source=provider.model_daily?.length?aggregateRows(provider.model_daily.filter(row=>visibleDates.has(row.date)),'model',row=>row.model||'unknown'):provider.models
+    return source.map(row=>({...row,model:selected==='all'?`[${provider.provider}] ${row.model}`:row.model}))
+  }).sort((a,b)=>(b.total_tokens||0)-(a.total_tokens||0))
 
   const refreshProvider=async(provider:Provider)=>{
     setRefreshing(provider);setError('');setMessage(`Refreshing ${provider} usage… ccusage may take up to 30 seconds.`)
@@ -86,7 +111,13 @@ export function UsageDashboard({onClose,onConfigure}:{onClose:()=>void;onConfigu
       <div class={`usage-progress ${refreshing?'running':''}`} role="status" aria-live="polite"><span>{refreshing?'◌':'·'}</span><strong>{message}</strong></div>
       {error&&<div class="usage-error" role="alert">{error}</div>}
       <div class="usage-provider-status">{(['claude','codex'] as Provider[]).map(provider=>{const state=usage?.states[provider];return <article><span class={`state-dot ${state?.status==='ready'?'idle':state?.status==='refreshing'?'working':state?.error?'crashed':'running'}`}/><div><strong>{provider}</strong><small>{refreshing===provider?'refreshing now':state?.status||'loading'}{state?.refreshed_at?` · ${new Date(state.refreshed_at*1000).toLocaleString()}`:''}</small>{state?.error&&<em>{state.error}</em>}</div><button disabled={!usage?.enabled||!!refreshing} onClick={()=>void refreshProvider(provider)}>refresh</button></article>})}</div>
-      <main>{!usage?.enabled?<div class="usage-empty"><strong>Usage analytics is disabled.</strong><p>Enable ccusage in Settings, save, then refresh this dashboard.</p><button onClick={onConfigure}>Configure usage analytics</button></div>:visibleProviders.length===0?<div class="usage-empty"><strong>No usage has been cached.</strong><p>Refresh a provider to run its configured ccusage command.</p><button disabled={!!refreshing} onClick={()=>void refreshAll()}>Refresh Claude + Codex</button></div>:<><Summary totals={totals}/><div class="usage-tables"><UsageTable title="Recent daily usage" rows={daily} label="date"/><UsageTable title="Models" rows={models} label="model"/></div></>}</main>
+      <main>{!usage?.enabled?<div class="usage-empty"><strong>Usage analytics is disabled.</strong><p>Enable ccusage in Settings, save, then refresh this dashboard.</p><button onClick={onConfigure}>Configure usage analytics</button></div>:visibleProviders.length===0?<div class="usage-empty"><strong>No usage has been cached.</strong><p>Refresh a provider to run its configured ccusage command.</p><button disabled={!!refreshing} onClick={()=>void refreshAll()}>Refresh Claude + Codex</button></div>:<>
+        <div class="usage-view-tabs" role="tablist" aria-label="Analytics view"><button role="tab" aria-selected={view==='overview'} class={view==='overview'?'active':''} onClick={()=>setView('overview')}>overview</button><button role="tab" aria-selected={view==='timeline'} class={view==='timeline'?'active':''} onClick={()=>setView('timeline')}>time series</button><button role="tab" aria-selected={view==='models'} class={view==='models'?'active':''} onClick={()=>setView('models')}>model breakdown</button></div>
+        <div class="usage-view-controls"><label>range<select value={range} onChange={event=>setRange(event.currentTarget.value as typeof range)}><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option><option value="all">all cached</option></select></label>{view==='timeline'&&<><label>interval<select value={resolution} onChange={event=>setResolution(event.currentTarget.value as typeof resolution)}><option value="daily">daily</option><option value="monthly">monthly</option></select></label><label>metric<select value={metric} onChange={event=>setMetric(event.currentTarget.value as typeof metric)}><option value="tokens">tokens</option><option value="cost">estimated cost</option></select></label></>}</div>
+        {view==='overview'&&<><Summary totals={sumRows(daily)}/><div class="usage-tables"><UsageTable title="Daily aggregate" rows={daily} label="date"/><UsageTable title="Provider aggregate" rows={providerTotals} label="provider"/></div></>}
+        {view==='timeline'&&<><UsageSeries rows={timeline} label={resolution==='daily'?'date':'month'} metric={metric}/><UsageTable title={`${resolution} detail`} rows={timeline} label={resolution==='daily'?'date':'month'}/></>}
+        {view==='models'&&<UsageTable title="Model aggregate" rows={models} label="model"/>}
+      </>}</main>
       <footer><span>Historical analytics from unified {usage?.package||'ccusage'} · costs are estimates</span></footer>
     </section>
   </div>

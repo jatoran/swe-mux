@@ -26,7 +26,7 @@ Useful controls:
 
 - `Ctrl+V` / `Ctrl+Shift+V`: terminal-aware bracketed paste.
 - `Ctrl+C`: copy when text is selected; otherwise send SIGINT.
-- `Ctrl+Shift+P`: command palette.
+- `Ctrl+Alt+P`: command palette.
 - Right-click a terminal: copy, paste, select all, find, clear.
 - Right-click a session: rename, move, split, broadcast, reveal, or kill.
 - New terminals replace the focused pane by default; splits occur only through explicit context actions.

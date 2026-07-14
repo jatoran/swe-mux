@@ -177,6 +177,7 @@ async def reconcile_external_history(history: HistoryIndex, home: Path | None = 
         if item.cwd not in projects:
             projects[item.cwd] = await resolve_project(item.cwd)
         project = projects[item.cwd]
+        await history.register_project_scope(project)
         summary = await asyncio.to_thread(summarize_transcript, item.path, item.backend)
         await history.upsert_external(
             row_id=item.row_id,
@@ -189,6 +190,8 @@ async def reconcile_external_history(history: HistoryIndex, home: Path | None = 
             project_id=project.id,
             project_label=project.label,
             project_root=project.root,
+            project_scope_id=project.id,
+            repo_group_id=project.repo_group_id,
             **summary,
         )
     return len(transcripts)

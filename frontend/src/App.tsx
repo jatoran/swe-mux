@@ -7,7 +7,8 @@ import { ProcessPanel, type Preview } from './ProcessPanel'
 import { PreviewPane } from './PreviewPane'
 import { Notifications, type NotificationData, type UiNotification } from './Notifications'
 import { UsageDashboard } from './UsageDashboard'
-import type { Session, ShellProfile, Space } from './types'
+import { ProjectRegistry } from './ProjectRegistry'
+import type { ProjectScope, Session, ShellProfile, Space } from './types'
 import { keyChord } from './keys'
 import { Settings } from './Settings'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
@@ -16,16 +17,16 @@ import { clampContextMenuLeft } from './menuPosition'
 import {
   attachLeaf, emptyLayout, leaves, noteResourceId, parseLayout, parseNoteResourceId,
   reconcileTerminals, removeLeaf, replaceTerminal, resourceLeaf, setSplitRatio,
-  splitTerminal, swapTerminals, terminalIds, type PaneLayout,
+  activateContainingStack, activateStackChild, addToStack, dissolveStack, groupTerminalsInStack, reorderStack, resolveLayout, splitTerminal, stackForSession, stackTerminal, swapTerminals, terminalIds, visibleTerminalIds, type PaneLayout,
   type PaneNode, type SplitDirection,
 } from './layout'
 
-const stateRank: Record<string, number> = {
-  awaiting: 0, crashed: 1, exited: 2, working: 3, starting: 4, running: 5, idle: 6,
-}
-
 function isAgent(session: Session) {
   return session.backend === 'claude' || session.backend === 'codex'
+}
+
+function workingCwd(session:Session):string {
+  return session.runtime_cwd||session.spawn_cwd||session.cwd
 }
 
 function sessionStatus(session: Session): string {
@@ -42,6 +43,7 @@ type HistoryEntry = {
   id: string; native_id: string; backend: string; name: string; cwd: string
   spawned_at: number; exited_at?: number; exit_reason?: string; transcript_path?: string
   project_id?: string; project_label?: string; final_state?: string; external?: number
+  project_scope_id?:string;repo_group_id?:string;space_id?:string;project_root?:string
   context_window?: number; final_context_pct?: number; peak_context_pct?: number
   tokens_in?: number; tokens_out?: number; model?: string; measurement_source?: string
 }
@@ -54,7 +56,8 @@ type RenameTarget = { kind: 'session'; session: Session } | { kind: 'space'; spa
 type Worktree = { worktree: string; HEAD?: string; branch?: string; bare?: boolean; detached?: boolean }
 type WorktreeState = { session: Session; items: Worktree[] } | null
 type WorktreeCreate = { session: Session; branch: string; path: string; pathEdited: boolean } | null
-type NoteTarget = {cwd:string;spaceId:string;sessionId:string|null;terminalSessionId:string|null;kind:'spaces'|'sessions'}
+type NoteTarget = {cwd:string;projectScopeId?:string;spaceId:string;sessionId:string|null;terminalSessionId:string|null;kind:'projects'|'spaces'|'sessions';ownerLabel:string;projectLabel?:string}
+type SpaceNoteSummary = {id:string;label:string;active:boolean;path:string;revision:string}
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([])
@@ -92,7 +95,7 @@ export function App() {
   const [spaceMenu, setSpaceMenu] = useState<SpaceContext>(null)
   const [emptyMenu, setEmptyMenu] = useState<{x:number;y:number} | null>(null)
   const [zoomedId, setZoomedId] = useState<string | null>(null)
-  const [keybindings, setKeybindings] = useState<Record<string, string>>({ 'ctrl+alt+t': 'session.spawnShell', 'ctrl+shift+p': 'palette.open' })
+  const [keybindings, setKeybindings] = useState<Record<string, string>>({ 'ctrl+alt+t': 'session.spawnShell', 'ctrl+alt+p': 'palette.open' })
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null)
   const [confirmSpaceDeleteId, setConfirmSpaceDeleteId] = useState<string | null>(null)
   const [mainMenuOpen, setMainMenuOpen] = useState(false)
@@ -113,6 +116,10 @@ export function App() {
   const [notificationUnread, setNotificationUnread] = useState(0)
   const [notificationToast, setNotificationToast] = useState<UiNotification | null>(null)
   const [usageOpen, setUsageOpen] = useState(false)
+  const [projectsOpen,setProjectsOpen]=useState(false)
+  const [projectScopes,setProjectScopes]=useState<ProjectScope[]>([])
+  const [savedSpaceNotes,setSavedSpaceNotes]=useState<SpaceNoteSummary[]>([])
+  const [dragSessionId,setDragSessionId]=useState<string|null>(null)
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [profiles, setProfiles] = useState<ShellProfile[]>([])
   const [defaultProfile, setDefaultProfile] = useState('default')
@@ -125,6 +132,8 @@ export function App() {
   const longPressTimer = useRef<number | null>(null)
   const notificationIds = useRef<Set<string>>(new Set())
   const paletteInput = useRef<HTMLInputElement>(null)
+  const refreshInFlight = useRef<Promise<void> | null>(null)
+  const refreshQueued = useRef(false)
 
   const cancelLongPress = () => {
     if (longPressTimer.current !== null) window.clearTimeout(longPressTimer.current)
@@ -147,15 +156,22 @@ export function App() {
     if(announce&&fresh.length){setNotificationUnread(count=>count+fresh.length);setNotificationToast(fresh[fresh.length-1])}
   }
 
-  const refresh = async () => {
-    try {
-      const [nextSessions, nextSpaces, nextPreviews] = await Promise.all([
+  const refresh = (): Promise<void> => {
+    if (refreshInFlight.current) {
+      refreshQueued.current = true
+      return refreshInFlight.current
+    }
+    const operation = (async () => {
+      try {
+      const [nextSessions, nextSpaces, nextPreviews, nextSpaceNotes] = await Promise.all([
         api<Session[]>('GET', '/api/sessions'), api<Space[]>('GET', '/api/spaces'),
         api<{items:Preview[]}>('GET', '/api/previews'),
+        api<SpaceNoteSummary[]>('GET','/api/space-notes'),
       ])
       setSessions(nextSessions)
       setSpaces(nextSpaces)
       setPreviews(Object.fromEntries(nextPreviews.items.map(item => [item.id, item])))
+      setSavedSpaceNotes(nextSpaceNotes)
       setLayoutMap(current => {
         const next = { ...current }
         const live = new Set(nextSessions.filter(session => !['exited', 'crashed'].includes(session.state)).map(session => session.id))
@@ -165,15 +181,25 @@ export function App() {
         return next
       })
       setError('')
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    }
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause))
+      } finally {
+        refreshInFlight.current = null
+        if (refreshQueued.current) {
+          refreshQueued.current = false
+          void refresh()
+        }
+      }
+    })()
+    refreshInFlight.current = operation
+    return operation
   }
 
   useEffect(() => {
     void refresh()
     void api<{theme:ThemeName;custom_theme:CustomTheme;xterm_scrollback_lines:number}>('GET','/api/config').then(config => { configureCustomTheme(config.custom_theme); applyTheme(config.theme); setXtermScrollback(config.xterm_scrollback_lines) })
     void loadProfiles()
+    void api<{items:ProjectScope[]}>('GET','/api/projects').then(result=>setProjectScopes(result.items))
     void loadNotifications()
     void api<{paths:string[]}>('GET','/api/directories/pins').then(result=>setPinnedCwds(result.paths))
     const loadKeys = () => void api<{ bindings: Record<string, string> }>('GET', '/api/keybindings').then(result => setKeybindings(current => JSON.stringify(current) === JSON.stringify(result.bindings) ? current : result.bindings))
@@ -193,16 +219,24 @@ export function App() {
   useEffect(() => {
     let socket: WebSocket | null = null
     let retry: number | undefined
+    let refreshTimer: number | undefined
+    const queueRefresh = () => {
+      if (refreshTimer !== undefined) return
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = undefined
+        void refresh()
+      }, 100)
+    }
     const connect = () => {
       socket = openWebSocket('/events')
       socket.onmessage = message => {
-        void refresh()
+        queueRefresh()
         try { if (JSON.parse(String(message.data)).type==='notification') void loadNotifications(true) } catch { /* malformed events are ignored */ }
       }
       socket.onclose = () => { retry = window.setTimeout(connect, 1500) }
     }
     connect()
-    return () => { if (retry) clearTimeout(retry); socket?.close() }
+    return () => { if (retry) clearTimeout(retry); if(refreshTimer)clearTimeout(refreshTimer); socket?.close() }
   }, [])
 
   useEffect(()=>{if(!notificationToast)return;const timer=window.setTimeout(()=>setNotificationToast(null),5000);return()=>clearTimeout(timer)},[notificationToast])
@@ -212,25 +246,52 @@ export function App() {
   const activeSpace = spaces.find(space => space.id === spaceId)
   const activeLayout = layoutMap[spaceId] || emptyLayout()
   const paneIds = terminalIds(activeLayout).filter(id => sessions.some(session => session.id === id && !['exited', 'crashed'].includes(session.state)))
+  const activeStack=activeId?stackForSession(activeLayout,activeId):null
   const unpanned = sessions.filter(session => session.space_id === spaceId && !['exited', 'crashed'].includes(session.state) && !paneIds.includes(session.id))
+  const focusedOutsideLayout=!!active&&!['exited','crashed'].includes(active.state)&&active.space_id===spaceId&&!paneIds.includes(active.id)
+
+  useEffect(() => {
+    const live = sessions.filter(session => session.space_id === spaceId && !['exited', 'crashed'].includes(session.state))
+    if (zoomedId && !live.some(session => session.id === zoomedId)) setZoomedId(null)
+    if (live.some(session => session.id === activeId)) return
+    const liveIds = new Set(live.map(session => session.id))
+    const nextId = visibleTerminalIds(activeLayout).find(id => liveIds.has(id))
+      ?? terminalIds(activeLayout).find(id => liveIds.has(id))
+      ?? live[0]?.id
+      ?? null
+    if (nextId === activeId) return
+    setActiveId(nextId)
+    if (nextId && terminalIds(activeLayout).includes(nextId)) {
+      setLayoutMap(current => ({
+        ...current,
+        [spaceId]: activateContainingStack(current[spaceId] ?? activeLayout, nextId),
+      }))
+    }
+  }, [sessions, spaceId, activeId, zoomedId, layoutMap])
   const rememberedCwds = useMemo(() => {
     const stored = JSON.parse(localStorage.getItem('mux.recentCwds') || '[]') as string[]
-    return [...new Set([active?.cwd, ...sessions.map(session => session.cwd), ...stored].filter(Boolean))] as string[]
-  }, [sessions, active?.cwd])
+    return [...new Set([active?.runtime_cwd||active?.spawn_cwd||active?.cwd, ...sessions.map(session => session.runtime_cwd||session.spawn_cwd||session.cwd), ...stored].filter(Boolean))] as string[]
+  }, [sessions, active?.runtime_cwd,active?.spawn_cwd,active?.cwd])
 
   const openSettings = (section='General') => { setSettingsSection(section); setSettingsOpen(true); setMainMenuOpen(false); setSpaceMenu(null) }
-  const spaceNoteTarget = (space:Space):NoteTarget|null => {
+  const scopeLabel=(scopeId?:string)=>projectScopes.find(item=>item.id===scopeId)?.label
+  const spaceNoteTarget = (space:Space):NoteTarget => {
     const session=(active?.space_id===space.id?active:undefined)||sessions.find(item=>item.space_id===space.id&&!['exited','crashed'].includes(item.state))||sessions.find(item=>item.space_id===space.id)
-    const targetCwd=session?.cwd||space.default_cwd||rememberedCwds[0]
     const terminalSessionId=session&&!['exited','crashed'].includes(session.state)?session.id:null
-    return targetCwd?{cwd:targetCwd,spaceId:space.id,sessionId:session?.id||null,terminalSessionId,kind:'spaces'}:null
+    return {cwd:'',spaceId:space.id,sessionId:null,terminalSessionId,kind:'spaces',ownerLabel:space.name}
   }
-  const sessionNoteTarget = (session:Session):NoteTarget => ({
-    cwd:session.cwd,spaceId:session.space_id,sessionId:session.id,
-    terminalSessionId:['exited','crashed'].includes(session.state)?null:session.id,kind:'sessions',
-  })
+  const sessionNoteTarget = (session:Session):NoteTarget|null => !isAgent(session)?null
+    : {cwd:session.run_cwd||session.cwd,projectScopeId:session.run_project_scope_id||session.project_scope_id,spaceId:session.space_id,sessionId:session.agent_run_id||session.id,
+      terminalSessionId:['exited','crashed'].includes(session.state)?null:session.id,kind:'sessions',ownerLabel:session.name,projectLabel:session.project_label||scopeLabel(session.run_project_scope_id||session.project_scope_id)}
+  const projectNoteTarget=(session:Session,current=!isAgent(session)):NoteTarget|null=>{
+    const projectScopeId=current?session.runtime_project_scope_id:(session.run_project_scope_id||session.spawn_project_scope_id||session.project_scope_id)
+    const targetCwd=current?(session.runtime_cwd||session.spawn_cwd||session.cwd):(session.run_cwd||session.spawn_cwd||session.cwd)
+    const currentLabel=targetCwd.split(/[\\/]/).filter(Boolean).pop()
+    const projectLabel=current?scopeLabel(projectScopeId)||currentLabel:(session.project_label||session.spawn_project_label||scopeLabel(projectScopeId))
+    return projectScopeId?{cwd:targetCwd,projectScopeId,spaceId:session.space_id,sessionId:null,terminalSessionId:['exited','crashed'].includes(session.state)?null:session.id,kind:'projects',ownerLabel:projectLabel||targetCwd,projectLabel:projectLabel||targetCwd}:null
+  }
   const noteIdForTarget = (target:NoteTarget) => {
-    const id=target.kind==='spaces'?target.spaceId:target.sessionId
+    const id=target.kind==='projects'?target.projectScopeId:target.kind==='spaces'?target.spaceId:target.sessionId
     return id?noteResourceId(target.kind,id):null
   }
   const noteIsDocked = (target:NoteTarget) => {
@@ -244,8 +305,19 @@ export function App() {
       return space?spaceNoteTarget(space):null
     }
     if(identity?.kind==='sessions'){
-      const session=sessions.find(item=>item.id===identity.id)
+      const session=sessions.find(item=>item.id===identity.id||item.agent_run_id===identity.id)
       return session?sessionNoteTarget(session):null
+    }
+    if(identity?.kind==='projects'){
+      const scope=projectScopes.find(item=>item.id===identity.id)
+      const matches=sessions.filter(item=>item.runtime_project_scope_id===identity.id||item.run_project_scope_id===identity.id||item.spawn_project_scope_id===identity.id||item.project_scope_id===identity.id)
+      const session=matches.find(item=>item.id===activeId)||matches.find(item=>item.space_id===spaceId)||matches[0]
+      if(session){
+        const target=projectNoteTarget(session,session.runtime_project_scope_id===identity.id)
+        if(target)return {...target,cwd:scope?.root||target.cwd,projectScopeId:identity.id,ownerLabel:scope?.label||target.ownerLabel,projectLabel:scope?.label||target.projectLabel}
+      }
+      const terminal=sessions.find(item=>item.space_id===spaceId&&!['exited','crashed'].includes(item.state))
+      return scope?{cwd:scope.root,projectScopeId:scope.id,spaceId,sessionId:null,terminalSessionId:terminal?.id||null,kind:'projects',ownerLabel:scope.label,projectLabel:scope.label}:null
     }
     return null
   }
@@ -258,13 +330,28 @@ export function App() {
     setSpaceMenu(null);setContextMenu(null);setMainMenuOpen(false);setEmptyMenu(null)
   }
   const openSpaceNotes = (space:Space) => {
-    const target=spaceNoteTarget(space)
-    if(!target){setError('No project directory is available for this space.');return}
-    openNoteModal(target)
+    openNoteModal(spaceNoteTarget(space))
   }
   const openSessionNotes = (session:Session) => {
-    setActiveId(session.id);openNoteModal(sessionNoteTarget(session))
+    const target=sessionNoteTarget(session)
+    if(!target){void openProjectNotes(session,true);return}
+    setActiveId(session.id);openNoteModal(target)
   }
+  const openProjectNotes=async(session:Session,current=!isAgent(session))=>{
+    let target:NoteTarget|null=null
+    if(current){
+      try{
+        const cwd=workingCwd(session)
+        const scope=await api<ProjectScope>('POST','/api/projects/resolve',{cwd,session_id:session.id})
+        setProjectScopes(items=>items.some(item=>item.id===scope.id)?items:[...items,scope])
+        target={cwd:scope.root,projectScopeId:scope.id,spaceId:session.space_id,sessionId:null,terminalSessionId:session.id,kind:'projects',ownerLabel:scope.label,projectLabel:scope.label}
+      }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+    }else target=projectNoteTarget(session,current)
+    if(target){setActiveId(session.id);openNoteModal(target)}
+    else{setError('No project is available for this terminal location.');setContextMenu(null)}
+  }
+  const openProjectScopeNote=(scope:ProjectScope)=>{setProjectScopes(items=>items.some(item=>item.id===scope.id)?items:[...items,scope]);setProjectsOpen(false);openNoteModal({cwd:scope.root,projectScopeId:scope.id,spaceId:activeSpace?.id||'default',sessionId:null,terminalSessionId:active?.id||null,kind:'projects',ownerLabel:scope.label,projectLabel:scope.label})}
+  const openArchivedSpaceNote=(note:{id:string;label:string})=>{setProjectsOpen(false);const space=spaces.find(item=>item.id===note.id);if(space)openSpaceNotes(space);else openNoteModal({cwd:'',spaceId:note.id,sessionId:null,terminalSessionId:null,kind:'spaces',ownerLabel:note.label})}
   const openNotifications = () => { setNotificationsOpen(true);setNotificationUnread(0);setMainMenuOpen(false);void loadNotifications() }
 
   useEffect(() => {
@@ -319,11 +406,11 @@ export function App() {
     localStorage.setItem('mux.recentCwds', JSON.stringify(next))
   }
 
-  const spawnTerminal = async (targetSpace = spaceId, targetCwd?: string, split: false | SplitDirection = false, profileId?: string) => {
+  const spawnTerminal = async (targetSpace = spaceId, targetCwd?: string, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string) => {
     if (spawning.current) return
     spawning.current = true
     try {
-      const resolvedCwd = targetCwd || active?.cwd || rememberedCwds[0]
+      const resolvedCwd = targetCwd?.trim() || undefined
       const next = await api<Session>('POST', '/api/sessions', {
         backend: 'shell', space: targetSpace, cwd: resolvedCwd || undefined,
         profile_id: profileId || undefined,
@@ -334,9 +421,10 @@ export function App() {
       setSpaceId(targetSpace)
       setActiveId(next.id)
       const currentLayout = layoutMap[targetSpace] || emptyLayout()
-      const focused = targetSpace === spaceId ? activeId : terminalIds(currentLayout)[0] || null
+      const focused = targetSessionId ?? (targetSpace === spaceId ? activeId : terminalIds(currentLayout)[0] || null)
       const nextLayout = split
-        ? splitTerminal(currentLayout, focused, next.id, split)
+        ? split==='stack'&&focused?stackTerminal(currentLayout,focused,next.id)
+          : splitTerminal(currentLayout, focused, next.id, split as SplitDirection)
         : replaceTerminal(currentLayout, focused, next.id)
       await updateLayout(targetSpace, nextLayout)
       setLauncherOpen(false)
@@ -348,10 +436,10 @@ export function App() {
     }
   }
 
-  const openLauncher = (targetSpace = spaceId, split: false | SplitDirection = false) => {
+  const openLauncher = (targetSpace = spaceId, split: false | SplitDirection = false, initialCwd?:string) => {
     setLauncherSpace(targetSpace)
     setLauncherSplit(split)
-    setCwd(active?.cwd || rememberedCwds[0] || '')
+    setCwd(initialCwd ?? spaces.find(item=>item.id===targetSpace)?.default_cwd ?? '')
     setLauncherProfile(localStorage.getItem('mux.lastProfile') || spaces.find(item=>item.id===targetSpace)?.default_profile_id || defaultProfile)
     setBrowserPath(null)
     setLauncherOpen(true)
@@ -421,8 +509,26 @@ export function App() {
   const killNow = async (session: Session) => {
     await api('DELETE', `/api/sessions/${session.id}`)
     setConfirmKillId(null)
-    if (activeId === session.id) setActiveId(null)
-    await updateLayout(session.space_id, removeLeaf(layoutMap[session.space_id] || emptyLayout(), 'terminal', session.id))
+    const currentLayout = resolveLayout(
+      layoutMap[session.space_id],
+      spaces.find(space => space.id === session.space_id)?.layout,
+    )
+    let nextLayout = removeLeaf(currentLayout, 'terminal', session.id)
+    const surviving = sessions.filter(item => item.id !== session.id && item.space_id === session.space_id && !['exited', 'crashed'].includes(item.state))
+    const survivingIds = new Set(surviving.map(item => item.id))
+    const nextActiveId = activeId === session.id
+      ? visibleTerminalIds(nextLayout).find(id => survivingIds.has(id))
+        ?? terminalIds(nextLayout).find(id => survivingIds.has(id))
+        ?? surviving[0]?.id
+        ?? null
+      : activeId
+    if (nextActiveId && terminalIds(nextLayout).includes(nextActiveId)) {
+      nextLayout = activateContainingStack(nextLayout, nextActiveId)
+    }
+    setSessions(items => items.filter(item => item.id !== session.id))
+    if (activeId === session.id) setActiveId(nextActiveId)
+    if (zoomedId === session.id) setZoomedId(null)
+    await updateLayout(session.space_id, nextLayout)
     await refresh()
   }
 
@@ -471,12 +577,13 @@ export function App() {
   }
 
   const selectSession = async (session: Session) => {
-    const current = layoutMap[session.space_id] || emptyLayout()
-    const next = replaceTerminal(current, activeId, session.id)
+    const current = resolveLayout(layoutMap[session.space_id],spaces.find(item=>item.id===session.space_id)?.layout)
+    const isPaned=terminalIds(current).includes(session.id)
     setSpaceId(session.space_id)
     setActiveId(session.id)
+    setMobileNoteId(null)
     setSidebarOpen(false)
-    await updateLayout(session.space_id, next)
+    if(isPaned)await updateLayout(session.space_id,activateContainingStack(current,session.id))
   }
 
   const openInSplit = async (session: Session, direction: SplitDirection = 'horizontal') => {
@@ -568,7 +675,7 @@ export function App() {
   const createWorktree = (session: Session) => {
     setContextMenu(null)
     setWorktrees(null)
-    setWorktreeCreate({ session, branch: '', path: `${session.cwd}-worktree`, pathEdited: false })
+    setWorktreeCreate({ session, branch: '', path: `${workingCwd(session)}-worktree`, pathEdited: false })
   }
 
   const submitWorktree = async () => {
@@ -602,7 +709,7 @@ export function App() {
   }
 
   const manageWorktrees = async (session: Session) => {
-    const items = await api<Worktree[]>('GET', `/api/git/worktrees?cwd=${encodeURIComponent(session.cwd)}`)
+    const items = await api<Worktree[]>('GET', `/api/git/worktrees?cwd=${encodeURIComponent(workingCwd(session))}`)
     setContextMenu(null)
     setWorktrees({ session, items })
   }
@@ -613,7 +720,7 @@ export function App() {
       setConfirmWorktreeRemove(path)
       return
     }
-    await api('DELETE', '/api/git/worktrees', { cwd: worktrees.session.cwd, path })
+    await api('DELETE', '/api/git/worktrees', { cwd: workingCwd(worktrees.session), path })
     const items = worktrees.items.filter(item => item.worktree !== path)
     setWorktrees({ ...worktrees, items })
     setConfirmWorktreeRemove(null)
@@ -623,20 +730,23 @@ export function App() {
   const commandSpace = spaceMenu?.space || activeSpace
   const commands: Command[] = [
     { id: 'palette.open', label: 'Open command palette', category: 'view', available: true, run: () => setPaletteOpen(true) },
-    { id: 'session.spawnShell', label: 'New terminal here', category: 'session', available: true, run: () => void spawnTerminal() },
+    { id: 'session.spawnShell', label: 'New terminal in current space', category: 'session', available: true, run: () => void spawnTerminal() },
     { id: 'session.quickLaunch', label: 'New terminal custom…', category: 'session', available: true, run: () => openLauncher() },
     { id: 'space.create', label: 'Create space', category: 'space', available: true, run: () => void createSpace() },
     { id: 'history.open', label: 'Browse session history', category: 'view', available: true, run: () => void showHistory() },
+    { id: 'projects.open', label: 'Browse project registry', category: 'view', available: true, run: () => {setProjectsOpen(true);setMainMenuOpen(false)} },
     { id: 'settings.open', label: 'Open Settings', category: 'view', available: true, run: () => openSettings() },
-    { id: 'settings.project', label: 'Open current project settings', category: 'view', available: !!(active?.cwd||rememberedCwds[0]), disabledReason: 'No project directory is available', run: () => openSettings('Current project') },
+    { id: 'settings.project', label: 'Open current project settings', category: 'view', available: !!(active||rememberedCwds[0]), disabledReason: 'No project directory is available', run: () => openSettings('Current project') },
     { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => {setUsageOpen(true);setMainMenuOpen(false)} },
     { id: 'hooks.open', label: 'Open hooks and notification settings', category: 'view', available: true, run: () => openSettings('Hooks and notifications') },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
-    { id: 'notes.open', label: 'Open current space notes', category: 'view', available: !!activeSpace&&!!spaceNoteTarget(activeSpace), disabledReason: 'No project directory is available', run: () => activeSpace&&openSpaceNotes(activeSpace) },
-    { id: 'session.notes', label: 'Open selected session note', category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession&&openSessionNotes(commandSession) },
-    { id: 'space.notes', label: 'Open selected space notes', category: 'view', available: !!commandSpace&&!!spaceNoteTarget(commandSpace), disabledReason: 'No project directory is available for this space', run: () => commandSpace&&openSpaceNotes(commandSpace) },
-    { id: 'session.notesSplit', label: 'Open selected session note in split', category: 'pane', available: !!commandSession&&!['exited','crashed'].includes(commandSession.state), disabledReason: 'A live session is required', run: () => commandSession&&void openNoteInSplit(sessionNoteTarget(commandSession)) },
-    { id: 'space.notesSplit', label: 'Open selected space note in split', category: 'pane', available: !!commandSpace&&!!spaceNoteTarget(commandSpace)?.terminalSessionId, disabledReason: 'A live terminal is required in this space', run: () => {const target=commandSpace&&spaceNoteTarget(commandSpace);if(target)void openNoteInSplit(target)} },
+    { id: 'notes.open', label: 'Open current space note', category: 'view', available: !!activeSpace, disabledReason: 'No space selected', run: () => activeSpace&&openSpaceNotes(activeSpace) },
+    { id: 'session.notes', label: 'Open selected agent-run note', category: 'view', available: !!commandSession&&isAgent(commandSession), disabledReason: 'Session notes exist only for Claude and Codex runs', run: () => commandSession&&openSessionNotes(commandSession) },
+    { id: 'session.projectNote', label: `Open selected ${commandSession&&isAgent(commandSession)?'run':'current'} project note`, category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession&&void openProjectNotes(commandSession) },
+    { id: 'session.currentProjectNote', label: 'Open current runtime project note', category: 'view', available: !!commandSession?.runtime_cwd_live, disabledReason: 'Live cwd telemetry is unavailable', run: () => commandSession&&void openProjectNotes(commandSession,true) },
+    { id: 'space.notes', label: 'Open selected space note', category: 'view', available: !!commandSpace, disabledReason: 'No space selected', run: () => commandSpace&&openSpaceNotes(commandSpace) },
+    { id: 'session.notesSplit', label: 'Open selected agent-run note in split', category: 'pane', available: !!commandSession&&isAgent(commandSession)&&!['exited','crashed'].includes(commandSession.state), disabledReason: 'A live Claude or Codex run is required', run: () => {const target=commandSession&&sessionNoteTarget(commandSession);if(target)void openNoteInSplit(target)} },
+    { id: 'space.notesSplit', label: 'Open selected space note in split', category: 'pane', available: !!commandSpace&&!!spaceNoteTarget(commandSpace).terminalSessionId, disabledReason: 'A live terminal is required in this space', run: () => {const target=commandSpace&&spaceNoteTarget(commandSpace);if(target)void openNoteInSplit(target)} },
     { id: 'processes.open', label: 'Inspect selected session processes and previews', category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => {if(commandSession){setProcessSession(commandSession);setContextMenu(null);setMainMenuOpen(false)}} },
     { id: 'terminal.find', label: 'Find in focused terminal', category: 'terminal', available: !!active, disabledReason: 'No focused terminal', run: () => window.dispatchEvent(new CustomEvent('mux:terminal-find', { detail: activeId })) },
     ...(['copy', 'paste', 'selectAll', 'clear'] as const).map((action): Command => ({
@@ -651,13 +761,14 @@ export function App() {
     { id: 'session.open', label: 'Open selected session in focused pane', category: 'session', available: !!commandSession && !['exited', 'crashed'].includes(commandSession.state), disabledReason: 'No live session selected', run: () => commandSession && void selectSession(commandSession) },
     { id: 'session.rename', label: 'Rename selected session', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && openRename({ kind: 'session', session: commandSession }) },
     { id: 'session.copyId', label: 'Copy selected session ID', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(commandSession.id).catch(() => setError('Clipboard access was blocked.')) ; setContextMenu(null) } },
-    { id: 'session.copyCwd', label: 'Copy selected working directory', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(commandSession.cwd).catch(() => setError('Clipboard access was blocked.')); setContextMenu(null) } },
+    { id: 'session.copyCwd', label: 'Copy selected working directory', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(workingCwd(commandSession)).catch(() => setError('Clipboard access was blocked.')); setContextMenu(null) } },
     { id: 'session.openSplitHorizontal', label: 'Open selected session in split right', category: 'pane', available: !!commandSession && !['exited', 'crashed'].includes(commandSession.state), disabledReason: 'No live session selected', run: () => commandSession && void openInSplit(commandSession, 'horizontal') },
     { id: 'session.openSplitVertical', label: 'Open selected session in split below', category: 'pane', available: !!commandSession && !['exited', 'crashed'].includes(commandSession.state), disabledReason: 'No live session selected', run: () => commandSession && void openInSplit(commandSession, 'vertical') },
+    { id: 'session.groupStack', label: 'Stack selected session with focused terminal', category: 'pane', available: !!commandSession&&!!activeId&&commandSession.id!==activeId&&commandSession.space_id===spaceId, disabledReason: 'Choose two live sessions in the same space', run:()=>commandSession&&activeId&&void updateLayout(spaceId,groupTerminalsInStack(activeLayout,activeId,commandSession.id)) },
     { id: 'session.reveal', label: 'Reveal selected working directory', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void api('POST', '/api/reveal', { path: commandSession.cwd }); setContextMenu(null) } },
     { id: 'session.worktreeCreate', label: 'Create worktree and terminal', category: 'git', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && createWorktree(commandSession) },
     { id: 'session.worktreesManage', label: 'Manage worktrees', category: 'git', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void manageWorktrees(commandSession) },
-    { id: 'session.customSplit', label: 'New custom terminal in selected session split', category: 'pane', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) { setContextMenu(null); openLauncher(commandSession.space_id, 'horizontal') } } },
+    { id: 'session.customSplit', label: 'New custom terminal in selected session split', category: 'pane', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) { setContextMenu(null); openLauncher(commandSession.space_id, 'horizontal',workingCwd(commandSession)) } } },
     { id: 'session.broadcastMembership', label: commandSession?.broadcast ? 'Remove selected session from broadcast' : 'Add selected session to broadcast', category: 'input', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void api<Session>('POST', `/api/sessions/${commandSession.id}/broadcast-set`, { include: !commandSession.broadcast }).then(updated => { updateSession(updated); setContextMenu(null) }) } },
     { id: 'session.resume', label: 'Resume selected agent as new', category: 'history', available: !!commandSession && isAgent(commandSession) && ['exited', 'crashed'].includes(commandSession.state), disabledReason: 'Select an exited Claude or Codex session', run: () => commandSession && void resumeSession(commandSession) },
     { id: 'space.newTerminal', label: 'New terminal in selected space', category: 'space', available: !!commandSpace, disabledReason: 'No space selected', run: () => { if (commandSpace) void spawnTerminal(commandSpace.id); setSpaceMenu(null) } },
@@ -677,9 +788,13 @@ export function App() {
       id: `session.move(${target.id})`, label: `Move selected session to ${target.name}`, category: 'space', available: true,
       run: () => void move(commandSession, target.id),
     })) : []),
-    { id: 'pane.splitHorizontal', label: 'Split focused pane right', category: 'pane', available: !!active, disabledReason: 'No focused terminal', run: () => void spawnTerminal(spaceId, active?.cwd, 'horizontal') },
-    { id: 'pane.splitVertical', label: 'Split focused pane below', category: 'pane', available: !!active, disabledReason: 'No focused terminal', run: () => void spawnTerminal(spaceId, active?.cwd, 'vertical') },
-    { id: 'pane.detach', label: 'Detach focused pane', category: 'pane', available: !!active, disabledReason: 'No focused terminal', run: () => active && void updateLayout(spaceId, removeLeaf(activeLayout, 'terminal', active.id)) },
+    { id: 'pane.splitHorizontal', label: 'Split focused pane right', category: 'pane', available: !!active, disabledReason: 'No focused terminal', run: () => void spawnTerminal(spaceId, active&&workingCwd(active), 'horizontal') },
+    { id: 'pane.splitVertical', label: 'Split focused pane below', category: 'pane', available: !!active, disabledReason: 'No focused terminal', run: () => void spawnTerminal(spaceId, active&&workingCwd(active), 'vertical') },
+    { id: 'pane.stackNew', label: 'New terminal as tab in focused stack', category: 'pane', available: !!active, disabledReason: 'No focused terminal', run:()=>void spawnTerminal(spaceId,active&&workingCwd(active),'stack') },
+    { id:'stack.tabLeft',label:'Move focused tab left',category:'pane',available:!!activeStack&&activeStack.children.findIndex(child=>child.id===activeId)>0,disabledReason:'Focused tab is already first or is not stacked',run:()=>{if(!activeStack||!activeId)return;const ids=activeStack.children.map(child=>child.id);const at=ids.indexOf(activeId);[ids[at-1],ids[at]]=[ids[at],ids[at-1]];void updateLayout(spaceId,reorderStack(activeLayout,activeStack.id,ids))}},
+    { id:'stack.tabRight',label:'Move focused tab right',category:'pane',available:!!activeStack&&activeStack.children.findIndex(child=>child.id===activeId)<activeStack.children.length-1,disabledReason:'Focused tab is already last or is not stacked',run:()=>{if(!activeStack||!activeId)return;const ids=activeStack.children.map(child=>child.id);const at=ids.indexOf(activeId);[ids[at+1],ids[at]]=[ids[at],ids[at+1]];void updateLayout(spaceId,reorderStack(activeLayout,activeStack.id,ids))}},
+    { id:'stack.dissolve',label:'Dissolve focused tab stack into splits',category:'pane',available:!!activeStack,disabledReason:'Focused session is not in a stack',run:()=>activeStack&&void updateLayout(spaceId,dissolveStack(activeLayout,activeStack.id))},
+    { id: 'pane.detach', label: activeStack ? 'Remove focused session from tab group' : 'Detach focused pane from layout', category: 'pane', available: !!active, disabledReason: 'No focused terminal', run: () => active && void updateLayout(spaceId, removeLeaf(activeLayout, 'terminal', active.id)) },
     { id: 'pane.zoom', label: zoomedId ? 'Restore pane layout' : 'Zoom focused pane', category: 'pane', available: !!active && paneIds.length > 1, disabledReason: 'Zoom requires multiple panes', run: () => setZoomedId(zoomedId ? null : activeId) },
     { id: 'pane.next', label: 'Focus next pane', category: 'pane', available: paneIds.length > 1, disabledReason: 'Only one pane is open', run: () => focusRelativePane(1) },
     { id: 'pane.previous', label: 'Focus previous pane', category: 'pane', available: paneIds.length > 1, disabledReason: 'Only one pane is open', run: () => focusRelativePane(-1) },
@@ -773,13 +888,27 @@ export function App() {
     window.addEventListener('pointerup', stopResize, { once: true })
   }
 
-  const renderPaneNode = (node: PaneNode, path = ''): ComponentChildren => {
+  const openSessionMenu = (session:Session,x:number,y:number) => {
+    setSpaceId(session.space_id)
+    setActiveId(session.id)
+    setContextMenu({session,x,y})
+  }
+
+  const renderPaneNode = (node: PaneNode, path = '', insideStack = false): ComponentChildren => {
     if (node.type === 'split') {
       return <div class={`pane-split ${node.direction}`}>
         <div class="pane-branch" style={{ flex: `${node.ratio} 1 0` }}>{renderPaneNode(node.first, `${path}f`)}</div>
         <div class={`pane-divider ${node.direction}`} role="separator" aria-orientation={node.direction === 'horizontal' ? 'vertical' : 'horizontal'} onPointerDown={event => beginResize(event, path, node.direction)} />
         <div class="pane-branch" style={{ flex: `${1 - node.ratio} 1 0` }}>{renderPaneNode(node.second, `${path}s`)}</div>
       </div>
+    }
+    if(node.type==='stack'){
+      const activeChild=node.children.find(child=>child.id===node.active_child_id)||node.children[0]
+      const activeSession=sessions.find(item=>item.id===activeChild.id)
+      return <section class="pane-stack"><div class="stack-tabs" role="tablist" aria-label="Terminal stack">
+        {node.children.map(child=>{const session=sessions.find(item=>item.id===child.id);const activate=()=>{setActiveId(child.id);setMobileNoteId(null);if(child.id!==activeChild.id)void updateLayout(spaceId,activateStackChild(activeLayout,node.id,child.id))};return <button role="tab" aria-label={`${session?.name||child.id} session tab`} aria-selected={child.id===activeChild.id} class={`${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();if(session)openSessionMenu(session,event.clientX,event.clientY)}}><span class={`state-dot ${session?.state||'running'}`}/>{session?.name||child.id}</button>})}
+        <button class="stack-add" aria-label="New terminal tab" title="New terminal tab" disabled={!activeSession} onClick={()=>activeSession&&void spawnTerminal(activeSession.space_id,workingCwd(activeSession),'stack',undefined,activeChild.id)}>+</button>
+      </div><div class="stack-active">{renderPaneNode(activeChild,`${path}t`,true)}</div></section>
     }
     if (node.kind === 'preview') {
       const preview = previews[node.id]
@@ -794,7 +923,7 @@ export function App() {
       const identity=parseNoteResourceId(node.id)
       const target=noteTargetForResource(node.id)
       if(!target)return <section class="workspace-leaf-placeholder note-unavailable"><strong>note unavailable</strong><span>{identity?.id||node.id}</span><button onClick={()=>void removeNotePane(spaceId,node.id)}>close pane</button></section>
-      return <Notes display="pane" targetKey={`pane:${node.id}`} mobileActive={mobileNoteId===node.id} cwd={target.cwd} spaceId={target.spaceId} sessionId={target.sessionId} terminalSessionId={target.terminalSessionId} initialKind={target.kind} onHide={()=>setMobileNoteId(null)} onClose={()=>removeNotePane(target.spaceId,node.id)} onPopOut={()=>popOutNotePane(target,node.id)} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:target.terminalSessionId,action:'insertText',text}}))} onCapture={targetKey=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:target.terminalSessionId,action:'captureSelection',targetKey}}))}/>
+      return <Notes display="pane" targetKey={`pane:${node.id}`} mobileActive={mobileNoteId===node.id} cwd={target.cwd} projectScopeId={target.projectScopeId} spaceId={target.spaceId} sessionId={target.sessionId} terminalSessionId={target.terminalSessionId} initialKind={target.kind} ownerLabel={target.ownerLabel} projectLabel={target.projectLabel} onHide={()=>setMobileNoteId(null)} onClose={()=>removeNotePane(target.spaceId,node.id)} onPopOut={()=>popOutNotePane(target,node.id)} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:target.terminalSessionId,action:'insertText',text}}))} onCapture={targetKey=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:target.terminalSessionId,action:'captureSelection',targetKey}}))}/>
     }
     if (node.kind !== 'terminal') {
       return <section class="workspace-leaf-placeholder"><strong>{node.kind}</strong><span>{node.id}</span></section>
@@ -802,47 +931,133 @@ export function App() {
     const session = sessions.find(item => item.id === node.id)
     if (!session) return null
     const id = session.id
-    return <section class={`terminal-pane ${activeId === id ? 'focused' : ''}`} onPointerDown={() => setActiveId(id)}>
-      <div class="pane-bar" onDblClick={() => setZoomedId(current => current === id ? null : id)}>
-        <div><span class={`state-dot ${session.state}`} /><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`}>[{session.backend}]</span>}{session.name}</strong><span class={`pane-state ${session.state}`} title={session.parser_diagnostic}>{sessionStatus(session)}</span>{session.git.branch && <span class="git-chip" title={`${session.git.branch}${session.git.dirty ? ` · ${session.git.dirty} changed` : ''}`}>{session.git.branch}{session.git.dirty ? ` ±${session.git.dirty}` : ''}</span>}</div>
-        <div class="pane-path" title={session.cwd}>{session.cwd}</div>
-        <div class="pane-tools"><span>PID {session.pid}</span><button class="pane-tool-label" aria-label={`Open note for ${session.name}`} title="Session note" onClick={() => openSessionNotes(session)}>note</button><button class="pane-tool-label" aria-label={`Inspect processes for ${session.name}`} title="Processes and previews" onClick={() => {setActiveId(session.id);setProcessSession(session)}}>proc</button><button title="Detach pane" onClick={() => runNamedCommand('pane.detach')}>—</button><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? 'Confirm kill' : 'Kill session'} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></div>
+    const displayedCwd=session.runtime_cwd||session.spawn_cwd||session.cwd
+    const cwdIsLive=session.runtime_cwd_live
+    const paneProjectLabel=isAgent(session)
+      ? session.project_label||scopeLabel(session.run_project_scope_id||session.project_scope_id)||'agent run'
+      : scopeLabel(session.runtime_project_scope_id)||displayedCwd.split(/[\\/]/).filter(Boolean).pop()||'project'
+    const openPaneMenu=(event:{clientX:number;clientY:number;preventDefault?:()=>void;stopPropagation?:()=>void})=>{event.preventDefault?.();event.stopPropagation?.();openSessionMenu(session,event.clientX,event.clientY)}
+    const terminalPane=<section class={`terminal-pane ${activeId === id ? 'focused' : ''}`} onPointerDown={() => {setActiveId(id);setMobileNoteId(null)}}>
+      <div class="pane-bar" onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
+        <div><span class={`pane-state ${session.state}`} title={session.parser_diagnostic}>{sessionStatus(session)}</span>{session.git.branch && <span class="git-chip" title={`Git branch ${session.git.branch}${session.git.dirty ? ` · ${session.git.dirty} changed files` : ' · clean'}`}>git:{session.git.branch}{session.git.dirty ? ` +${session.git.dirty}` : ''}</span>}</div>
+        <div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>
+        <div class="pane-tools"><span>PID {session.pid}</span><button class="pane-tool-label" aria-label={`Open note for ${session.name}`} title={isAgent(session)?`Agent-run note · ${paneProjectLabel}`:`Current project note · ${paneProjectLabel}`} onClick={() => openSessionNotes(session)}>{isAgent(session)?'run-note':`note:${paneProjectLabel}`}</button><button class="pane-tool-label" aria-label={`Inspect processes for ${session.name}`} title="Processes and previews" onClick={() => {setActiveId(session.id);setProcessSession(session)}}>proc</button><button title="Detach pane" onClick={() => runNamedCommand('pane.detach')}>—</button><button aria-label={`More actions for ${session.name}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? 'Confirm kill' : 'Kill session'} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></div>
       </div>
       <TerminalPane session={session} onState={updateSession} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} />
+    </section>
+    if(insideStack)return terminalPane
+    return <section class="pane-stack singleton-stack"><div class="stack-tabs" role="tablist" aria-label="Terminal tabs">
+      <button role="tab" aria-label={`${session.name} session tab`} aria-selected="true" class={`active ${session.state}`} onClick={()=>{setActiveId(id);setMobileNoteId(null)}} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setActiveId(id);setMobileNoteId(null);openSessionMenu(session,event.clientX,event.clientY)}}><span class={`state-dot ${session.state}`}/>{session.name}</button>
+      <button class="stack-add" aria-label="New terminal tab" title="New terminal tab" onClick={()=>void spawnTerminal(session.space_id,workingCwd(session),'stack',undefined,id)}>+</button>
+    </div><div class="stack-active">{terminalPane}</div></section>
+  }
+
+  const dockedNoteIds=(targetSpace:string)=>leaves(resolveLayout(layoutMap[targetSpace],spaces.find(item=>item.id===targetSpace)?.layout),'note').map(leaf=>leaf.id)
+  const layoutSessionForNote=(resourceId:string,targetSpace:string):Session|null=>{
+    const layout=resolveLayout(layoutMap[targetSpace],spaces.find(item=>item.id===targetSpace)?.layout)
+    const contains=(node:PaneNode,id:string):boolean=>node.type==='leaf'
+      ?node.kind==='note'&&node.id===id
+      :node.type==='stack'?false:contains(node.first,id)||contains(node.second,id)
+    const nearest=(node:PaneNode):string|null=>{
+      if(node.type!=='split')return null
+      if(contains(node.first,resourceId))return nearest(node.first)||visibleTerminalIds({version:3,root:node.second})[0]||terminalIds({version:3,root:node.second})[0]||null
+      if(contains(node.second,resourceId))return nearest(node.second)||visibleTerminalIds({version:3,root:node.first})[0]||terminalIds({version:3,root:node.first})[0]||null
+      return null
+    }
+    const id=layout.root?nearest(layout.root):null
+    return id?sessions.find(item=>item.id===id&&item.space_id===targetSpace)||null:null
+  }
+  const noteOwnerSession=(resourceId:string,targetSpace:string):Session|null=>{
+    const identity=parseNoteResourceId(resourceId)
+    const candidates=sessions.filter(item=>item.space_id===targetSpace)
+    if(identity?.kind==='spaces')return null
+    const layoutOwner=layoutSessionForNote(resourceId,targetSpace)
+    if(layoutOwner)return layoutOwner
+    if(identity?.kind==='sessions')return candidates.find(item=>item.agent_run_id===identity.id||item.id===identity.id)||null
+    if(identity?.kind!=='projects')return null
+    const matching=candidates.filter(item=>item.runtime_project_scope_id===identity.id||item.run_project_scope_id===identity.id||item.spawn_project_scope_id===identity.id||item.project_scope_id===identity.id)
+    return matching.find(item=>item.id===activeId&&item.runtime_project_scope_id===identity.id)
+      ||matching.find(item=>item.runtime_project_scope_id===identity.id)
+      ||matching.find(item=>item.id===activeId)
+      ||matching[0]
+      ||null
+  }
+  const sidebarNoteRow=(resourceId:string,targetSpace:string,ownerSession?:Session|null,detached=false)=>{
+    const identity=parseNoteResourceId(resourceId)
+    if(!identity)return null
+    const docked=leaves(resolveLayout(layoutMap[targetSpace],spaces.find(item=>item.id===targetSpace)?.layout),'note').some(leaf=>leaf.id===resourceId)
+    const scope=identity.kind==='projects'?projectScopes.find(item=>item.id===identity.id):undefined
+    const run=identity.kind==='sessions'?sessions.find(item=>item.agent_run_id===identity.id||item.id===identity.id):undefined
+    const owner=identity.kind==='spaces'?spaces.find(item=>item.id===identity.id)?.name
+      :identity.kind==='projects'?scope?.label||'project'
+      :run?.name||'agent run'
+    const kind=identity.kind==='spaces'?'space note':identity.kind==='projects'?'project note':'agent note'
+    return <button class={`sidebar-note-row ${mobileNoteId===resourceId?'active':''} ${detached?'unattached':''}`} title={`${kind} · ${owner} · ${docked?'open pane':'saved'}`} onClick={event=>{event.stopPropagation();setSpaceId(targetSpace);if(ownerSession)setActiveId(ownerSession.id);if(docked)setMobileNoteId(resourceId);else if(identity.kind==='spaces'){const space=spaces.find(item=>item.id===identity.id);if(space)openSpaceNotes(space)}setSidebarOpen(false)}}>
+      <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>{kind}</strong><small>{owner} · {docked?'open pane':'saved'}</small></span>
+    </button>
+  }
+  const sessionRow=(session:Session,relation?:'tab')=>{
+    const attachedNotes=dockedNoteIds(session.space_id).filter(resourceId=>noteOwnerSession(resourceId,session.space_id)?.id===session.id)
+    return <div class="session-entry"><button draggable class={`session-row ${activeId === session.id ? 'active' : ''} ${session.state}`} onDragStart={event=>{event.dataTransfer!.effectAllowed='move';setDragSessionId(session.id)}} onDragEnd={()=>setDragSessionId(null)} onDragOver={event=>{if(dragSessionId&&dragSessionId!==session.id)event.preventDefault()}} onDrop={event=>{event.preventDefault();const dragged=sessions.find(item=>item.id===dragSessionId);if(!dragged||dragged.id===session.id)return;if(dragged.space_id!==session.space_id){setError('Move the session into this space before grouping it.');return}void updateLayout(session.space_id,groupTerminalsInStack(layoutMap[session.space_id]||emptyLayout(),session.id,dragged.id));setDragSessionId(null)}} onPointerDown={event=>beginLongPress(event,(x,y)=>openSessionMenu(session,x,y))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); openSessionMenu(session,event.clientX,event.clientY) }} onClick={() => void selectSession(session)}>
+      <span class={`state-dot ${session.state}`} />
+      <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`}>[{session.backend}]</span>}{session.name}{relation==='tab'&&<span class="layout-affinity tab" title="Shares one pane region with the other bracketed sessions">▤</span>}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
+      <span class="session-meta">{isAgent(session) && <em class={`state-label ${session.state}`}>{session.state === 'idle' ? 'ready' : session.state}</em>}</span>
+      <span class="row-actions" onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? 'Confirm kill' : 'Kill'} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>
+    </button>{attachedNotes.map(resourceId=>sidebarNoteRow(resourceId,session.space_id,session))}</div>
+  }
+  const sidebarNode=(node:PaneNode|null|undefined,relation?:'tab'):ComponentChildren=>{
+    if(!node)return null
+    if(node.type==='leaf'){
+      if(node.kind!=='terminal')return null
+      const session=sessions.find(item=>item.id===node.id)
+      return session?sessionRow(session,relation):null
+    }
+    const ids=terminalIds({version:3,root:node})
+    const dropGroup=(event:JSX.TargetedDragEvent<HTMLElement>)=>{event.preventDefault();event.stopPropagation();const dragged=sessions.find(item=>item.id===dragSessionId);if(!dragged)return;const owner=sessions.find(item=>ids.includes(item.id));if(!owner||dragged.space_id!==owner.space_id){setError('Move the session into this space before changing its layout group.');return}if(node.type!=='stack'){setError('Drop onto a session to create a tab group, or onto an existing tab bracket to add a tab.');return}const sourceLayout=layoutMap[dragged.space_id]||parseLayout(spaces.find(item=>item.id===dragged.space_id)?.layout);const without=removeLeaf(sourceLayout,'terminal',dragged.id);void updateLayout(dragged.space_id,addToStack(without,node.id,dragged.id));setDragSessionId(null)}
+    const branches=(node.type==='stack'?node.children:[node.first,node.second]).filter(child=>terminalIds({version:3,root:child}).length>0)
+    if(branches.length===0)return null
+    if(branches.length===1)return sidebarNode(branches[0],relation)
+    const label=node.type==='stack'?'Sessions sharing one tabbed pane':`${node.direction} split branches`
+    return <section class={`layout-cluster ${node.type} ${node.type==='split'?node.direction:''}`} role="group" aria-label={label} onDragOver={event=>{if(dragSessionId)event.preventDefault()}} onDrop={dropGroup}>
+      <span class="layout-cluster-glyph" aria-hidden="true" title={label}>{node.type==='stack'?'▤':node.direction==='horizontal'?'↔':'↕'}</span>
+      {branches.map((child,index)=><div class={`layout-branch ${index===0?'first':''} ${index===branches.length-1?'last':''}`} key={child.id}>{sidebarNode(child,node.type==='stack'?'tab':undefined)}</div>)}
     </section>
   }
 
   return <div class="app-shell">
     <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{attention ? `${attention} agent${attention === 1 ? '' : 's'} awaiting attention` : 'No agents awaiting attention'}</div>
-    <header class="topbar">
-      <div class="brand"><button class="nav-toggle" onClick={() => setSidebarOpen(value => !value)}>:nav</button><span class="brand-mark">&gt;_</span><span>swe-mux</span><span class="dev-chip">[local]</span></div>
-      <div class="top-context"><span>{activeSpace?.name || 'Main'}</span><select class="mobile-session-switcher" aria-label="Focused session" value={activeId||''} onChange={event=>{const session=sessions.find(item=>item.id===event.currentTarget.value);if(session)void selectSession(session)}}><option value="">Select session</option>{sessions.filter(session=>session.space_id===spaceId&&!['exited','crashed'].includes(session.state)).map(session=><option value={session.id}>{isAgent(session)?`[${session.backend}] `:''}{session.name}</option>)}</select></div>
-      <div class="top-actions">
-        <span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span>
-      </div>
-    </header>
+    <button class="nav-toggle mobile-nav-toggle" onClick={() => setSidebarOpen(value => !value)}>:nav</button>
+    <select class="mobile-session-switcher" aria-label="Focused session" value={activeId||''} onChange={event=>{const session=sessions.find(item=>item.id===event.currentTarget.value);if(session)void selectSession(session)}}><option value="">No focused session</option>{sessions.filter(session=>!['exited','crashed'].includes(session.state)).map(session=><option value={session.id}>{spaces.find(space=>space.id===session.space_id)?.name} · {session.name}</option>)}</select>
 
     {broadcast && <div class="broadcast-banner"><strong>Broadcast input is on</strong><span>Keystrokes mirror to sessions in the broadcast set.</span><button onClick={() => setBroadcast(false)}>Stop broadcasting</button></div>}
 
     <div class="workspace">
       <aside class={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <div class="sidebar-heading"><span>~/WORKSPACES</span></div>
+        <div class="sidebar-heading"><strong>swe_mux</strong><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span></div>
         <div class="space-tree">
           {spaces.map(space => {
             const children = sessions
               .filter(session => session.space_id === space.id)
-              .sort((a, b) => (stateRank[a.state] ?? 9) - (stateRank[b.state] ?? 9) || a.name.localeCompare(b.name))
+              .sort((a,b)=>a.created_at-b.created_at||a.id.localeCompare(b.id))
+            const spaceLayout=resolveLayout(layoutMap[space.id],space.layout)
+            const spacePaneIds=terminalIds(spaceLayout)
+            const unpanedChildren=children.filter(session=>!spacePaneIds.includes(session.id))
+            const noteIds=leaves(spaceLayout,'note').map(leaf=>leaf.id)
+            const savedSpaceNote=savedSpaceNotes.some(note=>note.id===space.id&&note.active)
+            const spaceNoteIds=[...new Set([
+              ...noteIds.filter(id=>parseNoteResourceId(id)?.kind==='spaces'),
+              ...(savedSpaceNote?[noteResourceId('spaces',space.id)]:[]),
+            ])]
+            const unattachedNoteIds=noteIds.filter(id=>parseNoteResourceId(id)?.kind!=='spaces'&&!noteOwnerSession(id,space.id))
             return <section class={`space-group ${space.id === spaceId ? 'active' : ''}`}>
-              <div class="space-row" onPointerDown={event=>beginLongPress(event,(x,y)=>setSpaceMenu({space,x,y}))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setSpaceMenu({ space, x: event.clientX, y: event.clientY }) }} onClick={() => setSpaceId(space.id)}>
-                <span class="space-chevron">{space.id === spaceId ? '▾' : '·'}</span><strong>{space.name}</strong><small>{children.filter(s => !['exited', 'crashed'].includes(s.state)).length}</small>
+              <div class="space-row" onDragOver={event=>{if(dragSessionId)event.preventDefault()}} onDrop={event=>{event.preventDefault();const dragged=sessions.find(item=>item.id===dragSessionId);if(dragged&&dragged.space_id!==space.id)void move(dragged,space.id);setDragSessionId(null)}} onPointerDown={event=>beginLongPress(event,(x,y)=>setSpaceMenu({space,x,y}))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setSpaceMenu({ space, x: event.clientX, y: event.clientY }) }} onClick={() => setSpaceId(space.id)}>
+                <span class="space-chevron" aria-hidden="true">{space.id === spaceId ? '◆' : '◇'}</span><strong>{space.name}</strong>
               </div>
+              {spaceNoteIds.length>0&&<div class="space-note-list">{spaceNoteIds.map(resourceId=>sidebarNoteRow(resourceId,space.id,null))}</div>}
               <div class="session-list">
-                {children.map(session => <button class={`session-row ${activeId === session.id ? 'active' : ''} ${session.state}`} onPointerDown={event=>beginLongPress(event,(x,y)=>{setActiveId(session.id);setContextMenu({session,x,y})})} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setActiveId(session.id); setContextMenu({ session, x: event.clientX, y: event.clientY }) }} onClick={() => void selectSession(session)}>
-                  <span class={`state-dot ${session.state}`} />
-                  <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`}>[{session.backend}]</span>}{session.name}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
-                  <span class="session-meta">{isAgent(session) && <em class={`state-label ${session.state}`}>{session.state === 'idle' ? 'ready' : session.state}</em>}</span>
-                  <span class="row-actions" onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? 'Confirm kill' : 'Kill'} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>
-                </button>)}
+                {sidebarNode(spaceLayout.root)}
+                {unpanedChildren.map(session=>sessionRow(session))}
+                {unattachedNoteIds.map(resourceId=>sidebarNoteRow(resourceId,space.id,null,true))}
               </div>
             </section>
           })}
@@ -851,7 +1066,7 @@ export function App() {
       </aside>
 
       <main class="main-stage" onContextMenu={event => { if (!activeLayout.root) { event.preventDefault(); setEmptyMenu({ x: event.clientX, y: event.clientY }) } }}>
-        {activeLayout.root ? <div class="pane-tree">{renderPaneNode(zoomedId ? { type: 'leaf', kind: 'terminal', id: zoomedId } : activeLayout.root)}</div> : <div class="empty-stage">
+        {(activeLayout.root||focusedOutsideLayout) ? <div class="pane-tree">{renderPaneNode(zoomedId ? { type: 'leaf', kind: 'terminal', id: zoomedId } : focusedOutsideLayout&&activeId ? {type:'leaf',kind:'terminal',id:activeId} : activeLayout.root!)}</div> : <div class="empty-stage">
           <div class="hero-terminal" aria-hidden="true">&gt;_</div>
           <h1>Terminals that stay with you.</h1>
           <p>right-click {activeSpace?.name || 'a workspace'} or open : menu</p>
@@ -894,16 +1109,22 @@ export function App() {
       {['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button onClick={() => runNamedCommand('session.resume')}>Resume as new…</button>}
       <button onClick={() => runNamedCommand('session.copyId')}>Copy session ID</button>
       <button onClick={() => runNamedCommand('session.copyCwd')}>Copy working directory</button>
-      <button onClick={() => runNamedCommand('session.notes')}>Open session note…</button>
-      <button onClick={() => runNamedCommand('session.notesSplit')}>Open session note in split</button>
+      {isAgent(contextMenu.session)&&<button onClick={() => runNamedCommand('session.notes')}>Open agent-run note…</button>}
+      <button onClick={() => runNamedCommand('session.projectNote')}>Open {isAgent(contextMenu.session)?'run':'current'} project note…</button>
+      {isAgent(contextMenu.session)&&contextMenu.session.runtime_cwd_live&&contextMenu.session.runtime_cwd!==(contextMenu.session.run_cwd||contextMenu.session.spawn_cwd)&&<button onClick={() => runNamedCommand('session.currentProjectNote')}>Open current project note…</button>}
+      {isAgent(contextMenu.session)&&<button onClick={() => runNamedCommand('session.notesSplit')}>Open agent-run note in split</button>}
       <button onClick={() => runNamedCommand('session.openSplitHorizontal')}>Open in split right</button>
       <button onClick={() => runNamedCommand('session.openSplitVertical')}>Open in split below</button>
+      <button disabled={!activeId||activeId===contextMenu.session.id} onClick={()=>runNamedCommand('session.groupStack')}>Stack with focused terminal</button>
+      <button onClick={() => runNamedCommand('pane.detach')}>{activeStack?'Remove from tab group':'Detach from layout'}</button>
       <button onClick={() => runNamedCommand('session.reveal')}>Reveal in Explorer</button>
       <button onClick={() => runNamedCommand('session.worktreeCreate')}>Create worktree + terminal…</button>
       <button onClick={() => runNamedCommand('session.worktreesManage')}>Manage worktrees…</button>
       <button onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
       <button onClick={() => runNamedCommand('pane.splitHorizontal')}>New terminal in split right</button>
       <button onClick={() => runNamedCommand('pane.splitVertical')}>New terminal in split below</button>
+      <button onClick={()=>runNamedCommand('pane.stackNew')}>New terminal as tab</button>
+      {activeStack&&<><button disabled={!commands.find(item=>item.id==='stack.tabLeft')?.available} onClick={()=>runNamedCommand('stack.tabLeft')}>Move tab left</button><button disabled={!commands.find(item=>item.id==='stack.tabRight')?.available} onClick={()=>runNamedCommand('stack.tabRight')}>Move tab right</button><button onClick={()=>runNamedCommand('stack.dissolve')}>Dissolve tab stack into splits</button></>}
       <button onClick={() => runNamedCommand('session.customSplit')}>New terminal custom in split…</button>
       <button disabled={paneIds.length < 2} onClick={() => runNamedCommand('pane.swapNext')}>Swap pane with next</button>
       <button disabled={paneIds.length < 2} onClick={() => runNamedCommand('pane.zoom')}>{zoomedId?'Restore pane layout':'Zoom pane'}</button>
@@ -918,8 +1139,9 @@ export function App() {
       <div class="context-title"><strong>{spaceMenu.space.name}</strong></div>
       <button onClick={() => runNamedCommand('space.newTerminal')}>New terminal</button>
       <button onClick={() => runNamedCommand('space.newTerminalCustom')}>New terminal custom…</button>
-      <button onClick={() => runNamedCommand('space.notes')}>Open space notes…</button>
+      <button onClick={() => runNamedCommand('space.notes')}>Open space note…</button>
       <button onClick={() => runNamedCommand('space.notesSplit')}>Open space note in split</button>
+      <button onClick={()=>{setSpaceMenu(null);setProjectsOpen(true)}}>Projects and durable notes…</button>
       <button onClick={() => runNamedCommand('space.rename')}>Rename space</button>
       <button onClick={() => runNamedCommand('space.settings')}>Space defaults in Settings…</button>
       {spaceMenu.space.id !== 'default' && confirmSpaceDeleteId !== spaceMenu.space.id && <button class="danger" onClick={() => runNamedCommand('space.delete')}>Delete space…</button>}
@@ -935,7 +1157,7 @@ export function App() {
       <div class="context-title"><strong>EMPTY PANE</strong></div>
       <button role="menuitem" onClick={() => { setEmptyMenu(null); void spawnTerminal() }}>New terminal</button>
       <button role="menuitem" onClick={() => { setEmptyMenu(null); openLauncher() }}>New terminal custom…</button>
-      <button role="menuitem" disabled={!activeSpace||!spaceNoteTarget(activeSpace)} onClick={() => runNamedCommand('notes.open')}>Open space notes…</button>
+      <button role="menuitem" disabled={!activeSpace} onClick={() => runNamedCommand('notes.open')}>Open space note…</button>
       {unpanned.length > 0 && <div class="context-subtitle">ATTACH LIVE SESSION</div>}
       {unpanned.map(session => <button role="menuitem" onClick={() => runNamedCommand(`session.attach(${session.id})`)}><span class={`state-dot ${session.state}`} />{session.name}</button>)}
     </div>}
@@ -946,21 +1168,24 @@ export function App() {
       <button onClick={() => { setMainMenuOpen(false); runNamedCommand('session.spawnShell') }}>New terminal in current space</button>
       <button onClick={() => { setMainMenuOpen(false); runNamedCommand('session.quickLaunch') }}>New terminal custom…</button>
       <button onClick={() => { setMainMenuOpen(false); runNamedCommand('history.open') }}>Session history</button>
-      <button disabled={!activeSpace||!spaceNoteTarget(activeSpace)} onClick={() => runNamedCommand('notes.open')}>Space notes…</button>
-      <button disabled={!active} onClick={() => runNamedCommand('session.notes')}>Session note…</button>
-      <button disabled={!activeSpace||!spaceNoteTarget(activeSpace)?.terminalSessionId} onClick={() => runNamedCommand('space.notesSplit')}>Space note in split</button>
-      <button disabled={!active||['exited','crashed'].includes(active.state)} onClick={() => runNamedCommand('session.notesSplit')}>Session note in split</button>
+      <button onClick={() => runNamedCommand('projects.open')}>Projects</button>
+      <button disabled={!activeSpace} onClick={() => runNamedCommand('notes.open')}>Space note <span class="menu-hint">app data</span></button>
+      {active&&isAgent(active)&&<button onClick={() => runNamedCommand('session.notes')}>Agent-run note <span class="menu-hint">{active.project_label||'project'}</span></button>}
+      <button disabled={!active} onClick={() => runNamedCommand('session.projectNote')}>{active&&isAgent(active)?'Run':'Current'} project note…</button>
+      {active&&isAgent(active)&&active.runtime_cwd_live&&active.runtime_cwd!==(active.run_cwd||active.spawn_cwd)&&<button onClick={() => runNamedCommand('session.currentProjectNote')}>Current project note…</button>}
+      <button disabled={!activeSpace||!spaceNoteTarget(activeSpace).terminalSessionId} onClick={() => runNamedCommand('space.notesSplit')}>Space note in split</button>
+      <button disabled={!active||!isAgent(active)||['exited','crashed'].includes(active.state)} onClick={() => runNamedCommand('session.notesSplit')}>Agent-run note in split</button>
       <button disabled={!active} onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
       <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
-      <button onClick={() => { setMainMenuOpen(false); runNamedCommand('space.create') }}>Create workspace</button>
+      <button onClick={() => { setMainMenuOpen(false); runNamedCommand('space.create') }}>Create space</button>
       <button onClick={() => { setMainMenuOpen(false); runNamedCommand('broadcast.toggle') }}>{broadcast ? 'Stop broadcast input' : 'Start broadcast input'}</button>
       <div class="context-subtitle">CONFIGURATION</div>
-      <button disabled={!(active?.cwd||rememberedCwds[0])} onClick={() => runNamedCommand('settings.project')}>Project settings…</button>
+      <button disabled={!(active||rememberedCwds[0])} onClick={() => runNamedCommand('settings.project')}>Project settings…</button>
       <button onClick={() => runNamedCommand('usage.open')}>Usage analytics…</button>
       <button onClick={() => runNamedCommand('hooks.open')}>Hooks and notifications…</button>
       <button onClick={() => runNamedCommand('settings.open')}>All Settings…</button>
       <div class="context-subtitle">SHORTCUTS</div>
-      <button onClick={() => { setMainMenuOpen(false); runNamedCommand('palette.open') }}>Command palette <span class="menu-hint">ctrl shift p</span></button>
+      <button onClick={() => { setMainMenuOpen(false); runNamedCommand('palette.open') }}>Command palette <span class="menu-hint">ctrl alt p</span></button>
     </div>}
 
     {sidebarOpen && <button class="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
@@ -980,22 +1205,22 @@ export function App() {
           const branch = event.currentTarget.value
           setWorktreeCreate(current => current ? {
             ...current, branch,
-            path: current.pathEdited ? current.path : `${current.session.cwd}-${branch.replace(/[^a-z0-9._-]+/gi, '-') || 'worktree'}`,
+            path: current.pathEdited ? current.path : `${workingCwd(current.session)}-${branch.replace(/[^a-z0-9._-]+/gi, '-') || 'worktree'}`,
           } : current)
         }} placeholder="feature/my-change" autofocus /></label>
         <label>worktree directory<input value={worktreeCreate.path} onInput={event => setWorktreeCreate(current => current ? { ...current, path: event.currentTarget.value, pathEdited: true } : current)} /></label>
-        <div class="modal-note">source::{worktreeCreate.session.cwd}</div>
+        <div class="modal-note">source::{workingCwd(worktreeCreate.session)}</div>
         <div class="modal-footer"><span>enter::create · esc::cancel</span><button type="button" onClick={() => setWorktreeCreate(null)}>Cancel</button><button class="primary" type="submit" disabled={!worktreeCreate.branch.trim() || !worktreeCreate.path.trim()}>Create</button></div>
       </form>
     </div>}
 
     {worktrees && <div class="worktree-layer" onMouseDown={event => event.target === event.currentTarget && setWorktrees(null)}>
       <section class="worktree-panel">
-        <header><div><span>GIT WORKTREES</span><strong>{worktrees.session.cwd}</strong></div><button onClick={() => setWorktrees(null)}>×</button></header>
+        <header><div><span>GIT WORKTREES</span><strong>{workingCwd(worktrees.session)}</strong></div><button onClick={() => setWorktrees(null)}>×</button></header>
         <div class="worktree-list">{worktrees.items.length ? worktrees.items.map(item => <article>
           <div><strong>{item.worktree}</strong><span>{item.branch?.replace('refs/heads/', '') || (item.detached ? 'detached HEAD' : 'worktree')}</span></div>
           <button onClick={() => { void spawnTerminal(worktrees.session.space_id, item.worktree); setWorktrees(null) }}>Open terminal</button>
-          {item.worktree.toLowerCase() !== worktrees.session.cwd.toLowerCase() && <button class={confirmWorktreeRemove === item.worktree ? 'danger confirming' : 'danger'} onClick={() => void removeWorktree(item.worktree)}>{confirmWorktreeRemove === item.worktree ? 'Remove?' : 'Remove'}</button>}
+          {item.worktree.toLowerCase() !== workingCwd(worktrees.session).toLowerCase() && <button class={confirmWorktreeRemove === item.worktree ? 'danger confirming' : 'danger'} onClick={() => void removeWorktree(item.worktree)}>{confirmWorktreeRemove === item.worktree ? 'Remove?' : 'Remove'}</button>}
         </article>) : <div class="no-worktrees">No git worktrees found for this directory.</div>}</div>
         <footer><button onClick={() => { const target = worktrees.session; setWorktrees(null); void createWorktree(target) }}>Create worktree + terminal…</button></footer>
       </section>
@@ -1028,11 +1253,13 @@ export function App() {
           {historyNext && !historyLoading && <button class="history-load-more" onClick={() => void loadHistory({ append: true })}>Load more</button>}
         </aside>
         <main>{transcript ? <><div class="transcript-heading"><button class="history-back" onClick={()=>setTranscript(null)}>← Back</button><div><h3>[{transcript.entry.backend}] {transcript.entry.name}</h3><span>{transcript.entry.project_label || 'Ungrouped'} · {transcript.entry.cwd}</span><small>{transcript.entry.exit_reason || transcript.entry.final_state || 'indexed'} · {transcript.entry.model || 'model unavailable'} · {transcript.entry.external ? 'external' : 'mux session'}</small><small>{transcript.entry.context_window ? `context final ${Math.round((transcript.entry.final_context_pct || 0) * 100)}% · peak ${Math.round((transcript.entry.peak_context_pct || 0) * 100)}% · ${transcript.entry.measurement_source || 'native observation'}` : 'context unavailable'} · tokens in {transcript.entry.tokens_in || 0} / out {transcript.entry.tokens_out || 0}</small></div><button class="primary" onClick={() => void resumeHistoryEntry(transcript.entry)}>Resume as new</button></div>
-          <div class="messages">{transcript.messages.length ? transcript.messages.map(message => <article class={message.role}><header>{message.role}</header>{message.content.map(block => block.type === 'text' ? <p>{block.text}</p> : <pre>{block.type === 'tool_use' ? `${block.name}\n${JSON.stringify(block.input, null, 2)}` : block.type}</pre>)}</article>) : <div class="no-transcript">No native transcript is available for this session.</div>}</div></> : <div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Read its native transcript without resuming it.</p></div>}</main>
+          <div class="transcript-actions"><button onClick={()=>setNoteTarget({cwd:transcript.entry.cwd,projectScopeId:transcript.entry.project_scope_id,spaceId:transcript.entry.space_id||'default',sessionId:transcript.entry.id,terminalSessionId:null,kind:'sessions',ownerLabel:transcript.entry.name,projectLabel:transcript.entry.project_label})}>Agent-run note</button></div><div class="messages">{transcript.messages.length ? transcript.messages.map(message => <article class={message.role}><header>{message.role}</header>{message.content.map(block => block.type === 'text' ? <p>{block.text}</p> : <pre>{block.type === 'tool_use' ? `${block.name}\n${JSON.stringify(block.input, null, 2)}` : block.type}</pre>)}</article>) : <div class="no-transcript">No native transcript is available for this session.</div>}</div></> : <div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Read its native transcript without resuming it.</p></div>}</main>
       </div>
     </div>}
 
-    {settingsOpen && <Settings cwd={active?.cwd||rememberedCwds[0]} initialSection={settingsSection} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles() }} />}
+    {settingsOpen && <Settings cwd={(active&&workingCwd(active))||rememberedCwds[0]} initialSection={settingsSection} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles() }} />}
+
+    {projectsOpen&&<ProjectRegistry onOpenNote={openProjectScopeNote} onOpenSpaceNote={openArchivedSpaceNote} onClose={()=>setProjectsOpen(false)}/>}
 
     {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}
 
@@ -1044,7 +1271,7 @@ export function App() {
 
     {notificationsOpen&&<Notifications data={notificationData} onClose={()=>setNotificationsOpen(false)} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The notification session is no longer live.');return}setNotificationsOpen(false);void selectSession(session)}} />}
 
-    {noteTarget && <Notes targetKey={`modal:${noteIdForTarget(noteTarget)}`} cwd={noteTarget.cwd} spaceId={noteTarget.spaceId} sessionId={noteTarget.sessionId} terminalSessionId={noteTarget.terminalSessionId} initialKind={noteTarget.kind} onClose={() => setNoteTarget(null)} onOpenSplit={()=>openNoteInSplit(noteTarget)} onInsert={text => window.dispatchEvent(new CustomEvent('mux:terminal-action', { detail: { sessionId: noteTarget.terminalSessionId, action: 'insertText', text } }))} onCapture={targetKey => window.dispatchEvent(new CustomEvent('mux:terminal-action', { detail: { sessionId: noteTarget.terminalSessionId, action: 'captureSelection', targetKey } }))} />}
+    {noteTarget && <Notes targetKey={`modal:${noteIdForTarget(noteTarget)}`} cwd={noteTarget.cwd} projectScopeId={noteTarget.projectScopeId} spaceId={noteTarget.spaceId} sessionId={noteTarget.sessionId} terminalSessionId={noteTarget.terminalSessionId} initialKind={noteTarget.kind} ownerLabel={noteTarget.ownerLabel} projectLabel={noteTarget.projectLabel} onClose={() => setNoteTarget(null)} onOpenSplit={()=>openNoteInSplit(noteTarget)} onInsert={text => window.dispatchEvent(new CustomEvent('mux:terminal-action', { detail: { sessionId: noteTarget.terminalSessionId, action: 'insertText', text } }))} onCapture={targetKey => window.dispatchEvent(new CustomEvent('mux:terminal-action', { detail: { sessionId: noteTarget.terminalSessionId, action: 'captureSelection', targetKey } }))} />}
 
     {notificationToast&&<button class="notification-toast" aria-live="assertive" onClick={()=>{setNotificationToast(null);openNotifications()}}><strong>{notificationToast.session_name||'daemon'}</strong><span>{notificationToast.type.replaceAll('_',' ')}</span><small>open notifications</small></button>}
 

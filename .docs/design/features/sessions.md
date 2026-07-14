@@ -6,8 +6,10 @@
 
 ## Key concepts
 
-- Mux ID: identity of one process lifetime.
+- Mux ID: identity of one PTY/process lifetime. A plain shell may move between projects.
 - Native ID: Claude/Codex transcript identity; reused only for manual resume.
+- Agent run ID: identity of one Claude/Codex invocation within a PTY; this is the durable
+  history and session-note owner.
 - Scrollback: exact-tail daemon-memory byte buffer; discarded on daemon exit.
 - State: `starting | running | working | idle | awaiting | exited | crashed`.
 
@@ -17,6 +19,9 @@
 - Default shells use the selected profile's exact executable/argv; mux never seeds or
   injects visible text and never applies shell-specific flags globally.
 - Shell sessions enter `running`; agent sessions enter `starting` pending adapter observation.
+- Spawn cwd/scope remain immutable and trusted. OSC 7 runtime cwd is local-directory-
+  validated, debounced, rate-limited, and display-only. Promotion captures an immutable run
+  cwd/scope; demotion restores shell presentation without changing spawn identity.
 - Attach replays scrollback without changing process state.
 - Slow subscribers receive a gap frame and deterministic scrollback resync instead of
   silent permanent output loss.

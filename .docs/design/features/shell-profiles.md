@@ -30,6 +30,7 @@ platforms = ["windows"]
 cwd_strategy = "native"
 marker = "ps"
 capabilities = ["interactive", "agent-aware"]
+cwd_integration = false
 enabled = true
 ```
 
@@ -45,7 +46,14 @@ enabled = true
   chooses a profile/cwd. Split creation is an explicit separate action.
 - Detected Windows PowerShell, PowerShell 7, CMD, and installed WSL distros are offered
   without changing the selected default. Settings can persist/modify detected presets.
+  Its terminal tab lists compact profile identities first and expands one profile editor
+  only after selection; add, duplicate, reorder, enable/disable, remove, and restore remain
+  explicit operations.
 - No adapter injects `-NoLogo`; PowerShell profiles own the flag.
+- Cwd integration is a per-profile opt-in. For PowerShell/pwsh, swe-mux wraps only the
+  spawned process's prompt to emit OSC 7 and never edits the user's profile file. Profiles
+  with their own `Command`/`File` launch cannot enable the wrapper. The incremental parser
+  is shared infrastructure for later OSC 133 command boundaries.
 - WSL translates Windows cwd through distro `wslpath`, with drive-mount fallback, then
   starts through `wsl.exe --distribution ... --cd ...`.
 - WSL agent-awareness is capability-gated. Interactive profiles remain usable, but are
@@ -67,4 +75,3 @@ enabled = true
 - Spawn contract/API: `src/swe_mux/spawn_contract.py`, `src/swe_mux/server.py`
 - Runtime/history: `src/swe_mux/session.py`, `src/swe_mux/history.py`
 - UI: `frontend/src/App.tsx`, `frontend/src/Settings.tsx`
-

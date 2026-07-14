@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
-LAYOUT_VERSION = 2
+LAYOUT_VERSION = 3
 MAX_LAYOUT_LEAVES = 64
 MAX_LAYOUT_DEPTH = 24
 LEAF_KINDS = {"terminal", "note", "preview"}
@@ -11,6 +12,10 @@ SPLIT_DIRECTIONS = {"horizontal", "vertical"}
 
 def _leaf(kind: str, resource_id: str) -> dict[str, Any]:
     return {"type": "leaf", "kind": kind, "id": resource_id}
+
+
+def _group_id(value: object = None) -> str:
+    return str(value) if isinstance(value, str) and value else f"group-{uuid4().hex[:12]}"
 
 
 def _balanced_terminals(ids: list[str]) -> dict[str, Any] | None:
@@ -22,6 +27,7 @@ def _balanced_terminals(ids: list[str]) -> dict[str, Any] | None:
     direction = "horizontal" if len(ids) in {2, 4} else "vertical"
     return {
         "type": "split",
+        "id": _group_id(),
         "direction": direction,
         "ratio": 0.5,
         "first": _balanced_terminals(ids[:midpoint]),
@@ -67,20 +73,36 @@ def _validate_node(
             raise ValueError("layout split ratio must be between 0.1 and 0.9")
         return {
             "type": "split",
+            "id": _group_id(node.get("id")),
             "direction": direction,
             "ratio": normalized_ratio,
-            "first": _validate_node(
-                node.get("first"), depth=depth + 1, seen=seen, leaves=leaves
-            ),
-            "second": _validate_node(
-                node.get("second"), depth=depth + 1, seen=seen, leaves=leaves
-            ),
+            "first": _validate_node(node.get("first"), depth=depth + 1, seen=seen, leaves=leaves),
+            "second": _validate_node(node.get("second"), depth=depth + 1, seen=seen, leaves=leaves),
         }
-    raise ValueError("layout node type must be leaf or split")
+    if node_type == "stack":
+        children = node.get("children")
+        if not isinstance(children, list) or not children:
+            raise ValueError("layout stack requires at least one child")
+        normalized_children = [
+            _validate_node(child, depth=depth + 1, seen=seen, leaves=leaves) for child in children
+        ]
+        if any(
+            child["type"] != "leaf" or child["kind"] != "terminal" for child in normalized_children
+        ):
+            raise ValueError("layout stacks currently support terminal leaves only")
+        active = node.get("active_child_id")
+        child_ids = [child["id"] for child in normalized_children]
+        return {
+            "type": "stack",
+            "id": _group_id(node.get("id")),
+            "children": normalized_children,
+            "active_child_id": active if active in child_ids else child_ids[0],
+        }
+    raise ValueError("layout node type must be leaf, split, or stack")
 
 
 def normalize_layout(layout: object) -> dict[str, Any]:
-    """Validate a v2 tree or migrate a legacy v1 pane array into one."""
+    """Validate a v3 tree or migrate v1/v2 layouts into one."""
     if layout is None:
         return {"version": LAYOUT_VERSION, "root": None}
     if not isinstance(layout, dict):
@@ -94,7 +116,7 @@ def normalize_layout(layout: object) -> dict[str, Any]:
         if len(unique) > MAX_LAYOUT_LEAVES:
             raise ValueError(f"layout exceeds maximum leaf count {MAX_LAYOUT_LEAVES}")
         return {"version": LAYOUT_VERSION, "root": _balanced_terminals(unique)}
-    if version != LAYOUT_VERSION:
+    if version not in {2, LAYOUT_VERSION}:
         raise ValueError(f"unsupported layout version {version}")
     root = layout.get("root")
     if root is None:
@@ -115,8 +137,12 @@ def layout_terminal_ids(layout: object) -> list[str]:
             if node["kind"] == "terminal":
                 ids.append(str(node["id"]))
             return
-        visit(node["first"])
-        visit(node["second"])
+        if node["type"] == "stack":
+            for child in node["children"]:
+                visit(child)
+        else:
+            visit(node["first"])
+            visit(node["second"])
 
     visit(normalized["root"])
     return ids
@@ -154,8 +180,7 @@ def attach_leaf(
         return {"version": LAYOUT_VERSION, "root": _leaf(kind, resource_id)}
     terminals = layout_terminal_ids(normalized)
     if any(
-        leaf["kind"] == kind and leaf["id"] == resource_id
-        for leaf in _layout_leaves(normalized)
+        leaf["kind"] == kind and leaf["id"] == resource_id for leaf in _layout_leaves(normalized)
     ):
         return normalized
     target = target_id if target_id in terminals else (terminals[0] if terminals else None)
@@ -170,12 +195,36 @@ def attach_leaf(
             if direction in SPLIT_DIRECTIONS:
                 return {
                     "type": "split",
+                    "id": _group_id(),
                     "direction": direction,
                     "ratio": 0.5,
                     "first": node,
                     "second": next_leaf,
                 }
             return next_leaf
+        if node["type"] == "stack":
+            if (
+                target in [child["id"] for child in node["children"]]
+                and direction in SPLIT_DIRECTIONS
+            ):
+                return {
+                    "type": "split",
+                    "id": _group_id(),
+                    "direction": direction,
+                    "ratio": 0.5,
+                    "first": node,
+                    "second": _leaf(kind, resource_id),
+                }
+            if target in [child["id"] for child in node["children"]] and kind == "terminal":
+                return {
+                    **node,
+                    "children": [
+                        _leaf("terminal", resource_id) if child["id"] == target else child
+                        for child in node["children"]
+                    ],
+                    "active_child_id": resource_id,
+                }
+            return node
         return {**node, "first": replace(node["first"]), "second": replace(node["second"])}
 
     return normalize_layout({"version": LAYOUT_VERSION, "root": replace(root)})
@@ -191,8 +240,46 @@ def _layout_leaves(layout: object) -> list[dict[str, Any]]:
         if node["type"] == "leaf":
             leaves.append(node)
             return
-        visit(node["first"])
-        visit(node["second"])
+        if node["type"] == "stack":
+            for child in node["children"]:
+                visit(child)
+        else:
+            visit(node["first"])
+            visit(node["second"])
 
     visit(normalized["root"])
     return leaves
+
+
+def remove_layout_leaf(layout: object, kind: str, resource_id: str) -> dict[str, Any]:
+    """Remove one viewport resource and collapse empty layout containers."""
+    normalized = normalize_layout(layout)
+
+    def remove(node: dict[str, Any] | None) -> dict[str, Any] | None:
+        if node is None:
+            return None
+        if node["type"] == "leaf":
+            return None if node["kind"] == kind and node["id"] == resource_id else node
+        if node["type"] == "stack":
+            children = [child for child in node["children"] if remove(child) is not None]
+            if not children:
+                return None
+            if len(children) == 1:
+                return children[0]
+            active = node["active_child_id"]
+            return {
+                **node,
+                "children": children,
+                "active_child_id": (
+                    active if active in {child["id"] for child in children} else children[0]["id"]
+                ),
+            }
+        first = remove(node["first"])
+        second = remove(node["second"])
+        if first is None:
+            return second
+        if second is None:
+            return first
+        return {**node, "first": first, "second": second}
+
+    return normalize_layout({"version": LAYOUT_VERSION, "root": remove(normalized["root"])})

@@ -314,8 +314,9 @@ export function TerminalPane({ session, onState, broadcast, keybindings, scrollb
     <button role="menuitem" onClick={() => runCommand('terminal.selectAll')}>Select all</button>
     <button role="menuitem" onClick={() => runCommand('terminal.find')}>Find…</button>
     <button role="menuitem" onClick={() => runCommand('terminal.clear')}>Clear display</button>
-    <button role="menuitem" onClick={() => runCommand('session.notes')}>Session note…</button>
-    <button role="menuitem" onClick={() => runCommand('session.notesSplit')}>Session note in split</button>
+    {(session.backend==='claude'||session.backend==='codex')&&<button role="menuitem" onClick={() => runCommand('session.notes')}>Agent-run note…</button>}
+    {(session.backend==='claude'||session.backend==='codex')&&<button role="menuitem" onClick={() => runCommand('session.notesSplit')}>Agent-run note in split</button>}
+    <button role="menuitem" onClick={() => runCommand('session.projectNote')}>{session.backend==='shell'?'Current':'Run'} project note…</button>
     <button role="menuitem" onClick={() => runCommand('processes.open')}>Processes and previews…</button>
     <div class="context-rule" />
     <button role="menuitem" onClick={() => runCommand('pane.splitHorizontal')}>Split right</button>

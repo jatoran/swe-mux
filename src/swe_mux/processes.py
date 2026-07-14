@@ -194,10 +194,17 @@ class ProcessInspector:
         if session_id not in self.sessions.sessions:
             raise KeyError(session_id)
         if not self.available:
+            record = self.sessions.sessions[session_id].record
             return {
                 "available": False,
                 "diagnostic": "psutil is not installed in the active environment",
                 "session_id": session_id,
+                "project_scope_id": record.trusted_scope_id,
+                "repo_group_id": (
+                    record.run_repo_group_id
+                    if record.agent_run_id
+                    else record.spawn_repo_group_id
+                ),
                 "processes": [],
             }
         await asyncio.to_thread(self._collect_all)
@@ -207,9 +214,16 @@ class ProcessInspector:
             if item.session_id == session_id
         ]
         processes.sort(key=lambda item: (item["exited_at"] is not None, item["pid"]))
+        session = self.sessions.sessions[session_id].record
         return {
             "available": True,
             "session_id": session_id,
+            "project_scope_id": session.trusted_scope_id,
+            "repo_group_id": (
+                session.run_repo_group_id
+                if session.agent_run_id
+                else session.spawn_repo_group_id
+            ),
             "processes": processes[:MAX_PROCESSES_PER_SESSION],
         }
 
@@ -276,6 +290,8 @@ class PreviewRegistration:
     port: int
     source: str
     created_at: float
+    project_scope_id: str | None = None
+    repo_group_id: str | None = None
     viewport: str = "responsive"
 
     def snapshot(self) -> dict[str, Any]:
@@ -333,6 +349,12 @@ class PreviewRegistry:
             port,
             "detected" if detected else "user-approved",
             time.time(),
+            getattr(
+                session.record,
+                "trusted_scope_id",
+                getattr(session.record, "project_scope_id", None),
+            ),
+            getattr(session.record, "repo_group_id", None),
         )
         self.items[item.id] = item
         return item

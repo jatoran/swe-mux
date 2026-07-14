@@ -13,10 +13,16 @@ class ProjectIdentity:
     label: str
     root: str
     source: str
+    repo_group_id: str | None = None
+    repo_group_label: str | None = None
 
 
 def _stable_id(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()[:24]
+
+
+def project_scope_id(root: str | Path) -> str:
+    return _stable_id(f"scope:{os.path.normcase(str(Path(root).resolve()))}")
 
 
 def _normalize_remote(value: str) -> str:
@@ -51,20 +57,17 @@ async def resolve_project(cwd: str | Path) -> ProjectIdentity:
     root = Path(worktree).resolve() if worktree else resolved
     common = await _git(resolved, "rev-parse", "--path-format=absolute", "--git-common-dir")
     remote = await _git(resolved, "remote", "get-url", "origin")
+    scope_id = project_scope_id(root)
     if remote:
-        identity = f"remote:{_normalize_remote(remote)}"
+        normalized_remote = _normalize_remote(remote)
         return ProjectIdentity(
-            _stable_id(identity), root.name or "Repository", str(root), "git-remote"
+            scope_id, root.name or "Repository", str(root), "git-worktree",
+            _stable_id(f"remote:{normalized_remote}"), normalized_remote,
         )
     if common:
         common_path = os.path.normcase(str(Path(common).resolve()))
         return ProjectIdentity(
-            _stable_id(f"git:{common_path}"),
-            root.name or "Repository",
-            str(root),
-            "git-common-dir",
+            scope_id, root.name or "Repository", str(root), "git-worktree",
+            _stable_id(f"git:{common_path}"), Path(common_path).parent.name or root.name,
         )
-    normalized = os.path.normcase(str(resolved))
-    return ProjectIdentity(
-        _stable_id(f"cwd:{normalized}"), resolved.name or "Ungrouped", str(resolved), "cwd"
-    )
+    return ProjectIdentity(scope_id, resolved.name or "Ungrouped", str(resolved), "cwd")

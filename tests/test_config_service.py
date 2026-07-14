@@ -24,7 +24,7 @@ def test_legacy_config_migrates_with_backup_and_removes_obsolete_secret(tmp_path
 
     config = load_config(path)
 
-    assert config.schema_version == 4
+    assert config.schema_version == 5
     assert config.shell_profiles[0].executable == "pwsh.exe"
     assert path.with_suffix(".toml.bak").is_file()
     assert "token" not in tomllib.loads(path.read_text(encoding="utf-8"))

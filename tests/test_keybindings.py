@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from swe_mux.keybindings import DEFAULT_KEYBINDINGS, normalize_binding
+from swe_mux.keybindings import (
+    DEFAULT_KEYBINDINGS,
+    KEYBINDING_COMMANDS,
+    keybinding_policy,
+    normalize_binding,
+)
 
 
 def test_default_bindings_reference_valid_commands() -> None:
@@ -18,6 +23,8 @@ def test_default_bindings_reference_valid_commands() -> None:
         ("a", "require a modifier"),
         ("shift+a", "Shift alone shadows typing"),
         ("ctrl+w", "browser-reserved"),
+        ("ctrl+c", "terminal-reserved"),
+        ("ctrl+shift+p", "browser-reserved"),
         ("ctrl+ctrl+x", "duplicate modifier"),
         ("ctrl+hyper+x", "unknown modifier"),
     ],
@@ -39,3 +46,14 @@ def test_pane_swap_is_available_for_custom_bindings() -> None:
         "ctrl+alt+x",
         "pane.swapNext",
     )
+
+
+def test_keybinding_editor_metadata_exposes_commands_and_reserved_lists() -> None:
+    commands = {command_id for command_id, _, _ in KEYBINDING_COMMANDS}
+    policy = keybinding_policy()
+
+    assert "projects.open" in commands
+    assert "pane.stackNew" in commands
+    assert "space.activate(9)" in commands
+    assert "ctrl+w" in policy["browser_reserved"]
+    assert "ctrl+c" in policy["terminal_reserved"]

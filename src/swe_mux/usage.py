@@ -15,7 +15,7 @@ from .event_bus import EventBus
 
 MAX_USAGE_OUTPUT_BYTES = 10 * 1024 * 1024
 USAGE_TIMEOUT_SECONDS = 30.0
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 
 class UsageAdapterError(ValueError):
@@ -106,6 +106,32 @@ def _sum_rows(rows: list[dict[str, Any]], key: str, value: str) -> dict[str, Any
     return result
 
 
+def _daily_model_items(item: dict[str, Any]) -> list[dict[str, Any]]:
+    """Accept both legacy modelBreakdowns arrays and ccusage v20 model maps."""
+    legacy = item.get("modelBreakdowns") or item.get("model_breakdowns")
+    if isinstance(legacy, list):
+        return [model for model in legacy if isinstance(model, dict)]
+    source = item.get("models")
+    if isinstance(source, list):
+        return [model for model in source if isinstance(model, dict)]
+    if not isinstance(source, dict):
+        return []
+    day_tokens = _number(item, "totalTokens", "total_tokens")
+    day_cost = _number(item, "totalCost", "total_cost", "costUSD", "cost_usd", "cost")
+    result: list[dict[str, Any]] = []
+    for name, metrics in source.items():
+        if not isinstance(metrics, dict):
+            continue
+        row = {**metrics, "modelName": str(name)}
+        model_tokens = _number(metrics, "totalTokens", "total_tokens")
+        if day_cost and day_tokens and not _number(
+            metrics, "totalCost", "total_cost", "costUSD", "cost_usd", "cost"
+        ):
+            row["costUSD"] = day_cost * model_tokens / day_tokens
+        result.append(row)
+    return result
+
+
 def normalize_usage(payload: object, provider: str, provenance: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise UsageAdapterError("ccusage output must be a JSON object")
@@ -124,16 +150,18 @@ def normalize_usage(payload: object, provider: str, provenance: dict[str, Any]) 
         if item.get("sessionId") or item.get("session_id")
     ]
     model_source = _items(payload, "models", "modelBreakdowns", "model_breakdowns")
+    model_daily: list[dict[str, Any]] = []
     if not model_source:
-        model_source = [
-            model
-            for item in _items(payload, "daily", "days")
-            for model in (
-                item.get("modelBreakdowns") or item.get("model_breakdowns") or []
-            )
-            if isinstance(model, dict)
-        ]
-    model_rows = [
+        for day in _items(payload, "daily", "days"):
+            for item in _daily_model_items(day):
+                row = _normalize_row(
+                    item,
+                    key="model",
+                    value=str(item.get("modelName") or item.get("model") or "unknown"),
+                )
+                row["date"] = str(day.get("date") or "")
+                model_daily.append(row)
+    model_rows = model_daily or [
         _normalize_row(
             item,
             key="model",
@@ -163,6 +191,7 @@ def normalize_usage(payload: object, provider: str, provenance: dict[str, Any]) 
         "daily": daily,
         "monthly": monthly,
         "sessions": sessions,
+        "model_daily": model_daily,
         "models": models,
         "totals": totals,
         "provenance": provenance,

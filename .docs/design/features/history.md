@@ -7,21 +7,23 @@
 
 ## Data model
 
-- `history`: mux/native IDs, Claude/Codex backend, project identity/label/root, cwd/space,
-  spawn/exit/reason, model, current/peak context, token totals, provenance, transcript path.
+- `history`: agent-run/native IDs, Claude/Codex backend, immutable concrete run scope,
+  display-only repository group, label/root, cwd/space, spawn/exit/reason, model,
+  current/peak context, token totals, provenance, transcript path.
 - `events`: monotonic sequence, timestamp, optional session ID, source, type, JSON payload.
 - `links`: reserved pair relation for future relay; no runtime consumer.
 
 ## Operations
 
-- Shell start creates only an internal provisional row. It is excluded from all history
-  APIs and deleted on exit unless authenticated promotion atomically converts it into a
-  single Claude/Codex record while retaining mux ID, cwd, and original start time.
+- Shell start creates only an internal provisional PTY row. It is excluded from history
+  APIs and deleted on exit. Each authenticated promotion creates a separate durable agent-
+  run row with its launch cwd/scope; demotion closes it. The same shell may therefore own
+  several sequential Claude/Codex history entries without changing PTY identity.
 - Direct agents are visible immediately; explicit and unexpected exits update the same row.
 - History search is indexed and cursor-paginated across query, backend, project (including
   a distinct Ungrouped filter), state, date, space, and external origin.
-- Git remote/common identity groups worktrees under one project while each record retains
-  its actual worktree root. Friendly labels can come from project-local config.
+- Project filters group by concrete scope/worktree. Git remote/common identity is retained
+  separately as an optional broader display grouping; it never changes behavioral scope.
 - Context values are persisted only when native observation provides a valid window and
   current-window measurement; otherwise the UI says `context unavailable`.
 - Resume creates a new mux session and uses the selected adapter's native resume command.

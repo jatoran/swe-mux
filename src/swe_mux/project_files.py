@@ -18,7 +18,7 @@ PROJECT_CONFIG_FIELDS = {
 FORBIDDEN_PROJECT_FIELDS = {
     "token", "bind", "host", "port", "data_dir", "hooks", "executable", "command",
 }
-NOTE_KINDS = {"spaces", "sessions"}
+NOTE_KINDS = {"projects", "sessions"}
 _SAFE_ID = re.compile(r"[A-Za-z0-9._-]{1,120}\Z")
 
 
@@ -151,10 +151,14 @@ async def write_project_config(
 
 async def read_note(cwd: str | Path, kind: str, identity: str) -> dict[str, Any]:
     if kind not in NOTE_KINDS:
-        raise ValueError("note kind must be spaces or sessions")
+        raise ValueError("project note kind must be projects or sessions")
     project, mux_dir = await project_status(cwd)
     filename = f"{safe_note_filename(identity)}.md"
-    path = mux_dir / "notes" / kind / filename
+    path = (
+        mux_dir / "notes" / "project.md"
+        if kind == "projects"
+        else mux_dir / "notes" / kind / filename
+    )
     if not path.exists():
         return {
             "project": asdict(project), "kind": kind, "id": identity,
@@ -208,7 +212,8 @@ async def search_notes(cwd: str | Path, query: str) -> list[dict[str, Any]]:
         return []
     needle = query.casefold()
     results: list[dict[str, Any]] = []
-    for path in sorted(root.glob("*/*.md"))[:1000]:
+    paths = [*root.glob("*.md"), *root.glob("*/*.md")]
+    for path in sorted(paths)[:1000]:
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):

@@ -9,8 +9,8 @@
 
 - Runtime: `muxd` aiohttp daemon; Preact browser client; `mux` HTTP CLI.
 - Data: in-memory live sessions, process/preview registrations, and scrollback; SQLite
-  spaces, agent-only history, events, and cached indexes; project-owned Markdown/TOML in
-  `.swe-mux/`.
+  spaces, project scopes/repository groups, durable artifact relationships, agent-only
+  history, events, and cached indexes; project-owned Markdown/TOML in `.swe-mux/`.
 - Integrations: ConPTY/pywinpty; Win32 Job Objects; PowerShell/CMD/WSL profiles; Git;
   Claude Code; Codex CLI; optional locally installed unified ccusage adapter.
 
@@ -53,6 +53,10 @@
 - Plain shells never become agent history. Promotion converts the provisional lifecycle
   in place; demotion updates live state without duplicating its agent history.
 - Reading a project has no filesystem side effect. Only explicit saves create `.swe-mux/`.
+- Shells retain immutable spawn scope plus untrusted live cwd; each Claude/Codex run retains
+  immutable run scope. Spaces are project-independent, with app-owned notes; project and
+  agent-run notes remain project-local.
+- Sessions are processes; split/stack leaves are viewports. Layout removal never implies kill.
 - Network listeners are explicit localhost plus detected Tailscale IPv4; never wildcard LAN.
 
 ## Key trade-offs

@@ -19,7 +19,7 @@ async def test_layout_is_versioned_revisioned_and_rejects_stale_writes(tmp_path:
         "default", layout={"version": 1, "panes": ["one", "one"]}, layout_revision=0
     )
     assert updated.layout == {
-        "version": 2,
+        "version": 3,
         "root": {"type": "leaf", "kind": "terminal", "id": "one"},
     }
     assert updated.layout_revision == 1
@@ -56,7 +56,7 @@ def test_recursive_layout_validates_splits_ratios_and_unique_resources() -> None
             },
         }
     )
-    assert layout["version"] == 2
+    assert layout["version"] == 3
     assert layout_terminal_ids(layout) == ["left"]
     with pytest.raises(ValueError, match="same resource"):
         normalize_layout(

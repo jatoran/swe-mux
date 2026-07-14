@@ -31,6 +31,7 @@ class SpaceManager:
     async def update(self, space_id: str, **changes: object) -> SpaceRecord:
         space = self.spaces[space_id]
         expected = changes.pop("layout_revision", None)
+        changes.pop("anchor_revision", None)
         if (
             "layout" in changes
             and expected is not None
@@ -40,17 +41,33 @@ class SpaceManager:
             raise ValueError(
                 f"stale layout revision: expected {space.layout_revision}, received {expected}"
             )
+        if "anchor_mode" in changes or "anchor_project_scope_id" in changes:
+            raise ValueError("space project anchors have been retired")
+        normalized_layout = normalize_layout(changes["layout"]) if "layout" in changes else None
         for key in (
-            "name", "position", "layout", "default_cwd", "default_backend",
+            "name",
+            "position",
+            "layout",
+            "default_cwd",
+            "default_backend",
             "default_profile_id",
         ):
             if key in changes:
                 setattr(space, key, changes[key])
         if "layout" in changes:
-            space.layout = normalize_layout(space.layout)
+            space.layout = normalized_layout
             space.layout_revision += 1
         await self.history.upsert_space(space)
         return space
+
+    async def retire_anchors(self) -> None:
+        """Make legacy anchors inert after their space notes have been migrated."""
+        for space in self.spaces.values():
+            if space.anchor_mode != "none" or space.anchor_project_scope_id:
+                space.anchor_mode = "none"
+                space.anchor_project_scope_id = None
+                space.anchor_revision += 1
+                await self.history.upsert_space(space)
 
     async def delete(self, space_id: str) -> None:
         if space_id == "default":

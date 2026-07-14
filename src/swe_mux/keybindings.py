@@ -5,7 +5,7 @@ import re
 DEFAULT_KEYBINDINGS = {
     "ctrl+alt+t": "session.spawnShell",
     "ctrl+alt+o": "session.quickLaunch",
-    "ctrl+shift+p": "palette.open",
+    "ctrl+alt+p": "palette.open",
     "ctrl+shift+f": "terminal.find",
     "ctrl+alt+h": "pane.splitHorizontal",
     "ctrl+alt+v": "pane.splitVertical",
@@ -17,26 +17,131 @@ DEFAULT_KEYBINDINGS = {
     **{f"ctrl+alt+{index}": f"space.activate({index})" for index in range(1, 10)},
 }
 
-COMMAND_IDS = {
-    "palette.open", "session.spawnShell", "session.quickLaunch", "space.create",
-    "history.open", "settings.open", "terminal.find", "pane.splitHorizontal",
-    "pane.splitVertical", "pane.detach", "pane.zoom", "pane.next", "pane.previous",
-    "pane.swapNext",
-    "broadcast.toggle", "terminal.copy", "terminal.paste", "terminal.pasteImage",
-    "terminal.selectAll", "terminal.clear", "session.kill", "session.killImmediate",
-    "session.pinAttention",
-    "session.open", "session.rename", "session.copyId", "session.copyCwd",
-    "session.openSplitHorizontal", "session.openSplitVertical", "session.reveal",
-    "session.worktreeCreate", "session.worktreesManage", "session.customSplit",
-    "session.broadcastMembership", "session.resume", "space.newTerminal",
-    "space.newTerminalCustom", "space.rename", "space.settings", "space.delete",
-    "notes.open", "processes.open",
-}
+KEYBINDING_COMMANDS = (
+    ("palette.open", "Open command palette", "view"),
+    ("history.open", "Browse session history", "view"),
+    ("projects.open", "Browse project registry", "view"),
+    ("settings.open", "Open Settings", "view"),
+    ("settings.project", "Open current project settings", "view"),
+    ("usage.open", "Open usage analytics", "view"),
+    ("hooks.open", "Open hooks and notification settings", "view"),
+    ("notifications.open", "Open notifications", "view"),
+    ("notes.open", "Open current space note", "view"),
+    ("processes.open", "Inspect session processes and previews", "view"),
+    ("session.spawnShell", "New terminal in current space", "session"),
+    ("session.quickLaunch", "New terminal custom", "session"),
+    ("session.open", "Open selected session", "session"),
+    ("session.rename", "Rename selected session", "session"),
+    ("session.kill", "Confirm-kill focused session", "session"),
+    ("session.killImmediate", "Kill selected session immediately", "session"),
+    ("session.pinAttention", "Toggle focused agent attention pin", "session"),
+    ("session.copyId", "Copy selected session ID", "session"),
+    ("session.copyCwd", "Copy selected working directory", "session"),
+    ("session.reveal", "Reveal selected session directory", "session"),
+    ("session.resume", "Resume selected agent session", "session"),
+    ("session.worktreeCreate", "Create worktree and terminal", "session"),
+    ("session.worktreesManage", "Manage worktrees", "session"),
+    ("session.broadcastMembership", "Toggle selected session broadcast", "session"),
+    ("session.notes", "Open selected agent-run note", "notes"),
+    ("session.projectNote", "Open selected session project note", "notes"),
+    ("session.currentProjectNote", "Open runtime project note", "notes"),
+    ("session.notesSplit", "Open selected agent-run note in split", "notes"),
+    ("space.create", "Create space", "space"),
+    ("space.newTerminal", "New terminal in selected space", "space"),
+    ("space.newTerminalCustom", "New custom terminal in selected space", "space"),
+    ("space.rename", "Rename selected space", "space"),
+    ("space.settings", "Open selected space settings", "space"),
+    ("space.delete", "Delete selected space", "space"),
+    ("space.notes", "Open selected space note", "notes"),
+    ("space.notesSplit", "Open selected space note in split", "notes"),
+    ("pane.splitHorizontal", "Split focused pane right", "pane"),
+    ("pane.splitVertical", "Split focused pane below", "pane"),
+    ("pane.stackNew", "New terminal as tab", "pane"),
+    ("pane.detach", "Detach focused pane", "pane"),
+    ("pane.zoom", "Toggle focused pane zoom", "pane"),
+    ("pane.next", "Focus next pane", "pane"),
+    ("pane.previous", "Focus previous pane", "pane"),
+    ("pane.swapNext", "Swap focused pane with next", "pane"),
+    ("session.groupStack", "Stack selected and focused sessions", "pane"),
+    ("session.openSplitHorizontal", "Open selected session in split right", "pane"),
+    ("session.openSplitVertical", "Open selected session in split below", "pane"),
+    ("session.customSplit", "New custom terminal in split", "pane"),
+    ("stack.tabLeft", "Move focused tab left", "pane"),
+    ("stack.tabRight", "Move focused tab right", "pane"),
+    ("stack.dissolve", "Dissolve focused tab stack", "pane"),
+    ("broadcast.toggle", "Toggle broadcast input", "input"),
+    ("terminal.find", "Find in focused terminal", "terminal"),
+    ("terminal.copy", "Copy from focused terminal", "terminal"),
+    ("terminal.paste", "Paste into focused terminal", "terminal"),
+    ("terminal.pasteImage", "Paste clipboard image into focused agent", "terminal"),
+    ("terminal.selectAll", "Select all in focused terminal", "terminal"),
+    ("terminal.clear", "Clear focused terminal", "terminal"),
+    *tuple(
+        (f"space.activate({index})", f"Switch to space {index}", "space")
+        for index in range(1, 10)
+    ),
+)
+
+COMMAND_IDS = {command_id for command_id, _, _ in KEYBINDING_COMMANDS}
 
 _SPACE_COMMAND = re.compile(r"space\.activate\(([1-9])\)\Z")
 _MODIFIERS = {"ctrl", "shift", "alt", "meta"}
 _INTERCEPT_MODIFIERS = {"ctrl", "alt", "meta"}
-_BROWSER_RESERVED = {"ctrl+w", "ctrl+t", "ctrl+n", "meta+w", "meta+t", "meta+n"}
+_BROWSER_RESERVED = {
+    "alt+arrowleft",
+    "alt+arrowright",
+    "ctrl+d",
+    "ctrl+f",
+    "ctrl+h",
+    "ctrl+j",
+    "ctrl+l",
+    "ctrl+n",
+    "ctrl+p",
+    "ctrl+r",
+    "ctrl+s",
+    "ctrl+t",
+    "ctrl+tab",
+    "ctrl+shift+n",
+    "ctrl+shift+p",
+    "ctrl+shift+tab",
+    "ctrl+shift+t",
+    "ctrl+w",
+    "meta+d",
+    "meta+f",
+    "meta+l",
+    "meta+n",
+    "meta+p",
+    "meta+r",
+    "meta+s",
+    "meta+t",
+    "meta+w",
+}
+_TERMINAL_RESERVED = {
+    "ctrl+a",
+    "ctrl+c",
+    "ctrl+d",
+    "ctrl+e",
+    "ctrl+k",
+    "ctrl+l",
+    "ctrl+r",
+    "ctrl+u",
+    "ctrl+v",
+    "ctrl+w",
+    "ctrl+z",
+}
+
+
+def keybinding_policy() -> dict[str, object]:
+    return {
+        "browser_reserved": sorted(_BROWSER_RESERVED),
+        "terminal_reserved": sorted(_TERMINAL_RESERVED),
+        "rules": [
+            "Use Ctrl, Alt, or Meta plus a non-modifier key.",
+            "Shift alone is rejected so normal typing always reaches the terminal.",
+            "Known browser and terminal shortcuts are reserved.",
+            "One chord can be assigned to only one command.",
+        ],
+    }
 
 
 def normalize_binding(chord: object, command: object) -> tuple[str, str]:
@@ -53,6 +158,8 @@ def normalize_binding(chord: object, command: object) -> tuple[str, str]:
         raise ValueError("binding contains a duplicate modifier")
     if key in _BROWSER_RESERVED:
         raise ValueError("browser-reserved chord")
+    if key in _TERMINAL_RESERVED:
+        raise ValueError("terminal-reserved chord")
     command_id = str(command)
     if command_id not in COMMAND_IDS and not _SPACE_COMMAND.fullmatch(command_id):
         raise ValueError("unknown command id")
