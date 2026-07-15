@@ -10,10 +10,12 @@ export type PaneStack = {
   type: 'stack'; id: string; children: PaneLeaf[]; active_child_id: string
 }
 export type PaneNode = PaneLeaf | PaneSplit | PaneStack
-export type PaneLayout = { version: 3; root: PaneNode | null }
+export type NoteWorkspace = { open_ids:string[];active_id:string|null;size:number;visible:boolean;mode:'dock'|'popout' }
+export type PaneLayout = { version: 5; root: PaneNode | null;note_workspace:NoteWorkspace }
 
 const groupId = () => `group-${crypto.randomUUID().slice(0, 12)}`
-export const emptyLayout = (): PaneLayout => ({ version: 3, root: null })
+const emptyNoteWorkspace=():NoteWorkspace=>({open_ids:[],active_id:null,size:.38,visible:false,mode:'dock'})
+export const emptyLayout = (): PaneLayout => ({ version: 5, root: null,note_workspace:emptyNoteWorkspace() })
 export const terminalLeaf = (id: string): PaneLeaf => ({ type: 'leaf', kind: 'terminal', id })
 export const resourceLeaf = (kind: PaneLeafKind, id: string): PaneLeaf => ({ type: 'leaf', kind, id })
 
@@ -52,9 +54,12 @@ function isNode(value: unknown): value is PaneNode {
   if (node.type === 'leaf') {
     return ['terminal', 'note', 'preview'].includes(String(node.kind)) && typeof node.id === 'string' && !!node.id
   }
+  // Tab regions hold a session and the previews it spawned. Notes are excluded:
+  // they live in the space note workspace, not the terminal tree.
   if (node.type === 'stack') return typeof node.id === 'string'
     && Array.isArray(node.children) && node.children.length > 0
-    && node.children.every(child => isNode(child) && child.type === 'leaf' && child.kind === 'terminal')
+    && node.children.every(child => isNode(child) && child.type === 'leaf'
+      && (child.kind === 'terminal' || child.kind === 'preview'))
     && typeof node.active_child_id === 'string'
   return node.type === 'split'
     && (node.direction === 'horizontal' || node.direction === 'vertical')
@@ -62,15 +67,42 @@ function isNode(value: unknown): value is PaneNode {
     && isNode(node.first) && isNode(node.second)
 }
 
+function stripEmbeddedNotes(node:PaneNode|null):{root:PaneNode|null;notes:string[]}{
+  if(!node)return {root:null,notes:[]}
+  if(node.type==='leaf')return node.kind==='note'?{root:null,notes:[node.id]}:{root:node,notes:[]}
+  if(node.type==='stack')return {root:node,notes:[]}
+  const first=stripEmbeddedNotes(node.first),second=stripEmbeddedNotes(node.second)
+  const notes=[...first.notes,...second.notes]
+  if(!first.root)return {root:second.root,notes}
+  if(!second.root)return {root:first.root,notes}
+  return {root:{...node,first:first.root,second:second.root},notes}
+}
+
+function parseNoteWorkspace(value:unknown):NoteWorkspace{
+  if(!value||typeof value!=='object')return emptyNoteWorkspace()
+  const raw=value as {open_ids?:unknown;active_id?:unknown;size?:unknown;visible?:unknown;mode?:unknown}
+  const open_ids=Array.isArray(raw.open_ids)?[...new Set(raw.open_ids.filter((item):item is string=>typeof item==='string'&&!!item))].slice(0,32):[]
+  const size=typeof raw.size==='number'&&Number.isFinite(raw.size)?Math.max(.2,Math.min(.7,raw.size)):.38
+  const mode=raw.mode==='popout'?'popout':'dock'
+  return {open_ids,active_id:typeof raw.active_id==='string'&&open_ids.includes(raw.active_id)?raw.active_id:open_ids[0]||null,size,visible:!!raw.visible&&open_ids.length>0,mode}
+}
+
 export function parseLayout(value: unknown): PaneLayout {
   if (!value || typeof value !== 'object') return emptyLayout()
-  const raw = value as { version?: number; root?: unknown; panes?: unknown }
-  if (raw.version === 2 || raw.version === 3) return raw.root === null || raw.root === undefined || isNode(raw.root)
-    ? { version: 3, root: (raw.root as PaneNode | null | undefined) ?? null }
-    : emptyLayout()
+  const raw = value as { version?: number; root?: unknown; panes?: unknown;note_dock?:unknown;note_workspace?:unknown }
+  if ([2,3,4,5].includes(raw.version||0)) {
+    if(raw.root!==null&&raw.root!==undefined&&!isNode(raw.root))return emptyLayout()
+    const migrated=stripEmbeddedNotes((raw.root as PaneNode|null|undefined)??null)
+    const legacyDock=raw.note_dock&&typeof raw.note_dock==='object'?raw.note_dock:{}
+    const workspace=raw.version===5?parseNoteWorkspace(raw.note_workspace):raw.version===4?parseNoteWorkspace({...legacyDock,visible:true,mode:'dock'}):emptyNoteWorkspace()
+    workspace.open_ids=[...new Set([...workspace.open_ids,...migrated.notes])].slice(0,32)
+    if(!workspace.active_id||!workspace.open_ids.includes(workspace.active_id))workspace.active_id=workspace.open_ids[0]||null
+    if(migrated.notes.length)workspace.visible=true
+    return {version:5,root:migrated.root,note_workspace:workspace}
+  }
   if (Array.isArray(raw.panes)) {
     const ids = [...new Set(raw.panes.filter((id): id is string => typeof id === 'string' && !!id))]
-    return { version: 3, root: legacyTree(ids) }
+    return { version: 5, root: legacyTree(ids),note_workspace:emptyNoteWorkspace() }
   }
   return emptyLayout()
 }
@@ -91,6 +123,7 @@ export function leaves(layout: PaneLayout, kind?: PaneLeafKind): PaneLeaf[] {
     else { visit(node.first); visit(node.second) }
   }
   visit(layout.root)
+  if(!kind||kind==='note')layout.note_workspace.open_ids.forEach(id=>result.push(resourceLeaf('note',id)))
   return result
 }
 
@@ -124,15 +157,15 @@ function mapNode(node: PaneNode, targetId: string, replace: (leaf: PaneLeaf) => 
 }
 
 export function replaceTerminal(layout: PaneLayout, targetId: string | null, nextId: string): PaneLayout {
-  if (!layout.root) return { version: 3, root: terminalLeaf(nextId) }
+  if (!layout.root) return { ...layout, root: terminalLeaf(nextId) }
   if (!targetId || !terminalIds(layout).includes(targetId)) {
     const first = terminalIds(layout)[0]
     return first ? replaceTerminal(layout, first, nextId) : {
-      version:3,
+      ...layout,
       root:{type:'split',id:groupId(),direction:'horizontal',ratio:.62,first:terminalLeaf(nextId),second:layout.root},
     }
   }
-  return { version: 3, root: mapNode(layout.root, targetId, () => terminalLeaf(nextId)) }
+  return { ...layout, root: mapNode(layout.root, targetId, () => terminalLeaf(nextId)) }
 }
 
 export function splitTerminal(
@@ -141,7 +174,7 @@ export function splitTerminal(
   nextId: string,
   direction: SplitDirection,
 ): PaneLayout {
-  if (!layout.root) return { version: 3, root: terminalLeaf(nextId) }
+  if (!layout.root) return { ...layout, root: terminalLeaf(nextId) }
   const ids = terminalIds(layout)
   if (ids.includes(nextId)) return layout
   const target = targetId && ids.includes(targetId) ? targetId : ids[0]
@@ -153,7 +186,7 @@ export function splitTerminal(
       ?{type:'split',id:groupId(),direction,ratio:.5,first:node,second:terminalLeaf(nextId)}:node
     return {...node,first:visit(node.first),second:visit(node.second)}
   }
-  return {version:3,root:visit(layout.root)}
+  return {...layout,root:visit(layout.root)}
 }
 
 export function attachLeaf(
@@ -164,7 +197,8 @@ export function attachLeaf(
   ratio = .5,
 ): PaneLayout {
   if (leaves(layout).some(leaf => leaf.kind === next.kind && leaf.id === next.id)) return layout
-  if (!layout.root) return { version: 3, root: next }
+  if(next.kind==='note')return {...layout,note_workspace:{...layout.note_workspace,open_ids:[...layout.note_workspace.open_ids,next.id],active_id:next.id,visible:true}}
+  if (!layout.root) return { ...layout, root: next }
   const ids = terminalIds(layout)
   const target = targetId && ids.includes(targetId) ? targetId : ids[0]
   if (!target) return layout
@@ -176,7 +210,7 @@ export function attachLeaf(
       ?{type:'split',id:groupId(),direction,ratio:clampedRatio,first:node,second:next}:node
     return {...node,first:visit(node.first),second:visit(node.second)}
   }
-  return {version:3,root:visit(layout.root)}
+  return {...layout,root:visit(layout.root)}
 }
 
 function removeNode(node: PaneNode, kind: PaneLeafKind, id: string): PaneNode | null {
@@ -196,12 +230,25 @@ function removeNode(node: PaneNode, kind: PaneLeafKind, id: string): PaneNode | 
 }
 
 export function removeLeaf(layout: PaneLayout, kind: PaneLeafKind, id: string): PaneLayout {
-  return { version: 3, root: layout.root ? removeNode(layout.root, kind, id) : null }
+  if(kind==='note'){
+    const open_ids=layout.note_workspace.open_ids.filter(item=>item!==id)
+    return {...layout,note_workspace:{...layout.note_workspace,open_ids,active_id:layout.note_workspace.active_id===id?open_ids[0]||null:layout.note_workspace.active_id,visible:open_ids.length>0&&layout.note_workspace.visible}}
+  }
+  return { ...layout, root: layout.root ? removeNode(layout.root, kind, id) : null }
 }
 
 export function reconcileTerminals(layout: PaneLayout, liveIds: Set<string>): PaneLayout {
   let next = layout
   for (const id of terminalIds(layout)) if (!liveIds.has(id)) next = removeLeaf(next, 'terminal', id)
+  return next
+}
+
+/** Drop preview leaves the daemon no longer lists, e.g. once their server stopped. */
+export function reconcilePreviews(layout: PaneLayout, liveIds: Set<string>): PaneLayout {
+  let next = layout
+  for (const leaf of leaves(layout, 'preview')) {
+    if (!liveIds.has(leaf.id)) next = removeLeaf(next, 'preview', leaf.id)
+  }
   return next
 }
 
@@ -214,7 +261,28 @@ function updateSplit(node: PaneNode, path: string, ratio: number): PaneNode {
 }
 
 export function setSplitRatio(layout: PaneLayout, path: string, ratio: number): PaneLayout {
-  return layout.root ? { version: 3, root: updateSplit(layout.root, path, ratio) } : layout
+  return layout.root ? { ...layout, root: updateSplit(layout.root, path, ratio) } : layout
+}
+
+export function activateNoteWorkspace(layout:PaneLayout,id:string):PaneLayout{
+  return layout.note_workspace.open_ids.includes(id)?{...layout,note_workspace:{...layout.note_workspace,active_id:id}}:layout
+}
+
+export function showNoteWorkspace(layout:PaneLayout,id:string,mode:'dock'|'popout'):PaneLayout{
+  const withNote=layout.note_workspace.open_ids.includes(id)?layout:attachLeaf(layout,null,resourceLeaf('note',id))
+  return {...withNote,note_workspace:{...withNote.note_workspace,active_id:id,visible:true,mode}}
+}
+
+export function hideNoteWorkspace(layout:PaneLayout):PaneLayout{
+  return {...layout,note_workspace:{...layout.note_workspace,visible:false}}
+}
+
+export function setNoteWorkspaceMode(layout:PaneLayout,mode:'dock'|'popout'):PaneLayout{
+  return {...layout,note_workspace:{...layout.note_workspace,mode,visible:layout.note_workspace.open_ids.length>0}}
+}
+
+export function setNoteWorkspaceSize(layout:PaneLayout,size:number):PaneLayout{
+  return {...layout,note_workspace:{...layout.note_workspace,size:Math.max(.2,Math.min(.7,Math.round(size*10000)/10000))}}
 }
 
 export function swapTerminals(layout: PaneLayout, firstId: string, secondId: string): PaneLayout {
@@ -230,7 +298,7 @@ export function swapTerminals(layout: PaneLayout, firstId: string, secondId: str
     if (node.id === secondId) return { ...node, id: firstId }
     return node
   }
-  return { version: 3, root: swap(layout.root) }
+  return { ...layout, root: swap(layout.root) }
 }
 
 export function stackTerminal(layout: PaneLayout, targetId: string, nextId: string): PaneLayout {
@@ -242,7 +310,7 @@ export function stackTerminal(layout: PaneLayout, targetId: string, nextId: stri
       ?{...node,children:[...node.children,terminalLeaf(nextId)],active_child_id:nextId}:node
     return {...node,first:visit(node.first),second:visit(node.second)}
   }
-  return {version:3,root:visit(layout.root)}
+  return {...layout,root:visit(layout.root)}
 }
 
 export function groupTerminalsInStack(layout:PaneLayout,targetId:string,nextId:string):PaneLayout{
@@ -259,7 +327,7 @@ export function addToStack(layout: PaneLayout, stackId: string, sessionId: strin
       : node
     return { ...node, first: visit(node.first), second: visit(node.second) }
   }
-  return { version: 3, root: visit(layout.root) }
+  return { ...layout, root: visit(layout.root) }
 }
 
 export function activateStackChild(layout: PaneLayout, stackId: string, sessionId: string): PaneLayout {
@@ -270,7 +338,7 @@ export function activateStackChild(layout: PaneLayout, stackId: string, sessionI
       ? { ...node, active_child_id: sessionId } : node
     return { ...node, first: visit(node.first), second: visit(node.second) }
   }
-  return { version: 3, root: visit(layout.root) }
+  return { ...layout, root: visit(layout.root) }
 }
 
 export function activateContainingStack(layout:PaneLayout,sessionId:string):PaneLayout{
@@ -280,7 +348,7 @@ export function activateContainingStack(layout:PaneLayout,sessionId:string):Pane
     if(node.type==='stack')return node.children.some(child=>child.id===sessionId)?{...node,active_child_id:sessionId}:node
     return {...node,first:visit(node.first),second:visit(node.second)}
   }
-  return {version:3,root:visit(layout.root)}
+  return {...layout,root:visit(layout.root)}
 }
 
 export function reorderStack(layout: PaneLayout, stackId: string, orderedIds: string[]): PaneLayout {
@@ -296,7 +364,7 @@ export function reorderStack(layout: PaneLayout, stackId: string, orderedIds: st
     if (node.type === 'stack') return node
     return { ...node, first: visit(node.first), second: visit(node.second) }
   }
-  return { version: 3, root: visit(layout.root) }
+  return { ...layout, root: visit(layout.root) }
 }
 
 export function stackForSession(layout:PaneLayout,sessionId:string):PaneStack|null{
@@ -316,5 +384,5 @@ export function dissolveStack(layout:PaneLayout,stackId:string):PaneLayout{
     if(node.type==='stack')return node.id===stackId?splitChildren(node.children):node
     return {...node,first:visit(node.first),second:visit(node.second)}
   }
-  return {version:3,root:visit(layout.root)}
+  return {...layout,root:visit(layout.root)}
 }

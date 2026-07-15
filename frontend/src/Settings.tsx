@@ -13,11 +13,40 @@ type Config = {
   claude_args:string[]; codex_args:string[]
   git_poll_seconds:number; reconcile_external_history:boolean; theme:ThemeName
   middle_click_paste:boolean; broadcast_default:boolean
+  mobile_vertical_drag:'smart'|'terminal'|'application'|'disabled'
+  mobile_scroll_direction:'natural'|'wheel';mobile_scroll_sensitivity:number
+  mobile_long_press:'context_menu'|'disabled'
+  notes_default_open:'dock'|'popout'
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
   ccusage_claude_command:string[]; ccusage_codex_command:string[]
   custom_theme:CustomTheme
   default_shell_profile:string; shell_profiles:ShellProfile[]
+  automation_enabled:boolean;automation_retention_days:number;automation_concurrency:number
+  automation_queue_size:number;automation_max_input_tokens:number;automation_max_output_tokens:number
+  automation_daily_token_budget:number;automation_daily_budget_usd:number;automation_rule_daily_token_budget:number
+  automation_rule_daily_budget_usd:number;automation_hourly_call_cap:number
+  automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
+  openrouter_standard_model:string;openrouter_request_timeout_seconds:number
+  observer_titler_enabled:boolean;observer_summarizer_enabled:boolean
+  phase7_observers_enabled:boolean
+  tts_enabled:boolean;tts_default_mode:'off'|'on_demand'|'auto';tts_content:'summary'|'verbatim'
+  tts_engine:'edge'|'sapi';tts_edge_voice:string;tts_edge_rate:string;tts_edge_pitch:string
+  tts_soften_stops:boolean;tts_sapi_voice:string;tts_sapi_rate:number
+  tts_summary_model:string;tts_summary_max_tokens:number;tts_verbatim_max_chars:number
+  tts_daily_budget_usd:number;tts_cache_mb:number;stt_enabled:boolean
 }
+type VoiceStatusInfo = {
+  enabled:boolean;engine:string;engine_available:boolean;diagnostic?:string|null;voice:string
+  summary_model:string;spend_today:{tokens:number;cost_usd:number};daily_budget_usd:number
+  cache_bytes:number;cache_limit_bytes:number;clip_count:number;stt_enabled:boolean
+}
+const EDGE_VOICE_SUGGESTIONS = [
+  'en-AU-NatashaNeural','en-AU-WilliamNeural','en-US-AndrewNeural','en-US-AriaNeural',
+  'en-US-AvaNeural','en-US-GuyNeural','en-US-JennyNeural','en-GB-SoniaNeural','en-GB-RyanNeural',
+]
+
+type AutomationStatus={enabled:boolean;diagnostic?:string;rules:Array<{id:string;name:string;enabled:boolean;shadow:boolean;revision:string}>;queue:{size:number;capacity:number;dropped:number};legacy:{active:boolean;diagnostic?:string;migration:string};repository_rules:Array<{project_scope_id:string;path:string;valid:boolean;diagnostic?:string;execution:string}>}
+type ProviderStatus={secret:{configured:boolean;source:string;persistent:boolean};models:{models:Array<{id:string;name:string}>;fetched_at?:number;error?:string;stale:boolean};origin:string;cheap_model:string;standard_model:string}
 
 type UsageStatus = {
   enabled:boolean; refreshing:boolean; package:string; install_command:string
@@ -45,10 +74,12 @@ const settingsTabs = [
   {id:'general',label:'General'},
   {id:'terminals',label:'Terminals'},
   {id:'workspace',label:'Spaces + project'},
+  {id:'notes',label:'Notes'},
   {id:'agents',label:'Agents'},
   {id:'input',label:'Input'},
   {id:'usage',label:'Usage'},
-  {id:'hooks',label:'Hooks'},
+  {id:'automation',label:'Automation'},
+  {id:'voice',label:'Voice'},
   {id:'remote',label:'Remote'},
   {id:'appearance',label:'Appearance'},
 ] as const
@@ -56,13 +87,18 @@ type SettingsTab = typeof settingsTabs[number]['id']
 const tabForSection = (section:string):SettingsTab => ({
   Terminals:'terminals','Space defaults':'workspace','Current project':'workspace',
   Agents:'agents',Input:'input','Git and history':'workspace','Usage analytics':'usage',
-  'Hooks and notifications':'hooks','Remote and security':'remote',Appearance:'appearance',
+  Notes:'notes',
+  Automation:'automation','Hooks and notifications':'automation',Voice:'voice','Remote and security':'remote',Appearance:'appearance',
 }[section] as SettingsTab|undefined)||'general'
 
-export function Settings({ onClose, onOpenUsage, cwd, initialSection='General' }: { onClose: () => void; onOpenUsage?:() => void; cwd?:string; initialSection?:string }) {
+export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialSection='General' }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void; cwd?:string; initialSection?:string }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
-  const [hooks, setHooks] = useState('')
+  const [rules, setRules] = useState('version = 1\n')
+  const [automation,setAutomation]=useState<AutomationStatus|null>(null)
+  const [provider,setProvider]=useState<ProviderStatus|null>(null)
+  const [openRouterKey,setOpenRouterKey]=useState('')
+  const [providerMessage,setProviderMessage]=useState('')
   const [bindings, setBindings] = useState<Record<string,string>>({})
   const [bindingDefaults, setBindingDefaults] = useState<Record<string,string>>({})
   const [bindingCommands, setBindingCommands] = useState<KeybindingCommand[]>([])
@@ -74,8 +110,8 @@ export function Settings({ onClose, onOpenUsage, cwd, initialSection='General' }
   const [detectedProfiles, setDetectedProfiles] = useState<ShellProfile[]>([])
   const [spaceDefaults, setSpaceDefaults] = useState<Space[]>([])
   const [spaceBaseline,setSpaceBaseline]=useState<Space[]>([])
-  const [hookDiagnostic, setHookDiagnostic] = useState<{status:string;error?:string;rules?:number}>({status:'loading'})
   const [usage, setUsage] = useState<UsageStatus | null>(null)
+  const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
   const [usageRefreshMessage, setUsageRefreshMessage] = useState('')
   const [remote, setRemote] = useState<RemoteStatus | null>(null)
   const [projectConfig, setProjectConfig] = useState<ProjectConfig | null>(null)
@@ -90,24 +126,26 @@ export function Settings({ onClose, onOpenUsage, cwd, initialSection='General' }
 
   useEffect(() => {
     api<RemoteStatus>('GET','/api/remote/status').then(setRemote).catch(()=>setRemote(null))
+    api<VoiceStatusInfo>('GET','/api/voice').then(setVoiceInfo).catch(()=>setVoiceInfo(null))
     Promise.all([
       api<Config>('GET','/api/config'),
-      api<{text:string}>('GET','/api/hooks'),
+      api<{text:string}>('GET','/api/automation/rules'),
       api<KeybindingsResponse>('GET','/api/keybindings'),
       api<{detected:ShellProfile[]}>('GET','/api/profiles'),
       api<Space[]>('GET','/api/spaces'),
-      api<{diagnostic:{status:string;error?:string;rules?:number}}>('GET','/api/hooks/status'),
+      api<AutomationStatus>('GET','/api/automation'),
+      api<ProviderStatus>('GET','/api/automation/provider'),
       api<UsageStatus>('GET','/api/usage'),
       cwd ? api<ProjectConfig>('GET',`/api/project/config?cwd=${encodeURIComponent(cwd)}`) : Promise.resolve(null),
-    ]).then(([next, hookData, keyData, profileData, spaces, hookStatus, usageStatus, project]) => {
-      setConfig(next); setDraft(next); setHooks(hookData.text)
+    ]).then(([next, rulesData, keyData, profileData, spaces, automationStatus,providerStatus, usageStatus, project]) => {
+      setConfig(next); setDraft(next); setRules(rulesData.text)
       setClaudeArgs(JSON.stringify(next.claude_args)); setCodexArgs(JSON.stringify(next.codex_args))
       setBindings(keyData.bindings);setBindingDefaults(keyData.defaults||{})
       setBindingCommands(keyData.commands||[]);setBindingPolicy(keyData.policy||{browser_reserved:[],terminal_reserved:[],rules:[]})
       if(Object.keys(keyData.rejected||{}).length)setBindingError(`Ignored saved shortcuts · ${Object.entries(keyData.rejected).map(([chord,message])=>`${displayChord(chord)}: ${message}`).join(' · ')}`)
       setStatus('ready')
       setDetectedProfiles(profileData.detected); setSpaceDefaults(spaces);setSpaceBaseline(spaces)
-      setHookDiagnostic(hookStatus.diagnostic); setUsage(usageStatus)
+      setAutomation(automationStatus);setProvider(providerStatus); setUsage(usageStatus)
       setProjectConfig(project);setProjectValues(project?.values||{})
       configureCustomTheme(next.custom_theme); applyTheme(next.theme)
     }).catch(error => setStatus(error.message))
@@ -185,16 +223,16 @@ export function Settings({ onClose, onOpenUsage, cwd, initialSection='General' }
     try {
       const spacePatch=(space:Space)=>{
         const original=spaceBaseline.find(item=>item.id===space.id)
-        const values:Record<string,unknown>={default_profile_id:space.default_profile_id||null,default_cwd:space.default_cwd||null}
+        const values:Record<string,unknown>={default_profile_id:space.default_profile_id||null,default_cwd:space.default_cwd||null,notes_open_mode:space.notes_open_mode||null}
         return values
       }
       await Promise.all([
-        api('PUT','/api/hooks?validate=1',{text:hooks}),
+        api('PUT','/api/automation/rules?validate=1',{text:rules}),
         api('PUT','/api/keybindings?validate=1',{bindings}),
       ])
       const [next] = await Promise.all([
         api<Config & {hot_applied:string[];restart_required:string[]}>('PATCH','/api/config',body),
-        api('PUT','/api/hooks',{text:hooks}),
+        api('PUT','/api/automation/rules',{text:rules}),
         api('PUT','/api/keybindings',{bindings}),
         ...spaceDefaults.map(space=>api('PATCH',`/api/spaces/${space.id}`,spacePatch(space))),
         ...(projectConfig&&cwd?[api<ProjectConfig>('PUT','/api/project/config',{cwd,values:projectValues,revision:projectConfig.revision}).then(result=>{setProjectConfig(result);setProjectValues(result.values)})]:[]),
@@ -258,11 +296,24 @@ export function Settings({ onClose, onOpenUsage, cwd, initialSection='General' }
     }
   }
   const clearUsage = async () => setUsage(await api<UsageStatus>('DELETE','/api/usage/cache'))
+  const providerKeyAction=async(operation:'test'|'set'|'clear')=>{
+    setProviderMessage(operation==='clear'?'Clearing key…':operation==='set'?'Testing and storing key…':'Testing key…')
+    try{
+      const result=await api<{ok?:boolean;status:ProviderStatus['secret']}>('POST','/api/automation/provider/key',{operation,key:openRouterKey||undefined,test:true})
+      setProvider(current=>current?{...current,secret:result.status}:current);if(operation==='set'||operation==='clear')setOpenRouterKey('')
+      setProviderMessage(operation==='clear'?'Stored key cleared.':operation==='set'?'Key tested and stored with Windows DPAPI.':'OpenRouter connection succeeded.')
+    }catch(error){setProviderMessage(`OpenRouter error · ${(error as Error).message}`)}
+  }
+  const refreshModels=async()=>{
+    setProviderMessage('Refreshing OpenRouter model catalog…')
+    try{const models=await api<ProviderStatus['models']>('POST','/api/automation/provider/models/refresh',{});setProvider(current=>current?{...current,models}:current);setProviderMessage(`Model catalog ready · ${models.models.length} structured-output text models.`)}catch(error){setProviderMessage(`Model refresh failed · ${(error as Error).message}`)}
+  }
   const selectedProfileIndex=draft?.shell_profiles.findIndex(profile=>profile.id===selectedProfileId)??-1
   const selectedProfile=selectedProfileIndex>=0?draft?.shell_profiles[selectedProfileIndex]:undefined
   if (!draft) return <div class="settings-layer"><section class="settings-panel">{status}</section></div>
+  const modelOptions=(selected:string)=>{const items=[...(provider?.models.models||[])];if(selected&&!items.some(item=>item.id===selected))items.unshift({id:selected,name:'Configured model (catalog unavailable)'});return items}
   return <div class="settings-layer"><section class="settings-panel" ref={panel} role="dialog" aria-modal="true" aria-label="Settings">
-    <header><div><span>CONFIG::V5</span><h2>Settings</h2></div><button onClick={() => { if(config) applyTheme(config.theme); onClose() }}>×</button></header>
+    <header><div><span>CONFIG::V6</span><h2>Settings</h2></div><button onClick={() => { if(config) applyTheme(config.theme); onClose() }}>×</button></header>
     <main class="settings-body">
       <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
         {settingsTabs.map(tab=><button role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>setActiveTab(tab.id)}>{tab.label}</button>)}
@@ -303,16 +354,23 @@ export function Settings({ onClose, onOpenUsage, cwd, initialSection='General' }
         </section>}
 
         {activeTab==='workspace'&&<Fragment>
-          <section><h3>Space defaults</h3><p>A space is a workflow container, not a project. New terminals use its configured directory.</p>{spaceDefaults.map((space,index)=><article class="space-default"><strong>{space.name}</strong><label>Profile<select value={space.default_profile_id||''} onChange={e=>setSpaceDefaults(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,default_profile_id:e.currentTarget.value||undefined}:item))}><option value="">Use global default</option>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label><label>New-terminal directory<input value={space.default_cwd||''} placeholder="Use global startup directory" onInput={e=>setSpaceDefaults(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,default_cwd:e.currentTarget.value||undefined}:item))}/></label></article>)}</section>
+          <section><h3>Space defaults</h3><p>A space is a workflow container, not a project. New terminals use its configured directory.</p>{spaceDefaults.map((space,index)=><article class="space-default"><strong>{space.name}</strong><label>Profile<select value={space.default_profile_id||''} onChange={e=>setSpaceDefaults(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,default_profile_id:e.currentTarget.value||undefined}:item))}><option value="">Use global default</option>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label><label>New-terminal directory<input value={space.default_cwd||''} placeholder="Use global startup directory" onInput={e=>setSpaceDefaults(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,default_cwd:e.currentTarget.value||undefined}:item))}/></label><label>Notes opening<select value={space.notes_open_mode||''} onChange={e=>setSpaceDefaults(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,notes_open_mode:(e.currentTarget.value||undefined) as Space['notes_open_mode']}:item))}><option value="">Inherit global default</option><option value="dock">Dock</option><option value="popout">Pop-out</option></select></label></article>)}</section>
           <section><h3>Git and history</h3><label>Git poll seconds<input type="number" step=".25" value={draft.git_poll_seconds} onInput={e=>change('git_poll_seconds',Number(e.currentTarget.value))} /></label></section>
           {projectConfig&&<section><h3>Current project</h3><p>{projectConfig.project.root}</p><p aria-live="polite">.swe-mux/config.toml: {projectConfig.status}{projectConfig.error?` · ${projectConfig.error}`:''}</p><label>Friendly project label<input value={projectValues.project_label||''} onInput={e=>setProjectValues(values=>({...values,project_label:e.currentTarget.value||undefined}))} /></label><label>Project default directory<input value={projectValues.default_cwd||''} placeholder="relative to project root" onInput={e=>setProjectValues(values=>({...values,default_cwd:e.currentTarget.value||undefined}))} /></label><label>Project default shell profile<select value={projectValues.default_shell_profile||''} onChange={e=>setProjectValues(values=>({...values,default_shell_profile:e.currentTarget.value||undefined}))}><option value="">Use space/global default</option>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label><label class="check"><span>Enable project notes</span><input type="checkbox" checked={projectValues.notes_enabled!==false} onChange={e=>setProjectValues(values=>({...values,notes_enabled:e.currentTarget.checked}))} /></label><p>Opening a project never creates this folder. The first explicit Save writes it atomically.</p></section>}
         </Fragment>}
+
+        {activeTab==='notes'&&<section><h3>Notes</h3><p>Notes have durable semantic owners. Docking controls presentation only and never moves a note between a space, project, or agent run.</p><label>Global default<select value={draft.notes_default_open} onChange={event=>change('notes_default_open',event.currentTarget.value as Config['notes_default_open'])}><option value="dock">Dock in current space</option><option value="popout">Open tabbed pop-out</option></select></label><p>Each space can inherit this value or override it under General → Space defaults. Explicit Dock and Pop-out actions move the whole tabbed Notes workspace without changing the preference.</p></section>}
 
         {activeTab==='agents'&&<section><h3>Agents</h3><label>Claude executable<input value={draft.claude_exe} onInput={e=>change('claude_exe',e.currentTarget.value)} /></label><label>Claude default args<input value={claudeArgs} onInput={e=>setClaudeArgs(e.currentTarget.value)} /></label><label>Codex executable<input value={draft.codex_exe} onInput={e=>change('codex_exe',e.currentTarget.value)} /></label><label>Codex default args<input value={codexArgs} onInput={e=>setCodexArgs(e.currentTarget.value)} /></label><label class="check"><span>Reconcile native history</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label></section>}
 
         {activeTab==='input'&&<section class="input-settings"><h3>Input</h3>
           <label class="check"><span>Middle-click paste</span><input type="checkbox" checked={draft.middle_click_paste} onChange={e=>change('middle_click_paste',e.currentTarget.checked)} /></label>
           <label class="check"><span>Broadcast by default</span><input type="checkbox" checked={draft.broadcast_default} onChange={e=>change('broadcast_default',e.currentTarget.checked)} /></label>
+          <div class="keybinding-heading"><div><strong>MOBILE::TERMINAL</strong><p>Touch settings apply on coarse-pointer devices. Text input goes directly to the focused terminal.</p></div></div>
+          <label>Vertical drag<select value={draft.mobile_vertical_drag} onChange={e=>change('mobile_vertical_drag',e.currentTarget.value as Config['mobile_vertical_drag'])}><option value="smart">Smart: app wheel or scrollback</option><option value="terminal">Terminal scrollback only</option><option value="application">Application wheel</option><option value="disabled">Disabled</option></select></label>
+          <label>Scroll direction<select value={draft.mobile_scroll_direction} onChange={e=>change('mobile_scroll_direction',e.currentTarget.value as Config['mobile_scroll_direction'])}><option value="natural">Natural touch</option><option value="wheel">Mouse wheel</option></select></label>
+          <label>Scroll sensitivity<input type="number" min="0.25" max="4" step="0.25" value={draft.mobile_scroll_sensitivity} onInput={e=>change('mobile_scroll_sensitivity',Number(e.currentTarget.value))} /></label>
+          <label>Long press<select value={draft.mobile_long_press} onChange={e=>change('mobile_long_press',e.currentTarget.value as Config['mobile_long_press'])}><option value="context_menu">Terminal context menu</option><option value="disabled">Disabled</option></select></label>
           <div class="keybinding-heading"><div><strong>KEYBOARD::SHORTCUTS</strong><p>Click a command, then press the new shortcut. Changes apply when Settings is saved.</p></div><button onClick={()=>{setBindings({...bindingDefaults});setCapturingCommand(null);setBindingError('')}}>Restore shortcut defaults</button></div>
           {capturingCommand&&<div class="keybinding-capture" role="status"><span>PRESS KEYS FOR</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label||capturingCommand}</strong><button onClick={()=>{setCapturingCommand(null);setBindingError('')}}>Cancel</button></div>}
           {bindingError&&<p class="keybinding-error" role="alert">{bindingError}</p>}
@@ -324,7 +382,66 @@ export function Settings({ onClose, onOpenUsage, cwd, initialSection='General' }
 
         {activeTab==='usage'&&<section><h3>Usage analytics</h3><p>Daily Claude and Codex data is cached locally. The dashboard derives timelines and aggregate breakdowns from that cache.</p><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open usage dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh now'}</button><button onClick={()=>void clearUsage()}>Clear cache</button></div><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? Object.entries(usage.states).map(([provider,state])=>`${provider}: ${state.status}${state.error?` (${state.error})`:''}`).join(' · ') : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><p>The `latest` tag is resolved when you install or update. Refreshes use the installed unified executable and never download code in the background.</p><details class="settings-advanced"><summary>Advanced command overrides</summary><label>Claude command<textarea value={draft.ccusage_claude_command.join('\n')} onInput={e=>change('ccusage_claude_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label><label>Codex command<textarea value={draft.ccusage_codex_command.join('\n')} onInput={e=>change('ccusage_codex_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label></details></section>}
 
-        {activeTab==='hooks'&&<section><h3>Hooks and notifications</h3><label>hooks.toml<textarea value={hooks} onInput={e=>setHooks(e.currentTarget.value)} /></label><p aria-live="polite">Hook engine: {hookDiagnostic.status}{hookDiagnostic.rules!==undefined?` · ${hookDiagnostic.rules} rules`:''}{hookDiagnostic.error?` · ${hookDiagnostic.error}`:''}</p></section>}
+        {activeTab==='automation'&&<section><h3>Automation</h3>
+          <p>Universal hooks observe Claude and Codex out of band. Rules and observers can annotate or notify; they never type, approve, spawn, or modify a project.</p>
+          <div class="theme-actions"><button class="primary" onClick={onOpenAutomation}>Open Automation dashboard</button></div>
+          <label class="check"><span>Automation enabled</span><input type="checkbox" checked={draft.automation_enabled} onChange={e=>change('automation_enabled',e.currentTarget.checked)} /></label>
+          <label class="check"><span>Session titler</span><input type="checkbox" checked={draft.observer_titler_enabled} onChange={e=>change('observer_titler_enabled',e.currentTarget.checked)} /></label>
+          <label class="check"><span>Turn summarizer</span><input type="checkbox" checked={draft.observer_summarizer_enabled} onChange={e=>change('observer_summarizer_enabled',e.currentTarget.checked)} /></label>
+          <label class="check"><span>Phase 7 attention observers</span><input type="checkbox" checked={draft.phase7_observers_enabled} onChange={e=>change('phase7_observers_enabled',e.currentTarget.checked)} /></label>
+          <p class="settings-warning">Privacy boundary: each enabled observer sends only its selected bounded transcript slice to OpenRouter and the routed model provider. swe-mux does not crawl project files.</p>
+          <h3>OpenRouter</h3>
+          <p><span class={`state-dot ${provider?.secret.configured?'idle':'running'}`}/> key::{provider?.secret.configured?'configured':'not configured'} · source::{provider?.secret.source||'none'} · endpoint::{provider?.origin||'fixed OpenRouter API'}</p>
+          <label>API key<input type="password" autocomplete="off" value={openRouterKey} placeholder={provider?.secret.configured?'write only · enter to replace':'sk-or-…'} onInput={event=>setOpenRouterKey(event.currentTarget.value)} /></label>
+          <div class="theme-actions"><button disabled={!openRouterKey} onClick={()=>void providerKeyAction('test')}>Test entered key</button><button class="primary" disabled={!openRouterKey} onClick={()=>void providerKeyAction('set')}>Test + set/replace</button><button disabled={!provider?.secret.configured} onClick={()=>void providerKeyAction('clear')}>Clear stored key</button></div>
+          <p aria-live="polite">{providerMessage||'The key is write-only and never appears in config, exports, logs, or browser reads.'}</p>
+          <div class="theme-actions"><button disabled={!provider?.secret.configured} onClick={()=>void refreshModels()}>Refresh models</button><span>{provider?.models.models.length||0} models{provider?.models.stale?' · stale':''}{provider?.models.error?` · ${provider.models.error}`:''}</span></div>
+          <label>Cheap model<select value={draft.openrouter_cheap_model} onChange={event=>change('openrouter_cheap_model',event.currentTarget.value)}><option value="">Select exact model…</option>{modelOptions(draft.openrouter_cheap_model).map(model=><option value={model.id}>{model.name} · {model.id}</option>)}</select></label>
+          <label>Standard model<select value={draft.openrouter_standard_model} onChange={event=>change('openrouter_standard_model',event.currentTarget.value)}><option value="">Select exact model…</option>{modelOptions(draft.openrouter_standard_model).map(model=><option value={model.id}>{model.name} · {model.id}</option>)}</select></label>
+          <h3>Budgets + execution</h3>
+          <label>Daily token budget<input type="number" value={draft.automation_daily_token_budget} onInput={event=>change('automation_daily_token_budget',Number(event.currentTarget.value))}/></label>
+          <label>Daily dollar budget<input type="number" step="0.01" value={draft.automation_daily_budget_usd} onInput={event=>change('automation_daily_budget_usd',Number(event.currentTarget.value))}/></label>
+          <label>Per-rule daily tokens<input type="number" value={draft.automation_rule_daily_token_budget} onInput={event=>change('automation_rule_daily_token_budget',Number(event.currentTarget.value))}/></label>
+          <label>Per-rule daily dollars<input type="number" step="0.01" value={draft.automation_rule_daily_budget_usd} onInput={event=>change('automation_rule_daily_budget_usd',Number(event.currentTarget.value))}/></label>
+          <label>Hourly call cap<input type="number" value={draft.automation_hourly_call_cap} onInput={event=>change('automation_hourly_call_cap',Number(event.currentTarget.value))}/></label>
+          <label>Per-rule hourly calls<input type="number" value={draft.automation_rule_hourly_call_cap} onInput={event=>change('automation_rule_hourly_call_cap',Number(event.currentTarget.value))}/></label>
+          <label>Concurrent observers<input type="number" min="1" max="16" value={draft.automation_concurrency} onInput={event=>change('automation_concurrency',Number(event.currentTarget.value))}/></label>
+          <label>Maximum input tokens<input type="number" value={draft.automation_max_input_tokens} onInput={event=>change('automation_max_input_tokens',Number(event.currentTarget.value))}/></label>
+          <label>Maximum output tokens<input type="number" value={draft.automation_max_output_tokens} onInput={event=>change('automation_max_output_tokens',Number(event.currentTarget.value))}/></label>
+          <label>Retention days<input type="number" value={draft.automation_retention_days} onInput={event=>change('automation_retention_days',Number(event.currentTarget.value))}/></label>
+          <details class="settings-advanced"><summary>Advanced rules.toml editor</summary><p>Canonical machine-owned rules only. Repository .swe-mux/rules.toml files remain diagnostic and inert.</p><label>rules.toml<textarea value={rules} onInput={event=>setRules(event.currentTarget.value)} /></label></details>
+          <p aria-live="polite">engine::{automation?.diagnostic?'error':'ready'} · rules::{automation?.rules.length||0} · queue::{automation?.queue.size||0}/{automation?.queue.capacity||0} · dropped::{automation?.queue.dropped||0}{automation?.legacy.active?' · legacy hooks compatibility active':''}</p>
+        </section>}
+
+        {activeTab==='voice'&&<section><h3>Read aloud (TTS)</h3>
+          <p>Mark a Claude or Codex session with its pane <code>tts:</code> chip or context menu. On demand adds a speak button; auto generates audio when each reply completes. Playback and per-device autoplay live in the pane's player strip.</p>
+          <p aria-live="polite"><span class={`state-dot ${voiceInfo?.engine_available?'idle':'running'}`}/> engine::{voiceInfo?.engine||draft.tts_engine} {voiceInfo?.engine_available?'available':'unavailable'}{voiceInfo?.diagnostic?` · ${voiceInfo.diagnostic}`:''} · clips::{voiceInfo?.clip_count??0} · cache::{Math.round((voiceInfo?.cache_bytes||0)/1048576)}/{Math.round((voiceInfo?.cache_limit_bytes||0)/1048576)} MB · summary spend today::${(voiceInfo?.spend_today.cost_usd||0).toFixed(3)}</p>
+          <label class="check"><span>Enable read aloud</span><input type="checkbox" checked={draft.tts_enabled} onChange={e=>change('tts_enabled',e.currentTarget.checked)} /></label>
+          <label>Default mode for agent sessions<select value={draft.tts_default_mode} onChange={e=>change('tts_default_mode',e.currentTarget.value as Config['tts_default_mode'])}><option value="off">Off until marked</option><option value="on_demand">On demand (speak button)</option><option value="auto">Auto on every reply</option></select></label>
+          <label>Content<select value={draft.tts_content} onChange={e=>change('tts_content',e.currentTarget.value as Config['tts_content'])}><option value="summary">Spoken summary (LLM, like /say)</option><option value="verbatim">Verbatim reply (markdown stripped)</option></select></label>
+          <label>Engine<select value={draft.tts_engine} onChange={e=>change('tts_engine',e.currentTarget.value as Config['tts_engine'])}><option value="edge">Edge neural voices (online, free)</option><option value="sapi">Windows SAPI (offline)</option></select></label>
+          {draft.tts_engine==='edge'&&<>
+            <label>Edge voice<input list="edge-voice-suggestions" value={draft.tts_edge_voice} onInput={e=>change('tts_edge_voice',e.currentTarget.value)} /></label>
+            <datalist id="edge-voice-suggestions">{EDGE_VOICE_SUGGESTIONS.map(voice=><option value={voice}/>)}</datalist>
+            <label>Speaking rate<input value={draft.tts_edge_rate} placeholder="+10%" onInput={e=>change('tts_edge_rate',e.currentTarget.value)} /></label>
+            <label>Pitch<input value={draft.tts_edge_pitch} placeholder="+0Hz" onInput={e=>change('tts_edge_pitch',e.currentTarget.value)} /></label>
+            <label class="check"><span>Soften sentence stops (shorter pauses at periods)</span><input type="checkbox" checked={draft.tts_soften_stops} onChange={e=>change('tts_soften_stops',e.currentTarget.checked)} /></label>
+          </>}
+          {draft.tts_engine==='sapi'&&<>
+            <label>SAPI voice (blank = system default)<input value={draft.tts_sapi_voice} onInput={e=>change('tts_sapi_voice',e.currentTarget.value)} /></label>
+            <label>SAPI rate (-10 slow … 10 fast)<input type="number" min="-10" max="10" value={draft.tts_sapi_rate} onInput={e=>change('tts_sapi_rate',Number(e.currentTarget.value))} /></label>
+          </>}
+          <h3>Spoken summary</h3>
+          <p>Summaries call OpenRouter with the last turn only, record spend beside observer calls, and stop at the daily budget. Configure the key under Automation.</p>
+          <label>Summary model<select value={draft.tts_summary_model} onChange={e=>change('tts_summary_model',e.currentTarget.value)}><option value="">Use automation cheap model</option>{modelOptions(draft.tts_summary_model).map(model=><option value={model.id}>{model.name} · {model.id}</option>)}</select></label>
+          <label>Summary max tokens<input type="number" min="64" max="2000" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /></label>
+          <label>Daily summary budget (USD)<input type="number" step="0.01" min="0" max="100" value={draft.tts_daily_budget_usd} onInput={e=>change('tts_daily_budget_usd',Number(e.currentTarget.value))} /></label>
+          <label>Verbatim character cap<input type="number" min="200" max="40000" value={draft.tts_verbatim_max_chars} onInput={e=>change('tts_verbatim_max_chars',Number(e.currentTarget.value))} /></label>
+          <h3>Storage and dictation</h3>
+          <label>Audio cache limit (MB)<input type="number" min="10" max="5000" value={draft.tts_cache_mb} onInput={e=>change('tts_cache_mb',Number(e.currentTarget.value))} /></label>
+          <label class="check"><span>Microphone dictation button on agent panes</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
+          <p>Dictation uses the browser's speech recognition and needs a secure context: it works on localhost and behind optional Tailscale Serve HTTPS, but not over plain tailnet HTTP. Phone keyboards already dictate on mobile. Transcribed text is inserted without submitting; press Enter to send.</p>
+        </section>}
 
         {activeTab==='remote'&&<section><h3>Remote and security</h3><label class="check"><span>Listen on Tailscale IPv4</span><input type="checkbox" checked={draft.tailnet_enabled} onChange={event=>change('tailnet_enabled',event.currentTarget.checked)} /></label><p>Changing the listener requires a daemon restart. swe-mux binds localhost plus the specific Tailscale address—never every LAN interface.</p><dl><dt>Local URL</dt><dd>{remote?.listen_url||`http://${draft.host}:${draft.port}`}</dd><dt>Direct tailnet</dt><dd>{remote?.direct_available?'active':draft.tailnet_enabled?'Tailscale address unavailable':'disabled'}</dd>{remote?.tailnet_urls.map(url=><Fragment key={url}><dt>Tailnet URL</dt><dd><a href={url} target="_blank" rel="noreferrer">{url}</a></dd></Fragment>)}</dl><p>Direct tailnet HTTP is encrypted in transit by Tailscale, but browsers may restrict secure-context clipboard APIs. Normal terminal input remains available.</p><strong>Optional HTTPS with Tailscale Serve</strong><p>{remote?.diagnostic||'Checking Tailscale Serve…'}</p>{remote?.serve_url&&<p><a href={remote.serve_url} target="_blank" rel="noreferrer">{remote.serve_url}</a></p>}{remote?.funnel_detected&&<p class="settings-inline-error">Tailscale Funnel appears enabled. Public ingress is unsupported; use direct tailnet access or tailnet-only Serve.</p>}<label>Optional Serve command<input readonly value={remote?.setup_command||`tailscale serve --bg http://127.0.0.1:${draft.port}`} onFocus={event=>event.currentTarget.select()} /></label><div class="theme-actions"><button onClick={()=>void navigator.clipboard.writeText(remote?.setup_command||`tailscale serve --bg http://127.0.0.1:${draft.port}`)}>Copy Serve command</button><button onClick={()=>void api<RemoteStatus>('GET','/api/remote/status').then(setRemote)}>Recheck</button></div><p>No swe-mux login is used. Tailscale access policy controls which tailnet devices can connect.</p></section>}
 

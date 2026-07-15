@@ -19,8 +19,15 @@ async def test_layout_is_versioned_revisioned_and_rejects_stale_writes(tmp_path:
         "default", layout={"version": 1, "panes": ["one", "one"]}, layout_revision=0
     )
     assert updated.layout == {
-        "version": 3,
+        "version": 5,
         "root": {"type": "leaf", "kind": "terminal", "id": "one"},
+        "note_workspace": {
+            "open_ids": [],
+            "active_id": None,
+            "size": 0.38,
+            "visible": False,
+            "mode": "dock",
+        },
     }
     assert updated.layout_revision == 1
     with pytest.raises(ValueError, match="stale layout revision"):
@@ -34,6 +41,27 @@ async def test_layout_is_versioned_revisioned_and_rejects_stale_writes(tmp_path:
     await reopened_spaces.start()
     assert layout_terminal_ids(reopened_spaces.spaces["default"].layout) == ["one"]
     assert reopened_spaces.spaces["default"].layout_revision == 1
+    reopened_history.close()
+
+
+async def test_space_notes_open_mode_persists_and_inherits_global(tmp_path: Path) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    spaces = SpaceManager(history)
+    await spaces.start()
+
+    assert spaces.spaces["default"].notes_open_mode is None
+    updated = await spaces.update("default", notes_open_mode="popout")
+    assert updated.notes_open_mode == "popout"
+    history.close()
+
+    reopened_history = HistoryIndex(tmp_path / "mux.db")
+    reopened_spaces = SpaceManager(reopened_history)
+    await reopened_spaces.start()
+    assert reopened_spaces.spaces["default"].notes_open_mode == "popout"
+    await reopened_spaces.update("default", notes_open_mode=None)
+    assert reopened_spaces.spaces["default"].notes_open_mode is None
+    with pytest.raises(ValueError, match="notes_open_mode"):
+        await reopened_spaces.update("default", notes_open_mode="sideways")
     reopened_history.close()
 
 
@@ -56,8 +84,11 @@ def test_recursive_layout_validates_splits_ratios_and_unique_resources() -> None
             },
         }
     )
-    assert layout["version"] == 3
+    assert layout["version"] == 5
     assert layout_terminal_ids(layout) == ["left"]
+    assert layout["note_workspace"]["open_ids"] == ["notes"]
+    assert layout["note_workspace"]["active_id"] == "notes"
+    assert layout["note_workspace"]["visible"] is True
     with pytest.raises(ValueError, match="same resource"):
         normalize_layout(
             {

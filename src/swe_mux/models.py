@@ -69,6 +69,13 @@ class SessionRecord:
     git: GitState = field(default_factory=GitState)
     pinned_attention: bool = False
     broadcast: bool = False
+    # Read-aloud generation mode and spoken-content override for this session.
+    # None inherits the configured global default; both are volatile and die
+    # with the live session.
+    voice_mode: str | None = None
+    voice_content: str | None = None
+    startup_timing_ms: dict[str, float] = field(default_factory=dict)
+    client_startup_timing_ms: dict[str, float] = field(default_factory=dict)
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)
@@ -103,6 +110,7 @@ class SpaceRecord:
     anchor_mode: Literal["auto", "fixed", "none"] = "auto"
     anchor_project_scope_id: str | None = None
     anchor_revision: int = 0
+    notes_open_mode: Literal["dock", "popout"] | None = None
 
     def snapshot(self) -> dict[str, Any]:
         result = asdict(self)

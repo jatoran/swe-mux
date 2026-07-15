@@ -44,6 +44,8 @@ class SpaceManager:
         if "anchor_mode" in changes or "anchor_project_scope_id" in changes:
             raise ValueError("space project anchors have been retired")
         normalized_layout = normalize_layout(changes["layout"]) if "layout" in changes else None
+        if changes.get("notes_open_mode") not in {None, "dock", "popout"}:
+            raise ValueError("space notes_open_mode must be dock, popout, or null")
         for key in (
             "name",
             "position",
@@ -51,6 +53,7 @@ class SpaceManager:
             "default_cwd",
             "default_backend",
             "default_profile_id",
+            "notes_open_mode",
         ):
             if key in changes:
                 setattr(space, key, changes[key])

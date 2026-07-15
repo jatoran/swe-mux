@@ -16,8 +16,8 @@ for (const backend of ['PowerShell', 'CMD', 'pwsh', 'WSL', 'Claude', 'Codex']) {
 
   test(`${backend}: copy and bracketed-paste paths stay distinct`, () => {
     assert.deepEqual(terminalKeyDecision(key('c', { ctrlKey: true }), undefined, true), { kind: 'copySelection' })
-    assert.deepEqual(terminalKeyDecision(key('v', { ctrlKey: true }), undefined, false), { kind: 'pasteText' })
-    assert.deepEqual(terminalKeyDecision(key('v', { ctrlKey: true, shiftKey: true }), undefined, false), { kind: 'pasteText' })
+    assert.deepEqual(terminalKeyDecision(key('v', { ctrlKey: true }), undefined, false), { kind: 'browserPaste' })
+    assert.deepEqual(terminalKeyDecision(key('v', { ctrlKey: true, shiftKey: true }), undefined, false), { kind: 'browserPaste' })
   })
 }
 

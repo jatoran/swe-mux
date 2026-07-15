@@ -29,6 +29,8 @@ class ExternalTranscript:
     cwd: str
     created_at: float
     path: Path
+    mtime_ns: int = 0
+    size: int = 0
 
     @property
     def row_id(self) -> str:
@@ -73,8 +75,11 @@ def inspect_claude(path: Path) -> ExternalTranscript | None:
     )
     if not cwd:
         return None
-    created = _timestamp(events[0].get("timestamp"), path.stat().st_mtime)
-    return ExternalTranscript("claude", native_id, cwd, created, path)
+    st = path.stat()
+    created = _timestamp(events[0].get("timestamp"), st.st_mtime)
+    return ExternalTranscript(
+        "claude", native_id, cwd, created, path, st.st_mtime_ns, st.st_size
+    )
 
 
 def inspect_codex(path: Path) -> ExternalTranscript | None:
@@ -85,8 +90,11 @@ def inspect_codex(path: Path) -> ExternalTranscript | None:
         payload = event.get("payload") or {}
         native_id, cwd = payload.get("id"), payload.get("cwd")
         if native_id and cwd:
-            created = _timestamp(event.get("timestamp"), path.stat().st_mtime)
-            return ExternalTranscript("codex", str(native_id), str(cwd), created, path)
+            st = path.stat()
+            created = _timestamp(event.get("timestamp"), st.st_mtime)
+            return ExternalTranscript(
+                "codex", str(native_id), str(cwd), created, path, st.st_mtime_ns, st.st_size
+            )
     return None
 
 
@@ -172,8 +180,14 @@ def summarize_transcript(path: Path, backend: str) -> dict[str, Any]:
 
 async def reconcile_external_history(history: HistoryIndex, home: Path | None = None) -> int:
     transcripts = await asyncio.to_thread(scan_external_transcripts, home)
+    # Skip transcripts whose (mtime_ns, size) are unchanged since the last
+    # reconcile so unchanged native files are never re-read/re-parsed. The
+    # watermark is persisted per external row, so this holds across restarts.
+    watermarks = await history.external_watermarks()
     projects: dict[str, ProjectIdentity] = {}
     for item in transcripts:
+        if watermarks.get(str(item.path)) == (item.mtime_ns, item.size):
+            continue
         if item.cwd not in projects:
             projects[item.cwd] = await resolve_project(item.cwd)
         project = projects[item.cwd]
@@ -192,6 +206,8 @@ async def reconcile_external_history(history: HistoryIndex, home: Path | None = 
             project_root=project.root,
             project_scope_id=project.id,
             repo_group_id=project.repo_group_id,
+            mtime_ns=item.mtime_ns,
+            size=item.size,
             **summary,
         )
     return len(transcripts)

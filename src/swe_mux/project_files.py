@@ -110,8 +110,13 @@ def resolve_project_default_cwd(project_root: str | Path, relative_cwd: str) -> 
     return candidate
 
 
-async def read_project_config(cwd: str | Path) -> dict[str, Any]:
-    project, mux_dir = await project_status(cwd)
+async def read_project_config(
+    cwd: str | Path, *, project: ProjectIdentity | None = None
+) -> dict[str, Any]:
+    if project is None:
+        project, mux_dir = await project_status(cwd)
+    else:
+        mux_dir = Path(project.root) / ".swe-mux"
     path = mux_dir / "config.toml"
     if not path.exists():
         return {

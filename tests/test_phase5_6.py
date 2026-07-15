@@ -6,6 +6,7 @@ from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,7 +18,7 @@ from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.profiles import resolve_profile
 from swe_mux.project_files import read_note, write_note
 from swe_mux.runtime_cwd import Osc7Parser, local_directory_from_osc7
-from swe_mux.session import SessionManager
+from swe_mux.session import ScrollbackBuffer, Session, SessionManager
 
 
 def test_osc7_parser_handles_fragmentation_and_rejects_remote_or_missing_paths(
@@ -142,3 +143,116 @@ async def test_runtime_cwd_switch_rate_limit_prevents_poll_target_churn(
     await manager._accept_runtime_cwd(fake, tmp_path)
     assert record.runtime_cwd_live is False
     assert record.runtime_cwd_dropped == 1
+
+
+@pytest.mark.asyncio
+async def test_fallback_detection_ignores_a_native_run_that_already_exited(
+    tmp_path: Path,
+) -> None:
+    transcript = tmp_path / "native-ended.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    record = SessionRecord(
+        "pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", []
+    )
+
+    class Pty:
+        checks = 0
+
+        def isalive(self) -> bool:
+            self.checks += 1
+            return self.checks == 1
+
+    adapter = SimpleNamespace(
+        name="claude",
+        recent_transcripts=lambda *_: [(time.time(), transcript, "native-ended")],
+    )
+    session = SimpleNamespace(
+        record=record,
+        pty=Pty(),
+        stop_event=asyncio.Event(),
+        scrollback=SimpleNamespace(
+            position=0, bytes_since=lambda _position: b"PS> claude"
+        ),
+        ignored_detection_runs={("claude", "native-ended")},
+    )
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    manager.adapters = {"shell": SimpleNamespace(name="shell"), "claude": adapter}
+
+    await manager._detect_nested_agent(session)
+
+    assert record.backend == "shell"
+    assert record.agent_run_id is None
+
+
+@pytest.mark.asyncio
+async def test_fallback_detection_ignores_agent_names_retained_before_demotion(
+    tmp_path: Path,
+) -> None:
+    record = SessionRecord(
+        "pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", []
+    )
+    scrollback = ScrollbackBuffer(128)
+    scrollback.append(b"old Claude output mentioned codex\r\nPS> ")
+
+    class Pty:
+        checks = 0
+
+        def isalive(self) -> bool:
+            self.checks += 1
+            return self.checks == 1
+
+    adapter = SimpleNamespace(
+        name="codex",
+        recent_transcripts=lambda *_: (_ for _ in ()).throw(
+            AssertionError("retained output must not trigger transcript detection")
+        ),
+    )
+    session = SimpleNamespace(
+        record=record,
+        pty=Pty(),
+        stop_event=asyncio.Event(),
+        scrollback=scrollback,
+        ignored_detection_runs=set(),
+    )
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    manager.adapters = {"shell": SimpleNamespace(name="shell"), "codex": adapter}
+
+    await manager._detect_nested_agent(session)
+
+    assert record.backend == "shell"
+    assert record.state == "starting"
+
+
+@pytest.mark.asyncio
+async def test_codex_demotes_by_stable_launcher_id_after_native_id_discovery(
+    tmp_path: Path,
+) -> None:
+    record = SessionRecord(
+        "pty", "codex", "default", "codex", "codex-native", str(tmp_path), "pwsh", []
+    )
+    record.agent_run_id = "run"
+    record.run_cwd = str(tmp_path)
+    pty = SimpleNamespace(graceful_exit="", isalive=lambda: True)
+    codex = SimpleNamespace(graceful_exit_keys=lambda: "exit\r")
+    shell = SimpleNamespace(graceful_exit_keys=lambda: "exit\r")
+    session = Session(record, cast(Any, pty), cast(Any, codex), 32, "secret")
+    session.agent_lifecycle_id = "launcher-token"
+
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    manager.sessions = {record.id: session}
+    manager.adapters = {"shell": shell, "codex": codex}
+    manager.history = SimpleNamespace(
+        update_agent_summary=AsyncMock(), agent_run_ended=AsyncMock()
+    )
+    manager.events = SimpleNamespace(emit=AsyncMock())
+    manager._start_detection = lambda _session: None
+
+    unchanged = await manager.demote(record.id, "codex", "stale-launcher")
+    assert unchanged.record.backend == "codex"
+
+    demoted = await manager.demote(record.id, "codex", "launcher-token")
+    assert demoted.record.backend == "shell"
+    assert demoted.record.state == "running"
+    assert demoted.record.agent_run_id is None
+    assert demoted.agent_lifecycle_id is None
+    assert ("codex", "codex-native") in demoted.ignored_detection_runs

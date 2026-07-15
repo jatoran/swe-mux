@@ -1,7 +1,7 @@
 export type TerminalKeyDecision =
   | { kind: 'pass' }
   | { kind: 'command'; command: string }
-  | { kind: 'pasteText' }
+  | { kind: 'browserPaste' }
   | { kind: 'copySelection' }
 
 export type TerminalKey = {
@@ -19,7 +19,7 @@ export function terminalKeyDecision(
     return { kind: 'command', command }
   }
   const key = event.key.toLowerCase()
-  if (event.ctrlKey && !event.altKey && !event.metaKey && key === 'v') return { kind: 'pasteText' }
+  if (event.ctrlKey && !event.altKey && !event.metaKey && key === 'v') return { kind: 'browserPaste' }
   if (event.ctrlKey && !event.altKey && !event.metaKey && key === 'c' && hasSelection) {
     return { kind: 'copySelection' }
   }

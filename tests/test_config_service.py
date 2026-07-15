@@ -7,6 +7,7 @@ import pytest
 
 from swe_mux.config import (
     BUILTIN_THEME_PAIRS,
+    SCHEMA_VERSION,
     contrast_ratio,
     default_ccusage_command,
     load_config,
@@ -24,7 +25,7 @@ def test_legacy_config_migrates_with_backup_and_removes_obsolete_secret(tmp_path
 
     config = load_config(path)
 
-    assert config.schema_version == 5
+    assert config.schema_version == SCHEMA_VERSION
     assert config.shell_profiles[0].executable == "pwsh.exe"
     assert path.with_suffix(".toml.bak").is_file()
     assert "token" not in tomllib.loads(path.read_text(encoding="utf-8"))
@@ -97,6 +98,52 @@ def test_safe_update_is_atomic_and_revisioned(tmp_path: Path) -> None:
     loaded = load_config(path)
     assert loaded.theme == "tokyo-night"
     assert loaded.port == 9010
+
+
+def test_note_opening_default_is_hot_reloadable_and_validated(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    assert config.notes_default_open == "dock"
+
+    hot, restart = update_config(config, {"notes_default_open": "popout"})
+
+    assert hot == {"notes_default_open"}
+    assert restart == set()
+    assert load_config(path).notes_default_open == "popout"
+    with pytest.raises(ValueError, match="dock or popout"):
+        update_config(config, {"notes_default_open": "window"})
+
+
+def test_mobile_input_defaults_are_hot_reloadable_and_validated(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+
+    assert config.mobile_vertical_drag == "smart"
+    assert config.mobile_scroll_direction == "natural"
+    assert config.mobile_scroll_sensitivity == 1.0
+    assert config.mobile_long_press == "context_menu"
+
+    hot, restart = update_config(
+        config,
+        {
+            "mobile_vertical_drag": "application",
+            "mobile_scroll_direction": "wheel",
+            "mobile_scroll_sensitivity": 1.5,
+            "mobile_long_press": "disabled",
+        },
+    )
+
+    assert hot == {
+        "mobile_vertical_drag",
+        "mobile_scroll_direction",
+        "mobile_scroll_sensitivity",
+        "mobile_long_press",
+    }
+    assert restart == set()
+    with pytest.raises(ValueError, match="smart, terminal, application, or disabled"):
+        update_config(config, {"mobile_vertical_drag": "swipe"})
+    with pytest.raises(ValueError, match="between 0.25 and 4"):
+        update_config(config, {"mobile_scroll_sensitivity": 10})
 
 
 def test_builtin_themes_and_custom_text_meet_readability_contract(tmp_path: Path) -> None:

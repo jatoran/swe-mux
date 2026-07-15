@@ -1,8 +1,9 @@
-# Meta-hooks
+# Legacy hook compatibility
 
 ## What it is
 
-- Hot-reloaded user rules map normalized mux events to local actions.
+- This is the isolated compatibility engine for the pre-Phase-6 `hooks.toml` contract.
+  New automation uses Universal hooks in `rules.toml`; see `automation.md`.
 
 ## Configuration
 
@@ -39,6 +40,9 @@ accept a validated, bounded variable set.
 - A plain shell matches `project_scope_id` against its daemon-resolved spawn scope. An active
   Claude/Codex session matches its immutable run scope. Event payloads and OSC runtime scope
   cannot override these match fields, and `run` actions execute from trusted spawn/run cwd.
+- Legacy rules remain last-known-good and are never silently migrated or deleted. Their
+  `run`, `http`, and `write_pty` authority is not exposed to canonical rules, observers,
+  model results, repository files, or the ordinary Automation editor.
 
 ## Key files
 

@@ -15,6 +15,10 @@ from .win_jobobj import ReaperJob
 
 log = logging.getLogger(__name__)
 
+# Upper bound on a single coalesced read handoff. Caps per-handoff memory and keeps a
+# firehose from starving the drain loop while still collapsing typical bursts into one put.
+_MAX_COALESCE_BYTES = 256 * 1024
+
 
 def merge_environment(
     base: Mapping[str, str], extra: Mapping[str, str]
@@ -45,6 +49,7 @@ class PtyHost:
     _queue: asyncio.Queue[bytes] | None = field(default=None, init=False)
     _loop: asyncio.AbstractEventLoop | None = field(default=None, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
+    _first_output_at: float | None = field(default=None, init=False)
 
     @property
     def pid(self) -> int:
@@ -56,9 +61,14 @@ class PtyHost:
             raise RuntimeError("PTY has not been spawned")
         return self._queue
 
+    @property
+    def first_output_at(self) -> float | None:
+        return self._first_output_at
+
     def spawn(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue(maxsize=1024)
+        self._first_output_at = None
         self._pty = winpty.PTY(cols=self.cols, rows=self.rows)
         env = None
         if self.env_extra:
@@ -84,8 +94,26 @@ class PtyHost:
                 except winpty.WinptyError:
                     chunk = None
                 if chunk:
-                    data = chunk.encode("utf-8") if isinstance(chunk, str) else chunk
-                    future = asyncio.run_coroutine_threadsafe(self._queue.put(data), self._loop)
+                    buffer = bytearray(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+                    # Coalesce any output already waiting in the ConPTY into a single
+                    # cross-thread handoff. A burst (build log, large `ls`) is thousands
+                    # of tiny reads; without this each pays a full event-loop wakeup plus
+                    # a blocking round-trip, capping throughput at loop-wakeup latency.
+                    while len(buffer) < _MAX_COALESCE_BYTES:
+                        try:
+                            more = self._pty.read(blocking=False)
+                        except winpty.WinptyError:
+                            break
+                        if not more:
+                            break
+                        buffer += more.encode("utf-8") if isinstance(more, str) else more
+                    if self._first_output_at is None:
+                        self._first_output_at = time.perf_counter()
+                    # A single blocking put per drain preserves backpressure (a slow
+                    # consumer throttles the child) while amortizing the round-trip cost.
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._queue.put(bytes(buffer)), self._loop
+                    )
                     future.result(timeout=5)
                 elif not self._pty.isalive():
                     break

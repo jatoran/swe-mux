@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from swe_mux.app_notes import read_space_note, write_space_note
 from swe_mux.history import HistoryIndex
-from swe_mux.layouts import layout_terminal_ids, normalize_layout, remove_layout_leaf
-from swe_mux.models import SpaceRecord
+from swe_mux.layouts import (
+    layout_terminal_ids,
+    normalize_layout,
+    remove_layout_leaf,
+    stack_leaf,
+)
+from swe_mux.models import SessionRecord, SpaceRecord
 from swe_mux.note_migration import migrate_space_notes, repair_misbound_project_notes
 from swe_mux.projects import ProjectIdentity, project_scope_id
+from swe_mux.server import note_shelf_items
 from swe_mux.spaces import SpaceManager
 
 
@@ -131,7 +139,8 @@ def test_v3_stack_validation_preserves_order_and_active_identity() -> None:
     )
     assert layout_terminal_ids(layout) == ["one", "two"]
     assert layout["root"]["active_child_id"] == "two"
-    with pytest.raises(ValueError, match="terminal leaves only"):
+    # Notes live in the space note workspace, never in a terminal tab region.
+    with pytest.raises(ValueError, match="terminal and preview leaves only"):
         normalize_layout(
             {
                 "version": 3,
@@ -143,6 +152,90 @@ def test_v3_stack_validation_preserves_order_and_active_identity() -> None:
                 },
             }
         )
+
+
+def test_stacks_accept_preview_tabs_beside_their_session() -> None:
+    layout = normalize_layout(
+        {
+            "version": 5,
+            "root": {
+                "type": "stack",
+                "id": "tabs-a",
+                "active_child_id": "preview-1",
+                "children": [
+                    {"type": "leaf", "kind": "terminal", "id": "one"},
+                    {"type": "leaf", "kind": "preview", "id": "preview-1"},
+                ],
+            },
+        }
+    )
+    assert layout_terminal_ids(layout) == ["one"]
+    assert [child["kind"] for child in layout["root"]["children"]] == ["terminal", "preview"]
+    assert layout["root"]["active_child_id"] == "preview-1"
+
+
+def _single_terminal_layout(session_id: str) -> dict[str, Any]:
+    return normalize_layout(
+        {"version": 5, "root": {"type": "leaf", "kind": "terminal", "id": session_id}}
+    )
+
+
+def test_stack_leaf_groups_a_preview_beside_a_bare_session() -> None:
+    layout = _single_terminal_layout("a")
+    grouped = stack_leaf(layout, "preview", "preview-1", target_id="a")
+    assert grouped is not None
+    root = grouped["root"]
+    assert root["type"] == "stack"
+    assert [(child["kind"], child["id"]) for child in root["children"]] == [
+        ("terminal", "a"),
+        ("preview", "preview-1"),
+    ]
+    assert root["active_child_id"] == "preview-1"
+
+
+def test_stack_leaf_appends_into_the_sessions_existing_tab_region() -> None:
+    layout = normalize_layout(
+        {
+            "version": 5,
+            "root": {
+                "type": "stack",
+                "id": "tabs-a",
+                "active_child_id": "a",
+                "children": [
+                    {"type": "leaf", "kind": "terminal", "id": "a"},
+                    {"type": "leaf", "kind": "terminal", "id": "b"},
+                ],
+            },
+        }
+    )
+    grouped = stack_leaf(layout, "preview", "preview-1", target_id="b")
+    assert grouped is not None
+    root = grouped["root"]
+    assert root["id"] == "tabs-a"  # joins the existing region, does not create a new one
+    assert [child["id"] for child in root["children"]] == ["a", "b", "preview-1"]
+    assert root["active_child_id"] == "preview-1"
+
+
+def test_stack_leaf_reports_when_the_session_has_no_terminal_to_group_with() -> None:
+    layout = _single_terminal_layout("a")
+    # The caller falls back to an ordinary split attach when this returns None.
+    assert stack_leaf(layout, "preview", "preview-1", target_id="absent") is None
+    empty = normalize_layout({"version": 5, "root": None})
+    seeded = stack_leaf(empty, "preview", "preview-1", target_id="absent")
+    assert seeded is not None and seeded["root"] == {
+        "type": "leaf", "kind": "preview", "id": "preview-1",
+    }
+
+
+def test_stack_leaf_rejects_notes_and_ignores_duplicates() -> None:
+    layout = _single_terminal_layout("a")
+    with pytest.raises(ValueError, match="cannot hold note leaves"):
+        stack_leaf(layout, "note", "spaces:one", target_id="a")
+    grouped = stack_leaf(layout, "preview", "preview-1", target_id="a")
+    assert grouped is not None
+    again = stack_leaf(grouped, "preview", "preview-1", target_id="a")
+    assert again is not None
+    assert [child["id"] for child in again["root"]["children"]] == ["a", "preview-1"]
 
 
 async def test_misbound_project_notes_are_released_and_removed_from_layout(
@@ -213,3 +306,91 @@ def test_remove_layout_leaf_collapses_its_split() -> None:
     }
     cleaned = remove_layout_leaf(layout, "note", "projects:stale")
     assert cleaned["root"] == {"type": "leaf", "kind": "terminal", "id": "shell"}
+
+
+async def test_note_shelf_unifies_space_project_run_and_recovered_notes(tmp_path: Path) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    spaces = SpaceManager(history)
+    await spaces.start()
+    data_dir = tmp_path / "data"
+    write_space_note(data_dir, "default", "Main", "# Daily log\nSpace detail", "missing")
+
+    root = tmp_path / "project"
+    root.mkdir()
+    scope = ProjectIdentity(project_scope_id(root), "project", str(root), "cwd")
+    await history.register_project_scope(scope)
+    project_note = root / ".swe-mux" / "notes" / "project.md"
+    project_note.parent.mkdir(parents=True)
+    project_note.write_text("# Project plan\nShip it", encoding="utf-8")
+    await history.bind_artifact(
+        artifact_id="project-note",
+        kind="note",
+        owner_type="project",
+        owner_id=scope.id,
+        owner_label="project",
+        project_scope_id=scope.id,
+        relative_path=".swe-mux/notes/project.md",
+    )
+
+    run = SessionRecord(
+        "run-1", "claude-a", "default", "claude", "native-1", str(root), "claude", []
+    )
+    run.project_scope_id = scope.id
+    run.project_label = scope.label
+    run.project_root = scope.root
+    run.state = "exited"
+    await history.session_started(run, None)
+    run_note = root / ".swe-mux" / "notes" / "sessions" / "run-1.md"
+    run_note.parent.mkdir(parents=True)
+    run_note.write_text("# Fix parser\nRemember the edge case", encoding="utf-8")
+    await history.bind_artifact(
+        artifact_id="run-note",
+        kind="note",
+        owner_type="session",
+        owner_id="run-1",
+        owner_label="claude-a",
+        project_scope_id=scope.id,
+        relative_path=".swe-mux/notes/sessions/run-1.md",
+    )
+    recovered = root / ".swe-mux" / "notes" / "sessions" / "unknown.md"
+    recovered.write_text("orphaned but visible", encoding="utf-8")
+
+    request = SimpleNamespace(
+        app={
+            "history": history,
+            "spaces": spaces,
+            "sessions": SimpleNamespace(sessions={}),
+            "config": SimpleNamespace(data_dir=data_dir),
+        }
+    )
+    items = await note_shelf_items(request)
+    assert {item["category"] for item in items} == {
+        "space",
+        "project",
+        "agent-run",
+        "recovered",
+    }
+    assert next(item for item in items if item["category"] == "space")["content_title"] == (
+        "Daily log"
+    )
+    ended = next(item for item in items if item["category"] == "agent-run")
+    assert ended["owner_label"] == "claude-a"
+    assert ended["openable"] is True
+    orphan = next(item for item in items if item["category"] == "recovered")
+    assert orphan["openable"] is False
+    assert "orphaned but visible" in orphan["excerpt"]
+    history.close()
+
+
+def test_frontend_exposes_global_notes_shelf_and_keeps_projects_project_only() -> None:
+    app = Path("frontend/src/App.tsx").read_text(encoding="utf-8")
+    shelf = Path("frontend/src/NotesShelf.tsx").read_text(encoding="utf-8")
+    projects = Path("frontend/src/ProjectRegistry.tsx").read_text(encoding="utf-8")
+    assert 'class="notes-shelf-trigger"' in app
+    assert "Browse all notes" in app
+    assert "/api/note-shelf" in shelf
+    assert "Agent runs" in shelf and "Recovered" in shelf
+    assert "APP-OWNED SPACE NOTES" not in projects
+    assert "/api/space-notes" not in projects
+    assert "project settings" in projects
+    assert "onOpenSettings(selected)" in projects

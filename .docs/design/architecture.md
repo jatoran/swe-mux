@@ -17,6 +17,9 @@
   grouping only.
 - Artifact: durable project-resident file relationship with immutable owning scope and
   last-known logical owner metadata.
+- Universal hook: one machine-owned normalized event rule. Observer: a stateless,
+  read-only OpenRouter call whose schema-validated result becomes an annotation or
+  provider-neutral notification. Annotation: durable derived metadata owned by an agent run.
 
 ## Process model
 
@@ -24,9 +27,11 @@
 Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell/agent CLI
                                │       │             └── descendants/listeners
                                │       ├── global + nested Win32 jobs
-                               │       ├── Git/hooks/optional usage workers
+                               │       ├── Git/events/legacy hooks/usage workers
+                               │       ├── bounded automation queue ──> OpenRouter
+                               │       ├── fleet evidence + attention/interlocks
                                │       └── project `.swe-mux/` files
-                               └── SQLite history/events/spaces/scopes/artifacts
+                               └── SQLite history/events/spaces/scopes/artifacts/automation
 ```
 
 ## Deployment topology
@@ -54,7 +59,18 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
 - `src/swe_mux/processes.py`: bounded descendant reconciliation, ownership-checked
   actions, loopback listener discovery, and preview registration.
 - `src/swe_mux/usage.py`: optional, cached, non-blocking external usage normalization.
-- `src/swe_mux/meta_hooks.py`: validated last-known-good event actions and delivery records.
+- `src/swe_mux/automation.py`: normalized event/rule validation, transcript slices, bounded
+  scheduling, deterministic actions, observers, budgets, and built-in observer definitions.
+- `src/swe_mux/automation_store.py`: annotations, firing/action/call evidence, checkpoints,
+  budgets, notifications, lineage, experiences, batches, and model-cache persistence.
+- `src/swe_mux/openrouter.py` + `secret_store.py`: fixed-origin provider and write-only
+  platform secret boundary.
+- `src/swe_mux/fleet_intelligence.py`: deterministic attention evidence, environment
+  interlocks, absence reports, experience suggestions, and actuation-gate diagnostics.
+- `src/swe_mux/voice.py`: read-aloud clip pipeline — TTS engine boundary (edge-tts/SAPI),
+  bounded app-owned audio cache, and the only non-observer OpenRouter call (spoken
+  summaries, ledgered under `builtin:voice-summary`).
+- `src/swe_mux/meta_hooks.py`: isolated legacy last-known-good compatibility engine.
 - `frontend/src/`: Preact state and xterm rendering; talks only through public HTTP/WS contracts.
 
 ## Lifecycle invariants
@@ -79,6 +95,11 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
     remain app-local, so mixed membership and `cd` never retarget an existing note.
 11. Layout v3 separates process and viewport: split/stack nodes arrange independently
     killable session leaves, and removing a leaf never terminates its process.
+12. Event persistence precedes bounded automation evaluation. A provider call receives only
+    an explicit normalized slice; no prompt or slice is persisted. Every result is locally
+    schema checked and can map only to the rule-authored annotation/notification action.
+13. Cross-vendor reviews and observer batches require confirmation bound to the exact
+    preview token. Reviews are typed user operations with lineage, never automation actions.
 
 ## Failure modes
 
@@ -89,6 +110,11 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
 - Missing frontend build ⇒ `/` returns a build instruction; API remains operational.
 - Missing optional `psutil` or ccusage executable ⇒ the related surface reports a typed
   unavailable/error status; terminal operation remains unaffected.
+- Missing/invalid OpenRouter key, stale model metadata, budget exhaustion, queue overflow,
+  provider timeout, invalid JSON, or cancellation ⇒ visible automation diagnostics; no PTY,
+  session state, note, transcript, history, or project mutation is affected.
+- TTS engine failure, missing edge-tts, or voice budget exhaustion ⇒ a failed clip record
+  and `voice_clip_failed` event; terminals and agent runs are unaffected.
 
 ## References
 

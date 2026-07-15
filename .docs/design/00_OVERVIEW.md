@@ -2,7 +2,8 @@
 
 ## System purpose
 
-- Windows-native browser terminal multiplexer for long-lived shell and coding-agent CLI sessions.
+- Windows-native browser terminal multiplexer and read-only control plane for long-lived
+  shell and coding-agent CLI sessions.
 - Browser lifetime is independent of session lifetime; daemon lifetime owns all child processes.
 
 ## Surfaces
@@ -10,15 +11,18 @@
 - Runtime: `muxd` aiohttp daemon; Preact browser client; `mux` HTTP CLI.
 - Data: in-memory live sessions, process/preview registrations, and scrollback; SQLite
   spaces, project scopes/repository groups, durable artifact relationships, agent-only
-  history, events, and cached indexes; project-owned Markdown/TOML in `.swe-mux/`.
+  history, events, automation evidence, annotations, lineage, notifications, and cached
+  indexes; project-owned Markdown/TOML in `.swe-mux/`.
 - Integrations: ConPTY/pywinpty; Win32 Job Objects; PowerShell/CMD/WSL profiles; Git;
   Claude Code; Codex CLI; optional locally installed unified ccusage adapter.
+  Read-only LLM observers use the fixed OpenRouter API with a separately encrypted key.
 
 ## Doc map
 
 ### Structural
 
 - Architecture: `architecture.md`
+- Durable data and ownership: `data-model.md`
 - HTTP and WebSocket contracts: `interfaces.md`
 
 ### Features
@@ -27,7 +31,9 @@
 - Spaces: `features/spaces.md`
 - History and events: `features/history.md`
 - Backend detection and observation: `features/backends.md`
-- Meta-hooks: `features/meta-hooks.md`
+- Universal hooks and OpenRouter observers: `features/automation.md`
+- Fleet attention and intelligence: `features/fleet-intelligence.md`
+- Legacy hook compatibility: `features/meta-hooks.md`
 - Git awareness and worktrees: `features/git.md`
 - Browser interaction model: `features/ui.md`
 - Shell profiles and terminal creation: `features/shell-profiles.md`
@@ -35,6 +41,7 @@
 - Usage analytics: `features/usage.md`
 - Process ownership and previews: `features/processes-and-previews.md`
 - Remote access and browser boundary: `features/remote-access.md`
+- Read aloud (TTS) and dictation: `features/voice.md`
 
 ### Active development
 
@@ -58,6 +65,11 @@
   agent-run notes remain project-local.
 - Sessions are processes; split/stack leaves are viewports. Layout removal never implies kill.
 - Network listeners are explicit localhost plus detected Tailscale IPv4; never wildcard LAN.
+- Universal hooks are asynchronous and out of band. Observer results can annotate and notify;
+  they cannot type, approve, spawn, execute scripts, call arbitrary URLs, or mutate projects.
+- Canonical automation is machine-owned `rules.toml`. Repository `.swe-mux/rules.toml` is
+  diagnostic and inert. OpenRouter secrets never enter public config, SQLite, logs, exports,
+  events, prompts-at-rest, or project files.
 
 ## Key trade-offs
 

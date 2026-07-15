@@ -1,4 +1,4 @@
-export type CommandCategory = 'session' | 'pane' | 'space' | 'terminal' | 'view' | 'input' | 'clipboard' | 'git' | 'history'
+export type CommandCategory = 'session' | 'pane' | 'space' | 'terminal' | 'view' | 'input' | 'clipboard' | 'git' | 'history' | 'voice'
 
 export type Command = {
   id: string

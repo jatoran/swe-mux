@@ -2,17 +2,27 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 11
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {"light", "dark", "system", "solarized-dark", "tokyo-night", "custom"}
 CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "accent", "error"}
-RESTART_FIELDS = {"host", "port", "data_dir", "reconcile_external_history", "tailnet_enabled"}
+RESTART_FIELDS = {
+    "host",
+    "port",
+    "data_dir",
+    "reconcile_external_history",
+    "tailnet_enabled",
+    "automation_concurrency",
+    "automation_queue_size",
+    "openrouter_request_timeout_seconds",
+}
 BUILTIN_THEME_PAIRS = {
     "dark": ("#090a0c", "#d9dde2"),
     "light": ("#f5f2e9", "#252821"),
@@ -36,9 +46,7 @@ def contrast_ratio(first: str, second: str) -> float:
     def luminance(color: str) -> float:
         channels = [int(color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
         linear = [
-            channel / 12.92
-            if channel <= 0.04045
-            else ((channel + 0.055) / 1.055) ** 2.4
+            channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
             for channel in channels
         ]
         return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
@@ -83,13 +91,22 @@ class Config:
     theme: str = "dark"
     custom_theme: dict[str, str] = field(
         default_factory=lambda: {
-            "background": "#090a0c", "panel": "#0d0f12", "line": "#2a2e34",
-            "foreground": "#d9dde2", "muted": "#848b94", "accent": "#8bd450",
+            "background": "#090a0c",
+            "panel": "#0d0f12",
+            "line": "#2a2e34",
+            "foreground": "#d9dde2",
+            "muted": "#848b94",
+            "accent": "#8bd450",
             "error": "#f07178",
         }
     )
     middle_click_paste: bool = True
     broadcast_default: bool = False
+    mobile_vertical_drag: str = "smart"
+    mobile_scroll_direction: str = "natural"
+    mobile_scroll_sensitivity: float = 1.0
+    mobile_long_press: str = "context_menu"
+    notes_default_open: str = "dock"
     ccusage_enabled: bool = False
     ccusage_refresh_minutes: int = 0
     ccusage_claude_command: list[str] = field(
@@ -101,6 +118,40 @@ class Config:
     default_shell_profile: str = "default"
     shell_profiles: list[ShellProfile] = field(default_factory=list)
     pinned_directories: list[str] = field(default_factory=list)
+    automation_enabled: bool = False
+    automation_retention_days: int = 90
+    automation_concurrency: int = 2
+    automation_queue_size: int = 256
+    automation_max_input_tokens: int = 4096
+    automation_max_output_tokens: int = 256
+    automation_daily_token_budget: int = 200_000
+    automation_daily_budget_usd: float = 2.0
+    automation_rule_daily_token_budget: int = 50_000
+    automation_rule_daily_budget_usd: float = 0.5
+    automation_hourly_call_cap: int = 60
+    automation_rule_hourly_call_cap: int = 20
+    openrouter_cheap_model: str = ""
+    openrouter_standard_model: str = ""
+    openrouter_request_timeout_seconds: float = 30.0
+    observer_titler_enabled: bool = False
+    observer_summarizer_enabled: bool = False
+    phase7_observers_enabled: bool = False
+    tts_enabled: bool = False
+    tts_default_mode: str = "on_demand"
+    tts_content: str = "summary"
+    tts_engine: str = "edge"
+    tts_edge_voice: str = "en-AU-NatashaNeural"
+    tts_edge_rate: str = "+10%"
+    tts_edge_pitch: str = "+0Hz"
+    tts_soften_stops: bool = True
+    tts_sapi_voice: str = ""
+    tts_sapi_rate: int = 0
+    tts_summary_model: str = ""
+    tts_summary_max_tokens: int = 500
+    tts_verbatim_max_chars: int = 6000
+    tts_daily_budget_usd: float = 1.0
+    tts_cache_mb: int = 200
+    stt_enabled: bool = True
     data_dir: Path = Path.home() / ".mux"
     config_path: Path | None = field(default=None, repr=False)
 
@@ -116,9 +167,7 @@ class Config:
         result["requires_auth"] = False
         # The daemon retains exact bytes. Browsers retain an approximate line
         # window using a documented 160-byte average, bounded for xterm.
-        result["xterm_scrollback_lines"] = max(
-            1_000, min(100_000, self.scrollback_bytes // 160)
-        )
+        result["xterm_scrollback_lines"] = max(1_000, min(100_000, self.scrollback_bytes // 160))
         return result
 
 
@@ -133,6 +182,18 @@ def _validate(config: Config) -> None:
         errors["port"] = "must be between 1 and 65535"
     if config.default_backend not in {"shell", "claude", "codex"}:
         errors["default_backend"] = "must be shell, claude, or codex"
+    if config.notes_default_open not in {"dock", "popout"}:
+        errors["notes_default_open"] = "must be dock or popout"
+    if config.mobile_vertical_drag not in {"smart", "terminal", "application", "disabled"}:
+        errors["mobile_vertical_drag"] = (
+            "must be smart, terminal, application, or disabled"
+        )
+    if config.mobile_scroll_direction not in {"natural", "wheel"}:
+        errors["mobile_scroll_direction"] = "must be natural or wheel"
+    if not 0.25 <= config.mobile_scroll_sensitivity <= 4:
+        errors["mobile_scroll_sensitivity"] = "must be between 0.25 and 4"
+    if config.mobile_long_press not in {"context_menu", "disabled"}:
+        errors["mobile_long_press"] = "must be context_menu or disabled"
     for field_name in (
         "claude_args",
         "codex_args",
@@ -152,6 +213,52 @@ def _validate(config: Config) -> None:
         errors["git_poll_seconds"] = "must be between 0.25 and 3600 seconds"
     if not 1 <= config.history_limit <= 10000:
         errors["history_limit"] = "must be between 1 and 10000"
+    if not 1 <= config.automation_retention_days <= 3650:
+        errors["automation_retention_days"] = "must be between 1 and 3650"
+    if not 1 <= config.automation_concurrency <= 16:
+        errors["automation_concurrency"] = "must be between 1 and 16"
+    if not 16 <= config.automation_queue_size <= 4096:
+        errors["automation_queue_size"] = "must be between 16 and 4096"
+    if not 128 <= config.automation_max_input_tokens <= 128_000:
+        errors["automation_max_input_tokens"] = "must be between 128 and 128000"
+    if not 16 <= config.automation_max_output_tokens <= 8192:
+        errors["automation_max_output_tokens"] = "must be between 16 and 8192"
+    if not 0 <= config.automation_daily_token_budget <= 100_000_000:
+        errors["automation_daily_token_budget"] = "must be between 0 and 100000000"
+    if not 0 <= config.automation_daily_budget_usd <= 10_000:
+        errors["automation_daily_budget_usd"] = "must be between 0 and 10000"
+    if not 0 <= config.automation_rule_daily_token_budget <= 100_000_000:
+        errors["automation_rule_daily_token_budget"] = "must be between 0 and 100000000"
+    if not 0 <= config.automation_rule_daily_budget_usd <= 10_000:
+        errors["automation_rule_daily_budget_usd"] = "must be between 0 and 10000"
+    if not 1 <= config.automation_hourly_call_cap <= 10_000:
+        errors["automation_hourly_call_cap"] = "must be between 1 and 10000"
+    if not 1 <= config.automation_rule_hourly_call_cap <= 10_000:
+        errors["automation_rule_hourly_call_cap"] = "must be between 1 and 10000"
+    if not 1 <= config.openrouter_request_timeout_seconds <= 120:
+        errors["openrouter_request_timeout_seconds"] = "must be between 1 and 120"
+    if config.tts_default_mode not in {"off", "on_demand", "auto"}:
+        errors["tts_default_mode"] = "must be off, on_demand, or auto"
+    if config.tts_content not in {"summary", "verbatim"}:
+        errors["tts_content"] = "must be summary or verbatim"
+    if config.tts_engine not in {"edge", "sapi"}:
+        errors["tts_engine"] = "must be edge or sapi"
+    if not config.tts_edge_voice.strip():
+        errors["tts_edge_voice"] = "must name an edge-tts voice, e.g. en-AU-NatashaNeural"
+    if not re.fullmatch(r"[+-]\d{1,3}%", config.tts_edge_rate):
+        errors["tts_edge_rate"] = "must look like +10% or -5%"
+    if not re.fullmatch(r"[+-]\d{1,3}Hz", config.tts_edge_pitch):
+        errors["tts_edge_pitch"] = "must look like +0Hz or -20Hz"
+    if not -10 <= config.tts_sapi_rate <= 10:
+        errors["tts_sapi_rate"] = "must be between -10 and 10"
+    if not 64 <= config.tts_summary_max_tokens <= 2000:
+        errors["tts_summary_max_tokens"] = "must be between 64 and 2000"
+    if not 200 <= config.tts_verbatim_max_chars <= 40_000:
+        errors["tts_verbatim_max_chars"] = "must be between 200 and 40000"
+    if not 0 <= config.tts_daily_budget_usd <= 100:
+        errors["tts_daily_budget_usd"] = "must be between 0 and 100"
+    if not 10 <= config.tts_cache_mb <= 5000:
+        errors["tts_cache_mb"] = "must be between 10 and 5000"
     if config.theme not in THEMES:
         errors["theme"] = f"must be one of {', '.join(sorted(THEMES))}"
     if set(config.custom_theme) != CUSTOM_THEME_KEYS or any(
@@ -162,9 +269,7 @@ def _validate(config: Config) -> None:
         for value in config.custom_theme.values()
     ):
         errors["custom_theme"] = "must contain every semantic token as a #RRGGBB color"
-    elif contrast_ratio(
-        config.custom_theme["background"], config.custom_theme["foreground"]
-    ) < 4.5:
+    elif contrast_ratio(config.custom_theme["background"], config.custom_theme["foreground"]) < 4.5:
         errors["custom_theme"] = "background and foreground require at least 4.5:1 contrast"
     ids = [profile.id for profile in config.shell_profiles]
     if len(ids) != len(set(ids)) or any(not value.strip() for value in ids):
@@ -180,8 +285,7 @@ def _validate(config: Config) -> None:
         if not all(isinstance(item, str) for item in profile.args):
             errors[f"{prefix}.args"] = "must be an array of strings"
         if not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in profile.env.items()
+            isinstance(key, str) and isinstance(value, str) for key, value in profile.env.items()
         ):
             errors[f"{prefix}.env"] = "must be a string map"
     if errors:
@@ -198,9 +302,9 @@ def _toml_value(value: object) -> str:
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     if isinstance(value, dict):
-        return "{ " + ", ".join(
-            f"{key} = {_toml_value(item)}" for key, item in value.items()
-        ) + " }"
+        return (
+            "{ " + ", ".join(f"{key} = {_toml_value(item)}" for key, item in value.items()) + " }"
+        )
     raise TypeError(f"cannot encode {type(value).__name__}")
 
 
@@ -258,9 +362,12 @@ def load_config(path: Path | None = None) -> Config:
                 setattr(cfg, key, Path(raw[key]) if key == "data_dir" else raw[key])
         cfg.shell_profiles = [ShellProfile(**item) for item in raw.get("shell_profiles", [])]
     if not cfg.shell_profiles:
-        args = ["-NoLogo"] if Path(cfg.shell_exe).name.casefold() in {
-            "powershell", "powershell.exe", "pwsh", "pwsh.exe"
-        } else []
+        args = (
+            ["-NoLogo"]
+            if Path(cfg.shell_exe).name.casefold()
+            in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
+            else []
+        )
         cfg.shell_profiles = [
             ShellProfile("default", "Default shell", cfg.shell_exe, args, marker="ps")
         ]
@@ -274,7 +381,10 @@ def load_config(path: Path | None = None) -> Config:
 
 def update_config(config: Config, changes: dict[str, Any]) -> tuple[set[str], set[str]]:
     allowed = set(Config.__dataclass_fields__) - {
-        "schema_version", "revision", "data_dir", "config_path"
+        "schema_version",
+        "revision",
+        "data_dir",
+        "config_path",
     }
     unknown = set(changes) - allowed
     if unknown:

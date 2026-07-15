@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import secrets
 import time
 import uuid
@@ -24,8 +25,10 @@ class ScrollbackBuffer:
         self.max_bytes = max_bytes
         self._chunks: deque[bytes] = deque()
         self._size = 0
+        self._written = 0
 
     def append(self, data: bytes) -> None:
+        self._written += len(data)
         if self.max_bytes <= 0:
             self._chunks.clear()
             self._size = 0
@@ -52,6 +55,19 @@ class ScrollbackBuffer:
     def bytes(self) -> bytes:
         return b"".join(self._chunks)
 
+    @property
+    def position(self) -> int:
+        return self._written
+
+    def bytes_since(self, position: int) -> builtins.bytes:
+        retained = self.bytes()
+        retained_start = self._written - len(retained)
+        if position >= self._written:
+            return b""
+        if position <= retained_start:
+            return retained
+        return retained[position - retained_start :]
+
 
 @dataclass(eq=False, slots=True)
 class PtySubscriber:
@@ -71,6 +87,7 @@ class Session:
         max_scrollback: int,
         hook_secret: str,
         ownership_job: ReaperJob | None = None,
+        startup_started_at: float | None = None,
     ) -> None:
         self.record, self.pty, self.adapter = record, pty, adapter
         self.scrollback = ScrollbackBuffer(max_scrollback)
@@ -80,6 +97,9 @@ class Session:
         self.stop_event = asyncio.Event()
         self.hook_secret = hook_secret
         self.ownership_job = ownership_job
+        self.startup_started_at = startup_started_at or time.perf_counter()
+        self.startup_measurement_task: asyncio.Task[Any] | None = None
+        self.attachments_seen = 0
         # Exactly one browser connection may write terminal-generated responses
         # and user keystrokes. Without this, two attached xterms both answer
         # device-status queries and the duplicate response appears at the prompt.
@@ -88,11 +108,27 @@ class Session:
         self.state_source_priority = -1
         self.agent_stop_event = asyncio.Event()
         self.observer_task: asyncio.Task[Any] | None = None
+        self.transcript_path: Path | None = None
         self.detection_task: asyncio.Task[Any] | None = None
+        # The launcher-generated lifecycle id remains stable even when an
+        # adapter later discovers and records a different native transcript id.
+        # Demotion must match this token so Codex can return to its parent shell.
+        self.agent_lifecycle_id: str | None = None
+        # Detection is a fallback for agents launched without the mux shim. Once a
+        # native run has explicitly exited, its still-recent transcript must not
+        # immediately promote the containing shell again. An explicit launcher
+        # promotion may reuse the same native id (for example, resume).
+        self.ignored_detection_runs: set[tuple[str, str]] = set()
         self.osc7 = Osc7Parser()
         self.cwd_debounce_task: asyncio.Task[Any] | None = None
         self.cwd_switches: deque[float] = deque()
         self.cwd_telemetry_dropped = 0
+        self.last_input_event_ts = 0.0
+        self.output_window: deque[tuple[float, int]] = deque()
+        # Native transcripts report tool results by opaque invocation id.  Keep
+        # this correlation in memory only; normalized events expose the stable
+        # tool name without persisting backend-specific transcript identifiers.
+        self.tool_names: dict[str, str] = {}
 
     def subscribe(self, maxsize: int = 1024) -> PtySubscriber:
         subscriber = PtySubscriber(asyncio.Queue(maxsize=maxsize))
@@ -233,7 +269,11 @@ class SessionManager:
         profile_env: dict[str, str] | None = None,
         project_label: str | None = None,
         project: ProjectIdentity | None = None,
+        startup_started_at: float | None = None,
+        startup_timing_ms: dict[str, float] | None = None,
     ) -> Session:
+        startup_started_at = startup_started_at or time.perf_counter()
+        startup_timing_ms = dict(startup_timing_ms or {})
         if backend not in self.adapters:
             raise ValueError(f"unknown backend: {backend}")
         sid = str(uuid.uuid4())
@@ -260,8 +300,14 @@ class SessionManager:
             shell_profile_id=shell_profile_id,
             auto_named=name is None,
             state="running" if backend == "shell" else "starting",
+            startup_timing_ms=startup_timing_ms,
         )
-        project = project or await resolve_project(resolved_cwd)
+        if project is None:
+            project_started_at = time.perf_counter()
+            project = await resolve_project(resolved_cwd)
+            startup_timing_ms["project_resolution"] = round(
+                (time.perf_counter() - project_started_at) * 1000, 1
+            )
         record.project_id = project.id
         record.project_label = project_label or project.label
         record.project_root = project.root
@@ -302,8 +348,13 @@ class SessionManager:
                 "MUX_HOOK_SECRET": hook_secret,
             },
         )
+        pty_started_at = time.perf_counter()
         pty.spawn()
+        startup_timing_ms["pty_spawn"] = round(
+            (time.perf_counter() - pty_started_at) * 1000, 1
+        )
         record.pid = pty.pid
+        registration_started_at = time.perf_counter()
         await self.history.register_project_scope(project)
         ownership_job: ReaperJob | None = None
         ownership_error: str | None = None
@@ -324,6 +375,7 @@ class SessionManager:
             self.max_scrollback,
             hook_secret,
             ownership_job,
+            startup_started_at,
         )
         self.sessions[sid] = session
         transcript = adapter.transcript_path(native_id, resolved_cwd)
@@ -350,6 +402,12 @@ class SessionManager:
             self._start_observer(session, transcript)
         elif backend == "shell":
             self._start_detection(session)
+        startup_timing_ms["registration"] = round(
+            (time.perf_counter() - registration_started_at) * 1000, 1
+        )
+        startup_timing_ms["server_ready"] = round(
+            (time.perf_counter() - startup_started_at) * 1000, 1
+        )
         return session
 
     def _start_observer(self, session: Session, transcript: Path | None) -> None:
@@ -357,6 +415,7 @@ class SessionManager:
             session.agent_stop_event.set()
             session.observer_task.cancel()
         session.agent_stop_event = asyncio.Event()
+        session.transcript_path = transcript
         task = asyncio.create_task(
             self._observe(session, transcript, session.agent_stop_event),
             name=f"observe-{session.record.id}",
@@ -374,18 +433,35 @@ class SessionManager:
         session.tasks.add(task)
 
     async def _detect_nested_agent(self, session: Session) -> None:
+        scan_cursor = session.scrollback.position
+        detection_started_at = time.time()
+        agent_names = [name for name in self.adapters if name != "shell"]
+        max_name_len = max((len(name) for name in agent_names), default=0)
+        seen_names: set[str] = set()
+        carry = b""
         while not session.stop_event.is_set() and session.pty.isalive():
             if session.record.backend != "shell":
                 return
-            terminal_text = session.scrollback.bytes().lower()
+            # Scan only output produced since the previous poll, accumulating which
+            # agent names have appeared. A plain shell may never launch an agent, so
+            # re-joining and re-lowercasing the whole retained scrollback twice a
+            # second is pure waste; the carry tail catches a name split across the
+            # poll boundary, and remembering names keeps the sticky wait-for-transcript
+            # behavior even after the echoed command scrolls out of the window.
+            current = session.scrollback.position
+            if current > scan_cursor:
+                haystack = (carry + session.scrollback.bytes_since(scan_cursor)).lower()
+                scan_cursor = current
+                for name in agent_names:
+                    if name.encode() in haystack:
+                        seen_names.add(name)
+                carry = haystack[-(max_name_len - 1) :] if max_name_len > 1 else b""
             # Full-screen CLIs redraw the echoed command quickly and ANSI can split
-            # prompt text, so exact ``> claude`` matching is not reliable. Native
-            # transcript cwd/time matching below is the ownership guard.
-            launched = [
-                adapter
-                for name, adapter in self.adapters.items()
-                if name != "shell" and name.encode() in terminal_text
-            ]
+            # prompt text, so exact ``> claude`` matching is not reliable. Only
+            # output and native transcript activity created during this detection
+            # pass may promote the shell; retained output from an ended agent must
+            # never identify a new run.
+            launched = [self.adapters[name] for name in seen_names]
             if not launched:
                 try:
                     await asyncio.wait_for(session.stop_event.wait(), timeout=0.5)
@@ -397,8 +473,9 @@ class SessionManager:
                 for adapter in launched
                 for modified, path, native_id in adapter.recent_transcripts(
                     Path(session.record.runtime_cwd or session.record.cwd),
-                    session.record.created_at,
+                    detection_started_at,
                 )
+                if (adapter.name, native_id) not in session.ignored_detection_runs
             ]
             if candidates:
                 _, backend, path, native_id = max(candidates)
@@ -432,8 +509,13 @@ class SessionManager:
         if backend not in {"claude", "codex"}:
             raise ValueError(f"cannot promote session to {backend}")
         session = self.resolve(sid)
-        if session.record.backend == backend and session.record.native_session_id == native_id:
+        if session.record.backend == backend and session.agent_lifecycle_id == native_id:
             return session
+        if session.record.backend == backend and session.record.native_session_id == native_id:
+            session.agent_lifecycle_id = native_id
+            return session
+        session.ignored_detection_runs.discard((backend, native_id))
+        session.agent_lifecycle_id = native_id
         await self._begin_agent_run(session, launch_cwd)
         adapter = self.adapters[backend]
         session.adapter = adapter
@@ -465,8 +547,14 @@ class SessionManager:
 
     async def demote(self, sid: str, backend: str, native_id: str) -> Session:
         session = self.resolve(sid)
-        if session.record.backend != backend or session.record.native_session_id != native_id:
+        if session.record.backend != backend:
             return session
+        lifecycle_id = session.agent_lifecycle_id or session.record.native_session_id
+        if lifecycle_id != native_id:
+            return session
+        observed_native_id = session.record.native_session_id
+        session.ignored_detection_runs.add((backend, native_id))
+        session.ignored_detection_runs.add((backend, observed_native_id))
         await self.history.update_agent_summary(session.record)
         await self.history.agent_run_ended(session.record, "agent_exit")
         session.agent_stop_event.set()
@@ -474,6 +562,7 @@ class SessionManager:
             session.observer_task.cancel()
             await asyncio.gather(session.observer_task, return_exceptions=True)
         session.observer_task = None
+        session.agent_lifecycle_id = None
         session.adapter = self.adapters["shell"]
         session.pty.graceful_exit = session.adapter.graceful_exit_keys()
         session.record.backend = "shell"
@@ -504,7 +593,7 @@ class SessionManager:
             session_id=session.record.id,
             source="daemon",
             backend=backend,
-            native_session_id=native_id,
+            native_session_id=observed_native_id,
         )
         self._start_detection(session)
         return session
@@ -524,6 +613,7 @@ class SessionManager:
                 stop_event,
             )
         if path:
+            session.transcript_path = path
             native_id = adapter.transcript_native_id(path)
             if native_id:
                 session.record.native_session_id = native_id
@@ -538,10 +628,54 @@ class SessionManager:
                     await self._mark_ended(session, "process_exit")
                 return
             session.record.last_activity_ts = time.time()
-            for uri in session.osc7.feed(chunk):
+            timing_changed = False
+            if "first_output" not in session.record.startup_timing_ms:
+                first_output_at = getattr(session.pty, "first_output_at", None)
+                session.record.startup_timing_ms["first_output"] = round(
+                    ((first_output_at or time.perf_counter()) - session.startup_started_at)
+                    * 1000,
+                    1,
+                )
+                timing_changed = True
+            session.output_window.append((session.record.last_activity_ts, len(chunk)))
+            while (
+                session.output_window
+                and session.record.last_activity_ts - session.output_window[0][0] > 60
+            ):
+                session.output_window.popleft()
+            prompt_uris = session.osc7.feed(chunk)
+            if prompt_uris and "first_prompt" not in session.record.startup_timing_ms:
+                session.record.startup_timing_ms["first_prompt"] = round(
+                    (time.perf_counter() - session.startup_started_at) * 1000, 1
+                )
+                timing_changed = True
+            for uri in prompt_uris:
                 self._queue_runtime_cwd(session, uri)
             session.scrollback.append(chunk)
             session.publish_output(chunk)
+            if timing_changed:
+                session.publish_update()
+            if prompt_uris:
+                self._schedule_startup_measurement(session, "first_prompt")
+
+    def _schedule_startup_measurement(self, session: Session, milestone: str) -> None:
+        if session.startup_measurement_task is not None:
+            return
+        task = asyncio.create_task(
+            self.events.emit(
+                "session_startup_measured",
+                session_id=session.record.id,
+                source="daemon",
+                milestone=milestone,
+                backend=session.record.backend,
+                shell_profile_id=session.record.shell_profile_id,
+                timing_ms=dict(session.record.startup_timing_ms),
+            ),
+            name=f"startup-measurement-{session.record.id}",
+        )
+        session.startup_measurement_task = task
+        session.tasks.add(task)
+        task.add_done_callback(session.tasks.discard)
 
     def _queue_runtime_cwd(self, session: Session, uri: str) -> None:
         path = local_directory_from_osc7(uri)
@@ -654,6 +788,9 @@ class SessionManager:
             return
         session.record.state = "exited" if session.stopping else "crashed"
         session.record.last_activity_ts = time.time()
+        self._schedule_startup_measurement(session, "session_end")
+        if session.startup_measurement_task:
+            await asyncio.gather(session.startup_measurement_task, return_exceptions=True)
         session.agent_stop_event.set()
         if session.cwd_debounce_task and not session.cwd_debounce_task.done():
             session.cwd_debounce_task.cancel()

@@ -14,10 +14,10 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
   return response.json()
 }
 
-export async function upload<T>(path: string, body: FormData): Promise<T> {
+export async function uploadTerminalImage<T>(path: string, body: FormData): Promise<T> {
   const response = await fetch(path, {
     method: 'POST',
-    headers: { 'X-Mux-User-Gesture': 'clipboard-image' },
+    headers: { 'X-Mux-User-Gesture': 'terminal-image' },
     body,
   })
   if (!response.ok) {

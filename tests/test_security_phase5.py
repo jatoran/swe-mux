@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import time
 from collections import deque
 from types import SimpleNamespace
@@ -265,3 +266,75 @@ async def test_hook_ingress_rejects_expired_sessions_and_bounded_bursts() -> Non
             headers={"X-Mux-Hook-Secret": "secret"},
         )
         assert expired.status == 410
+
+
+def _passthrough_registration(port: int) -> PreviewRegistration:
+    return PreviewRegistration(
+        "preview-a",
+        "session-a",
+        "default",
+        f"http://127.0.0.1:{port}/",
+        "127.0.0.1",
+        port,
+        "detected",
+        0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_preview_proxy_streams_full_decompressed_body_for_gzip_upstream() -> None:
+    raw = b"x" * 50000
+
+    async def gzipped(_: web.Request) -> web.Response:
+        # Upstream declares a (compressed) Content-Length via Content-Encoding: gzip.
+        return web.Response(
+            body=gzip.compress(raw),
+            headers={"Content-Encoding": "gzip", "Content-Type": "application/json"},
+        )
+
+    upstream_app = web.Application()
+    upstream_app.router.add_get("/data.json", gzipped)
+    async with TestServer(upstream_app, host="127.0.0.1") as upstream:
+        registration = _passthrough_registration(upstream.port)
+        async with TestClient(TestServer(_proxy_application(registration))) as client:
+            response = await client.get("/preview/preview-a/data.json")
+            assert response.status == 200
+            body = await response.read()
+            # The passthrough must deliver the FULL decompressed body, never a copy
+            # silently truncated to the upstream's compressed Content-Length.
+            assert len(body) == len(raw)
+            assert body == raw
+
+
+@pytest.mark.asyncio
+async def test_preview_proxy_streams_identity_binary_passthrough() -> None:
+    raw = bytes(range(256)) * 400  # 102400 binary bytes
+
+    async def binary(_: web.Request) -> web.Response:
+        return web.Response(body=raw, headers={"Content-Type": "image/png"})
+
+    upstream_app = web.Application()
+    upstream_app.router.add_get("/img.png", binary)
+    async with TestServer(upstream_app, host="127.0.0.1") as upstream:
+        registration = _passthrough_registration(upstream.port)
+        async with TestClient(TestServer(_proxy_application(registration))) as client:
+            response = await client.get("/preview/preview-a/img.png")
+            assert response.status == 200
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
+            body = await response.read()
+            assert body == raw
+
+
+@pytest.mark.asyncio
+async def test_preview_proxy_head_returns_empty_body() -> None:
+    async def binary(_: web.Request) -> web.Response:
+        return web.Response(body=b"abcdef", headers={"Content-Type": "image/png"})
+
+    upstream_app = web.Application()
+    upstream_app.router.add_route("*", "/img.png", binary)
+    async with TestServer(upstream_app, host="127.0.0.1") as upstream:
+        registration = _passthrough_registration(upstream.port)
+        async with TestClient(TestServer(_proxy_application(registration))) as client:
+            response = await client.head("/preview/preview-a/img.png")
+            assert response.status == 200
+            assert await response.read() == b""

@@ -17,8 +17,9 @@ These decisions are authoritative and must not be reverted while completing olde
 spec language:
 
 - Spaces and sessions share the sidebar tree; no space-tab strip in the top bar.
-- Git branch/dirty status appears in pane headers, not sidebar rows.
-- Pane headers are the sole location for session cwd and Git status; the global top bar
+- Git branch/dirty status, PID, and startup timing live in the session menu's info row,
+  not in pane headers or sidebar rows (amended: headers stay minimal).
+- Pane headers are the sole location for session cwd; the global top bar
   shows workspace identity only and never repeats cwd/session state.
 - The default dark UI uses neutral near-black fills: no green background fills,
   main-stage grid, scanline texture, or decorative blinking cursor. The daemon is an
@@ -505,8 +506,11 @@ args = ["--distribution", "Ubuntu"]
 - [x] Add terminal-styled desktop/mobile raw Markdown editing, export,
   and explicit Insert selection into session / Capture terminal selection actions. Notes
   never enter a prompt or context window without a direct user action. Provide both a
-  centered quick-editor modal and a persistent terminal + note split leaf, with dock/pop-out,
-  draggable ratio, targeted capture routing, and mobile return-to-terminal behavior.
+  persistent tabbed workspace with whole-workspace dock/pop-out presentation, targeted
+  capture routing, and responsive behavior. Phase 5.7 finalizes it as a per-space companion
+  surface outside the terminal layout tree. Global Dock/Pop-out preference is inheritable
+  per space; changing the current workspace presentation preserves all open tabs and does
+  not rewrite that preference.
 - [x] Surface missing, read-only, malformed, disabled, and conflicting `.swe-mux/` states
   without blocking terminal use. Phase 4's schema is data-only and rejects executable,
   secret, and parent/absolute-cwd fields; Phase 5 adds resolved-path and privileged-boundary
@@ -546,6 +550,10 @@ args = ["--distribution", "Ubuntu"]
 - [x] Add a process inspector with interrupt, terminate process, terminate tree, copy PID,
   and open detected preview. Label measurable conditions such as high CPU/memory or no PTY
   output; never auto-kill or assert that an idle server is hung.
+- [x] Add one unified process viewer across spaces/sessions with fleet totals, space →
+  session grouping, registered/detected previews, session drill-down/back navigation, and
+  portable CPU/memory/listener/connection metrics. Keep byte-throughput monitoring out of
+  the portable boundary.
 - [x] Add explicit preview registrations tied to a session/space and a detected or
   user-approved loopback listener. Preview leaves support embedded best-effort rendering,
   refresh, full-screen mobile view, viewport presets, copy/open externally, and clear
@@ -878,6 +886,10 @@ automatically, or introduce repository-owned executable rules.
   button, label its purpose accessibly, restore focus on dismissal, and preserve the
   existing Escape/outside-click dismissal contract. Do not maintain separate sidebar and
   header menu definitions that can drift.
+- [x] Move object-specific actions out of `: menu`: sidebar-background right-click owns
+  Create space, unified processes, and All Settings; note rows/tabs own Dock/Pop-out; session
+  contexts retain session process inspection. Every context remains Escape/outside-click
+  dismissible and command-palette addressable.
 - [x] Show agent working/awaiting/finished attention on every session row, including
   background tabs. Connector/group decoration never invents or aggregates session state.
 - [x] Add drag/drop and context/command-palette actions for split, stack, unstack, attach,
@@ -943,9 +955,9 @@ automatically, or introduce repository-owned executable rules.
   cross-volume partial move, filesystem escape, or loss after conflict/restart.
 - [x] Global hook scope predicates follow session scope across mixed spaces, while all
   repository-owned executable/rule content remains inert.
-- [x] Closing spaces and agent sessions leaves their notes reachable from Projects/history;
-  plain shells cannot create a soon-to-be-hidden durable session note; legacy shell notes
-  appear as unlinked artifacts.
+- [x] Closing spaces and agent sessions leaves their notes reachable from Notes,
+  Projects/history; plain shells cannot create a soon-to-be-hidden durable session note;
+  legacy shell notes appear as unlinked artifacts.
 - [x] Inventory tests prove every recognized supported `.swe-mux/` artifact under a known
   scope appears in project detail despite deleted spaces, deleted index relationships,
   missing history, duplicate files, malformed content, or daemon restart.
@@ -1043,7 +1055,7 @@ superseded by Phase 5.7, which removes project anchors entirely.
 
 ## Phase 5.7 — Project-independent spaces and explicit note ownership
 
-**Status: complete (2026-07-13).** This corrective pass removes the remaining coupling that
+**Status: complete (2026-07-14).** This corrective pass removes the remaining coupling that
 made a space appear to be a project and made note destinations confusing.
 
 ### Ownership and migration
@@ -1057,8 +1069,9 @@ made a space appear to be a project and made note destinations confusing.
 - [x] On startup, copy a uniquely identified legacy project-owned space note to app data,
   preserve its original Markdown as a backup, release its project artifact binding, and
   clear the space's legacy anchor. Never overwrite, move, or delete the source.
-- [x] Keep deleted-space notes reachable in a distinct App-owned space notes section of the
-  durable shelf. Label old project-local space files as legacy backups, not active notes.
+- [x] Keep deleted-space notes reachable in the unified Notes shelf. Keep Projects focused
+  on project scopes/configuration and label old project-local space files as legacy backups,
+  not active notes.
 
 ### Explicit note UX
 
@@ -1070,20 +1083,40 @@ made a space appear to be a project and made note destinations confusing.
   a session note; project and space notes remain separately available in menus/palette.
 - [x] Keep run project notes bound to run scope. Resolve/register shell live cwd only after
   the user explicitly requests Current project note; never route a write from OSC alone.
-- [x] Nest docked note rows under their semantic sidebar owner: space note under space;
-  agent-run/project note under the associated session. Keep unmatched notes visibly marked
-  instead of rendering anonymous `note` layout rows or hiding them.
-- [x] Make terminal navigation authoritative. Selecting a session clears mobile note focus;
-  if its persisted layout contains resources but no terminal leaf, restore the selected
-  terminal beside the resource without discarding either one.
+- [x] Keep sidebar note labels terse (`space note`, `project note`, `agent note`). Nest a
+  live agent note under its durable run when available; keep project and ended-run notes at
+  space level instead of assigning them to an arbitrary terminal.
+- [x] Make terminal navigation authoritative without hiding notes. Selecting sessions,
+  terminal tabs, or split branches changes terminal focus while the space Notes Dock remains
+  visible and keeps its active note.
 - [x] Resolve a shell's Current project note from its effective cwd on every explicit open,
   and label the pane action with that project. Project editor headers name the project once,
   without redundant `NOTE::PROJECT::x · PROJECT::x` chrome.
 - [x] Drive space-note sidebar presence from the app-owned saved-note inventory, not only
-  pane layout. Distinguish a saved note from an open pane and keep both states navigable.
+  dock layout. Use one concise row and keep saved and currently docked states navigable.
 - [x] Enforce `project-note owner id == owning project scope id`. Release early-build
   cross-project bindings during startup and remove their stale viewport leaves without
   deleting or moving the real project Markdown.
+- [x] Add a global Notes shelf from the right side of the sidebar footer. Index saved space,
+  project, and durable agent-run notes with friendly owner/project/backend/state metadata,
+  modified time, bounded excerpts, search, and Recent/Spaces/Projects/Agent runs/Recovered
+  filters. Ended-run notes remain directly openable; unowned recovery files remain visible
+  but non-editable until ownership is resolved from Projects.
+
+### Notes Dock and shelf continuity
+
+- [x] Replace terminal-embedded note leaves with one persistent per-space Notes Dock. Layout
+  v4 stores ordered note tabs, active note, and desktop size separately from the recursive
+  terminal/preview tree.
+- [x] Migrate v2/v3 embedded note leaves into the v4 dock, collapse their old split branches,
+  and preserve every terminal, note resource ID, file, and artifact relationship.
+- [x] Support multiple docked notes as tabs. Closing or popping out a tab changes only its
+  presentation and never deletes Markdown. Default note opening is configurable as Dock or
+  Pop-out in a dedicated Notes Settings tab, with Dock as the default.
+- [x] Render the dock to the right of the whole space on desktop with a persisted draggable
+  divider; render it as the bottom half of the workspace on narrow/mobile screens.
+- [x] Keep the Notes shelf mounted while an entry is open. Back/Browse returns to the same
+  search, category, and scroll position instead of rebuilding the index.
 
 ### Terminal creation
 
@@ -1097,9 +1130,11 @@ made a space appear to be a project and made note destinations confusing.
 - [x] Mixed-project spaces require no anchor and space-note identity never changes after
   `cd`, membership changes, new sessions, restart, or space-default edits.
 - [x] Project, space, shell-current-project, and agent-run note actions open distinct,
-  correctly labelled destinations in modal and split modes.
+  correctly labelled destinations in modal and per-space dock modes.
 - [x] Legacy space-note migration is idempotent, revision-safe, non-destructive, and removes
   project Forget blockers created only by the retired ownership model.
+- [x] Notes-shelf tests prove all three durable note owners remain discoverable after their
+  live space/session disappears and every supported unlinked project note remains visible.
 - [x] Ruff, the complete backend suite, frontend behavior tests, TypeScript, production
   build, and canonical design/interface documentation pass against the new contract.
 
@@ -1111,135 +1146,169 @@ asynchronously, and records annotations without entering an agent turn or steeri
 The first release proves one complete observer path while keeping terminal ownership and
 ordinary agent operation independent of OpenRouter availability.
 
+### Approved release boundary
+
+Phase 6 promotes only the read-only control-plane kernel from
+`CONTROL_PLANE_IDEAS.md`: canonical machine-owned rules, normalized events and transcript
+slices, durable annotations, bounded asynchronous evaluation, one fixed-origin OpenRouter
+provider, write-only key management in Settings, operator-visible budgets/diagnostics, and
+the titler/summarizer proof path. The ideas document remains a design catalog, not an
+implicit backlog.
+
+This phase does **not** promote workers, rule/model-initiated spawning, PTY input,
+auto-approval, arbitrary HTTP, project scripts, executable rulepacks, repository-owned
+rules, alternate LLM providers/base URLs, or model-authored action selection. Those
+capabilities remain unscheduled unless a later roadmap decision names their authorization,
+trust, confirmation, and audit contracts explicitly.
+
+### Implementation sequence
+
+1. Land the normalized event envelope, adapter capability registry, transcript-slice
+   boundary, automation tables, and annotation ownership before adding any model call.
+2. Replace the current user-facing meta-hook surface with the canonical rules engine while
+   retaining the legacy engine as an isolated last-known-good compatibility path.
+3. Add the SecretStore and fixed-origin OpenRouter provider behind fixture-driven tests,
+   then expose write-only key/model/budget controls in Settings.
+4. Ship shadow/dry-run diagnostics and the Automation dashboard before enabling built-in
+   observers; finish with the titler and summarizer as the first end-to-end proof.
+
+Each slice must remain usable when later slices are absent or disabled. In particular,
+deterministic rules and ordinary terminal/session operation cannot depend on an OpenRouter
+key, model-catalog availability, or successful observer calls.
+
 ### Universal rule contract and compatibility
 
-- [ ] Retire “Meta-hooks” as user-facing terminology. Use Universal hooks for the layer,
+- [x] Retire “Meta-hooks” as user-facing terminology. Use Universal hooks for the layer,
   Rules for deterministic trigger/condition/action evaluation, Observers for stateless LLM
   calls, and Annotations for persisted derived output.
-- [ ] Make machine-owned `~/.mux/rules.toml` the canonical source with a versioned
+- [x] Make machine-owned `~/.mux/rules.toml` the canonical source with a versioned
   `[[rule]] { on, when[], do[] }` schema. Continue reading legacy `~/.mux/hooks.toml` and
   preserve its last-known-good behavior; migration requires an explicit successful save
   and never silently deletes the legacy file.
-- [ ] Preserve existing guarded global `notify`, `run`, `http`, and `write_pty` behavior only
+- [x] Preserve existing guarded global `notify`, `run`, `http`, and `write_pty` behavior only
   through the deterministic compatibility path. Do not make those actions reachable from
   LLM results or expand their authority during this phase.
-- [ ] Limit newly authored Phase 6 rules/observers to `annotate`, provider-neutral `notify`,
+- [x] Limit newly authored Phase 6 rules/observers to `annotate`, provider-neutral `notify`,
   and OpenRouter `llm` with a reviewed fixed annotation/notification result mapping. The
   ordinary editor does not offer `run`, `http`, `write_pty`, `spawn`, approval, or relay.
-- [ ] Parse repository-owned `.swe-mux/rules.toml` for diagnostics only. It executes no
+- [x] Parse repository-owned `.swe-mux/rules.toml` for diagnostics only. It executes no
   rules, scripts, HTTP, model calls, PTY writes, or workers. Keep executable project rules
   and the required machine-owned fingerprinted trust store unscheduled.
-- [ ] Validate the complete canonical rules file before atomic replacement. Stable rule ids
+- [x] Validate the complete canonical rules file before atomic replacement. Stable rule ids
   and definition-revision hashes survive reorder/format edits and identify firing, budget,
   checkpoint, and annotation provenance.
 
 ### Normalized events, capabilities, and transcript slices
 
-- [ ] Define versioned normalized event envelopes with event sequence, agent-run/session
+- [x] Define versioned normalized event envelopes with event sequence, agent-run/session
   identity, backend, trusted run/spawn project scope, source, confidence, capability level,
   timestamp, chain id/depth, and a trigger-specific bounded payload.
-- [ ] Add an allowlisted event-schema registry. Rules and observers consume only normalized
+- [x] Add an allowlisted event-schema registry. Rules and observers consume only normalized
   fields; native transcript schemas, paths, hook names, and adapter flags never escape the
   adapter/normalization boundary.
-- [ ] Publish per-adapter observation capabilities and runtime degradation diagnostics.
+- [x] Publish per-adapter observation capabilities and runtime degradation diagnostics.
   Hook silence, parser drift, missing transcript data, and PTY-only fallback emit typed
   `capability_degraded` events and disable observers whose declared minimum fidelity is
   unavailable.
-- [ ] Implement normalized transcript slices over the existing read-only transcript viewer:
+- [x] Implement normalized transcript slices over the existing read-only transcript viewer:
   `last_turn`, `last_n_messages`, `since_event`, and `since_annotation`. Bound message count,
   bytes, tokens, and parsing time; never copy a native transcript into mux persistence.
-- [ ] Add daemon-declared composite-trigger state with bounded windows, beginning with
+- [x] Add daemon-declared composite-trigger state with bounded windows, beginning with
   `stalled`, `unattended_attention`, `runaway`, and `claim_unverified`. Users may condition
   on exposed primitive fields but do not define arbitrary state machines in v1.
 
 ### Persistence and asynchronous execution
 
-- [ ] Add app-owned SQLite annotations keyed to durable `agent_run_id`/history identity,
+- [x] Add app-owned SQLite annotations keyed to durable `agent_run_id`/history identity,
   with tag, content, source event, rule id/revision, provenance, requested/resolved model,
   usage/cost, confidence, and creation time. PTY ids and project note files never own
   observer annotations.
-- [ ] Add rule-firing, condition-trace, action-result, observer-call, checkpoint/debounce,
+- [x] Add rule-firing, condition-trace, action-result, observer-call, checkpoint/debounce,
   and budget-ledger records. Persist no rendered prompt or transcript slice by default;
   retain hashes, sizes, status, errors, and resulting annotation content for diagnosis.
-- [ ] Run automation through a bounded queue and worker pool after EventBus persistence.
+- [x] Run automation through a bounded queue and worker pool after EventBus persistence.
   PTY fanout, input, state updates, process ownership, daemon startup, and agent exit never
   wait for rule evaluation or network calls.
-- [ ] Make firing idempotent by event sequence plus rule revision. Implement uniform
+- [x] Make firing idempotent by event sequence plus rule revision. Implement uniform
   debounce/coalescing, threshold hysteresis, intervals, rate guards, quiet hours, annotation
   guards, cancellation, queue overflow diagnostics, and a hard chain-depth/loop cap.
-- [ ] Permit automatic observers only for live mux-owned agent runs initially. Explicit
+- [x] Permit automatic observers only for live mux-owned agent runs initially. Explicit
   user dry-runs may target external reconciled history; startup reconciliation never causes
   retroactive model spend.
 
 ### OpenRouter provider and secret handling
 
-- [ ] Implement one daemon-owned OpenRouter client with `aiohttp`, a fixed
+- [x] Implement one daemon-owned OpenRouter client with `aiohttp`, a fixed
   `https://openrouter.ai/api/v1` origin, Bearer authentication, bounded non-streaming
   requests, strict timeouts/body limits, retry policy, cancellation, and redacted errors.
   Do not add arbitrary LLM base URLs or an SDK dependency.
-- [ ] Add a platform `SecretStore` boundary. On the Windows proving platform, protect the
+- [x] Add a platform `SecretStore` boundary. On the Windows proving platform, protect the
   OpenRouter key with current-user DPAPI and keep only encrypted material in a separate
   machine-owned secrets file. Support an explicit `OPENROUTER_API_KEY` environment source
   for headless use; public config/API/export/log/event paths expose only configured/source
   status and never key material.
-- [ ] Add write-only Settings/API operations to Set/Replace, Test, and Clear the key.
+- [x] Add write-only Settings/API operations to Set/Replace, Test, and Clear the key.
   Mutations retain the existing Host/Origin/Tailscale boundary and never echo the submitted
   secret. A failed test does not discard the previous working key.
-- [ ] Cache OpenRouter model metadata with explicit refresh and stale/error state. Filter
+- [x] Cache OpenRouter model metadata with explicit refresh and stale/error state. Filter
   the picker to text models capable of strict structured output; store exact model ids under
   operator-controlled `cheap` and `standard` tiers, with an expert per-rule exact-model
   override. Do not silently select a newly cheapest or newly popular model.
-- [ ] Send strict `response_format: json_schema`, require provider support for requested
+- [x] Send strict `response_format: json_schema`, require provider support for requested
   parameters, validate returned JSON again locally, and reject extra/invalid fields. The
   configured rule fixes `on_result`; model output is data and can never name or construct an
   action.
-- [ ] Record response generation id, requested/resolved model, native token usage, latency,
+- [x] Record response generation id, requested/resolved model, native token usage, latency,
   and reported cost. Reconcile cost asynchronously through OpenRouter generation stats when
   necessary; model-catalog pricing provides only a conservative preflight estimate.
 
 ### Economics, privacy, and control UI
 
-- [ ] Add a global automation kill switch, default-off OpenRouter observers, per-rule
+- [x] Add a global automation kill switch, default-off OpenRouter observers, per-rule
   enablement, shadow mode, bounded concurrency, maximum input/output tokens, call-rate caps,
   and global/per-rule daily token and dollar budgets. Budget exhaustion fails visibly and
   cannot fall through to another model or action.
-- [ ] Show the privacy boundary before enabling an observer: the selected normalized
+- [x] Show the privacy boundary before enabling an observer: the selected normalized
   transcript slice is sent to OpenRouter and its routed model provider. Project files are
   included only when already represented in that explicit transcript slice; no background
   repository crawl occurs.
-- [ ] Give Settings a dedicated Automation tab for provider status, write-only key controls,
+- [x] Give Settings a dedicated Automation tab for provider status, write-only key controls,
   `cheap`/`standard` model selection, model refresh, budgets, concurrency, retention,
   kill switch, and non-secret diagnostics. OpenRouter observer spend remains distinct from
   Claude/Codex ccusage analytics.
-- [ ] Add an Automation dashboard for rules, enabled/shadow/error state, last firing,
+- [x] Add an Automation dashboard for rules, enabled/shadow/error state, last firing,
   condition traces, action/observer results, spend by rule/model, annotations, capability
   degradation, and dry-run against a selected historical event. Keep canonical TOML
   available as an advanced two-way editor rather than requiring it for ordinary review.
 
 ### First end-to-end observers
 
-- [ ] Ship a session titler over the first stable completed turn. Store the generated title
+- [x] Ship a session titler over the first stable completed turn. Store the generated title
   as an annotation and render it in live/history surfaces without replacing an explicit
   user-assigned name.
-- [ ] Ship a bounded one-line turn summarizer. Later observers consume summary annotations
+- [x] Ship a bounded one-line turn summarizer. Later observers consume summary annotations
   instead of repeatedly sending full transcript windows.
-- [ ] Render observer provenance, model, timestamp, confidence, and cost on demand while
+- [x] Render observer provenance, model, timestamp, confidence, and cost on demand while
   keeping default sidebar/history presentation compact. Annotation creation emits a
   normalized `annotation_created` event subject to chain/loop limits.
 
 ### Phase 6 exit criteria
 
-- [ ] Legacy global hooks retain last-known-good behavior while canonical global rules
+- [x] Legacy global hooks retain last-known-good behavior while canonical global rules
   validate, reload, shadow, dry-run, debounce, budget, fire, and diagnose deterministically.
-- [ ] OpenRouter key set/test/replace/clear, DPAPI persistence, environment override,
+- [x] OpenRouter key set/test/replace/clear, DPAPI persistence, environment override,
   redaction, structured-output validation, model-catalog caching, timeout/retry, and budget
   failure paths pass tests without any real paid call in the normal suite.
-- [ ] Titler and summarizer complete event → slice → OpenRouter fixture → schema validation
+- [x] Titler and summarizer complete event → slice → OpenRouter fixture → schema validation
   → annotation → UI display end to end. Provider failure never blocks or changes an agent
   turn, PTY, transcript, note, or history lifecycle.
-- [ ] Repository rules remain inert; LLM results cannot execute deterministic actions; no
+- [x] Repository rules remain inert; LLM results cannot execute deterministic actions; no
   key, prompt, transcript slice, or backend credential appears in public config, exports,
   logs, events, firing records, or browser reads.
+
+Verification: 205 backend tests passed (1 skipped), including fixture-only OpenRouter,
+secret-store, normalized-event, rule-engine, observer, budget, and API coverage. Frontend
+tests (23), TypeScript checks, production build, Ruff, and Mypy also passed.
 
 ## Phase 7 — Composite attention and fleet intelligence
 
@@ -1248,65 +1317,97 @@ multi-agent control plane can provide. Deterministic telemetry is preferred when
 can answer the question; OpenRouter observers classify or summarize only when semantics are
 required. Actuation remains user-initiated or explicitly unscheduled.
 
+### Approved release boundary
+
+Phase 7 promotes explainable attention observers, provider-neutral inbox/digests,
+cross-session environment interlocks, durable lineage, an explicitly confirmed
+cross-vendor review flow, observational workload telemetry, a non-injecting experience
+index, and preview-first batch analysis. All of them reuse the Phase 6 scheduler, provider,
+budget ledger, notification store, and agent-run identity.
+
+Knowledge-graph extraction, automatic instruction or memory synchronization, overnight
+repository mutation, observer-triggered workers, autonomous relay, and automatic approval
+remain outside this phase. A user-confirmed review spawn is a typed product operation, not
+an automation action, and its complete prompt is visible before creation.
+
+### Implementation sequence
+
+1. Build deterministic cross-source evidence windows and the attention inbox/digest over
+   persisted events, annotations, attach/input activity, PTY telemetry, and process state.
+2. Add bounded semantic observers for stall, approval, context pressure, and absence only
+   where deterministic evidence cannot supply the answer; every result retains its evidence,
+   confidence, cost, and model provenance.
+3. Add lineage and environment interlocks, then the explicitly user-initiated cross-vendor
+   review flow. These use typed daemon operations and never become rule/model actions.
+4. Add workload telemetry, the experience index, and opt-in batch observers after the live
+   attention features have demonstrated useful signal quality and acceptable economics.
+
+Phase 7 may reuse Phase 6 summaries and annotations but may not create a second scheduler,
+provider abstraction, budget ledger, notification store, or session identity model.
+
 ### Attention observers and digests
 
-- [ ] Implement stall/spiral detection from turn summaries, repeated tool/command failures,
+- [x] Implement stall/spiral detection from turn summaries, repeated tool/command failures,
   PTY silence/output rate, process-tree CPU, and progress windows. Expose the evidence and
   confidence behind every annotation; never equate ordinary idle time with a stall.
-- [ ] Implement approval triage that summarizes and prioritizes normalized approval events,
+- [x] Implement approval triage that summarizes and prioritizes normalized approval events,
   then annotates or notifies. It never approves, rejects, types, or modifies an allowlist.
-- [ ] Add context-pressure/handoff suggestions from native context telemetry plus summary
+- [x] Add context-pressure/handoff suggestions from native context telemetry plus summary
   chains. Generate a draft annotation or exportable handoff; do not inject it automatically.
-- [ ] Add interval attention digests and an absence report across spaces/sessions since the
+- [x] Add interval attention digests and an absence report across spaces/sessions since the
   user's last attach/input activity. Browser/mobile notification and inbox delivery ship
   first; Telegram later consumes the same provider-neutral records.
 
 ### Fleet-level deterministic intelligence
 
-- [ ] Add cross-session environment interlocks using trusted scope, Git/worktree state,
+- [x] Add cross-session environment interlocks using trusted scope, Git/worktree state,
   owned descendant processes, listeners, and registered previews: same-branch concurrent
   work, port collisions, and one session consuming another session's dev server.
-- [ ] Persist session lineage for resume, explicit handoff, continuation, and review edges.
+- [x] Persist session lineage for resume, explicit handoff, continuation, and review edges.
   History may group a work thread across backends while retaining atomic agent-run records.
-- [ ] Add a user-initiated cross-vendor second-opinion command: select a completed/current
+- [x] Add a user-initiated cross-vendor second-opinion command: select a completed/current
   agent run, review the generated diff/context prompt, then explicitly spawn the other
   backend in the chosen cwd/worktree. This is an ordinary session plus lineage edge, not a
   rule `spawn` action.
-- [ ] Add actual-workload scaffold telemetry: turn/stall/approval rates, duration, context,
+- [x] Add actual-workload scaffold telemetry: turn/stall/approval rates, duration, context,
   cost, completion evidence, and backend/model dimensions. Clearly label observational
   correlation; do not claim benchmark causality without paired user-initiated runs.
 
 ### Compounding knowledge
 
-- [ ] Build an experience index from error/resolution annotations across Claude and Codex
+- [x] Build an experience index from error/resolution annotations across Claude and Codex
   history. Retrieval may suggest a prior resolution to a live run as an annotation; it does
   not write memory/project files or inject guidance automatically.
-- [ ] Add explicit, budgeted batch observers over selected ended sessions for repeated
+- [x] Add explicit, budgeted batch observers over selected ended sessions for repeated
   failures/procedures, doc-drift candidates, convention findings, and regression/eval
   candidates. Default to preview/export; never mutate a repository overnight.
-- [ ] Keep knowledge-graph extraction and instruction/memory synchronization outside the
+- [x] Keep knowledge-graph extraction and instruction/memory synchronization outside the
   initial Phase 7 exit criteria until the simpler experience index proves useful.
 
 ### Deliberate actuation gate
 
-- [ ] Define and test a future safe-to-inject predicate from daemon PTY-mode/composer state
+- [x] Define and test a future safe-to-inject predicate from daemon PTY-mode/composer state
   plus adapter-specific etiquette. Completing the predicate is research/diagnostic work and
   does not itself authorize actuation.
-- [ ] Keep observer-triggered `write_pty`, approval response, worker/spawn, arbitrary HTTP,
+- [x] Keep observer-triggered `write_pty`, approval response, worker/spawn, arbitrary HTTP,
   project scripts, executable rulepacks, and model-directed actions unscheduled. Enabling
   any one requires a separate product decision, reviewed policy, confirmation/allowlist,
   audit trail, and—where repository-owned—a fingerprinted machine trust store.
 
 ### Phase 7 exit criteria
 
-- [ ] Stall, approval, context, digest, and absence observers are explainable, budgeted,
+- [x] Stall, approval, context, digest, and absence observers are explainable, budgeted,
   bounded, provider-failure tolerant, and useful on both Claude and Codex fixture histories.
-- [ ] Fleet interlocks and lineage operate across mixed-project spaces without trusting OSC
+- [x] Fleet interlocks and lineage operate across mixed-project spaces without trusting OSC
   runtime cwd or conflating PTY sessions, agent runs, worktrees, and repository groups.
-- [ ] A user can explicitly create a cross-vendor review session with a visible prompt and
+- [x] A user can explicitly create a cross-vendor review session with a visible prompt and
   lineage edge; no rule or model can initiate that session.
-- [ ] Read-only guarantees remain intact: control-plane intelligence annotates, notifies,
+- [x] Read-only guarantees remain intact: control-plane intelligence annotates, notifies,
   summarizes, suggests, and reports, but never commands an agent or mutates a project.
+
+Verification: the same full backend/frontend suite covers both Claude and Codex fixture
+histories, fleet interlocks, attention evidence, lineage, token-bound review/batch
+confirmation, experience suggestions, and the read-only actuation boundary.
 
 ## Phase 8 — Windows product maturity, CLI control, and diagnostics
 

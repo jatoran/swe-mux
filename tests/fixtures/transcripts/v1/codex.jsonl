@@ -1,3 +1,5 @@
 {"type":"session_meta","payload":{"id":"codex-fixture","cwd":"__CWD__"}}
 {"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"event_msg","timestamp":"2026-01-01T00:00:01Z","payload":{"type":"user_message","message":"Fix the parser and verify it."}}
+{"type":"event_msg","timestamp":"2026-01-01T00:00:02Z","payload":{"type":"agent_message","message":"Implemented the parser and the tests pass."}}
 {"type":"event_msg","payload":{"type":"task_complete"}}

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
 import secrets
 import shutil
+import threading
 import time
 import tomllib
 from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -20,9 +23,20 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
 from .adapters import BackendAdapter, ClaudeAdapter, CodexAdapter, ShellAdapter
-from .app_notes import list_space_notes, read_space_note, write_space_note
+from .app_notes import list_space_notes, note_body, read_space_note, write_space_note
+from .automation import (
+    OBSERVER_SCHEMAS,
+    AutomationEngine,
+    RuleValidationError,
+    normalize_event,
+    parse_rules,
+    serialize_rules,
+    validate_observer_result,
+)
+from .automation_store import AutomationStore
 from .config import Config, load_config, update_config
 from .event_bus import EventBus
+from .fleet_intelligence import FleetIntelligence
 from .git_monitor import GitMonitor, _git
 from .history import HistoryIndex
 from .keybindings import (
@@ -32,10 +46,11 @@ from .keybindings import (
     normalize_binding,
 )
 from .launchers import create_agent_shims
-from .layouts import attach_leaf, attach_terminal
+from .layouts import attach_leaf, attach_terminal, stack_leaf
 from .meta_hooks import MetaHookEngine, parse_hook_rules
-from .models import SessionState
+from .models import MuxEvent, SessionState
 from .note_migration import migrate_space_notes, repair_misbound_project_notes
+from .openrouter import OpenRouterClient, OpenRouterError
 from .processes import PreviewRegistry, ProcessInspector
 from .profiles import profile_payload, resolve_profile
 from .project_files import (
@@ -52,12 +67,14 @@ from .project_files import (
 )
 from .projects import resolve_project
 from .reconcile import reconcile_external_history
+from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import Session, SessionManager
 from .spaces import SpaceManager
 from .spawn_contract import SpawnRequest
 from .tailscale import is_tailscale_ip, tailscale_status
-from .transcript_view import parse_transcript
+from .transcript_view import parse_transcript_cached
 from .usage import UsageManager
+from .voice import VoiceError, VoiceService, VoiceStore, clip_snapshot
 from .win_jobobj import ReaperJob
 
 log = logging.getLogger(__name__)
@@ -138,6 +155,37 @@ def browser_origin_matches_request(origin: str, raw_host: str) -> bool:
     return origin_port == request_port
 
 
+def _apply_security_headers(response: web.StreamResponse, request: web.Request) -> None:
+    """Stamp response security headers.
+
+    Shared by the security middleware and the preview passthrough, which streams
+    its own StreamResponse and so must set these before it calls prepare() (the
+    middleware's post-handler stamping would otherwise be too late).
+    """
+    if request.path.startswith("/preview/"):
+        csp = (
+            "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; "
+            "connect-src * data: blob:; frame-ancestors 'self'"
+        )
+    else:
+        csp = (
+            "default-src 'self'; connect-src 'self' ws: wss:; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+            "frame-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+        )
+    response.headers.setdefault("Content-Security-Policy", csp)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    # microphone=(self) keeps third-party frames blocked while allowing the app's
+    # own dictation (STT) feature to request the microphone on secure contexts.
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(self), geolocation=()"
+    )
+    if not request.path.startswith("/preview/"):
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+
+
 @web.middleware
 async def security_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
     host = request_host(request)
@@ -155,24 +203,7 @@ async def security_middleware(request: web.Request, handler: Handler) -> web.Str
     response = await handler(request)
     if websocket:
         return response
-    if request.path.startswith("/preview/"):
-        csp = (
-            "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; "
-            "connect-src * data: blob:; frame-ancestors 'self'"
-        )
-    else:
-        csp = (
-            "default-src 'self'; connect-src 'self' ws: wss:; "
-            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
-            "frame-src 'self'; frame-ancestors 'none'; base-uri 'self'"
-        )
-    response.headers.setdefault("Content-Security-Policy", csp)
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("Referrer-Policy", "no-referrer")
-    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-    if not request.path.startswith("/preview/"):
-        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-        response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    _apply_security_headers(response, request)
     return response
 
 
@@ -199,6 +230,32 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.get("/api/hooks", get_hooks),
             web.get("/api/hooks/status", get_hook_status),
             web.put("/api/hooks", put_hooks),
+            web.get("/api/automation", get_automation_status),
+            web.get("/api/automation/rules", get_automation_rules),
+            web.put("/api/automation/rules", put_automation_rules),
+            web.patch("/api/automation/rules/{rule_id}", patch_automation_rule),
+            web.post("/api/automation/dry-run", automation_dry_run),
+            web.get("/api/automation/dashboard", automation_dashboard),
+            web.get("/api/automation/firings", automation_firings),
+            web.get("/api/annotations", list_annotations),
+            web.get("/api/automation/provider", automation_provider_status),
+            web.post("/api/automation/provider/key", automation_provider_key),
+            web.post("/api/automation/provider/models/refresh", refresh_automation_models),
+            web.get("/api/automation/notifications", automation_notifications),
+            web.patch(
+                "/api/automation/notifications/{notification_id}",
+                patch_automation_notification,
+            ),
+            web.get("/api/lineage", list_lineage),
+            web.post("/api/lineage", create_lineage),
+            web.get("/api/attention/absence", absence_report),
+            web.get("/api/automation/injection-safety", injection_safety),
+            web.post("/api/history/{sid}/second-opinion", second_opinion),
+            web.get("/api/history/{sid}/handoff", export_handoff),
+            web.get("/api/telemetry/workloads", workload_telemetry),
+            web.get("/api/experiences", list_experiences),
+            web.get("/api/automation/batches", list_observer_batches),
+            web.post("/api/automation/batches", create_observer_batch),
             web.get("/api/profiles", list_profiles),
             web.get("/api/project/config", get_project_config),
             web.put("/api/project/config", put_project_config),
@@ -208,6 +265,7 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.put("/api/notes", put_project_note),
             web.get("/api/project/notes/search", find_project_notes),
             web.get("/api/space-notes", list_app_space_notes),
+            web.get("/api/note-shelf", list_note_shelf),
             web.get("/api/projects", list_projects),
             web.post("/api/projects/resolve", resolve_project_scope),
             web.get("/api/projects/{scope_id}", get_project_scope),
@@ -226,6 +284,7 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.patch("/api/sessions/{sid}", patch_session),
             web.delete("/api/sessions/{sid}", delete_session),
             web.post("/api/sessions/{sid}/input", session_input),
+            web.post("/api/sessions/{sid}/startup-metrics", session_startup_metrics),
             web.post("/api/sessions/{sid}/broadcast-set", broadcast_set),
             web.post("/api/broadcast/input", broadcast_input_route),
             web.post("/api/sessions/{sid}/media", upload_session_media),
@@ -242,6 +301,11 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.delete("/api/history/{sid}", delete_history_entry),
             web.get("/api/events", list_events),
             web.get("/api/notifications", list_notifications),
+            web.get("/api/voice", voice_status),
+            web.post("/api/sessions/{sid}/voice/generate", voice_generate),
+            web.get("/api/voice/clips", list_voice_clips),
+            web.get("/api/voice/clips/{clip_id}/audio", voice_clip_audio),
+            web.delete("/api/voice/clips/{clip_id}", delete_voice_clip),
             web.get("/api/usage", get_usage),
             web.post("/api/usage/refresh", refresh_usage),
             web.delete("/api/usage/cache", clear_usage_cache),
@@ -292,13 +356,35 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     )
     git_monitor = GitMonitor(sessions, events, config.git_poll_seconds)
     hooks = MetaHookEngine(config.data_dir / "hooks.toml", events, sessions)
+    automation_store = AutomationStore(config.database_path)
+    await automation_store.prune(config.automation_retention_days)
+    secret_store = PlatformSecretStore(config.data_dir / "automation.secrets.json")
+    openrouter = OpenRouterClient(
+        secret_store, timeout_seconds=config.openrouter_request_timeout_seconds
+    )
+    automation = AutomationEngine(
+        config.data_dir / "rules.toml",
+        events,
+        sessions,
+        automation_store,
+        config,
+        openrouter,
+    )
     usage = UsageManager(config, events)
     process_inspector = ProcessInspector(sessions, events)
     previews = PreviewRegistry(process_inspector, sessions)
+    fleet = FleetIntelligence(
+        sessions, events, automation_store, process_inspector, previews, config
+    )
+    voice_store = VoiceStore(config.database_path)
+    voice = VoiceService(config, events, sessions, voice_store, automation_store, openrouter)
     git_monitor.start()
     hooks.start()
+    automation.start()
     usage.start()
     process_inspector.start()
+    fleet.start()
+    voice.start()
     config_watch = asyncio.create_task(_watch_config(app), name="config-watch")
     media_cleanup_task = asyncio.create_task(
         _media_cleanup_loop(config.data_dir), name="media-cleanup"
@@ -316,25 +402,41 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         reaper=reaper,
         git_monitor=git_monitor,
         hooks=hooks,
+        automation=automation,
+        automation_store=automation_store,
+        secret_store=secret_store,
+        openrouter=openrouter,
         usage=usage,
         process_inspector=process_inspector,
         previews=previews,
+        fleet=fleet,
+        voice=voice,
+        voice_store=voice_store,
+        automation_tasks=set(),
     )
     yield
     if reconcile_task:
         if not reconcile_task.done():
             reconcile_task.cancel()
         await asyncio.gather(reconcile_task, return_exceptions=True)
+    for task in tuple(app["automation_tasks"]):
+        task.cancel()
+    await asyncio.gather(*app["automation_tasks"], return_exceptions=True)
     config_watch.cancel()
     await asyncio.gather(config_watch, return_exceptions=True)
     media_cleanup_task.cancel()
     await asyncio.gather(media_cleanup_task, return_exceptions=True)
     await hooks.stop()
+    await automation.stop()
+    await voice.stop()
     await usage.stop()
+    await fleet.stop()
     await process_inspector.stop()
     await git_monitor.stop()
     await sessions.shutdown()
     history.close()
+    automation_store.close()
+    voice_store.close()
     reaper.close()
 
 
@@ -580,6 +682,708 @@ async def put_hooks(request: web.Request) -> web.Response:
     return json_response({"text": text})
 
 
+# Diagnostic repository rules re-read/re-parse on every /automation request; cache
+# the parsed entry per rules.toml path, invalidated by (mtime_ns, size).
+_repo_rules_cache: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
+_repo_rules_lock = threading.Lock()
+
+
+def _load_repo_rule_entry(project_id: str, root: str) -> dict[str, Any] | None:
+    """Build one project's inert repository-rules diagnostic, cached by mtime+size.
+
+    Runs entirely in a worker thread (stat + read + TOML parse all block). The
+    diagnostic is a deterministic function of file content, so caching an
+    invalid-parse entry by version is correct too. Returns None when there is no
+    regular rules.toml, mirroring the original `not path.is_file()` skip.
+    """
+    path = Path(str(root)) / ".swe-mux" / "rules.toml"
+    try:
+        if not path.is_file():
+            return None
+        version = (path.stat().st_mtime_ns, path.stat().st_size)
+    except OSError:
+        return None
+    key = str(path)
+    with _repo_rules_lock:
+        cached = _repo_rules_cache.get(key)
+    if cached and cached[0] == version:
+        return {**cached[1], "project_scope_id": project_id}
+    try:
+        rules = parse_rules(path.read_text(encoding="utf-8"), source="repository-inert")
+        entry: dict[str, Any] = {
+            "project_scope_id": project_id,
+            "path": str(path),
+            "valid": True,
+            "rules": [rule.snapshot() for rule in rules],
+            "execution": "inert",
+        }
+    except (OSError, RuleValidationError) as exc:
+        entry = {
+            "project_scope_id": project_id,
+            "path": str(path),
+            "valid": False,
+            "diagnostic": str(exc),
+            "execution": "inert",
+        }
+    with _repo_rules_lock:
+        _repo_rules_cache[key] = (version, entry)
+    return {**entry, "project_scope_id": project_id}
+
+
+async def get_automation_status(request: web.Request) -> web.Response:
+    automation: AutomationEngine = request.app["automation"]
+    projects = await request.app["history"].project_scopes(include_hidden=True)
+    entries = await asyncio.gather(
+        *(
+            asyncio.to_thread(_load_repo_rule_entry, str(project["id"]), str(project["root"]))
+            for project in projects
+        )
+    )
+    repository_rules = [entry for entry in entries if entry is not None]
+    return json_response(
+        {
+            **automation.status(),
+            "legacy": {
+                "path": str(request.app["config"].data_dir / "hooks.toml"),
+                "active": bool(request.app["hooks"].rules),
+                "diagnostic": request.app["hooks"].diagnostic,
+                "migration": "explicit-save-required",
+            },
+            "repository_rules": repository_rules,
+        }
+    )
+
+
+async def get_automation_rules(request: web.Request) -> web.Response:
+    path = request.app["config"].data_dir / "rules.toml"
+    return json_response(
+        {
+            "version": 1,
+            "text": path.read_text(encoding="utf-8") if path.exists() else "version = 1\n",
+            "rules": [rule.snapshot() for rule in request.app["automation"].rules],
+            "diagnostic": request.app["automation"].diagnostic,
+        }
+    )
+
+
+async def put_automation_rules(request: web.Request) -> web.Response:
+    text = str((await request.json()).get("text", ""))
+    try:
+        parse_rules(text)
+    except RuleValidationError as exc:
+        return json_response({"error": "invalid rules TOML", "fields": {"text": str(exc)}}, 422)
+    if request.query.get("validate") == "1":
+        return json_response({"ok": True})
+    path = request.app["config"].data_dir / "rules.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".toml.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+    automation: AutomationEngine = request.app["automation"]
+    automation.reload()
+    await request.app["events"].emit("configuration_changed", source="settings")
+    return await get_automation_rules(request)
+
+
+async def patch_automation_rule(request: web.Request) -> web.Response:
+    body = await request.json()
+    if not isinstance(body, dict) or not body or set(body) - {"enabled", "shadow"}:
+        raise ValueError("only enabled and shadow may be changed through the ordinary editor")
+    if any(not isinstance(value, bool) for value in body.values()):
+        raise ValueError("enabled and shadow must be boolean")
+    rule_id = request.match_info["rule_id"]
+    automation: AutomationEngine = request.app["automation"]
+    found = False
+    rules = []
+    for rule in automation.rules:
+        if rule.id != rule_id:
+            rules.append(rule)
+            continue
+        found = True
+        rules.append(
+            replace(
+                rule,
+                enabled=body.get("enabled", rule.enabled),
+                shadow=body.get("shadow", rule.shadow),
+            )
+        )
+    if not found:
+        raise KeyError(rule_id)
+    text = serialize_rules(rules)
+    parse_rules(text)
+    path = request.app["config"].data_dir / "rules.toml"
+    temporary = path.with_suffix(".toml.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+    automation.reload()
+    await request.app["events"].emit("configuration_changed", source="settings")
+    return await get_automation_rules(request)
+
+
+async def automation_dry_run(request: web.Request) -> web.Response:
+    body = await request.json()
+    sequence = int(body.get("event_seq") or 0)
+    rows = await request.app["history"].events(after_seq=max(0, sequence - 1), limit=1)
+    if not rows or int(rows[0]["seq"]) != sequence:
+        raise KeyError(sequence)
+    row = rows[0]
+    event = MuxEvent(
+        float(row["ts"]),
+        row.get("session_id"),
+        str(row["source"]),
+        str(row["type"]),
+        row["payload"],
+        int(row["seq"]),
+    )
+    session = request.app["sessions"].sessions.get(row.get("session_id") or "")
+    normalized = normalize_event(
+        event,
+        session.record if session else None,
+        attended=bool(session and session.subscribers),
+    )
+    supplied = body.get("text")
+    rules = parse_rules(str(supplied), source="dry-run") if supplied is not None else None
+    reports = await request.app["automation"].evaluate(normalized, rules=rules, dry_run=True)
+    return json_response({"event": normalized.snapshot(), "reports": reports})
+
+
+async def automation_dashboard(request: web.Request) -> web.Response:
+    store: AutomationStore = request.app["automation_store"]
+    return json_response(
+        {
+            **await store.dashboard(),
+            "engine": request.app["automation"].status(),
+            "provider": await _provider_status(request),
+            "recent_firings": await store.firings(limit=25),
+            "recent_action_results": await store.action_results(limit=50),
+            "recent_observer_calls": await store.observer_calls(limit=50),
+            "recent_annotations": await store.annotations(limit=25),
+        }
+    )
+
+
+async def automation_firings(request: web.Request) -> web.Response:
+    return json_response(
+        {
+            "items": await request.app["automation_store"].firings(
+                rule_id=request.query.get("rule"),
+                limit=int(request.query.get("limit", 200)),
+            )
+        }
+    )
+
+
+async def list_annotations(request: web.Request) -> web.Response:
+    return json_response(
+        {
+            "items": await request.app["automation_store"].annotations(
+                agent_run_id=request.query.get("agent_run_id"),
+                tag=request.query.get("tag"),
+                limit=int(request.query.get("limit", 200)),
+            )
+        }
+    )
+
+
+async def _provider_status(request: web.Request) -> dict[str, Any]:
+    return {
+        "secret": request.app["secret_store"].status("openrouter_api_key"),
+        "models": await request.app["automation_store"].model_cache(),
+        "origin": "https://openrouter.ai/api/v1",
+        "cheap_model": request.app["config"].openrouter_cheap_model,
+        "standard_model": request.app["config"].openrouter_standard_model,
+    }
+
+
+async def automation_provider_status(request: web.Request) -> web.Response:
+    return json_response(await _provider_status(request))
+
+
+async def automation_provider_key(request: web.Request) -> web.Response:
+    body = await request.json()
+    operation = str(body.get("operation") or "test")
+    value = body.get("key")
+    store: PlatformSecretStore = request.app["secret_store"]
+    provider: OpenRouterClient = request.app["openrouter"]
+    try:
+        if operation == "test":
+            result = await provider.test_key(str(value) if value else None)
+            return json_response({**result, "status": store.status("openrouter_api_key")})
+        if operation in {"set", "replace"}:
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("key is required")
+            if body.get("test", True):
+                await provider.test_key(value)
+            store.set("openrouter_api_key", value)
+            return json_response({"ok": True, "status": store.status("openrouter_api_key")})
+        if operation == "clear":
+            store.clear("openrouter_api_key")
+            return json_response({"ok": True, "status": store.status("openrouter_api_key")})
+        raise ValueError("operation must be test, set, replace, or clear")
+    except (OpenRouterError, SecretStoreError) as exc:
+        return json_response({"error": str(exc), "status": store.status("openrouter_api_key")}, 422)
+
+
+async def refresh_automation_models(request: web.Request) -> web.Response:
+    store: AutomationStore = request.app["automation_store"]
+    try:
+        models = await request.app["openrouter"].models()
+        await store.cache_models(models)
+    except OpenRouterError as exc:
+        await store.record_model_error(str(exc))
+        return json_response({"error": str(exc), **await store.model_cache()}, 422)
+    return json_response(await store.model_cache())
+
+
+async def automation_notifications(request: web.Request) -> web.Response:
+    return json_response(
+        {
+            "items": await request.app["automation_store"].notifications(
+                unread=request.query.get("unread") == "1",
+                limit=int(request.query.get("limit", 200)),
+            )
+        }
+    )
+
+
+async def patch_automation_notification(request: web.Request) -> web.Response:
+    body = await request.json()
+    changed = await request.app["automation_store"].mark_notification(
+        request.match_info["notification_id"], bool(body.get("read", True))
+    )
+    if not changed:
+        raise KeyError(request.match_info["notification_id"])
+    return json_response({"ok": True})
+
+
+async def list_lineage(request: web.Request) -> web.Response:
+    return json_response(
+        {"items": await request.app["automation_store"].lineage(request.query.get("run_id"))}
+    )
+
+
+async def create_lineage(request: web.Request) -> web.Response:
+    body = await request.json()
+    parent = str(body.get("parent_run_id") or "")
+    child = str(body.get("child_run_id") or "")
+    relation = str(body.get("relation") or "")
+    if not parent or not child or relation not in {"resume", "handoff", "continuation", "review"}:
+        raise ValueError("parent_run_id, child_run_id, and a valid relation are required")
+    return json_response(
+        await request.app["automation_store"].add_lineage(
+            parent, child, relation, body.get("metadata")
+        ),
+        201,
+    )
+
+
+async def absence_report(request: web.Request) -> web.Response:
+    since = float(request.query["since"]) if request.query.get("since") else None
+    return json_response(await request.app["fleet"].absence_report(since))
+
+
+async def injection_safety(request: web.Request) -> web.Response:
+    return json_response(request.app["fleet"].injection_safety())
+
+
+async def second_opinion(request: web.Request) -> web.Response:
+    source_id = request.match_info["sid"]
+    history: HistoryIndex = request.app["history"]
+    source = await history.history_entry(source_id)
+    if not source:
+        live = next(
+            (
+                item.record
+                for item in request.app["sessions"].sessions.values()
+                if item.record.agent_run_id == source_id or item.record.id == source_id
+            ),
+            None,
+        )
+        if live and live.agent_run_id:
+            source_id = live.agent_run_id
+            source = await history.history_entry(source_id)
+    if not source or source.get("backend") not in {"claude", "codex"}:
+        raise KeyError(source_id)
+    body = await request.json()
+    backend = str(body.get("backend") or ("codex" if source["backend"] == "claude" else "claude"))
+    if backend not in {"claude", "codex"} or backend == source["backend"]:
+        raise ValueError("second opinion backend must be the other supported agent")
+    annotations = await request.app["automation_store"].annotations(
+        agent_run_id=source_id, limit=50
+    )
+    summaries = [
+        str(item["content"])
+        for item in reversed(annotations)
+        if item["tag"] in {"turn-summary", "summary"}
+    ][-12:]
+    worktree_context = await _review_worktree_context(str(source["cwd"]))
+    prompt = (
+        f"Review the work from a {source['backend']} agent run in {source['cwd']}.\n"
+        "Act as an independent reviewer. Inspect the current working tree and identify "
+        "incorrect changes, missing tests, regressions, or unsupported completion claims. "
+        "Do not assume the prior agent was correct.\n"
+    )
+    if summaries:
+        prompt += "\nPrior run summaries:\n- " + "\n- ".join(summaries)
+    if worktree_context:
+        prompt += f"\n\nCurrent bounded worktree context:\n```text\n{worktree_context}\n```"
+    if body.get("instructions"):
+        prompt += f"\n\nUser review instructions:\n{str(body['instructions'])[:4000]}"
+    preview = {
+        "source_run_id": source_id,
+        "source_backend": source["backend"],
+        "backend": backend,
+        "cwd": source["cwd"],
+        "worktree_context": worktree_context,
+        "prompt": prompt,
+        "relation": "review",
+    }
+    preview_token = hashlib.sha256(
+        json.dumps(preview, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    preview["preview_token"] = preview_token
+    if not body.get("confirm"):
+        return json_response({"preview": preview, "spawned": False})
+    if not secrets.compare_digest(str(body.get("preview_token") or ""), preview_token):
+        raise ValueError("review confirmation requires the current preview token")
+    target_space = str(body.get("space") or source.get("space_id") or "default")
+    session = await _spawn_from_body(
+        request.app,
+        {
+            "backend": backend,
+            "name": body.get("name") or f"{backend} review · {source['name']}",
+            "cwd": source["cwd"],
+            "space": target_space,
+            "argv": [prompt],
+        },
+    )
+    space = request.app["spaces"].spaces[target_space]
+    next_layout = attach_terminal(
+        space.layout,
+        session.record.id,
+        target_id=body.get("target_session_id"),
+        direction=body.get("direction"),
+    )
+    try:
+        await request.app["spaces"].update(
+            target_space, layout=next_layout, layout_revision=space.layout_revision
+        )
+    except Exception:
+        await request.app["sessions"].stop(session.record.id)
+        request.app["sessions"].sessions.pop(session.record.id, None)
+        raise
+    lineage = await request.app["automation_store"].add_lineage(
+        source_id,
+        session.record.agent_run_id or session.record.id,
+        "review",
+        {
+            "prompt_reviewed": True,
+            "preview_token": preview_token,
+            "source_backend": source["backend"],
+        },
+    )
+    return json_response(
+        {
+            "preview": preview,
+            "spawned": True,
+            "session": session.record.snapshot(),
+            "lineage": lineage,
+        },
+        201,
+    )
+
+
+async def _review_worktree_context(cwd: str) -> str:
+    """Return bounded, reviewable Git evidence without persisting a repository diff."""
+    (status_code, status), (diff_code, diff) = await asyncio.gather(
+        _git(cwd, "status", "--short", "--branch", "--untracked-files=normal"),
+        _git(cwd, "diff", "--stat", "--", "."),
+    )
+    sections: list[str] = []
+    if status_code == 0 and status:
+        sections.append("STATUS\n" + status[:6000])
+    if diff_code == 0 and diff:
+        sections.append("DIFF STAT\n" + diff[:4000])
+    return "\n\n".join(sections)[:10_000]
+
+
+async def export_handoff(request: web.Request) -> web.Response:
+    run_id = request.match_info["sid"]
+    row = await request.app["history"].history_entry(run_id)
+    if not row or row.get("backend") not in {"claude", "codex"}:
+        raise KeyError(run_id)
+    annotations = await request.app["automation_store"].annotations(agent_run_id=run_id, limit=200)
+    summaries = [
+        item
+        for item in reversed(annotations)
+        if item["tag"] in {"turn-summary", "summary", "handoff-suggestion"}
+    ]
+    lines = [
+        f"# Handoff: {row['name']}",
+        "",
+        f"- Backend: {row['backend']}",
+        f"- Working directory: {row['cwd']}",
+        f"- Agent run: {run_id}",
+        "",
+        "## Progress",
+        "",
+    ]
+    lines.extend(f"- {item['content']}" for item in summaries)
+    if not summaries:
+        lines.append("- No observer summaries are available yet.")
+    lines.extend(
+        [
+            "",
+            "## Provenance",
+            "",
+            "Generated from read-only swe-mux annotations. Review before using it as context.",
+        ]
+    )
+    return json_response({"run_id": run_id, "markdown": "\n".join(lines) + "\n"})
+
+
+async def workload_telemetry(request: web.Request) -> web.Response:
+    since = float(request.query.get("since", 0))
+    result = await request.app["history"].workload_telemetry(since)
+    result["observer_spend"] = await request.app["automation_store"].spend()
+    provider_costs: list[dict[str, Any]] = []
+    usage = request.app.get("usage")
+    providers = (usage.cache.get("providers") or {}) if usage else {}
+    for backend, payload in providers.items():
+        for row in payload.get("models") or []:
+            provider_costs.append(
+                {
+                    "backend": backend,
+                    "model": row.get("model") or "unknown",
+                    "tokens": int(row.get("total_tokens") or 0),
+                    "cost_usd": float(row.get("cost_usd") or 0),
+                    "cost_is_estimate": bool(row.get("cost_is_estimate", True)),
+                    "attribution": "ccusage_provider_model_aggregate",
+                }
+            )
+    result["provider_cost_dimensions"] = provider_costs
+    result["cost_note"] = (
+        "ccusage costs are backend/model aggregates and are not attributed to individual runs"
+    )
+    return json_response(result)
+
+
+async def list_experiences(request: web.Request) -> web.Response:
+    return json_response(
+        {
+            "items": await request.app["automation_store"].experiences(
+                query=request.query.get("q", ""),
+                project_scope_id=request.query.get("project_scope_id"),
+                limit=int(request.query.get("limit", 100)),
+            ),
+            "advisory_only": True,
+        }
+    )
+
+
+async def list_observer_batches(request: web.Request) -> web.Response:
+    return json_response(
+        {
+            "items": await request.app["automation_store"].batches(
+                int(request.query.get("limit", 50))
+            )
+        }
+    )
+
+
+async def create_observer_batch(request: web.Request) -> web.Response:
+    body = await request.json()
+    kind = str(body.get("kind") or "")
+    allowed = {"experience", "procedure", "doc-drift", "convention", "regression"}
+    if kind not in allowed:
+        raise ValueError(f"kind must be one of {', '.join(sorted(allowed))}")
+    run_ids = body.get("run_ids")
+    if (
+        not isinstance(run_ids, list)
+        or not 1 <= len(run_ids) <= 25
+        or not all(isinstance(item, str) for item in run_ids)
+    ):
+        raise ValueError("run_ids must select between 1 and 25 agent runs")
+    rows: list[dict[str, Any]] = []
+    for identity in run_ids:
+        row = await request.app["history"].history_entry(identity)
+        if (
+            not row
+            or row.get("backend") not in {"claude", "codex"}
+            or not row.get("exited_at")
+            or not row.get("transcript_path")
+        ):
+            raise ValueError(f"batch run is not an ended agent transcript: {identity}")
+        rows.append(row)
+    estimate = {
+        "calls": len(rows),
+        "maximum_input_tokens": len(rows) * request.app["config"].automation_max_input_tokens,
+        "maximum_output_tokens": len(rows) * request.app["config"].automation_max_output_tokens,
+        "repository_mutation": False,
+    }
+    preview_token = hashlib.sha256(
+        json.dumps(
+            {"kind": kind, "run_ids": run_ids, "estimate": estimate},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if not body.get("confirm"):
+        return json_response(
+            {
+                "preview": True,
+                "preview_token": preview_token,
+                "kind": kind,
+                "runs": run_ids,
+                "estimate": estimate,
+            }
+        )
+    if not secrets.compare_digest(str(body.get("preview_token") or ""), preview_token):
+        raise ValueError("batch confirmation requires the current preview token")
+    if not request.app["config"].automation_enabled:
+        raise ValueError("automation kill switch is off")
+    batch_id = await request.app["automation_store"].create_batch(kind, run_ids)
+    task = asyncio.create_task(
+        _run_observer_batch(request.app, batch_id, kind, rows),
+        name=f"observer-batch-{batch_id}",
+    )
+    request.app["automation_tasks"].add(task)
+    task.add_done_callback(request.app["automation_tasks"].discard)
+    return json_response({"id": batch_id, "status": "running", "estimate": estimate}, 202)
+
+
+async def _run_observer_batch(
+    app: web.Application, batch_id: str, kind: str, rows: list[dict[str, Any]]
+) -> None:
+    store: AutomationStore = app["automation_store"]
+    config: Config = app["config"]
+    model = config.openrouter_standard_model or config.openrouter_cheap_model
+    results: list[dict[str, Any]] = []
+    calls = tokens = 0
+    cost = 0.0
+    error: str | None = None
+    if not model:
+        await store.finish_batch(
+            batch_id,
+            status="failed",
+            preview=[],
+            calls=0,
+            tokens=0,
+            cost_usd=0,
+            error="no OpenRouter standard or cheap model is configured",
+        )
+        return
+    schema_name = "experience_v1" if kind == "experience" else "summary_v1"
+    prompts = {
+        "experience": (
+            "Extract one concrete error and its demonstrated resolution. If no resolution "
+            "is demonstrated, state that clearly. Return only the schema."
+        ),
+        "procedure": "Summarize one repeatable procedure demonstrated by this run.",
+        "doc-drift": "Identify a plausible documentation drift candidate; do not edit files.",
+        "convention": "Summarize one project convention evidenced by this run.",
+        "regression": "Summarize one concrete regression-test candidate from this run.",
+    }
+    try:
+        for row in rows:
+            spend = await store.spend()
+            rule_id = f"batch.{kind}"
+            rule_spend = await store.spend(rule_id=rule_id)
+            if (
+                spend["tokens"] >= config.automation_daily_token_budget
+                or spend["cost_usd"] >= config.automation_daily_budget_usd
+            ):
+                raise ValueError("global daily observer budget is exhausted")
+            if (
+                rule_spend["tokens"] >= config.automation_rule_daily_token_budget
+                or rule_spend["cost_usd"] >= config.automation_rule_daily_budget_usd
+            ):
+                raise ValueError("batch observer rule budget is exhausted")
+            hour_ago = time.time() - 3600
+            if await store.observer_call_count(hour_ago) >= config.automation_hourly_call_cap:
+                raise ValueError("global hourly observer call cap is exhausted")
+            if (
+                await store.observer_call_count(hour_ago, rule_id=rule_id)
+                >= config.automation_rule_hourly_call_cap
+            ):
+                raise ValueError("batch observer hourly call cap is exhausted")
+            path = Path(str(row["transcript_path"]))
+            transcript = await app["automation"].slices.build(
+                path,
+                str(row["backend"]),
+                "last_n_messages",
+                max_messages=24,
+                max_bytes=min(config.automation_max_input_tokens * 4, 512 * 1024),
+            )
+            input_text = transcript.render()
+            call_id = await store.observer_started(
+                firing_id=batch_id,
+                rule_id=rule_id,
+                model=model,
+                input_hash=transcript.input_hash,
+                input_bytes=transcript.bytes,
+            )
+            try:
+                completion = await app["openrouter"].complete_json(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": prompts[kind]},
+                        {"role": "user", "content": input_text},
+                    ],
+                    schema_name=schema_name,
+                    schema=OBSERVER_SCHEMAS[schema_name],
+                    max_tokens=config.automation_max_output_tokens,
+                )
+                validate_observer_result(completion.value, schema_name)
+                await store.observer_finished(
+                    call_id,
+                    status="completed",
+                    resolved_model=completion.resolved_model,
+                    generation_id=completion.generation_id,
+                    input_tokens=completion.input_tokens,
+                    output_tokens=completion.output_tokens,
+                    cost_usd=completion.cost_usd,
+                    latency_ms=completion.latency_ms,
+                )
+                await store.add_spend(
+                    rule_id=rule_id,
+                    model=completion.resolved_model,
+                    input_tokens=completion.input_tokens,
+                    output_tokens=completion.output_tokens,
+                    cost_usd=completion.cost_usd or 0,
+                    call_id=call_id,
+                )
+            except Exception as exc:
+                await store.observer_finished(call_id, status="failed", error=str(exc)[:1000])
+                results.append({"run_id": row["id"], "error": str(exc)})
+                continue
+            calls += 1
+            tokens += completion.input_tokens + completion.output_tokens
+            cost += completion.cost_usd or 0
+            result = {"run_id": row["id"], "result": completion.value}
+            results.append(result)
+            if kind == "experience":
+                await store.add_experience(
+                    project_scope_id=row.get("project_scope_id"),
+                    backend=str(row["backend"]),
+                    error=str(completion.value["error"]),
+                    resolution=str(completion.value["resolution"]),
+                    source_run_id=str(row["id"]),
+                    confidence=float(completion.value["confidence"]),
+                )
+    except Exception as exc:
+        error = str(exc)
+    await store.finish_batch(
+        batch_id,
+        status="failed" if error else "completed",
+        preview=results,
+        calls=calls,
+        tokens=tokens,
+        cost_usd=cost,
+        error=error,
+    )
+
+
 async def list_profiles(request: web.Request) -> web.Response:
     return json_response(profile_payload(request.app["config"]))
 
@@ -628,6 +1432,10 @@ async def get_project_note(request: web.Request) -> web.Response:
         identity,
     )
     note["project_scope_id"] = scope_id
+    note["owner_label"] = await _artifact_owner_label(
+        request, kind.removesuffix("s"), identity
+    )
+    note["project_label"] = note["project"].get("label")
     project_config = await read_project_config(cwd)
     if project_config["values"].get("notes_enabled") is False:
         note["status"] = "disabled"
@@ -676,9 +1484,7 @@ async def put_project_note(request: web.Request) -> web.Response:
             if "changed externally" in str(exc):
                 return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
             raise
-        await request.app["events"].emit(
-            "space_note_changed", source="user", space_id=identity
-        )
+        await request.app["events"].emit("space_note_changed", source="user", space_id=identity)
         return json_response(result)
     cwd, scope_id = await _note_scope(request, kind, identity, body)
     if not await request.app["history"].project_scope(scope_id):
@@ -818,6 +1624,281 @@ async def list_app_space_notes(request: web.Request) -> web.Response:
     return json_response(list_space_notes(request.app["config"].data_dir, labels))
 
 
+def _note_preview(path: Path, *, app_owned: bool = False) -> tuple[str | None, str]:
+    """Return a bounded, presentation-only title and excerpt for a note."""
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(64 * 1024 + 1)[: 64 * 1024]
+        text = raw.decode("utf-8", errors="replace")
+    except OSError:
+        return None, ""
+    if app_owned:
+        text = note_body(text)
+    title: str | None = None
+    body: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if title is None and stripped.startswith("#"):
+            candidate = stripped.lstrip("#").strip()
+            if candidate:
+                title = candidate[:120]
+                continue
+        if stripped and not stripped.startswith("---"):
+            body.append(stripped)
+    excerpt = re.sub(r"\s+", " ", " ".join(body)).strip()
+    if len(excerpt) > 240:
+        excerpt = f"{excerpt[:237].rstrip()}..."
+    return title, excerpt
+
+
+_NOTE_PREVIEW_CACHE: dict[tuple[str, bool], tuple[int, int, str | None, str]] = {}
+_NOTE_CACHE_LOCK = threading.Lock()
+
+
+def _note_card(path: Path, app_owned: bool = False) -> tuple[str | None, str, float]:
+    """Return ``(title, excerpt, modified_at)`` for a note, cached by path+mtime+size.
+
+    Combines the stat and the 64KB read+parse into one worker-thread call and
+    serves unchanged notes from a process cache, so a /note-shelf request no
+    longer re-reads every note on the event loop. A stat failure returns
+    ``(None, "", 0.0)``, matching the original _note_preview/_note_modified_at
+    fallbacks; ``app_owned`` is part of the key so the note_body-stripped space
+    variant can never collide with a raw preview of the same path.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None, "", 0.0
+    key = (str(path), app_owned)
+    with _NOTE_CACHE_LOCK:
+        hit = _NOTE_PREVIEW_CACHE.get(key)
+    if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+        return hit[2], hit[3], st.st_mtime
+    title, excerpt = _note_preview(path, app_owned=app_owned)
+    with _NOTE_CACHE_LOCK:
+        if len(_NOTE_PREVIEW_CACHE) >= 4096:
+            _NOTE_PREVIEW_CACHE.clear()  # bound growth over a long-lived daemon
+        _NOTE_PREVIEW_CACHE[key] = (st.st_mtime_ns, st.st_size, title, excerpt)
+    return title, excerpt, st.st_mtime
+
+
+def _safe_project_note_path(scope: dict[str, Any], relative_path: str) -> Path | None:
+    root = Path(str(scope["root"]))
+    mux = root / ".swe-mux"
+    candidate = root / relative_path
+    try:
+        relative = candidate.relative_to(mux)
+        cursor = mux
+        for part in relative.parts:
+            cursor /= part
+            if cursor.is_symlink():
+                return None
+        if mux.is_symlink():
+            return None
+        resolved = candidate.resolve(strict=True)
+        mux_root = mux.resolve(strict=True)
+    except (OSError, ValueError):
+        return None
+    if not resolved.is_file() or not resolved.is_relative_to(mux_root):
+        return None
+    return resolved
+
+
+async def note_shelf_items(request: web.Request) -> list[dict[str, Any]]:
+    """Build the unified, read-only discovery index without creating project files."""
+    history: HistoryIndex = request.app["history"]
+    spaces = request.app["spaces"].spaces
+    scopes = await history.project_scopes(include_hidden=True)
+    scope_by_id = {str(item["id"]): item for item in scopes}
+    history_rows = await history.history(limit=1000)
+    if "automation_store" in request.app:
+        await _decorate_generated_titles(request.app, history_rows)
+    history_by_id = {str(item["id"]): item for item in history_rows}
+    live_by_run: dict[str, Any] = {}
+    for session in request.app["sessions"].sessions.values():
+        live_by_run[str(session.record.id)] = session.record
+        if session.record.agent_run_id:
+            live_by_run[str(session.record.agent_run_id)] = session.record
+
+    results: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    labels = {item.id: item.name for item in spaces.values()}
+    data_dir: Path = request.app["config"].data_dir
+    for summary in list_space_notes(data_dir, labels):
+        path = Path(str(summary["path"]))
+        title, excerpt, modified_at = await asyncio.to_thread(_note_card, path, True)
+        seen_paths.add(str(path.resolve()))
+        results.append(
+            {
+                "id": f"space:{summary['id']}",
+                "category": "space",
+                "kind": "spaces",
+                "identity": summary["id"],
+                "owner_label": summary["label"],
+                "content_title": title,
+                "project_scope_id": None,
+                "project_label": None,
+                "project_root": None,
+                "space_id": summary["id"],
+                "backend": None,
+                "run_state": "live" if summary["active"] else "archived",
+                "storage": "app-data",
+                "path": str(path),
+                "modified_at": modified_at,
+                "excerpt": excerpt,
+                "linked": True,
+                "recovered": False,
+                "active": bool(summary["active"]),
+                "openable": True,
+            }
+        )
+
+    artifacts = [item for item in await history.artifacts() if item["kind"] == "note"]
+    artifacts_by_scope: dict[str, list[dict[str, Any]]] = {}
+    for artifact in artifacts:
+        scope_id = str(artifact["project_scope_id"])
+        artifacts_by_scope.setdefault(scope_id, []).append(artifact)
+        scope = scope_by_id.get(scope_id)
+        if not scope:
+            continue
+        artifact_path = _safe_project_note_path(scope, str(artifact["relative_path"]))
+        if not artifact_path:
+            continue
+        seen_paths.add(str(artifact_path))
+        owner_type = str(artifact["owner_type"])
+        identity = str(artifact["owner_id"])
+        row = history_by_id.get(identity)
+        if owner_type == "session" and not row:
+            candidate = await history.history_entry(identity)
+            if candidate and candidate.get("backend") in {"claude", "codex"}:
+                row = candidate
+                if "automation_store" in request.app:
+                    await _decorate_generated_titles(request.app, [row])
+                history_by_id[identity] = row
+        live = live_by_run.get(identity)
+        if owner_type == "project":
+            category = "project"
+            artifact_kind: str | None = "projects"
+            owner_label = str(scope.get("label") or artifact.get("owner_label") or identity)
+            openable = True
+        elif owner_type == "session":
+            category = "agent-run" if row or live else "recovered"
+            artifact_kind = "sessions" if row or live else None
+            generated = (
+                row.get("generated_title") if row else getattr(live, "generated_title", None)
+            )
+            auto_named = row.get("auto_named", 1) if row else getattr(live, "auto_named", True)
+            owner_label = str(
+                generated
+                if auto_named and generated
+                else (row or {}).get("name")
+                or getattr(live, "name", None)
+                or artifact.get("owner_label")
+                or identity
+            )
+            openable = bool(row or live)
+        else:
+            category = "recovered"
+            artifact_kind = None
+            owner_label = str(artifact.get("owner_label") or identity)
+            openable = False
+        title, excerpt, modified_at = await asyncio.to_thread(_note_card, artifact_path, False)
+        results.append(
+            {
+                "id": f"artifact:{artifact['id']}",
+                "category": category,
+                "kind": artifact_kind,
+                "identity": identity,
+                "owner_label": owner_label,
+                "content_title": title,
+                "project_scope_id": scope_id,
+                "project_label": scope.get("label"),
+                "project_root": scope.get("root"),
+                "space_id": (row or {}).get("space_id") or getattr(live, "space_id", None),
+                "backend": (row or {}).get("backend") or getattr(live, "backend", None),
+                "run_state": (row or {}).get("final_state") or getattr(live, "state", None),
+                "storage": "project",
+                "path": str(artifact_path),
+                "modified_at": modified_at,
+                "excerpt": excerpt,
+                "linked": True,
+                "recovered": category == "recovered",
+                "active": bool(live),
+                "openable": openable,
+            }
+        )
+
+    for scope in scopes:
+        scope_id = str(scope["id"])
+        for item in _scope_inventory(scope, artifacts_by_scope.get(scope_id, []))["unlinked"]:
+            path = Path(str(item["path"]))
+            try:
+                resolved = str(path.resolve(strict=True))
+            except OSError:
+                continue
+            if resolved in seen_paths:
+                continue
+            seen_paths.add(resolved)
+            source_kind = str(item["kind"])
+            identity = path.stem
+            row = history_by_id.get(identity) if source_kind == "sessions" else None
+            if source_kind == "sessions" and not row:
+                candidate = await history.history_entry(identity)
+                if candidate and candidate.get("backend") in {"claude", "codex"}:
+                    row = candidate
+                    if "automation_store" in request.app:
+                        await _decorate_generated_titles(request.app, [row])
+                    history_by_id[identity] = row
+            if source_kind == "projects" and path.name == "project.md":
+                category, inventory_kind, identity, openable = (
+                    "project",
+                    "projects",
+                    scope_id,
+                    True,
+                )
+                owner_label = str(scope.get("label") or scope_id)
+            elif source_kind == "sessions" and row:
+                category, inventory_kind, openable = "agent-run", "sessions", True
+                owner_label = str(
+                    row.get("generated_title")
+                    if row.get("auto_named", 1) and row.get("generated_title")
+                    else row.get("name") or identity
+                )
+            else:
+                category, inventory_kind, openable = "recovered", None, False
+                owner_label = f"Unlinked {source_kind.removesuffix('s') or 'note'} note"
+            title, excerpt, modified_at = await asyncio.to_thread(_note_card, path, False)
+            results.append(
+                {
+                    "id": f"recovered:{scope_id}:{path.name}",
+                    "category": category,
+                    "kind": inventory_kind,
+                    "identity": identity,
+                    "owner_label": owner_label,
+                    "content_title": title,
+                    "project_scope_id": scope_id,
+                    "project_label": scope.get("label"),
+                    "project_root": scope.get("root"),
+                    "space_id": (row or {}).get("space_id"),
+                    "backend": (row or {}).get("backend"),
+                    "run_state": (row or {}).get("final_state"),
+                    "storage": "project",
+                    "path": str(path),
+                    "modified_at": modified_at,
+                    "excerpt": excerpt,
+                    "linked": False,
+                    "recovered": True,
+                    "active": False,
+                    "openable": openable,
+                }
+            )
+    return sorted(results, key=lambda item: (-float(item["modified_at"]), item["owner_label"]))
+
+
+async def list_note_shelf(request: web.Request) -> web.Response:
+    return json_response({"items": await note_shelf_items(request)})
+
+
 def _scope_inventory(scope: dict[str, Any], artifacts: list[dict[str, Any]]) -> dict[str, Any]:
     root = Path(str(scope["root"]))
     mux = root / ".swe-mux"
@@ -830,7 +1911,11 @@ def _scope_inventory(scope: dict[str, Any], artifacts: list[dict[str, Any]]) -> 
             for path in sorted(note_paths)[:1000]:
                 try:
                     resolved = path.resolve(strict=True)
-                    if not resolved.is_relative_to(mux.resolve()) or path.is_symlink():
+                    if (
+                        not resolved.is_relative_to(mux.resolve())
+                        or path.is_symlink()
+                        or path.parent.is_symlink()
+                    ):
                         continue
                 except OSError:
                     continue
@@ -872,14 +1957,18 @@ async def resolve_project_scope(request: web.Request) -> web.Response:
             if same:
                 session.record.runtime_project_scope_id = project.id
                 session.publish_update()
-    return json_response(project.__dict__ if hasattr(project, "__dict__") else {
-        "id": project.id,
-        "label": project.label,
-        "root": project.root,
-        "source": project.source,
-        "repo_group_id": project.repo_group_id,
-        "repo_group_label": project.repo_group_label,
-    })
+    return json_response(
+        project.__dict__
+        if hasattr(project, "__dict__")
+        else {
+            "id": project.id,
+            "label": project.label,
+            "root": project.root,
+            "source": project.source,
+            "repo_group_id": project.repo_group_id,
+            "repo_group_label": project.repo_group_label,
+        }
+    )
 
 
 async def list_projects(request: web.Request) -> web.Response:
@@ -1075,10 +2164,27 @@ async def unpin_directory(request: web.Request) -> web.Response:
     return json_response({"paths": values})
 
 
-async def filesystem_roots(request: web.Request) -> web.Response:
-    roots = [
+_FS_ROOTS_TTL = 10.0
+_fs_roots_cache: tuple[float, list[str]] | None = None
+
+
+def _probe_drive_roots() -> list[str]:
+    return [
         f"{letter}:\\" for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if Path(f"{letter}:\\").is_dir()
     ]
+
+
+async def filesystem_roots(request: web.Request) -> web.Response:
+    # Probe all 26 drive letters off the event loop and cache briefly: each
+    # is_dir() is a blocking syscall and absent/network letters can stall for
+    # hundreds of ms. `remote` stays per-request and is never cached.
+    global _fs_roots_cache
+    now = time.monotonic()
+    if _fs_roots_cache is None or now >= _fs_roots_cache[0]:
+        roots = await asyncio.to_thread(_probe_drive_roots)
+        _fs_roots_cache = (now + _FS_ROOTS_TTL, roots)
+    else:
+        roots = _fs_roots_cache[1]
     return json_response({"roots": roots, "remote": request.remote not in {"127.0.0.1", "::1"}})
 
 
@@ -1105,6 +2211,7 @@ async def filesystem_list(request: web.Request) -> web.Response:
 async def list_sessions(request: web.Request) -> web.Response:
     manager: SessionManager = request.app["sessions"]
     sessions = [s.record.snapshot() for s in manager.sessions.values()]
+    await _decorate_generated_titles(request.app, sessions)
     for field in ("space_id", "state", "backend"):
         value = request.query.get(field.removesuffix("_id") if field == "space_id" else field)
         if value:
@@ -1112,7 +2219,31 @@ async def list_sessions(request: web.Request) -> web.Response:
     return json_response(sessions)
 
 
+async def _decorate_generated_titles(app: web.Application, items: list[dict[str, Any]]) -> None:
+    run_ids = {
+        str(item.get("agent_run_id") or item.get("id"))
+        for item in items
+        if item.get("agent_run_id") or item.get("agent_visible")
+    }
+    if not run_ids:
+        return
+    annotations = await app["automation_store"].annotations(tag="title", limit=1000)
+    by_run: dict[str, dict[str, Any]] = {}
+    for annotation in annotations:
+        run_id = str(annotation["agent_run_id"])
+        if run_id in run_ids and run_id not in by_run:
+            by_run[run_id] = annotation
+    for item in items:
+        run_id = str(item.get("agent_run_id") or item.get("id") or "")
+        annotation = by_run.get(run_id)
+        if annotation:
+            item["generated_title"] = annotation["content"]
+            item["generated_title_annotation"] = annotation
+
+
 async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Session:
+    startup_started_at = time.perf_counter()
+    startup_timing_ms: dict[str, float] = {}
     spec = SpawnRequest.parse(body)
     manager: SessionManager = app["sessions"]
     spaces: SpaceManager = app["spaces"]
@@ -1122,14 +2253,17 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
     space = spaces.spaces[space_id]
     config: Config = app["config"]
     backend = spec.backend or space.default_backend or config.default_backend
-    seed_cwd = (
-        spec.cwd
-        or space.default_cwd
-        or config.startup_cwd
-        or str(Path.cwd())
-    )
+    seed_cwd = spec.cwd or space.default_cwd or config.startup_cwd or str(Path.cwd())
+    project_started_at = time.perf_counter()
     project = await resolve_project(seed_cwd)
-    project_config = await read_project_config(seed_cwd)
+    startup_timing_ms["project_resolution"] = round(
+        (time.perf_counter() - project_started_at) * 1000, 1
+    )
+    config_started_at = time.perf_counter()
+    project_config = await read_project_config(seed_cwd, project=project)
+    startup_timing_ms["project_config"] = round(
+        (time.perf_counter() - config_started_at) * 1000, 1
+    )
     project_values = (
         project_config["values"] if project_config["status"] in {"ready", "read-only"} else {}
     )
@@ -1169,7 +2303,11 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
             or project_values.get("default_shell_profile")
             or config.default_shell_profile
         )
+        profile_started_at = time.perf_counter()
         profile = resolve_profile(config, profile_id, Path(cwd).resolve())
+        startup_timing_ms["profile_resolution"] = round(
+            (time.perf_counter() - profile_started_at) * 1000, 1
+        )
         executable = profile.executable
         argv = [*profile.argv, *argv]
         profile_env = profile.env
@@ -1186,6 +2324,8 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
     )
     if isinstance(manager, SessionManager):
         spawn_values["project"] = project
+        spawn_values["startup_started_at"] = startup_started_at
+        spawn_values["startup_timing_ms"] = startup_timing_ms
     session = await manager.spawn(**spawn_values)
     return session
 
@@ -1213,6 +2353,16 @@ async def patch_session(request: web.Request) -> web.Response:
         session.record.space_id = body["space"]
     if "pin" in body:
         session.record.pinned_attention = bool(body["pin"])
+    if "voice_mode" in body:
+        mode = body["voice_mode"]
+        if mode is not None and mode not in {"off", "on_demand", "auto"}:
+            raise ValueError("voice_mode must be off, on_demand, auto, or null to inherit")
+        session.record.voice_mode = mode
+    if "voice_content" in body:
+        content = body["voice_content"]
+        if content is not None and content not in {"summary", "verbatim"}:
+            raise ValueError("voice_content must be summary, verbatim, or null to inherit")
+        session.record.voice_content = content
     await request.app["history"].update_session_metadata(session.record)
     session.publish_update()
     await request.app["events"].emit("session_updated", session_id=session.record.id)
@@ -1222,7 +2372,8 @@ async def patch_session(request: web.Request) -> web.Response:
 async def delete_session(request: web.Request) -> web.Response:
     manager: SessionManager = request.app["sessions"]
     session = manager.resolve(request.match_info["sid"])
-    await manager.stop(session.record.id)
+    if session.record.state not in {"exited", "crashed"}:
+        await manager.stop(session.record.id)
     manager.sessions.pop(session.record.id, None)
     shutil.rmtree(
         session_media_directory(request.app["config"].data_dir, session.record.id),
@@ -1236,6 +2387,36 @@ async def session_input(request: web.Request) -> web.Response:
     session = request.app["sessions"].resolve(request.match_info["sid"])
     session.pty.write(str(body.get("data", "")))
     return json_response({"ok": True})
+
+
+async def session_startup_metrics(request: web.Request) -> web.Response:
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    raw = (await request.json()).get("timing_ms")
+    if not isinstance(raw, dict):
+        raise ValueError("timing_ms must be an object")
+    allowed = {"api_response", "pane_mounted", "socket_open", "replay_ready"}
+    timing_ms: dict[str, float] = {}
+    for key, value in raw.items():
+        if key not in allowed:
+            raise ValueError(f"unsupported startup timing: {key}")
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError(f"startup timing must be numeric: {key}")
+        measured = float(value)
+        if not 0 <= measured <= 300_000:
+            raise ValueError(f"startup timing is out of range: {key}")
+        timing_ms[key] = round(measured, 1)
+    if "replay_ready" not in timing_ms:
+        raise ValueError("replay_ready startup timing is required")
+    if not session.record.client_startup_timing_ms:
+        session.record.client_startup_timing_ms = timing_ms
+        session.publish_update()
+        await request.app["events"].emit(
+            "session_startup_client_measured",
+            session_id=session.record.id,
+            source="browser",
+            timing_ms=dict(timing_ms),
+        )
+    return json_response({"ok": True, "timing_ms": session.record.client_startup_timing_ms})
 
 
 async def broadcast_set(request: web.Request) -> web.Response:
@@ -1365,8 +2546,8 @@ async def _media_cleanup_loop(data_dir: Path) -> None:
 
 
 async def upload_session_media(request: web.Request) -> web.Response:
-    if request.headers.get("X-Mux-User-Gesture") != "clipboard-image":
-        raise web.HTTPForbidden(text="clipboard image upload requires an explicit paste action")
+    if request.headers.get("X-Mux-User-Gesture") not in {"terminal-image", "clipboard-image"}:
+        raise web.HTTPForbidden(text="terminal image upload requires an explicit paste or drop action")
     session = request.app["sessions"].resolve(request.match_info["sid"])
     adapter: BackendAdapter = request.app["sessions"].adapters[session.record.backend]
     if session.record.backend not in {"claude", "codex"}:
@@ -1498,6 +2679,7 @@ async def list_history(request: web.Request) -> web.Response:
         cursor=request.query.get("cursor"),
         limit=int(request.query.get("limit", min(50, request.app["config"].history_limit))),
     )
+    await _decorate_generated_titles(request.app, page["items"])
     return json_response(page)
 
 
@@ -1515,8 +2697,16 @@ async def history_transcript(request: web.Request) -> web.Response:
             {"error": "native transcript is unavailable", "code": "transcript_unavailable"},
             409,
         )
-    messages = parse_transcript(Path(transcript), str(row["backend"]))
-    return json_response({"entry": row, "messages": messages})
+    # Parse off the event loop and reuse the shared (path, mtime, backend,
+    # max_bytes) cache; large transcripts otherwise block the loop on every open.
+    messages = await asyncio.to_thread(
+        parse_transcript_cached, Path(transcript), str(row["backend"])
+    )
+    annotations = await request.app["automation_store"].annotations(
+        agent_run_id=str(row["id"]), limit=200
+    )
+    await _decorate_generated_titles(request.app, [row])
+    return json_response({"entry": row, "messages": messages, "annotations": annotations})
 
 
 async def resume_history(request: web.Request) -> web.Response:
@@ -1565,6 +2755,12 @@ async def resume_history(request: web.Request) -> web.Response:
         await request.app["sessions"].stop(session.record.id)
         request.app["sessions"].sessions.pop(session.record.id, None)
         raise
+    await request.app["automation_store"].add_lineage(
+        str(row["id"]),
+        session.record.agent_run_id or session.record.id,
+        "resume",
+        {"backend": row["backend"], "space_id": target_space},
+    )
     return json_response(session.record.snapshot(), 201)
 
 
@@ -1592,12 +2788,62 @@ async def list_events(request: web.Request) -> web.Response:
 
 async def list_notifications(request: web.Request) -> web.Response:
     hooks: MetaHookEngine = request.app["hooks"]
+    automation = await request.app["automation_store"].notifications(limit=200)
     return json_response(
         {
             "notifications": hooks.notifications,
             "deliveries": [item.snapshot() for item in hooks.deliveries[-100:]],
+            "automation": automation,
         }
     )
+
+
+async def voice_status(request: web.Request) -> web.Response:
+    voice: VoiceService = request.app["voice"]
+    return json_response(await voice.status())
+
+
+async def voice_generate(request: web.Request) -> web.Response:
+    voice: VoiceService = request.app["voice"]
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    try:
+        clip = await voice.generate(session.record.id, trigger="manual")
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 409)
+    return json_response(clip)
+
+
+async def list_voice_clips(request: web.Request) -> web.Response:
+    store: VoiceStore = request.app["voice_store"]
+    session_id = request.query.get("session") or None
+    if session_id:
+        session_id = request.app["sessions"].resolve(session_id).record.id
+    rows = await store.clips(
+        session_id=session_id,
+        agent_run_id=request.query.get("run") or None,
+        limit=int(request.query.get("limit") or 20),
+    )
+    return json_response({"items": [clip_snapshot(row) for row in rows]})
+
+
+async def voice_clip_audio(request: web.Request) -> web.StreamResponse:
+    store: VoiceStore = request.app["voice_store"]
+    row = await store.clip(request.match_info["clip_id"])
+    if not row or row["status"] != "ready":
+        raise web.HTTPNotFound(text="voice clip not found")
+    path = Path(str(row["file_path"]))
+    if not path.is_file():
+        raise web.HTTPNotFound(text="voice clip audio is no longer cached")
+    content_type = "audio/mpeg" if row["format"] == "mp3" else "audio/wav"
+    return web.FileResponse(path, headers={"Content-Type": content_type})
+
+
+async def delete_voice_clip(request: web.Request) -> web.Response:
+    store: VoiceStore = request.app["voice_store"]
+    file_path = await store.delete_clip(request.match_info["clip_id"])
+    if file_path:
+        Path(file_path).unlink(missing_ok=True)
+    return json_response({"ok": True})
 
 
 async def get_usage(request: web.Request) -> web.Response:
@@ -1619,10 +2865,10 @@ async def clear_usage_cache(request: web.Request) -> web.Response:
 
 async def list_processes(request: web.Request) -> web.Response:
     session_id = request.query.get("session")
-    if not session_id:
-        raise ValueError("session query parameter is required")
     inspector: ProcessInspector = request.app["process_inspector"]
-    return json_response(await inspector.snapshot(session_id))
+    return json_response(
+        await inspector.snapshot(session_id) if session_id else await inspector.snapshot_all()
+    )
 
 
 async def process_action(request: web.Request) -> web.Response:
@@ -1635,6 +2881,9 @@ async def process_action(request: web.Request) -> web.Response:
 
 async def list_previews(request: web.Request) -> web.Response:
     previews: PreviewRegistry = request.app["previews"]
+    # Reap on read so a client never sees a preview whose server has stopped; the
+    # browser drops the matching tab and sidebar row when it disappears from here.
+    previews.prune()
     return json_response(await previews.list(request.query.get("session")))
 
 
@@ -1647,12 +2896,20 @@ async def create_preview(request: web.Request) -> web.Response:
     if body.get("attach", True):
         spaces: SpaceManager = request.app["spaces"]
         space = spaces.spaces[item.space_id]
-        space.layout = attach_leaf(
-            space.layout,
-            "preview",
-            item.id,
-            target_id=str(body.get("target_session_id") or "") or None,
-            direction=str(body.get("direction") or "horizontal"),
+        # A preview belongs beside whatever spawned it: group it as a tab in the
+        # owning session's region instead of splitting off an unrelated one. Fall
+        # back to a split when that session has no terminal in this layout.
+        grouped = stack_leaf(space.layout, "preview", item.id, target_id=item.session_id)
+        space.layout = (
+            grouped
+            if grouped is not None
+            else attach_leaf(
+                space.layout,
+                "preview",
+                item.id,
+                target_id=str(body.get("target_session_id") or "") or None,
+                direction=str(body.get("direction") or "horizontal"),
+            )
         )
         space.layout_revision += 1
         await spaces.history.upsert_space(space)
@@ -1918,7 +3175,12 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
     semaphore: asyncio.Semaphore = request.app["preview_http_semaphore"]
     await _acquire_preview_slot(semaphore)
     try:
-        async with ClientSession(timeout=ClientTimeout(total=15)) as client:
+        # Per-operation timeouts (not a wall-clock total) so a legitimately large
+        # or slow passthrough download is not aborted mid-stream, while a hung
+        # upstream still trips sock_read and a dead loopback port fails fast.
+        async with ClientSession(
+            timeout=ClientTimeout(total=None, sock_connect=10, sock_read=30)
+        ) as client:
             async with client.request(
                 request.method,
                 target,
@@ -1934,27 +3196,17 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
                         max_size=PREVIEW_RESPONSE_BYTES,
                         actual_size=upstream.content_length,
                     )
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in upstream.content.iter_chunked(64 * 1024):
-                    total += len(chunk)
-                    if total > PREVIEW_RESPONSE_BYTES:
-                        raise web.HTTPRequestEntityTooLarge(
-                            max_size=PREVIEW_RESPONSE_BYTES, actual_size=total
-                        )
-                    chunks.append(chunk)
-                data = b"".join(chunks)
                 content_type = upstream.headers.get("Content-Type", "")
+                casefolded = content_type.casefold()
                 prefix = f"/preview/{preview_id}/"
-                if "text/html" in content_type.casefold():
-                    data = rewrite_preview_html(data, prefix)
-                elif "text/css" in content_type.casefold():
-                    data = rewrite_preview_css(data, prefix)
-                elif any(
-                    marker in content_type.casefold()
-                    for marker in ("javascript", "ecmascript", "typescript")
-                ):
-                    data = rewrite_preview_javascript(data, prefix)
+                needs_rewrite = (
+                    "text/html" in casefolded
+                    or "text/css" in casefolded
+                    or any(m in casefolded for m in ("javascript", "ecmascript", "typescript"))
+                )
+                # Build the outbound headers (whitelist + Location reject/rewrite +
+                # CORS-null) up front so an external redirect still fails with a 502
+                # BEFORE any bytes are written on the streaming path.
                 response_headers = {
                     name: value
                     for name, value in upstream.headers.items()
@@ -1987,11 +3239,65 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
                         )[:1000]
                         if requested_headers:
                             response_headers["Access-Control-Allow-Headers"] = requested_headers
-                return web.Response(
-                    body=data if request.method != "HEAD" else b"",
-                    status=upstream.status,
-                    headers=response_headers,
-                )
+                if request.method == "HEAD":
+                    return web.Response(body=b"", status=upstream.status, headers=response_headers)
+                if needs_rewrite:
+                    # HTML/CSS/JS rewriting needs the whole body, so buffer it (with the
+                    # running-total cap) and rewrite before responding.
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in upstream.content.iter_chunked(64 * 1024):
+                        total += len(chunk)
+                        if total > PREVIEW_RESPONSE_BYTES:
+                            raise web.HTTPRequestEntityTooLarge(
+                                max_size=PREVIEW_RESPONSE_BYTES, actual_size=total
+                            )
+                        chunks.append(chunk)
+                    data = b"".join(chunks)
+                    if "text/html" in casefolded:
+                        data = rewrite_preview_html(data, prefix)
+                    elif "text/css" in casefolded:
+                        data = rewrite_preview_css(data, prefix)
+                    else:
+                        data = rewrite_preview_javascript(data, prefix)
+                    return web.Response(body=data, status=upstream.status, headers=response_headers)
+                # Passthrough: stream unrewritten bodies straight through instead of
+                # materialising up to PREVIEW_RESPONSE_BYTES in daemon RAM per request.
+                response = web.StreamResponse(status=upstream.status, headers=response_headers)
+                # Only advertise the upstream Content-Length for an identity-encoded
+                # body. aiohttp auto-decompresses gzip/deflate/br, so we stream the
+                # DECOMPRESSED bytes while ``upstream.content_length`` is the raw
+                # (compressed) header value; copying it would make aiohttp truncate the
+                # outbound body to the compressed length (a silent fail-open). Leaving
+                # it unset makes aiohttp chunk-frame the decompressed stream. The
+                # response never carries Content-Encoding (not whitelisted), so the
+                # client correctly receives already-decompressed bytes.
+                content_encoding = upstream.headers.get("Content-Encoding", "").strip().casefold()
+                if (
+                    content_encoding in ("", "identity")
+                    and upstream.content_length is not None
+                    and upstream.content_length <= PREVIEW_RESPONSE_BYTES
+                ):
+                    response.content_length = upstream.content_length
+                # The security middleware stamps its headers only after the handler
+                # returns, which is too late once we prepare() and stream ourselves.
+                _apply_security_headers(response, request)
+                await response.prepare(request)
+                total = 0
+                async for chunk in upstream.content.iter_chunked(64 * 1024):
+                    total += len(chunk)
+                    if total > PREVIEW_RESPONSE_BYTES:
+                        # Headers are already sent, so a clean 413 is impossible: abort
+                        # the connection so the client sees a broken transfer, never a
+                        # well-formed response carrying a silently truncated body.
+                        if request.transport is not None:
+                            request.transport.close()
+                        raise web.HTTPRequestEntityTooLarge(
+                            max_size=PREVIEW_RESPONSE_BYTES, actual_size=total
+                        )
+                    await response.write(chunk)
+                await response.write_eof()
+                return response
     except (ClientError, OSError, TimeoutError) as exc:
         raise web.HTTPBadGateway(text=f"preview unavailable: {exc}") from exc
     finally:
@@ -2033,6 +3339,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
         raise ValueError("unsupported hook event type")
     payload = body.get("payload") or {}
     event_payload = hook_event_payload(payload)
+    request.app["automation"].note_native_hook(session.record.id)
     await request.app["events"].emit(
         event_type, session_id=session.record.id, source="hook", **event_payload
     )
@@ -2229,9 +3536,27 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     connection_id = secrets.token_urlsafe(12)
     ws = web.WebSocketResponse(heartbeat=20, max_msg_size=2 * 1024 * 1024)
     await ws.prepare(request)
+    allow_terminal_responses = (
+        session.attachments_seen == 0
+        and session.record.state not in {"exited", "crashed"}
+        and time.time() - session.record.created_at <= 5
+    )
+    session.attachments_seen += 1
     snapshot, revision, replay, subscriber = session.replay_and_subscribe()
+    await request.app["events"].emit(
+        "terminal_attached",
+        session_id=session.record.id,
+        source="daemon",
+        connections=len(session.subscribers),
+    )
     await ws.send_json({"type": "state", "snapshot": snapshot, "revision": revision})
-    await ws.send_json({"type": "replay_start", "reason": "attach"})
+    await ws.send_json(
+        {
+            "type": "replay_start",
+            "reason": "attach",
+            "allow_terminal_responses": allow_terminal_responses,
+        }
+    )
     if replay:
         await ws.send_bytes(replay)
     await ws.send_json({"type": "replay_end", "reason": "attach"})
@@ -2290,6 +3615,15 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
             if message.type == WSMsgType.BINARY:
                 if session.input_owner == connection_id:
                     session.pty.write(message.data)
+                    if time.monotonic() - session.last_input_event_ts >= 2:
+                        session.last_input_event_ts = time.monotonic()
+                        await request.app["events"].emit(
+                            "terminal_input",
+                            session_id=session.record.id,
+                            source="daemon",
+                            input_owner=True,
+                            bytes=len(message.data),
+                        )
             elif message.type == WSMsgType.TEXT:
                 frame = json.loads(message.data)
                 if frame.get("type") == "claim_input":
@@ -2298,6 +3632,15 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
                 elif frame.get("type") == "input" and session.input_owner == connection_id:
                     data = str(frame.get("data", ""))
                     session.pty.write(data)
+                    if time.monotonic() - session.last_input_event_ts >= 2:
+                        session.last_input_event_ts = time.monotonic()
+                        await request.app["events"].emit(
+                            "terminal_input",
+                            session_id=session.record.id,
+                            source="daemon",
+                            input_owner=True,
+                            bytes=len(data.encode("utf-8")),
+                        )
                     if frame.get("broadcast"):
                         await deliver_broadcast(
                             request.app["sessions"],
@@ -2313,6 +3656,12 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         if session.input_owner == connection_id:
             session.input_owner = None
         session.unsubscribe(subscriber)
+        await request.app["events"].emit(
+            "terminal_detached",
+            session_id=session.record.id,
+            source="daemon",
+            connections=len(session.subscribers),
+        )
     return ws
 
 

@@ -9,6 +9,8 @@ export interface Session {
   tokens_out: number; context_window: number; context_pct: number; last_activity_ts: number
   git: { branch?: string; dirty: number; ahead: number; behind: number }
   pinned_attention: boolean; broadcast: boolean
+  startup_timing_ms?: Record<string, number>
+  client_startup_timing_ms?: Record<string, number>
   shell_profile_id?: string
   context_peak_pct:number;model?:string;measurement_source?:string
   project_id?:string;project_label?:string;project_root?:string
@@ -18,9 +20,31 @@ export interface Session {
   runtime_project_scope_id?:string;runtime_cwd_dropped:number;agent_run_id?:string;agent_run_started_at?:number
   run_cwd?:string;run_project_scope_id?:string;run_repo_group_id?:string
   parser_status?:string;parser_diagnostic?:string;parser_events_seen?:number
+  auto_named?:boolean;generated_title?:string
+  generated_title_annotation?:{id:string;provenance:string;resolved_model?:string;confidence?:number;cost_usd?:number;created_at:number}
+  voice_mode?: VoiceMode | null
+  voice_content?: VoiceContent | null
 }
 
-export interface Space { id: string; name: string; position: number; layout: PaneLayout | unknown; layout_revision:number; default_cwd?:string; default_backend?:string; default_profile_id?:string }
+export type VoiceContent = 'summary' | 'verbatim'
+
+export type VoiceMode = 'off' | 'on_demand' | 'auto'
+
+export interface VoiceClip {
+  id:string; session_id:string; agent_run_id?:string|null; created_at:number
+  trigger:'auto'|'manual'; content_mode:'summary'|'verbatim'; engine:string; voice:string
+  text:string; format:string; size_bytes:number; duration_hint_s?:number|null
+  status:'ready'|'failed'; error?:string|null; model?:string|null; cost_usd?:number|null
+}
+
+export interface VoiceStatus {
+  enabled:boolean; engine:string; engine_available:boolean; diagnostic?:string|null
+  content:'summary'|'verbatim'; default_mode:VoiceMode; voice:string; summary_model:string
+  spend_today:{tokens:number;cost_usd:number}; daily_budget_usd:number
+  cache_bytes:number; cache_limit_bytes:number; clip_count:number; stt_enabled:boolean
+}
+
+export interface Space { id: string; name: string; position: number; layout: PaneLayout | unknown; layout_revision:number; default_cwd?:string; default_backend?:string; default_profile_id?:string;notes_open_mode?:'dock'|'popout' }
 
 export interface ProjectScope {
   id:string;root:string;label:string;source:string;repo_group_id?:string;repo_group_label?:string

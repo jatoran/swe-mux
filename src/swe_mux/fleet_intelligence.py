@@ -1,0 +1,570 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import re
+import time
+from collections import defaultdict, deque
+from typing import Any
+
+from .automation_store import AutomationStore
+from .config import Config
+from .event_bus import EventBus
+from .models import MuxEvent
+from .processes import OwnedProcess, PreviewRegistry, ProcessInspector
+from .session import Session, SessionManager
+from .transcript_view import parse_transcript_cached
+
+STALL_SECONDS = 300
+UNATTENDED_SECONDS = 15
+RUNAWAY_BYTES_PER_MINUTE = 4 * 1024 * 1024
+INTERLOCK_REPEAT_SECONDS = 300
+DIGEST_SECONDS = 30 * 60
+
+
+class FleetIntelligence:
+    """Deterministic cross-session evidence collector; it never actuates a session."""
+
+    def __init__(
+        self,
+        sessions: SessionManager,
+        events: EventBus,
+        store: AutomationStore,
+        processes: ProcessInspector,
+        previews: PreviewRegistry,
+        config: Config,
+    ) -> None:
+        self.sessions = sessions
+        self.events = events
+        self.store = store
+        self.processes = processes
+        self.previews = previews
+        self.config = config
+        self._task: asyncio.Task[None] | None = None
+        self._event_task: asyncio.Task[None] | None = None
+        self._queue: asyncio.Queue[MuxEvent] | None = None
+        self._seen: dict[str, float] = {}
+        self._failures: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
+        self._last_turn: dict[str, float] = {}
+        self._turn_started: dict[str, float] = {}
+        self._last_test: dict[str, float] = {}
+        # _seen keys contributed per session, so a session's emit_once keys and
+        # interlock fingerprints can be dropped from _seen when it exits.
+        self._emit_keys_by_session: dict[str, set[str]] = defaultdict(set)
+        self._last_user_activity = time.time()
+        self._last_digest = time.time()
+
+    def start(self) -> None:
+        if self._task:
+            return
+        self._queue = self.events.subscribe()
+        self._task = asyncio.create_task(self._run(), name="fleet-intelligence")
+        self._event_task = asyncio.create_task(self._consume(), name="fleet-events")
+
+    async def stop(self) -> None:
+        if self._queue:
+            self.events.unsubscribe(self._queue)
+        for task in (self._task, self._event_task):
+            if task:
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in (self._task, self._event_task) if task),
+            return_exceptions=True,
+        )
+
+    async def _consume(self) -> None:
+        assert self._queue is not None
+        while True:
+            event = await self._queue.get()
+            if event.type in {"terminal_attached", "terminal_input"}:
+                self._last_user_activity = event.ts
+                await self.store.set_checkpoint("fleet:last_user_activity", {"ts": event.ts})
+            if not event.session_id:
+                continue
+            if event.type in {"session_exited", "session_crashed"}:
+                sid = event.session_id
+                self._failures.pop(sid, None)
+                self._last_turn.pop(sid, None)
+                self._turn_started.pop(sid, None)
+                self._last_test.pop(sid, None)
+                for key in self._emit_keys_by_session.pop(sid, ()):
+                    self._seen.pop(key, None)
+                continue
+            if event.type == "turn_ended":
+                self._last_turn[event.session_id] = event.ts
+                asyncio.create_task(
+                    self._claim_check(event.session_id, event.ts),
+                    name=f"claim-check-{event.session_id}",
+                )
+            elif event.type == "turn_started":
+                self._turn_started[event.session_id] = event.ts
+            elif event.type == "tool_result" and event.payload.get("success", True):
+                tool = str(event.payload.get("tool") or "").casefold()
+                if any(token in tool for token in ("test", "pytest", "vitest", "check")):
+                    self._last_test[event.session_id] = event.ts
+            elif event.type == "tool_result" and not event.payload.get("success", True):
+                failures = self._failures[event.session_id]
+                failures.append(
+                    {
+                        "ts": event.ts,
+                        "tool": str(event.payload.get("tool") or "unknown")[:120],
+                        "exit_code": event.payload.get("exit_code"),
+                    }
+                )
+                while failures and event.ts - failures[0]["ts"] > 900:
+                    failures.popleft()
+                same_tool = [item for item in failures if item["tool"] == failures[-1]["tool"]]
+                session = self.sessions.sessions.get(event.session_id)
+                if session and len(same_tool) >= 3:
+                    spiral_key = (
+                        f"spiral:{session.record.agent_run_id}:"
+                        f"{same_tool[-1]['tool']}:{int(event.ts // 900)}"
+                    )
+                    await self._emit_once(
+                        spiral_key,
+                        "stalled",
+                        session,
+                        [
+                            {"signal": "repeated_tool_failure", "value": same_tool[-5:]},
+                            {"signal": "failure_window_s", "value": 900},
+                        ],
+                        0.9,
+                        subtype="spiral",
+                    )
+                detail = str(event.payload.get("detail") or "")
+                if detail and session and session.record.agent_run_id:
+                    matches = await self.store.experiences(
+                        query=detail[:240],
+                        project_scope_id=session.record.trusted_scope_id,
+                        limit=1,
+                    )
+                    if matches:
+                        match = matches[0]
+                        annotation = await self.store.create_annotation(
+                            agent_run_id=session.record.agent_run_id,
+                            session_id=event.session_id,
+                            tag="prior-resolution",
+                            content=(
+                                "A prior run encountered a similar error. Suggested resolution: "
+                                f"{match['resolution_summary']}"
+                            ),
+                            source_event_seq=event.seq,
+                            rule_id=None,
+                            rule_revision=None,
+                            provenance="experience_index",
+                            confidence=match.get("confidence"),
+                        )
+                        await self.events.emit(
+                            "annotation_created",
+                            session_id=event.session_id,
+                            source="automation",
+                            annotation_id=annotation["id"],
+                            tag=annotation["tag"],
+                            rule_id=None,
+                        )
+
+    async def _claim_check(self, session_id: str, ended_at: float) -> None:
+        session = self.sessions.sessions.get(session_id)
+        if not session or not session.transcript_path or not session.transcript_path.is_file():
+            return
+        try:
+            messages = await asyncio.wait_for(
+                asyncio.to_thread(
+                    parse_transcript_cached,
+                    session.transcript_path,
+                    session.record.backend,
+                    max_bytes=256 * 1024,
+                ),
+                timeout=2,
+            )
+        except (OSError, TimeoutError):
+            return
+        assistant = next(
+            (item for item in reversed(messages) if item.get("role") == "assistant"), None
+        )
+        if not assistant:
+            return
+        text = " ".join(
+            str(block.get("text") or "")
+            for block in assistant.get("content") or []
+            if block.get("type") == "text"
+        )
+        if not CLAIM_PATTERN.search(text):
+            return
+        turn_started = self._turn_started.get(session_id, ended_at - 3600)
+        if self._last_test.get(session_id, 0) >= turn_started:
+            return
+        await self._emit_once(
+            f"claim:{session.record.agent_run_id}:{int(ended_at)}",
+            "claim_unverified",
+            session,
+            [
+                {"signal": "completion_claim", "value": text[:240]},
+                {"signal": "test_tool_seen_in_turn", "value": False},
+            ],
+            0.75,
+        )
+
+    async def _run(self) -> None:
+        while True:
+            await asyncio.sleep(5)
+            await self.inspect()
+
+    def _index_processes(self) -> dict[str, list[OwnedProcess]]:
+        """Group live owned processes by session id once per tick.
+
+        _attention and _interlocks would otherwise each re-scan the whole owned
+        map (O(sessions x processes) per 5s tick). Only live rows (exited_at is
+        None) are indexed, so the cpu sum and interlock filters keep excluding
+        exited processes exactly as before.
+        """
+        by_session: dict[str, list[OwnedProcess]] = defaultdict(list)
+        for item in self.processes.owned.values():
+            if item.exited_at is None:
+                by_session[item.session_id].append(item)
+        return by_session
+
+    async def inspect(self) -> None:
+        now = time.time()
+        index = self._index_processes()
+        for session in list(self.sessions.sessions.values()):
+            if not session.record.agent_run_id or session.record.state in {"exited", "crashed"}:
+                continue
+            await self._attention(session, now, index)
+        await self._interlocks(now, index)
+        if self.config.phase7_observers_enabled and now - self._last_digest >= DIGEST_SECONDS:
+            self._last_digest = now
+            items = await self.store.notifications(unread=True, limit=50)
+            if items:
+                evidence = [
+                    {"signal": "unread_attention_records", "value": len(items)},
+                    {"signal": "since_last_user_activity", "value": self._last_user_activity},
+                ]
+                notification = await self.store.notify(
+                    agent_run_id=None,
+                    session_id=None,
+                    rule_id=None,
+                    kind="attention_digest",
+                    title="Attention digest",
+                    message=f"{len(items)} unread attention records across the active fleet.",
+                    severity="info",
+                    evidence=evidence,
+                )
+                await self.events.emit(
+                    "attention_digest_due",
+                    source="automation",
+                    since=self._last_user_activity,
+                    items=len(items),
+                )
+                await self.events.emit(
+                    "notification_created",
+                    source="automation",
+                    notification_id=notification["id"],
+                    kind=notification["kind"],
+                )
+
+    async def _attention(
+        self, session: Session, now: float, index: dict[str, list[OwnedProcess]] | None = None
+    ) -> None:
+        record = session.record
+        run_id = record.agent_run_id or record.id
+        if index is None:
+            index = self._index_processes()
+        process_rows = index.get(record.id, [])
+        cpu = sum(item.cpu_pct for item in process_rows)
+        if (
+            record.state == "awaiting"
+            and not session.subscribers
+            and now - record.last_activity_ts >= UNATTENDED_SECONDS
+        ):
+            await self._emit_once(
+                f"unattended:{run_id}",
+                "unattended_attention",
+                session,
+                [
+                    {"signal": "state", "value": "awaiting"},
+                    {"signal": "browser_connections", "value": 0},
+                ],
+                1.0,
+            )
+        if record.state == "working" and now - record.last_activity_ts >= STALL_SECONDS and cpu < 5:
+            failures = list(self._failures.get(record.id, ()))
+            evidence: list[dict[str, Any]] = [
+                {"signal": "pty_silence_s", "value": round(now - record.last_activity_ts)},
+                {"signal": "process_cpu_pct", "value": round(cpu, 1)},
+                {"signal": "state", "value": record.state},
+            ]
+            if failures:
+                evidence.append({"signal": "recent_failures", "value": failures[-5:]})
+            await self._emit_once(
+                f"stalled:{run_id}:{int(now // STALL_SECONDS)}",
+                "stalled",
+                session,
+                evidence,
+                0.85 if failures else 0.7,
+            )
+        output_bytes = sum(size for _, size in session.output_window)
+        if (
+            output_bytes >= RUNAWAY_BYTES_PER_MINUTE
+            and now - self._last_turn.get(record.id, 0) > 60
+        ):
+            await self._emit_once(
+                f"runaway:{run_id}:{int(now // 60)}",
+                "runaway",
+                session,
+                [
+                    {"signal": "pty_bytes_60s", "value": output_bytes},
+                    {
+                        "signal": "seconds_since_turn",
+                        "value": round(now - self._last_turn.get(record.id, 0)),
+                    },
+                ],
+                0.8,
+            )
+        if record.context_pct >= 0.8:
+            bucket = int(record.context_pct * 10)
+            await self._emit_once(
+                f"context:{run_id}:{bucket}",
+                "context_pressure",
+                session,
+                [
+                    {"signal": "context_pct", "value": record.context_pct},
+                    {"signal": "measurement_source", "value": record.measurement_source},
+                ],
+                0.95 if record.measurement_source else 0.6,
+                context_pct=record.context_pct,
+            )
+
+    async def _interlocks(
+        self, now: float, index: dict[str, list[OwnedProcess]] | None = None
+    ) -> None:
+        if index is None:
+            index = self._index_processes()
+        live = [
+            item
+            for item in self.sessions.sessions.values()
+            if item.record.agent_run_id and item.record.state not in {"exited", "crashed"}
+        ]
+        live_ids = {item.record.id for item in live}
+        branches: dict[tuple[str, str], list[Session]] = defaultdict(list)
+        for session in live:
+            scope = session.record.trusted_scope_id
+            branch = session.record.git.branch
+            if scope and branch:
+                branches[(scope, branch)].append(session)
+        for (scope, branch), members in branches.items():
+            if len(members) < 2:
+                continue
+            await self._emit_interlock(
+                "same_branch",
+                [item.record.id for item in members],
+                [
+                    {"signal": "project_scope_id", "value": scope},
+                    {"signal": "git_branch", "value": branch},
+                ],
+                now,
+            )
+        listeners: dict[tuple[str, int], set[str]] = defaultdict(set)
+        registered_previews: dict[tuple[str, int], set[str]] = defaultdict(set)
+        for preview in self.previews.items.values():
+            if preview.session_id not in live_ids:
+                continue
+            key = (str(preview.host), int(preview.port))
+            listeners[key].add(preview.session_id)
+            registered_previews[key].add(preview.session_id)
+        for sid, rows in index.items():
+            if sid not in live_ids:
+                continue
+            for item in rows:
+                for listener in item.listeners:
+                    listeners[(str(listener.get("host")), int(listener.get("port") or 0))].add(sid)
+        for (host, port), session_ids in listeners.items():
+            if len(session_ids) < 2:
+                continue
+            await self._emit_interlock(
+                "port_collision",
+                sorted(session_ids),
+                [
+                    {"signal": "listener_host", "value": host},
+                    {"signal": "listener_port", "value": port},
+                    {
+                        "signal": "registered_preview_sessions",
+                        "value": sorted(registered_previews.get((host, port), set())),
+                    },
+                ],
+                now,
+            )
+        providers_by_port: dict[int, set[str]] = defaultdict(set)
+        preview_providers_by_port: dict[int, set[str]] = defaultdict(set)
+        for preview in self.previews.items.values():
+            if preview.session_id not in live_ids:
+                continue
+            providers_by_port[int(preview.port)].add(preview.session_id)
+            preview_providers_by_port[int(preview.port)].add(preview.session_id)
+        for sid, rows in index.items():
+            if sid not in live_ids:
+                continue
+            for item in rows:
+                for listener in item.listeners:
+                    providers_by_port[int(listener.get("port") or 0)].add(item.session_id)
+        for sid, rows in index.items():
+            if sid not in live_ids:
+                continue
+            for item in rows:
+                for connection in item.connections:
+                    remote_host = str(connection.get("remote_host") or "")
+                    remote_port = int(connection.get("remote_port") or 0)
+                    if remote_host not in {"127.0.0.1", "::1"}:
+                        continue
+                    for provider_session in providers_by_port.get(remote_port, set()):
+                        if provider_session == item.session_id:
+                            continue
+                        await self._emit_interlock(
+                            "cross_session_dev_server",
+                            sorted([provider_session, item.session_id]),
+                            [
+                                {"signal": "provider_session", "value": provider_session},
+                                {"signal": "consumer_session", "value": item.session_id},
+                                {"signal": "loopback_port", "value": remote_port},
+                                {
+                                    "signal": "provider_has_registered_preview",
+                                    "value": provider_session
+                                    in preview_providers_by_port.get(remote_port, set()),
+                                },
+                            ],
+                            now,
+                        )
+
+    async def _emit_interlock(
+        self,
+        kind: str,
+        session_ids: list[str],
+        evidence: list[dict[str, Any]],
+        now: float,
+    ) -> None:
+        fingerprint = hashlib.sha256(
+            json.dumps([kind, session_ids, evidence], sort_keys=True).encode()
+        ).hexdigest()[:20]
+        if now - self._seen.get(fingerprint, 0) < INTERLOCK_REPEAT_SECONDS:
+            return
+        self._seen[fingerprint] = now
+        for sid in session_ids:
+            self._emit_keys_by_session[sid].add(fingerprint)
+        await self.events.emit(
+            "environment_interlock",
+            session_id=session_ids[0],
+            source="automation",
+            kind=kind,
+            sessions=session_ids,
+            evidence=evidence,
+            confidence=1.0,
+        )
+        notification = await self.store.notify(
+            agent_run_id=self.sessions.sessions[session_ids[0]].record.agent_run_id,
+            session_id=session_ids[0],
+            rule_id=None,
+            kind="environment_interlock",
+            title=kind.replace("_", " "),
+            message=f"Sessions {', '.join(session_ids)} share a conflicting environment.",
+            severity="warning",
+            evidence=evidence,
+        )
+        await self.events.emit(
+            "notification_created",
+            session_id=session_ids[0],
+            source="automation",
+            notification_id=notification["id"],
+            kind=notification["kind"],
+        )
+
+    async def _emit_once(
+        self,
+        key: str,
+        event_type: str,
+        session: Session,
+        evidence: list[dict[str, Any]],
+        confidence: float,
+        **payload: Any,
+    ) -> None:
+        if key in self._seen:
+            return
+        self._seen[key] = time.time()
+        self._emit_keys_by_session[session.record.id].add(key)
+        await self.events.emit(
+            event_type,
+            session_id=session.record.id,
+            source="automation",
+            evidence=evidence,
+            confidence=confidence,
+            **payload,
+        )
+
+    async def absence_report(self, since: float | None = None) -> dict[str, Any]:
+        checkpoint = await self.store.checkpoint("fleet:last_user_activity")
+        start = since or float((checkpoint or {}).get("ts") or self._last_user_activity)
+        annotations = [
+            item for item in await self.store.annotations(limit=500) if item["created_at"] >= start
+        ]
+        notifications = [
+            item
+            for item in await self.store.notifications(limit=500)
+            if item["created_at"] >= start
+        ]
+        sessions = []
+        for session in self.sessions.sessions.values():
+            if session.record.last_activity_ts >= start:
+                sessions.append(
+                    {
+                        "session_id": session.record.id,
+                        "agent_run_id": session.record.agent_run_id,
+                        "name": session.record.name,
+                        "backend": session.record.backend,
+                        "state": session.record.state,
+                        "last_activity": session.record.last_activity_ts,
+                    }
+                )
+        return {
+            "since": start,
+            "generated_at": time.time(),
+            "sessions": sessions,
+            "annotations": annotations,
+            "notifications": notifications,
+        }
+
+    def injection_safety(self) -> dict[str, Any]:
+        """Research-only evidence for a future actuation gate; never grants authority."""
+        now = time.time()
+        sessions: list[dict[str, Any]] = []
+        for session in self.sessions.sessions.values():
+            record = session.record
+            checks = {
+                "agent_idle": record.agent_run_id is not None and record.state == "idle",
+                "operator_not_typing": now - session.last_input_event_ts >= 2,
+                "input_owner_absent": session.input_owner is None,
+                "composer_empty": None,
+                "alternate_screen_state_known": None,
+                "adapter_injection_etiquette_defined": False,
+            }
+            sessions.append(
+                {
+                    "session_id": record.id,
+                    "agent_run_id": record.agent_run_id,
+                    "backend": record.backend,
+                    "state": record.state,
+                    "checks": checks,
+                    "candidate_safe": all(value is True for value in checks.values()),
+                    "authorized": False,
+                    "diagnostic": (
+                        "composer, terminal-mode, and adapter etiquette evidence is incomplete"
+                    ),
+                }
+            )
+        return {
+            "research_only": True,
+            "authorizes_actuation": False,
+            "sessions": sessions,
+        }
+
+
+CLAIM_PATTERN = re.compile(r"\b(?:tests? (?:pass|passed)|implemented|fixed|complete[d]?)\b", re.I)

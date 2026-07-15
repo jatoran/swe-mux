@@ -29,6 +29,14 @@ def _publish_update(session: Session) -> None:
         publish()
 
 
+def _tool_names(session: Session) -> dict[str, str]:
+    names = getattr(session, "tool_names", None)
+    if names is None:
+        names = {}
+        session.tool_names = names
+    return names
+
+
 class JsonlTailer:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -86,6 +94,9 @@ async def observe_transcript(
                 "turn_aborted",
                 "function_call",
                 "custom_tool_call",
+                "function_call_output",
+                "custom_tool_call_output",
+                "exec_command_end",
                 "exec_approval_request",
                 "apply_patch_approval_request",
                 "request_user_input",
@@ -101,11 +112,20 @@ async def observe_transcript(
         else:
             unknown += 1
             if session.record.parser_events_seen == 0 and unknown >= 10:
-                session.record.parser_status = "degraded"
-                session.record.parser_diagnostic = (
-                    f"{unknown} transcript events did not match the supported schema"
-                )
-                _publish_update(session)
+                if session.record.parser_status != "degraded":
+                    session.record.parser_status = "degraded"
+                    session.record.parser_diagnostic = (
+                        f"{unknown} transcript events did not match the supported schema"
+                    )
+                    _publish_update(session)
+                    await events.emit(
+                        "capability_degraded",
+                        session_id=session.record.id,
+                        source="transcript",
+                        capability="semantic_transcript",
+                        minimum="semantic",
+                        reason=session.record.parser_diagnostic,
+                    )
 
 
 async def _transition(
@@ -145,6 +165,29 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
         ):
             session.record.state_detail = None
             await _transition(session, events, "working")
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                tool_use_id = str(block.get("tool_use_id") or "")
+                tool = _tool_names(session).pop(tool_use_id, "tool")
+                result_content = block.get("content")
+                if isinstance(result_content, list):
+                    detail = " ".join(
+                        str(item.get("text") or "")
+                        for item in result_content
+                        if isinstance(item, dict) and item.get("type") == "text"
+                    )
+                else:
+                    detail = str(result_content or "")
+                await events.emit(
+                    "tool_result",
+                    session_id=session.record.id,
+                    source="transcript",
+                    tool=tool,
+                    success=not bool(block.get("is_error")),
+                    exit_code=None,
+                    detail=detail[:4000],
+                )
     elif event_type == "assistant":
         await _transition(session, events, "working")
         has_text = False
@@ -153,6 +196,9 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                 has_text = True
             elif isinstance(block, dict) and block.get("type") == "tool_use":
                 name = str(block.get("name") or "tool")
+                tool_use_id = str(block.get("id") or "")
+                if tool_use_id:
+                    _tool_names(session)[tool_use_id] = name
                 await _transition(session, events, "working", name)
                 await events.emit(
                     "tool_use", session_id=session.record.id, source="transcript", tool=name
@@ -184,9 +230,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
         # deliberately left working until their result or a later completion.
         if message.get("stop_reason") == "end_turn" and has_text:
             await _transition(session, events, "idle")
-            await events.emit(
-                "turn_ended", session_id=session.record.id, source="transcript"
-            )
+            await events.emit("turn_ended", session_id=session.record.id, source="transcript")
     elif event_type == "system" and event.get("subtype") == "turn_duration":
         await _transition(session, events, "idle")
         await events.emit(
@@ -212,8 +256,40 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         await events.emit("turn_ended", session_id=session.record.id, source="transcript")
     elif payload_type in {"function_call", "custom_tool_call"}:
         name = str(payload.get("name") or "tool")
+        call_id = str(payload.get("call_id") or payload.get("id") or "")
+        if call_id:
+            _tool_names(session)[call_id] = name
         await _transition(session, events, "working", name)
         await events.emit("tool_use", session_id=session.record.id, source="transcript", tool=name)
+    elif payload_type in {
+        "function_call_output",
+        "custom_tool_call_output",
+        "exec_command_end",
+    }:
+        call_id = str(payload.get("call_id") or payload.get("id") or "")
+        tool = _tool_names(session).pop(call_id, str(payload.get("name") or "tool"))
+        exit_code_value = payload.get("exit_code")
+        try:
+            exit_code = int(exit_code_value) if exit_code_value is not None else None
+        except (TypeError, ValueError):
+            exit_code = None
+        success = not bool(payload.get("is_error")) and exit_code in {None, 0}
+        detail = str(
+            payload.get("output")
+            or payload.get("content")
+            or payload.get("result")
+            or payload.get("message")
+            or ""
+        )
+        await events.emit(
+            "tool_result",
+            session_id=session.record.id,
+            source="transcript",
+            tool=tool,
+            success=success,
+            exit_code=exit_code,
+            detail=detail[:4000],
+        )
     elif payload_type in {
         "exec_approval_request",
         "apply_patch_approval_request",

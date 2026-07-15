@@ -14,6 +14,7 @@ from swe_mux.project_files import (
     write_note,
     write_project_config,
 )
+from swe_mux.projects import ProjectIdentity
 
 
 async def test_project_config_is_explicit_versioned_and_conflict_safe(tmp_path: Path) -> None:
@@ -32,6 +33,22 @@ async def test_project_config_is_explicit_versioned_and_conflict_safe(tmp_path: 
         await write_project_config(tmp_path, {}, "missing")
     with pytest.raises(ValueError, match="unknown project fields"):
         await write_project_config(tmp_path, {"token": "forbidden"}, saved["revision"])
+
+
+async def test_project_config_reuses_a_resolved_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = ProjectIdentity("project-id", "project", str(tmp_path), "cwd")
+
+    async def unexpected_resolution(_cwd: str | Path) -> ProjectIdentity:
+        raise AssertionError("project identity should be reused")
+
+    monkeypatch.setattr("swe_mux.project_files.resolve_project", unexpected_resolution)
+
+    result = await read_project_config(tmp_path, project=project)
+
+    assert result["status"] == "missing"
+    assert result["project"]["id"] == "project-id"
 
 
 async def test_notes_round_trip_as_markdown_and_detect_external_edits(tmp_path: Path) -> None:

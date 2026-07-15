@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import ipaddress
 import json
 import shutil
+import time
 from typing import Any
 
 
@@ -81,7 +83,26 @@ async def listener_hosts(local_host: str, tailnet_enabled: bool) -> list[str]:
     return listener_host_values(local_host, tailnet_enabled, await tailscale_ipv4())
 
 
+_TS_STATUS_TTL = 15.0
+_ts_status_cache: dict[tuple[int, bool], tuple[float, dict[str, object]]] = {}
+
+
 async def tailscale_status(port: int, *, tailnet_enabled: bool = True) -> dict[str, object]:
+    # Hit on every /remote/status poll; the probe spawns 3 subprocesses. Cache
+    # per (port, tailnet_enabled) for a few seconds. remote_status is display
+    # only, so a <=15s lag on serve/funnel/ip state is acceptable. Return a
+    # deepcopy so a caller can never mutate the cached dict (tailnet_urls is a list).
+    key = (port, tailnet_enabled)
+    now = time.monotonic()
+    cached = _ts_status_cache.get(key)
+    if cached is not None and now < cached[0]:
+        return copy.deepcopy(cached[1])
+    result = await _probe_tailscale_status(port, tailnet_enabled=tailnet_enabled)
+    _ts_status_cache[key] = (now + _TS_STATUS_TTL, result)
+    return copy.deepcopy(result)
+
+
+async def _probe_tailscale_status(port: int, *, tailnet_enabled: bool = True) -> dict[str, object]:
     executable = shutil.which("tailscale")
     result: dict[str, object] = {
         "mode": "loopback",

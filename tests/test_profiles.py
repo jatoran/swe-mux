@@ -152,12 +152,22 @@ async def test_spawn_api_keeps_agent_and_profile_paths_distinct(tmp_path: Path) 
 
 async def test_native_agent_history_resume_bypasses_shell_profiles(tmp_path: Path) -> None:
     captured: list[dict[str, Any]] = []
+    lineage: list[tuple[str, str, str, dict[str, Any]]] = []
     transcript = tmp_path / "rollout.jsonl"
     transcript.write_text("{}\n", encoding="utf-8")
 
     async def spawn(**kwargs: Any) -> Any:
         captured.append(kwargs)
-        return SimpleNamespace(record=SimpleNamespace(id="resumed", snapshot=lambda: kwargs))
+        return SimpleNamespace(
+            record=SimpleNamespace(
+                id="resumed", agent_run_id="resumed-run", snapshot=lambda: kwargs
+            )
+        )
+
+    async def add_lineage(
+        parent: str, child: str, relation: str, metadata: dict[str, Any]
+    ) -> None:
+        lineage.append((parent, child, relation, metadata))
 
     async def update_space(*args: Any, **kwargs: Any) -> Any:
         return (args, kwargs)
@@ -181,7 +191,12 @@ async def test_native_agent_history_resume_bypasses_shell_profiles(tmp_path: Pat
         update=update_space,
     )
     request = SimpleNamespace(
-        app={"history": history, "sessions": manager, "spaces": spaces},
+        app={
+            "history": history,
+            "sessions": manager,
+            "spaces": spaces,
+            "automation_store": SimpleNamespace(add_lineage=add_lineage),
+        },
         match_info={"sid": "history-id"}, can_read_body=False,
     )
 
@@ -190,6 +205,14 @@ async def test_native_agent_history_resume_bypasses_shell_profiles(tmp_path: Pat
     assert captured[0]["backend"] == "codex"
     assert captured[0]["resume_native_id"] == "native-codex"
     assert "shell_profile_id" not in captured[0]
+    assert lineage == [
+        (
+            "history-id",
+            "resumed-run",
+            "resume",
+            {"backend": "codex", "space_id": "default"},
+        )
+    ]
 
 
 async def _async_value(value: Any) -> Any:

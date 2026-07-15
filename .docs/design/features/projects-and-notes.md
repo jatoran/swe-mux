@@ -52,8 +52,8 @@
   headers name their project owner. The editor has one fixed target; there is no scope toggle
   that can silently route the same text to a different owner.
 - Active space notes open from the space menu, main menu, palette, empty stage, or a docked
-  note pane. The Projects shelf includes a separate **App-owned space notes** section, so a
-  note from a deleted space remains reachable as an archived space note.
+  note pane. The global Notes shelf indexes live and archived app-owned space notes, so a
+  note from a deleted space remains reachable without making it appear project-owned.
 - Phase 5.5 project-owned space notes are copied once into app data during daemon startup.
   The source Markdown is retained as a non-canonical legacy backup, the project artifact
   binding is released, and legacy anchor columns are made inert. Migration never deletes or
@@ -66,21 +66,33 @@
 - Claude/Codex `note` means **Agent-run note**. Menus also expose the immutable run project
   note. Plain shells never create per-PTY notes.
 - Space note, project note, and agent-run note are separate explicit commands. The raw
-  Markdown editor may be a modal or a persistent split leaf; docking changes layout only.
+  Markdown editor may be a quick modal or a persistent per-space Notes Dock; presentation
+  never changes semantic ownership. Settings chooses the default presentation and defaults
+  to Dock.
 - The footer status light exposes storage destination, save state, and revision on hover.
   Paths are not shown in the editor chrome. External changes yield a visible conflict.
-- Projects is the durable shelf for project-local config and notes. App-owned space notes
-  are visibly separated from project-owned items. Legacy space-note files discovered under
-  project `.swe-mux/` are labelled backups, not active notes.
-- Docked notes appear beside their semantic owner in the sidebar: space notes directly
-  under the space; agent-run and project notes under their associated session. Unmatched
-  durable notes remain visible as unattached rows instead of disappearing.
-- Saved app-owned space notes appear beneath their space whether or not they are docked.
-  The row distinguishes `saved` from `open pane`; selecting a saved note opens its editor,
-  while selecting an open-pane note focuses that existing viewport on narrow screens.
-- Selecting a terminal always selects a terminal viewport. A resource-only persisted layout
-  is expanded to terminal + resource when its live shell is selected; a note can never trap
-  navigation or replace session identity.
+- Projects is the registry for project roots, project-local config, diagnostics, and file
+  recovery. Notes is the durable discovery shelf across saved space, project, and agent-run
+  notes, grouped as Recent/Spaces/Projects/Agent runs/Recovered. Entries lead with friendly
+  ownership and content metadata rather than filenames or IDs. Legacy space-note files
+  discovered under project `.swe-mux/` are labelled backups, not active notes.
+- The Notes shelf opens from `# notes` on the right side of the sidebar footer. It searches
+  bounded excerpts and owner/project/backend metadata. Recognized notes with durable owners
+  open in the canonical editor; unowned recovery files stay visible and read-only until
+  their relationship is resolved from Projects. Opening a note from the shelf keeps the
+  shelf mounted behind the editor, so `← notes`/`browse` returns to the same query, category,
+  and scroll position.
+- The Notes Dock belongs to the active space, not a terminal leaf. It stays open while the
+  user changes sessions, terminal tabs, or split focus; multiple notes use tabs inside the
+  dock. Its width and active note persist with the space. Desktop docks right of the whole
+  space; narrow/mobile layouts use the bottom half of the workspace.
+- Sidebar rows use only `space note`, `project note`, and `agent note`. A space note is
+  directly beneath its space. A live agent note may nest beneath its agent session; project
+  notes and ended-run notes remain visible at space level instead of being attached to an
+  arbitrary terminal. Saved app-owned space notes appear whether or not the dock is open.
+- Selecting a terminal always selects a terminal viewport and never hides or retargets the
+  space Notes Dock. Closing a dock tab removes only its presentation; it never deletes the
+  note file or durable artifact relationship.
 
 ## Key files
 
@@ -90,4 +102,5 @@
   `src/swe_mux/note_migration.py`
 - Scope/artifact registry: `src/swe_mux/history.py`
 - Notes UI/routing: `frontend/src/Notes.tsx`, `frontend/src/App.tsx`
-- Durable shelf: `frontend/src/ProjectRegistry.tsx`
+- Notes discovery shelf: `frontend/src/NotesShelf.tsx`
+- Project registry/recovery: `frontend/src/ProjectRegistry.tsx`

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +15,21 @@ def _blocks(content: Any) -> list[dict[str, Any]]:
     return []
 
 
-def parse_transcript(path: Path, backend: str) -> list[dict[str, Any]]:
+def parse_transcript(
+    path: Path, backend: str, *, max_bytes: int | None = None
+) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    if max_bytes is None:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    else:
+        with path.open("rb") as handle:
+            size = handle.seek(0, 2)
+            handle.seek(max(0, size - max_bytes))
+            raw = handle.read(max_bytes)
+        if size > max_bytes:
+            _, _, raw = raw.partition(b"\n")
+        text = raw.decode("utf-8", "replace")
+    for line in text.splitlines():
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
@@ -38,9 +52,7 @@ def parse_transcript(path: Path, backend: str) -> list[dict[str, Any]]:
                 content = payload.get("message") or payload.get("text") or payload.get("content")
                 blocks = _blocks(content)
                 if blocks:
-                    messages.append(
-                        {"role": role, "ts": event.get("timestamp"), "content": blocks}
-                    )
+                    messages.append({"role": role, "ts": event.get("timestamp"), "content": blocks})
             elif payload_type in {"function_call", "custom_tool_call"}:
                 messages.append(
                     {
@@ -56,3 +68,40 @@ def parse_transcript(path: Path, backend: str) -> list[dict[str, Any]]:
                     }
                 )
     return messages
+
+
+_CACHE_MAX = 32
+_cache: OrderedDict[tuple[str, int, str, int | None], list[dict[str, Any]]] = OrderedDict()
+_cache_lock = threading.Lock()
+
+
+def parse_transcript_cached(
+    path: Path, backend: str, *, max_bytes: int | None = None
+) -> list[dict[str, Any]]:
+    """Cached ``parse_transcript`` keyed on (path, mtime_ns, backend, max_bytes).
+
+    The same transcript is parsed several times per turn (fleet claim-check,
+    titler/summarizer observers, the history transcript view). This bounded LRU
+    collapses the repeated whole-file read + per-line JSON parse into one.
+
+    Safe to call from both the event loop and ``asyncio.to_thread`` workers: a
+    single lock guards the map, but the parse itself runs OUTSIDE the lock so
+    parses of distinct files never serialize. ``path.stat()`` raising ``OSError``
+    on a missing/locked file propagates exactly as ``parse_transcript``'s read
+    would; the cache never swallows it. The returned list is SHARED across
+    callers and MUST be treated as read-only.
+    """
+    mtime_ns = path.stat().st_mtime_ns
+    key = (str(path), mtime_ns, backend, max_bytes)
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit is not None:
+            _cache.move_to_end(key)
+            return hit
+    result = parse_transcript(path, backend, max_bytes=max_bytes)
+    with _cache_lock:
+        _cache[key] = result
+        _cache.move_to_end(key)
+        while len(_cache) > _CACHE_MAX:
+            _cache.popitem(last=False)
+    return result

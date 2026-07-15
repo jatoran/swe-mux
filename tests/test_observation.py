@@ -39,6 +39,23 @@ async def test_claude_parser_tracks_tools_completion_and_current_context() -> No
     )
     await _claude(
         session,
+        {
+            "type": "user",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-1",
+                        "is_error": True,
+                        "content": "pytest failed",
+                    }
+                ]
+            },
+        },
+        events,
+    )
+    await _claude(
+        session,
         {"type": "system", "subtype": "turn_duration", "durationMs": 50},
         events,
     )
@@ -49,9 +66,20 @@ async def test_claude_parser_tracks_tools_completion_and_current_context() -> No
     assert session.record.context_window == 1_000_000
     assert session.record.context_pct == 0.0006
     emitted = []
+    tool_result = None
     while not queue.empty():
-        emitted.append((await queue.get()).type)
+        item = await queue.get()
+        emitted.append(item.type)
+        if item.type == "tool_result":
+            tool_result = item
     assert "tool_use" in emitted
+    assert tool_result is not None
+    assert tool_result.payload == {
+        "tool": "Bash",
+        "success": False,
+        "exit_code": None,
+        "detail": "pytest failed",
+    }
     assert "turn_ended" in emitted
 
 
@@ -80,9 +108,7 @@ async def test_claude_parser_finishes_on_end_turn_without_duration_record() -> N
     )
     assert session.record.state == "idle"
     assert session.record.context_pct == 0.040912
-    assert "turn_ended" in [
-        (await queue.get()).type for _ in range(queue.qsize())
-    ]
+    assert "turn_ended" in [(await queue.get()).type for _ in range(queue.qsize())]
 
 
 async def test_codex_parser_normalizes_turn_completion() -> None:
@@ -112,6 +138,45 @@ async def test_codex_parser_normalizes_turn_completion() -> None:
     assert session.record.context_pct == 0.25
 
 
+async def test_codex_parser_correlates_tool_result_and_exit_code() -> None:
+    session = cast(Any, SimpleNamespace(record=record("codex")))
+    events = EventBus()
+    queue = events.subscribe()
+    await _codex(
+        session,
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "exec_command",
+            },
+        },
+        events,
+    )
+    await _codex(
+        session,
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "exit_code": 2,
+                "output": "command failed",
+            },
+        },
+        events,
+    )
+    emitted = [await queue.get() for _ in range(queue.qsize())]
+    result = next(item for item in emitted if item.type == "tool_result")
+    assert result.payload == {
+        "tool": "exec_command",
+        "success": False,
+        "exit_code": 2,
+        "detail": "command failed",
+    }
+
+
 def test_meta_hook_glob_matching(tmp_path: Path) -> None:
     session = SimpleNamespace(record=record("claude"))
     manager = cast(Any, SimpleNamespace(sessions={"mux-id": session}))
@@ -124,12 +189,8 @@ def test_meta_hook_glob_matching(tmp_path: Path) -> None:
 async def test_semantic_events_are_deduplicated_across_hook_and_transcript() -> None:
     events = EventBus()
     queue = events.subscribe()
-    first = await events.emit(
-        "tool_use", session_id="mux-id", source="transcript", tool="Bash"
-    )
-    duplicate = await events.emit(
-        "tool_use", session_id="mux-id", source="hook", tool="Bash"
-    )
+    first = await events.emit("tool_use", session_id="mux-id", source="transcript", tool="Bash")
+    duplicate = await events.emit("tool_use", session_id="mux-id", source="hook", tool="Bash")
 
     assert duplicate is first
     assert queue.qsize() == 1

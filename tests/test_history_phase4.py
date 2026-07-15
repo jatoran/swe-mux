@@ -96,6 +96,44 @@ async def test_event_cursor_is_monotonic_and_gap_free(tmp_path: Path) -> None:
     history.close()
 
 
+async def test_workload_telemetry_correlates_rates_context_and_completion_evidence(
+    tmp_path: Path,
+) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    current = agent("observed", "claude", tmp_path)
+    current.model = "claude-test"
+    current.context_window = 200_000
+    current.context_pct = 0.4
+    current.context_peak_pct = 0.6
+    await history.session_started(current, None)
+    events = EventBus(history.append_event)
+    await events.emit("turn_ended", session_id=current.id, source="transcript")
+    await events.emit("stalled", session_id=current.id, source="automation")
+    await events.emit("approval_needed", session_id=current.id, source="hook")
+    await events.emit(
+        "tool_result",
+        session_id=current.id,
+        source="transcript",
+        tool="pytest",
+        success=True,
+    )
+    await history.session_ended(current, "complete")
+
+    telemetry = await history.workload_telemetry()
+    dimension = telemetry["dimensions"][0]
+
+    assert dimension["backend"] == "claude"
+    assert dimension["model"] == "claude-test"
+    assert dimension["turns_per_run"] == 1
+    assert dimension["stalls_per_run"] == 1
+    assert dimension["approvals_per_run"] == 1
+    assert dimension["completion_evidence_runs"] == 1
+    assert dimension["completion_evidence_count"] == 1
+    assert dimension["average_final_context_pct"] == 0.4
+    assert dimension["average_peak_context_pct"] == 0.6
+    history.close()
+
+
 async def test_worktrees_have_distinct_scopes_but_share_repo_group(
     tmp_path: Path, monkeypatch,
 ) -> None:

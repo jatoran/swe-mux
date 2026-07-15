@@ -16,6 +16,7 @@ from swe_mux.session import Session
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
 async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
+    writes: list[str] = []
     record = SessionRecord(
         "mux-id",
         "agent",
@@ -30,7 +31,7 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
     pty = cast(
         Any,
         SimpleNamespace(
-            write=lambda data: None,
+            write=writes.append,
             resize=lambda cols, rows: None,
             isalive=lambda: True,
         ),
@@ -42,6 +43,7 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
     manager = SimpleNamespace(resolve=lambda identity: session, sessions={record.id: session})
     app = web.Application()
     app["sessions"] = manager
+    app["events"] = EventBus()
     app.router.add_get("/pty/{sid}", pty_ws)
 
     async with TestClient(TestServer(app)) as client:
@@ -49,11 +51,20 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         state = await ws.receive_json()
         assert state["type"] == "state"
         assert state["revision"] == 0
-        assert await ws.receive_json() == {"type": "replay_start", "reason": "attach"}
+        assert await ws.receive_json() == {
+            "type": "replay_start",
+            "reason": "attach",
+            "allow_terminal_responses": True,
+        }
         replay = await ws.receive()
         assert replay.type == WSMsgType.BINARY
         assert replay.data == b"past"
         assert await ws.receive_json() == {"type": "replay_end", "reason": "attach"}
+        await ws.send_json({"type": "claim_input"})
+        assert await ws.receive_json() == {"type": "input_owner", "active": True}
+        await ws.send_json({"type": "input", "data": "\x1b[?1;2c"})
+        await asyncio.sleep(0.01)
+        assert writes == ["\x1b[?1;2c"]
 
         session.publish_output(b"live")
         live = await ws.receive()
@@ -95,6 +106,7 @@ async def test_only_latest_claiming_browser_can_write_input() -> None:
     manager = SimpleNamespace(resolve=lambda identity: session, sessions={record.id: session})
     app = web.Application()
     app["sessions"] = manager
+    app["events"] = EventBus()
     app.router.add_get("/pty/{sid}", pty_ws)
 
     async with TestClient(TestServer(app)) as client:

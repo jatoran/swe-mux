@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import time
+from collections import deque
+from types import SimpleNamespace
 from typing import Any, cast
 
 from swe_mux.models import SessionRecord
-from swe_mux.session import ScrollbackBuffer, Session
+from swe_mux.runtime_cwd import Osc7Parser
+from swe_mux.server import session_startup_metrics
+from swe_mux.session import ScrollbackBuffer, Session, SessionManager
 
 
 def _fake_session(max_bytes: int = 32) -> Any:
@@ -35,6 +42,18 @@ def test_scrollback_zero_capacity_retains_nothing() -> None:
     buffer = ScrollbackBuffer(0)
     buffer.append(b"ignored")
     assert buffer.bytes() == b""
+
+
+def test_scrollback_cursor_excludes_retained_output_and_tracks_new_tail() -> None:
+    buffer = ScrollbackBuffer(8)
+    buffer.append(b"old")
+    position = buffer.position
+
+    assert buffer.bytes_since(position) == b""
+
+    buffer.append(b"-new-data")
+    assert buffer.bytes() == b"new-data"
+    assert buffer.bytes_since(position) == b"new-data"
 
 
 def test_replay_subscription_boundary_is_atomic() -> None:
@@ -102,3 +121,91 @@ def test_hook_state_blocks_lower_priority_transcript_regression() -> None:
     assert fake.record.state_detail == "permission"
     assert Session.transition(fake, "idle", None, source="hook")
     assert fake.record.state == "idle"
+
+
+async def test_fanout_records_first_output_and_prompt_startup_milestones() -> None:
+    queue: asyncio.Queue[bytes] = asyncio.Queue()
+    await queue.put(b"profile output\r\n\x1b]7;file:///D:/PROJECTS/swe-mux\x07")
+    await queue.put(b"")
+    record = SessionRecord(
+        "mux", "shell", "default", "shell", "native", ".", "powershell.exe", []
+    )
+    updates: list[dict[str, float]] = []
+    output: list[bytes] = []
+    session = SimpleNamespace(
+        pty=SimpleNamespace(output_queue=queue, first_output_at=time.perf_counter()),
+        record=record,
+        startup_started_at=time.perf_counter() - 0.05,
+        stopping=True,
+        output_window=deque(),
+        osc7=Osc7Parser(),
+        scrollback=ScrollbackBuffer(1024),
+        publish_output=output.append,
+        publish_update=lambda: updates.append(dict(record.startup_timing_ms)),
+        startup_measurement_task=None,
+        tasks=set(),
+    )
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    prompt_uris: list[str] = []
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit(event_type: str, **payload: Any) -> None:
+        events.append((event_type, payload))
+
+    manager.events = SimpleNamespace(emit=emit)
+    manager._queue_runtime_cwd = lambda _session, uri: prompt_uris.append(uri)
+
+    await SessionManager._fanout(manager, session)
+    await session.startup_measurement_task
+
+    assert record.startup_timing_ms["first_output"] >= 40
+    assert record.startup_timing_ms["first_prompt"] >= record.startup_timing_ms["first_output"]
+    assert record.snapshot()["startup_timing_ms"] == record.startup_timing_ms
+    assert prompt_uris == ["file:///D:/PROJECTS/swe-mux"]
+    assert output == [b"profile output\r\n\x1b]7;file:///D:/PROJECTS/swe-mux\x07"]
+    assert len(updates) == 1
+    assert events[0][0] == "session_startup_measured"
+    assert events[0][1]["milestone"] == "first_prompt"
+    assert events[0][1]["timing_ms"] == record.startup_timing_ms
+
+
+async def test_browser_startup_metrics_are_validated_and_persisted_once() -> None:
+    record = SessionRecord(
+        "mux", "shell", "default", "shell", "native", ".", "powershell.exe", []
+    )
+    updates: list[dict[str, float]] = []
+    emitted: list[tuple[str, dict[str, Any]]] = []
+    session = SimpleNamespace(
+        record=record,
+        publish_update=lambda: updates.append(dict(record.client_startup_timing_ms)),
+    )
+
+    async def emit(event_type: str, **payload: Any) -> None:
+        emitted.append((event_type, payload))
+
+    class Request:
+        app = {
+            "sessions": SimpleNamespace(resolve=lambda _sid: session),
+            "events": SimpleNamespace(emit=emit),
+        }
+        match_info = {"sid": "mux"}
+
+        async def json(self) -> dict[str, Any]:
+            return {
+                "timing_ms": {
+                    "api_response": 40.04,
+                    "pane_mounted": 51.15,
+                    "socket_open": 61.26,
+                    "replay_ready": 72.37,
+                }
+            }
+
+    response = await session_startup_metrics(cast(Any, Request()))
+    await session_startup_metrics(cast(Any, Request()))
+    payload = json.loads(response.text)
+
+    assert payload["timing_ms"]["replay_ready"] == 72.4
+    assert record.client_startup_timing_ms["api_response"] == 40.0
+    assert len(updates) == 1
+    assert len(emitted) == 1
+    assert emitted[0][0] == "session_startup_client_measured"

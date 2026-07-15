@@ -1,2 +1,2 @@
-{"type":"user","message":{"content":"hello"},"sessionId":"claude-fixture"}
-{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","model":"claude-haiku-4-5","usage":{"input_tokens":12,"output_tokens":3}}}
+{"type":"user","timestamp":"2026-01-01T00:00:01Z","message":{"content":"Fix the parser and verify it."},"sessionId":"claude-fixture"}
+{"type":"assistant","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"Implemented the parser and the tests pass."}],"stop_reason":"end_turn","model":"claude-haiku-4-5","usage":{"input_tokens":12,"output_tokens":3}}}

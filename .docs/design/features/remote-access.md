@@ -38,8 +38,10 @@
 - Restrict the Tailscale grant to the owning user/devices and this host. Remove a device
   or revoke its tailnet access immediately when it should no longer control swe-mux.
 - Direct tailnet HTTP is encrypted by Tailscale, but browsers may restrict Clipboard API
-  operations because the URL is not a browser secure context. Use optional Serve when
-  those capabilities matter.
+  operations because the URL is not a browser secure context. OSC-52 copy failures retain the
+  prepared text for a one-tap retry/selectable fallback. A browser-delivered paste event can
+  still carry an image, but proactive clipboard reads (including the long-press Paste fallback)
+  require a secure context. Use optional Serve when those capabilities matter.
 - Do not enable Funnel. Re-run `mux doctor` or use Settings → Remote and security after
   changing Tailscale/listener configuration.
 

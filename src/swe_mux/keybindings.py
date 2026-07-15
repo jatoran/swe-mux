@@ -73,7 +73,6 @@ KEYBINDING_COMMANDS = (
     ("terminal.find", "Find in focused terminal", "terminal"),
     ("terminal.copy", "Copy from focused terminal", "terminal"),
     ("terminal.paste", "Paste into focused terminal", "terminal"),
-    ("terminal.pasteImage", "Paste clipboard image into focused agent", "terminal"),
     ("terminal.selectAll", "Select all in focused terminal", "terminal"),
     ("terminal.clear", "Clear focused terminal", "terminal"),
     *tuple(
