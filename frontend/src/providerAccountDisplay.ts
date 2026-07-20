@@ -1,5 +1,5 @@
 export type QuotaWindowDisplay={used_percent:number;resets_at?:number|null}
-export type QuotaAccountDisplay={quota?:{status:string;error?:string|null;session?:QuotaWindowDisplay|null;weekly?:QuotaWindowDisplay|null}|null}
+export type QuotaAccountDisplay={quota?:{status:string;error?:string|null;session?:QuotaWindowDisplay|null;weekly?:QuotaWindowDisplay|null;fable?:QuotaWindowDisplay|null}|null}
 
 export const percent=(window?:QuotaWindowDisplay|null)=>window?`${Math.round(window.used_percent)}%`:'—'
 
@@ -14,7 +14,7 @@ export const formatResetRemaining=(resetsAt?:number|null,nowSeconds=Date.now()/1
 }
 
 export const quotaWindowSummary=(window?:QuotaWindowDisplay|null,nowSeconds=Date.now()/1000)=>window?`${percent(window)}${window.resets_at?` ${formatResetRemaining(window.resets_at,nowSeconds)}`:''}`:'—'
-export const quotaSummary=(account?:QuotaAccountDisplay,nowSeconds=Date.now()/1000)=>account?.quota?.status==='error'?'unavailable':`${quotaWindowSummary(account?.quota?.session,nowSeconds)} - ${quotaWindowSummary(account?.quota?.weekly,nowSeconds)}`
+export const quotaSummary=(account?:QuotaAccountDisplay,nowSeconds=Date.now()/1000)=>account?.quota?.status==='error'?'unavailable':`${quotaWindowSummary(account?.quota?.session,nowSeconds)} - ${quotaWindowSummary(account?.quota?.weekly,nowSeconds)}${account?.quota?.fable?` · fable ${quotaWindowSummary(account.quota.fable,nowSeconds)}`:''}`
 
 type PopoverRect={left:number;right:number;top:number;bottom:number}
 export function anchoredPopoverStyle(rect:PopoverRect,compact:boolean,viewport:{width:number;height:number}):Record<string,string> {

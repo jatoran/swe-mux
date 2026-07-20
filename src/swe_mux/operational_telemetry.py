@@ -19,7 +19,7 @@ from .sqlite_store import database_operation_lock, run_sqlite_operation
 
 T = TypeVar("T")
 
-TELEMETRY_SCHEMA_VERSION = 1
+TELEMETRY_SCHEMA_VERSION = 2
 TOOL_PARSER_VERSION = "phase2-v1"
 TOOL_PARSER_VERSIONS = {
     "claude": f"claude-{TOOL_PARSER_VERSION}",
@@ -154,7 +154,9 @@ CREATE TABLE IF NOT EXISTS quota_reset_events (
   confirmed INTEGER NOT NULL DEFAULT 0,
   suppression_reason TEXT,
   created_at REAL NOT NULL,
-  confirmed_at REAL
+  confirmed_at REAL,
+  review_status TEXT,
+  reviewed_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_quota_resets_recent
   ON quota_reset_events(observed_at DESC);
@@ -356,9 +358,20 @@ class OperationalTelemetryStore:
             self._db.execute("PRAGMA busy_timeout=5000")
             self._db.execute("PRAGMA cache_size=-12000")
             self._db.executescript(SCHEMA)
+            self._migrate_schema()
             self._repair_legacy_reset_classifications()
             self._db.execute(f"PRAGMA user_version={TELEMETRY_SCHEMA_VERSION}")
             self._db.commit()
+
+    def _migrate_schema(self) -> None:
+        reset_columns = {
+            str(row["name"])
+            for row in self._db.execute("PRAGMA table_info(quota_reset_events)").fetchall()
+        }
+        if "review_status" not in reset_columns:
+            self._db.execute("ALTER TABLE quota_reset_events ADD COLUMN review_status TEXT")
+        if "reviewed_at" not in reset_columns:
+            self._db.execute("ALTER TABLE quota_reset_events ADD COLUMN reviewed_at REAL")
 
     def _repair_legacy_reset_classifications(self) -> None:
         """Re-evaluate old unexpected rows under the hardened high-precision policy."""
@@ -1000,8 +1013,7 @@ class OperationalTelemetryStore:
                 ).fetchone()
                 same_candidate_identity = bool(
                     candidate_sample
-                    and int(current["account_active"])
-                    == int(candidate_sample["account_active"])
+                    and int(current["account_active"]) == int(candidate_sample["account_active"])
                     and current["auth_state"] == candidate_sample["auth_state"]
                 )
                 expected = pending["expected_reset_at"]
@@ -1316,13 +1328,39 @@ class OperationalTelemetryStore:
         def op() -> dict[str, Any]:
             row = self._db.execute(
                 "SELECT * FROM quota_reset_events WHERE classification='unexpected' "
-                "AND confirmed=1 AND suppression_reason IS NULL ORDER BY confirmed_at DESC LIMIT 1"
+                "AND confirmed=1 AND suppression_reason IS NULL AND review_status IS NULL "
+                "ORDER BY confirmed_at DESC LIMIT 1"
             ).fetchone()
             count = self._db.execute(
                 "SELECT COUNT(*) count FROM quota_reset_events WHERE classification='unexpected' "
-                "AND confirmed=1 AND suppression_reason IS NULL"
+                "AND confirmed=1 AND suppression_reason IS NULL AND review_status IS NULL"
             ).fetchone()["count"]
             return {"count": count, "latest": dict(row) if row else None}
+
+        return await self._run(op)
+
+    async def review_quota_reset(self, reset_id: str, resolution: str) -> dict[str, Any]:
+        if resolution not in {"manual_usage", "discarded"}:
+            raise ValueError("resolution must be manual_usage or discarded")
+
+        def op() -> dict[str, Any]:
+            row = self._db.execute(
+                "SELECT * FROM quota_reset_events WHERE id=?", (reset_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(reset_id)
+            if resolution == "manual_usage" and row["provider"] != "codex":
+                raise ValueError("manual_usage is only valid for Codex quota evidence")
+            reviewed_at = time.time()
+            self._db.execute(
+                "UPDATE quota_reset_events SET review_status=?,reviewed_at=? WHERE id=?",
+                (resolution, reviewed_at, reset_id),
+            )
+            self._db.commit()
+            reviewed = self._db.execute(
+                "SELECT * FROM quota_reset_events WHERE id=?", (reset_id,)
+            ).fetchone()
+            return dict(reviewed)
 
         return await self._run(op)
 
@@ -1514,9 +1552,7 @@ def scan_native_telemetry(
                 )
         elif backend == "codex":
             payload_value = record.get("payload")
-            codex_payload: dict[str, Any] = (
-                payload_value if isinstance(payload_value, dict) else {}
-            )
+            codex_payload: dict[str, Any] = payload_value if isinstance(payload_value, dict) else {}
             payload_type = str(codex_payload.get("type") or "")
             outer = str(record.get("type") or "")
             known = payload_type in CODEX_KNOWN_PAYLOADS or outer in CODEX_KNOWN_OUTER_RECORDS
@@ -1526,9 +1562,7 @@ def scan_native_telemetry(
             recognized += 1
             if payload_type in {"function_call", "custom_tool_call"}:
                 call_id = str(
-                    codex_payload.get("call_id")
-                    or codex_payload.get("id")
-                    or f"line-{index}"
+                    codex_payload.get("call_id") or codex_payload.get("id") or f"line-{index}"
                 )
                 name = str(codex_payload.get("name") or "tool")
                 names[call_id] = name
@@ -1552,9 +1586,7 @@ def scan_native_telemetry(
                 "exec_command_end",
             }:
                 call_id = str(
-                    codex_payload.get("call_id")
-                    or codex_payload.get("id")
-                    or f"line-{index}"
+                    codex_payload.get("call_id") or codex_payload.get("id") or f"line-{index}"
                 )
                 exit_code = codex_payload.get("exit_code")
                 result_success = not bool(codex_payload.get("is_error")) and exit_code in {
@@ -1566,9 +1598,7 @@ def scan_native_telemetry(
                         "source_identity": f"native:{session_id}:tool_result:{call_id}",
                         "observed_at": when,
                         "kind": "tool_result",
-                        "raw_tool": names.get(
-                            call_id, str(codex_payload.get("name") or "tool")
-                        ),
+                        "raw_tool": names.get(call_id, str(codex_payload.get("name") or "tool")),
                         "success": int(result_success),
                         "exit_code": exit_code if isinstance(exit_code, int) else None,
                         "duration_ms": _finite(codex_payload.get("duration_ms")),

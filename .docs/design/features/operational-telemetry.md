@@ -32,7 +32,7 @@ SQLite connection:
 - `quota_sample_rollups`: daily first/last/min/max/error summaries produced before old raw
   samples are pruned.
 - `quota_reset_events`: before/after evidence, expected/observed time, classification,
-  confirmation, confidence, and suppression reason.
+  confirmation, confidence, suppression reason, and nullable durable user review status/time.
 - `quota_attributions`: estimate/range, explicit external remainder, overlapping session
   count, sample gap, provider-lag allowance, optional native-token allocation, and caveats.
 - `context_compactions`: deduplicated explicit compaction evidence with backend capability,
@@ -85,6 +85,9 @@ enumeration.
    rules. Only confirmed unsuppressed unexpected resets produce the purple account indicator
    and optional browser-local sound; `localStorage` deduplicates per-device playback and the
    preference defaults off.
+7. User review preserves the detector evidence while removing it from the active alert summary.
+   A Codex row may be `manual_usage`; any provider row may be `discarded`. Review state survives
+   daemon restart and is shown in the evidence log.
 
 Positive quota deltas produce probabilistic attribution records. Mux session overlap defines
 the correlated range; unclaimed movement remains an explicit external/unassigned range.
@@ -125,6 +128,7 @@ records must be sanitized into the versioned fixture corpus.
 
 ```text
 GET /api/telemetry/operational?provider=&account=&limit=
+PATCH /api/telemetry/quota-resets/{reset_id} {resolution: manual_usage|discarded}
 GET /api/provider-accounts
 GET /api/processes[?session=]
 POST /api/processes/action {session_id, pid, identity_id, action}

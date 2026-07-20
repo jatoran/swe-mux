@@ -4,6 +4,7 @@ import asyncio
 import builtins
 import logging
 import secrets
+import sqlite3
 import time
 import uuid
 from collections import deque
@@ -901,6 +902,19 @@ class SessionManager:
             source="pty",
             reason=reason,
         )
+        if session.transcript_path and session.transcript_path.is_file():
+            try:
+                await self.history.index_transcript(
+                    session.record.agent_run_id or session.record.id,
+                    session.transcript_path,
+                    session.record.backend,
+                )
+            except (OSError, ValueError, sqlite3.Error):
+                log.warning(
+                    "could not index ended session transcript %s",
+                    session.record.id,
+                    exc_info=True,
+                )
 
     async def stop(self, sid: str) -> None:
         session = self.sessions[sid]

@@ -1,4 +1,4 @@
-export type PaneLeafKind = 'terminal' | 'note' | 'preview'
+export type PaneLeafKind = 'terminal' | 'note' | 'preview' | 'history'
 export type SplitDirection = 'horizontal' | 'vertical'
 export type PaneDirection = 'left'|'right'|'up'|'down'
 
@@ -13,9 +13,25 @@ export type PaneSplit = {
 export type PaneNode = PaneStack | PaneSplit
 export type PaneLayout = { version: 6; root: PaneNode | null }
 
-export type NoteLeafIdentity = { kind: 'note' | 'files' | 'file'; id: string }
+export type NoteLeafIdentity = { kind: 'note' | 'session-note' | 'files' | 'file'; id: string }
 
-const groupId = () => `group-${crypto.randomUUID().slice(0, 12)}`
+type BrowserCrypto = Pick<Crypto, 'getRandomValues'> & Partial<Pick<Crypto, 'randomUUID'>>
+
+/** Browser-local UUID that also works on direct tailnet HTTP. */
+export function browserUuid(cryptoApi: BrowserCrypto | undefined = globalThis.crypto): string {
+  if (typeof cryptoApi?.randomUUID === 'function') {
+    try { return cryptoApi.randomUUID() } catch { /* use the compatible path */ }
+  }
+  const bytes = new Uint8Array(16)
+  if (cryptoApi?.getRandomValues) cryptoApi.getRandomValues(bytes)
+  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+const groupId = () => `group-${browserUuid().slice(0, 12)}`
 const clampRatio=(ratio:number)=>Math.max(.1,Math.min(.9,Math.round(ratio*10000)/10000))
 export const emptyLayout = (): PaneLayout => ({ version: 6, root: null })
 export const terminalLeaf = (id: string): PaneLeaf => ({ type: 'leaf', kind: 'terminal', id })
@@ -23,17 +39,17 @@ export const resourceLeaf = (kind: PaneLeafKind, id: string): PaneLeaf => ({ typ
 export const paneStack=(children:PaneLeaf[],activeId=children[0]?.id||'',id=groupId()):PaneStack=>({type:'stack',id,children,active_child_id:children.some(child=>child.id===activeId)?activeId:children[0]?.id||''})
 
 export function noteResourceId(kind: NoteLeafIdentity['kind'], id: string): string {
-  return `${kind}:${encodeURIComponent(id)}`
+  return `${kind === 'session-note' ? 'sessions' : kind}:${encodeURIComponent(id)}`
 }
 
 export function parseNoteResourceId(resourceId: string): NoteLeafIdentity | null {
   const separator = resourceId.indexOf(':')
   if (separator < 1) return null
   const kind = resourceId.slice(0, separator)
-  if (kind !== 'note' && kind !== 'files' && kind !== 'file') return null
+  if (kind !== 'note' && kind !== 'sessions' && kind !== 'files' && kind !== 'file') return null
   try {
     const id = decodeURIComponent(resourceId.slice(separator + 1))
-    return id ? { kind, id } : null
+    return id ? { kind: kind === 'sessions' ? 'session-note' : kind, id } as NoteLeafIdentity : null
   } catch {
     return null
   }
@@ -42,7 +58,7 @@ export function parseNoteResourceId(resourceId: string): NoteLeafIdentity | null
 const isLeaf=(value:unknown):value is PaneLeaf=>{
   if(!value||typeof value!=='object')return false
   const leaf=value as Record<string,unknown>
-  return leaf.type==='leaf'&&['terminal','note','preview'].includes(String(leaf.kind))&&typeof leaf.id==='string'&&!!leaf.id
+  return leaf.type==='leaf'&&['terminal','note','preview','history'].includes(String(leaf.kind))&&typeof leaf.id==='string'&&!!leaf.id
 }
 
 function parseNode(value:unknown,seen:Set<string>,legacy=false):PaneNode|null{

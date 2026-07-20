@@ -8,14 +8,24 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
-import { openWebSocket, uploadTerminalImage } from './api'
+import { api, openWebSocket, uploadTerminalImage } from './api'
 import type { Session } from './types'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
 import { terminalKeyDecision } from './terminalKeys'
 import { isTerminalProtocolResponse } from './terminalProtocol'
 import { clampContextMenuLeft } from './menuPosition'
-import { mobileDragTarget, terminalScrollLines, touchWheelDelta, type MobileInputSettings } from './mobileInput'
+import {
+  mobileDragTarget,
+  terminalCellAtPoint,
+  terminalScrollLines,
+  terminalSelectionSpan,
+  terminalWordRange,
+  touchWheelDelta,
+  type MobileInputSettings,
+  type TerminalCell,
+} from './mobileInput'
+import { isMobileTerminalInput, mobileImeDelta } from './mobileTerminalIme'
 import { clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, ResilientClipboardProvider } from './terminalClipboard'
 import { redrawVisibleTerminal, refitVisibleTerminal } from './terminalViewport'
 
@@ -42,6 +52,10 @@ function reportError(message: string) {
 
 function acceptsClipboardImages(session: Session) {
   return session.backend === 'claude' || session.backend === 'codex'
+}
+
+function mobileClipboardFallback(): boolean {
+  return window.matchMedia('(max-width: 760px), (pointer: coarse)').matches
 }
 
 async function insertTerminalImage(term: Terminal, session: Session, blob: Blob) {
@@ -89,12 +103,36 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const [connectionState,setConnectionState]=useState<'connecting'|'connected'|'reconnecting'|'ended'>('connecting')
   const [preparedClipboard,setPreparedClipboard]=useState('')
   const [manualClipboard,setManualClipboard]=useState(false)
+  const [selectionText,setSelectionText]=useState('')
+  const [lastReply,setLastReply]=useState('')
+  const [clipboardStatus,setClipboardStatus]=useState('')
+  const [manualPaste,setManualPaste]=useState(false)
   const [imageDropActive,setImageDropActive]=useState(false)
   const manualClipboardRef=useRef<HTMLTextAreaElement>(null)
+  const manualPasteRef=useRef<HTMLTextAreaElement>(null)
+  const mobileLiveInputRef=useRef<HTMLTextAreaElement>(null)
+  const focusTerminalInputRef=useRef<()=>void>(()=>{})
+  const lastAutoCopiedSelectionRef=useRef('')
+  const clipboardStatusTimerRef=useRef<number|null>(null)
   const stateRef=useRef(session.state)
   stateRef.current=session.state
   const broadcastRef = useRef(broadcast)
   broadcastRef.current = broadcast
+
+  const prepareClipboardFallback = (text:string) => {
+    setPreparedClipboard(text)
+    setManualClipboard(mobileClipboardFallback())
+    requestAnimationFrame(()=>{manualClipboardRef.current?.focus();manualClipboardRef.current?.select()})
+  }
+  const showClipboardStatus = (message:string) => {
+    setClipboardStatus(message)
+    if(clipboardStatusTimerRef.current!==null)window.clearTimeout(clipboardStatusTimerRef.current)
+    clipboardStatusTimerRef.current=window.setTimeout(()=>setClipboardStatus(''),1800)
+  }
+
+  useEffect(() => () => {
+    if(clipboardStatusTimerRef.current!==null)window.clearTimeout(clipboardStatusTimerRef.current)
+  }, [])
 
   useEffect(() => {
     const openFind = (event: Event) => {
@@ -160,7 +198,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     term.loadAddon(search)
     term.loadAddon(new WebLinksAddon())
     term.loadAddon(new ClipboardAddon(undefined,new ResilientClipboardProvider(
-      text=>{setPreparedClipboard(text);setManualClipboard(false)},
+      prepareClipboardFallback,
       reportError,
     )))
     term.loadAddon(new Unicode11Addon())
@@ -168,6 +206,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     termRef.current = term
     searchRef.current = search
     term.open(host.current)
+    const mobileLiveInput=isMobileTerminalInput()?mobileLiveInputRef.current:null
+    const focusTerminalInput=()=>{
+      if(mobileLiveInput){
+        mobileLiveInput.focus({preventScroll:true})
+        const end=mobileLiveInput.value.length
+        mobileLiveInput.setSelectionRange(end,end)
+      }else term.focus()
+    }
+    focusTerminalInputRef.current=focusTerminalInput
     const onTheme = (event: Event) => {
       const name = (event as CustomEvent<Exclude<ThemeName,'system'>>).detail
       term.options.theme = terminalThemes[name]
@@ -187,8 +234,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return false
       }
       if (decision.kind === 'copySelection') {
-        void navigator.clipboard.writeText(term.getSelection()).catch(() => runCommand('clipboard.help'))
-        term.clearSelection()
+        const text = term.getSelection()
+        void copyPreparedText(text).then(copied => {
+          if (copied) { term.clearSelection(); showClipboardStatus('Copied') }
+          else prepareClipboardFallback(text)
+        })
         return false
       }
       return true
@@ -198,17 +248,30 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let reconnectAttempt=0
     let reconnectReplay=false
     let disposed=false
+    let replyRefreshTimer:number|undefined
     let hiddenAt:number|null=document.hidden?Date.now():null
     let replaying = false
     let replayEndReceived = false
     let replayAllowsTerminalResponses = false
     let pendingReplayWrites = 0
     let currentRevision = -1
+    let lastReplyTriggerState=session.state
     let exitWritten = false
     let fitFrame = 0
     let redrawFrame = 0
     let invalidateAtlasOnRedraw = false
     let webgl: WebglAddon | null = null
+    const loadLatestReply=()=>{
+      if(session.backend==='shell')return
+      void api<{text:string}>('GET',`/api/sessions/${session.id}/last-reply`).then(result=>{
+        if(!disposed&&result.text)setLastReply(result.text)
+      }).catch(()=>{})
+    }
+    const scheduleLatestReply=(delay=700)=>{
+      if(session.backend==='shell')return
+      if(replyRefreshTimer!==undefined)window.clearTimeout(replyRefreshTimer)
+      replyRefreshTimer=window.setTimeout(()=>{replyRefreshTimer=undefined;loadLatestReply()},delay)
+    }
     const reportTerminalState = () => {
       if (socket?.readyState !== WebSocket.OPEN) return
       socket.send(JSON.stringify({ type: 'terminal_state', mode: term.buffer.active.type }))
@@ -235,19 +298,24 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     const scheduleFit = () => scheduleViewport(false)
     const scheduleFullRedraw = () => scheduleViewport(true)
-    try {
-      const addon = new WebglAddon()
-      webgl = addon
-      addon.onContextLoss(() => {
-        if (webgl !== addon) return
+    // Chromium device emulation can preserve a live WebGL context while changing
+    // its emulated pixel ratio, leaving xterm interactive but visually blank.
+    // The built-in renderer is reliable for the single full-screen mobile pane.
+    if (!window.matchMedia('(max-width:760px)').matches) {
+      try {
+        const addon = new WebglAddon()
+        webgl = addon
+        addon.onContextLoss(() => {
+          if (webgl !== addon) return
+          webgl = null
+          addon.dispose()
+          scheduleFullRedraw()
+        })
+        term.loadAddon(addon)
+      } catch {
         webgl = null
-        addon.dispose()
-        scheduleFullRedraw()
-      })
-      term.loadAddon(addon)
-    } catch {
-      webgl = null
-      // Canvas renderer remains active on machines without WebGL support.
+        // Canvas renderer remains active on machines without WebGL support.
+      }
     }
     const claimInput = () => {
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'claim_input' }))
@@ -261,6 +329,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     const handleMessage=(event:MessageEvent)=>{
       if (event.data instanceof ArrayBuffer) {
+        scheduleLatestReply()
         if (replaying) {
           pendingReplayWrites += 1
           term.write(new Uint8Array(event.data), () => {
@@ -278,6 +347,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if (frame.type === 'gap') replaying = true
         if ((frame.type === 'state' || frame.type === 'update') && Number(frame.revision ?? 0) > currentRevision) {
           currentRevision = Number(frame.revision ?? 0)
+          const nextState=frame.snapshot?.state as Session['state']|undefined
+          if(nextState&&['idle','awaiting'].includes(nextState)&&nextState!==lastReplyTriggerState)scheduleLatestReply(250)
+          if(nextState)lastReplyTriggerState=nextState
           onState(frame.snapshot)
         }
         if (frame.type === 'replay_start') {
@@ -325,7 +397,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         scheduleFit()
         claimInput()
         reportTerminalState()
-        if(!reconnecting)term.focus()
+        // Mobile browsers should receive focus from the user's terminal tap.
+        // Pre-focusing an invisible textarea outside a gesture can leave Gboard
+        // believing the field is active without actually opening the keyboard.
+        if(!reconnecting&&!mobileLiveInput)term.focus()
       }
       next.onmessage=event=>{if(socket===next)handleMessage(event)}
       next.onclose=()=>{if(socket!==next)return;socket=null;scheduleReconnect()}
@@ -343,23 +418,149 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         socket.send(JSON.stringify({ type: 'input', data, kind: protocolResponse ? 'terminal_response' : 'user', broadcast: protocolResponse ? false : broadcastRef.current }))
       }
     })
+    let mobileInputValue=''
+    let lineBreakSent=false
+    let lineBreakResetTimer:number|undefined
+    const markLineBreakSent=()=>{
+      lineBreakSent=true
+      if(lineBreakResetTimer!==undefined)window.clearTimeout(lineBreakResetTimer)
+      lineBreakResetTimer=window.setTimeout(()=>{lineBreakSent=false;lineBreakResetTimer=undefined},0)
+    }
+    const resetMobileInput=()=>{
+      mobileInputValue=''
+      if(mobileLiveInput)mobileLiveInput.value=''
+    }
+    const keepMobileCaretAtEnd=()=>{
+      if(!mobileLiveInput)return
+      const end=mobileLiveInput.value.length
+      mobileLiveInput.setSelectionRange(end,end)
+    }
+    const mobileBeforeInput=(event:InputEvent)=>{
+      if(event.inputType!=='insertLineBreak'&&event.inputType!=='insertParagraph')return
+      event.preventDefault()
+      if(!lineBreakSent)term.input('\r',true)
+      markLineBreakSent()
+      resetMobileInput()
+    }
+    const mobileTextInput=()=>{
+      if(!mobileLiveInput)return
+      const next=mobileLiveInput.value
+      if(lineBreakSent&&/^[\r\n]*$/.test(next)){
+        resetMobileInput();return
+      }
+      const data=mobileImeDelta(mobileInputValue,next)
+      mobileInputValue=next
+      if(data)term.input(data,true)
+      if(/[\r\n]/.test(next))resetMobileInput()
+      else requestAnimationFrame(keepMobileCaretAtEnd)
+    }
+    const mobileKeyDown=(event:KeyboardEvent)=>{
+      const sequence:Record<string,string>={
+        ArrowUp:'\x1b[A',ArrowDown:'\x1b[B',ArrowRight:'\x1b[C',ArrowLeft:'\x1b[D',
+        Home:'\x1b[H',End:'\x1b[F',PageUp:'\x1b[5~',PageDown:'\x1b[6~',Delete:'\x1b[3~',
+        Escape:'\x1b',Tab:'\t',
+      }
+      if(event.key==='Enter'&&!event.isComposing){
+        event.preventDefault();term.input('\r',true);markLineBreakSent();resetMobileInput();return
+      }
+      if(event.key==='Backspace'&&!mobileInputValue){
+        event.preventDefault();term.input('\x7f',true);return
+      }
+      const data=sequence[event.key]
+      if(!data)return
+      event.preventDefault();term.input(data,true);resetMobileInput()
+    }
+    const mobilePaste=(event:ClipboardEvent)=>{
+      if(!mobileLiveInput||!event.clipboardData)return
+      const image=clipboardImage(Array.from(event.clipboardData.items))
+      if(image&&acceptsClipboardImages(session)){
+        event.preventDefault();resetMobileInput()
+        void insertTerminalImage(term,session,image).catch(cause=>reportError(cause instanceof Error?cause.message:'Clipboard image paste failed.'))
+        return
+      }
+      const text=event.clipboardData.getData('text/plain')
+      if(!text)return
+      event.preventDefault();resetMobileInput();term.paste(text);focusTerminalInput()
+    }
+    mobileLiveInput?.addEventListener('beforeinput',mobileBeforeInput)
+    mobileLiveInput?.addEventListener('input',mobileTextInput)
+    mobileLiveInput?.addEventListener('keydown',mobileKeyDown)
+    mobileLiveInput?.addEventListener('paste',mobilePaste)
+    const selectionChange = term.onSelectionChange(() => {
+      const text=term.getSelection()
+      setSelectionText(text)
+      if(!text)lastAutoCopiedSelectionRef.current=''
+    })
+    const autoCopySelection=()=>{
+      if(!mobileInput.autoCopySelection)return
+      const text=term.getSelection()
+      if(!text||text===lastAutoCopiedSelectionRef.current)return
+      lastAutoCopiedSelectionRef.current=text
+      void copyPreparedText(text).then(copied=>{
+        if(copied)showClipboardStatus('Selection copied')
+        else prepareClipboardFallback(text)
+      })
+    }
     let longPress: number | null = null
-    let touch:{pointerId:number;lastY:number;startY:number}|null=null
+    let lastTouchAt = 0
+    let activePointerId:number|null=null
+    let touch:{
+      pointerId:number
+      lastY:number
+      startY:number
+      selecting:{start:TerminalCell;length:number}|null
+    }|null=null
     const cancelLongPress = () => { if (longPress !== null) window.clearTimeout(longPress); longPress = null }
+    const cellAt = (clientX:number,clientY:number) => {
+      const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
+      if (!screen) return null
+      return terminalCellAtPoint(
+        clientX,
+        clientY,
+        screen.getBoundingClientRect(),
+        term.cols,
+        term.rows,
+        term.buffer.active.viewportY,
+      )
+    }
     const pointerClaim = (event: PointerEvent) => {
       claimInput()
+      activePointerId=event.pointerId
       if (event.pointerType === 'touch') {
-        touch={pointerId:event.pointerId,lastY:event.clientY,startY:event.clientY}
+        focusTerminalInput()
+        lastTouchAt = Date.now()
+        touch={pointerId:event.pointerId,lastY:event.clientY,startY:event.clientY,selecting:null}
         cancelLongPress()
         if(mobileInput.longPress==='context_menu')longPress = window.setTimeout(() => {
+          const cell = cellAt(event.clientX,event.clientY)
+          const line = cell ? term.buffer.active.getLine(cell.row)?.translateToString(true) : ''
+          if (cell && line !== undefined) {
+            const word = terminalWordRange(line,cell.column)
+            term.select(word.start,cell.row,Math.max(1,word.length))
+            if (touch?.pointerId === event.pointerId) {
+              touch.selecting={start:{column:word.start,row:cell.row},length:Math.max(1,word.length)}
+            }
             navigator.vibrate?.(20)
-            setMenu({x:event.clientX,y:event.clientY})
-            longPress = null
-          },550)
+          }
+          longPress = null
+        },450)
       }
+    }
+    const mobileMouseClaim=(event:MouseEvent)=>{
+      if(Date.now()-lastTouchAt>=1500)return
+      event.preventDefault();event.stopPropagation();focusTerminalInput()
     }
     const pointerMove=(event:PointerEvent)=>{
       if(event.pointerType!=='touch'||!touch||event.pointerId!==touch.pointerId)return
+      if(touch.selecting){
+        const cell=cellAt(event.clientX,event.clientY)
+        if(cell){
+          const span=terminalSelectionSpan(touch.selecting.start,touch.selecting.length,cell,term.cols)
+          event.preventDefault()
+          term.select(span.column,span.row,span.length)
+        }
+        return
+      }
       if(Math.abs(event.clientY-touch.startY)>8)cancelLongPress()
       const delta=touchWheelDelta(touch.lastY,event.clientY,mobileInput)
       touch.lastY=event.clientY
@@ -378,10 +579,21 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         deltaY:delta,deltaMode:WheelEvent.DOM_DELTA_PIXEL,
       }))
     }
-    const pointerEnd=()=>{cancelLongPress();touch=null}
+    const pointerEnd=(event:PointerEvent)=>{
+      if(activePointerId!==event.pointerId)return
+      activePointerId=null
+      cancelLongPress();touch=null
+      requestAnimationFrame(autoCopySelection)
+    }
+    const pointerCancel=(event:PointerEvent)=>{
+      if(activePointerId!==event.pointerId)return
+      activePointerId=null;cancelLongPress();touch=null
+    }
     const openMenu = (event: MouseEvent) => {
+      // The terminal body has no context menu: right-click stays out of the
+      // terminal surface entirely. Suppress the browser/desktop menu and the
+      // touch long-press selection gesture, but never open our own menu here.
       event.preventDefault()
-      setMenu({ x: event.clientX, y: event.clientY })
     }
     const pasteEvent = (event: ClipboardEvent) => {
       if (!acceptsClipboardImages(session) || !event.clipboardData) return
@@ -433,9 +645,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       })
     }
     host.current.addEventListener('pointerdown', pointerClaim)
-    host.current.addEventListener('pointerup', pointerEnd)
     host.current.addEventListener('pointermove', pointerMove)
-    host.current.addEventListener('pointercancel', pointerEnd)
+    host.current.addEventListener('mousedown',mobileMouseClaim,true)
+    window.addEventListener('pointerup', pointerEnd)
+    window.addEventListener('pointercancel', pointerCancel)
     host.current.addEventListener('focusin', claimInput)
     host.current.addEventListener('contextmenu', openMenu)
     host.current.addEventListener('paste', pasteEvent, true)
@@ -465,20 +678,56 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     window.addEventListener('focus',onWindowFocus)
     window.addEventListener('online',onOnline)
     window.visualViewport?.addEventListener('resize',scheduleFit)
+    loadLatestReply()
     connect(false)
-    return () => { disposed=true;if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();input.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('online',onOnline);window.removeEventListener('mux:theme',onTheme);host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointerup',pointerEnd);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('pointercancel',pointerEnd);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null }
+    return () => { disposed=true;if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('online',onOnline);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, mobileInput])
 
-  const copy = () => {
+  const copy = async () => {
     const term = termRef.current
     if (!term?.hasSelection()) { reportError('Copy requires a terminal selection.'); setMenu(null); return }
-    void navigator.clipboard.writeText(term.getSelection()).catch(() => runCommand('clipboard.help'))
-    term?.clearSelection(); setMenu(null)
-  }
-  const paste = () => {
-    const term = termRef.current
-    if (term) void pasteBrowserClipboard(term, session).catch(() => runCommand('clipboard.help'))
+    const text = term.getSelection()
+    if (await copyPreparedText(text)) {
+      term.clearSelection()
+      setPreparedClipboard('')
+      setManualClipboard(false)
+      showClipboardStatus('Copied')
+    } else {
+      prepareClipboardFallback(text)
+    }
     setMenu(null)
+  }
+  const paste = async () => {
+    const term = termRef.current
+    if (term) {
+      try {
+        await pasteBrowserClipboard(term, session)
+        focusTerminalInputRef.current()
+        showClipboardStatus('Pasted')
+      } catch {
+        setManualPaste(true)
+        requestAnimationFrame(()=>manualPasteRef.current?.focus())
+      }
+    }
+    setMenu(null)
+  }
+  const copyLastReply = async () => {
+    if(session.backend==='shell')return
+    let text=lastReply
+    if(!text){
+      showClipboardStatus('Loading reply…')
+      try {
+        const result=await api<{text:string}>('GET',`/api/sessions/${session.id}/last-reply`)
+        text=result.text
+        setLastReply(text)
+      } catch(cause) {
+        reportError(cause instanceof Error?cause.message:'No assistant reply is available yet.')
+        return
+      }
+    }
+    if(await copyPreparedText(text)){
+      setPreparedClipboard('');setManualClipboard(false);showClipboardStatus('Reply copied')
+    }else prepareClipboardFallback(text)
   }
   const find = () => {
     setFindOpen(true)
@@ -496,19 +745,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const closeFind = () => {
     setFindOpen(false)
     setFindResult('')
-    termRef.current?.focus()
+    focusTerminalInputRef.current()
   }
 
   useEffect(() => {
     const onAction = (event: Event) => {
       const detail = (event as CustomEvent<{sessionId:string|null;action:string;text?:string;targetKey?:string}>).detail
       if (detail.sessionId !== session.id) return
-      if (detail.action === 'copy') copy()
-      else if (detail.action === 'paste') paste()
+      if (detail.action === 'copy') void copy()
+      else if (detail.action === 'paste') void paste()
       else if (detail.action === 'selectAll') { termRef.current?.selectAll(); setMenu(null) }
       else if (detail.action === 'clear') { termRef.current?.clear(); setMenu(null) }
       else if (detail.action === 'find') find()
-      else if (detail.action === 'insertText' && detail.text) { termRef.current?.paste(detail.text); termRef.current?.focus() }
+      else if (detail.action === 'insertText' && detail.text) { termRef.current?.paste(detail.text); focusTerminalInputRef.current() }
       else if (detail.action === 'captureSelection') {
         const term = termRef.current
         if (!term?.hasSelection()) reportError('Select terminal text before capturing it into notes.')
@@ -522,13 +771,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const retryPreparedCopy=async()=>{
     if(!preparedClipboard)return
     if(await copyPreparedText(preparedClipboard,manualClipboardRef.current)){
-      setPreparedClipboard('');setManualClipboard(false);return
+      setPreparedClipboard('');setManualClipboard(false);showClipboardStatus('Copied');return
     }
     setManualClipboard(true)
     requestAnimationFrame(()=>{manualClipboardRef.current?.focus();manualClipboardRef.current?.select()})
   }
 
-  return <div class="terminal-surface"><div class="terminal-host" ref={host} />{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  return <div class="terminal-surface"><div class="terminal-host" ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class="terminal-action-rail" role="toolbar" aria-label="Terminal clipboard actions"><button disabled={session.backend==='shell'} title={session.backend==='shell'?'Copy reply is available in Claude and Codex sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}>Copy reply</button><button onClick={()=>void paste()}>Paste</button><span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span></div>{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }
@@ -538,15 +787,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     <button class={findCase ? 'active' : ''} title="Match case" aria-pressed={findCase} onClick={() => { setFindCase(value => !value); setFindResult('') }}>Aa</button>
     <span class={findResult === 'no match' ? 'missing' : ''}>{findResult}</span>
     <button title="Close find" onClick={closeFind}>×</button>
-  </div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status">{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Terminal prepared copied text.</span><button onClick={()=>void retryPreparedCopy()}>Copy now</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{menu && <div class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
+  </div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status">{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
+    const data=event.clipboardData
+    const image=data&&clipboardImage(Array.from(data.items))
+    if(image){event.preventDefault();void insertTerminalImage(termRef.current!,session,image).then(()=>{setManualPaste(false);showClipboardStatus('Pasted')}).catch(cause=>reportError(cause instanceof Error?cause.message:'Clipboard image paste failed.'));return}
+    const text=data?.getData('text/plain')||''
+    if(text){event.preventDefault();termRef.current?.paste(text);focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
+  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;termRef.current?.paste(text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{menu && <div class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
     <button role="menuitem" disabled={!termRef.current?.hasSelection()} onClick={() => runCommand('terminal.copy')}>Copy</button>
     <button role="menuitem" onClick={() => runCommand('terminal.paste')}>Paste</button>
     <button role="menuitem" onClick={() => runCommand('terminal.selectAll')}>Select all</button>
     <button role="menuitem" onClick={() => runCommand('terminal.find')}>Find…</button>
     <button role="menuitem" onClick={() => runCommand('terminal.clear')}>Clear display</button>
-    {(session.backend==='claude'||session.backend==='codex')&&<button role="menuitem" onClick={() => runCommand('session.notes')}>Agent-run note…</button>}
-    {(session.backend==='claude'||session.backend==='codex')&&<button role="menuitem" onClick={() => runCommand('session.notesSplit')}>Agent-run note in split</button>}
-    <button role="menuitem" onClick={() => runCommand('session.projectNote')}>{session.backend==='shell'?'Current':'Run'} project note…</button>
+    <button role="menuitem" onClick={() => runCommand('session.note')}>Session note…</button>
     <button role="menuitem" onClick={() => runCommand('processes.open')}>Processes and previews…</button>
     <div class="context-rule" />
     <button role="menuitem" onClick={() => runCommand('pane.splitHorizontal')}>Split right</button>

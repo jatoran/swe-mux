@@ -55,15 +55,18 @@ test('hidden v5 resource workspace migrates as closed views',()=>{
   assert.deepEqual(leaves(migrated,'note'),[])
 })
 
-test('terminals, previews, notes, Files, and file editors share one pane',()=>{
-  const note=noteResourceId('note','project-a'),files=noteResourceId('files','project-a'),file=noteResourceId('file','src/app.ts')
+test('terminals, previews, notes, Files, file editors, and History share one pane',()=>{
+  const note=noteResourceId('note','project-a'),sessionNote=noteResourceId('session-note','terminal-a'),files=noteResourceId('files','project-a'),file=noteResourceId('file','src/app.ts')
   let layout=openTab(emptyLayout(),null,terminalLeaf('term-a'))
   layout=openTab(layout,'term-a',resourceLeaf('preview','preview-a'))
   layout=openTab(layout,'preview-a',resourceLeaf('note',note))
-  layout=openTab(layout,note,resourceLeaf('note',files))
+  layout=openTab(layout,note,resourceLeaf('note',sessionNote))
+  layout=openTab(layout,sessionNote,resourceLeaf('note',files))
   layout=openTab(layout,files,resourceLeaf('note',file))
+  layout=openTab(layout,file,resourceLeaf('history','history:archive'))
   assert.equal(paneStacks(layout).length,1)
-  assert.deepEqual(leaves(layout).map(leaf=>leaf.kind),['terminal','preview','note','note','note'])
+  assert.deepEqual(leaves(layout).map(leaf=>leaf.kind),['terminal','preview','note','note','note','note','history'])
+  assert.deepEqual(parseNoteResourceId(sessionNote),{kind:'session-note',id:'terminal-a'})
   assert.deepEqual(parseNoteResourceId(file),{kind:'file',id:'src/app.ts'})
 })
 

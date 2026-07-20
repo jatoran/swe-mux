@@ -38,11 +38,12 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
 - Shell profiles, Claude/Codex adapters, in-place promotion, normalized lifecycle events,
   transcript reconciliation, agent history/resume, and current context usage in the
   session sidebar.
-- Durable Projects/Groups/layouts, Project note, lazy Project file tree, global/project
-  ignores, bounded leased file watches, revision-checked editors, Git status/worktrees,
-  process inspector, listeners, and previews.
+- Durable Project registry/Groups/sidebar visibility/layouts, Project and terminal-owned session
+  notes, lazy Project file tree, global/project ignores, bounded leased file watches,
+  revision-checked editors, Git status/worktrees, process inspector, listeners, and previews.
 - Settings draft/save/discard flow, terminal/profile configuration, themes, commands,
-  panes/tab stacks, responsive/mobile controls, and browser-native Web Speech STT.
+  per-pane mixed-view tab stacks, non-native pointer drag/drop, projection-only mobile controls,
+  and browser-native Web Speech STT.
 - Optional cached `ccusage` analytics plus Claude/Codex saved-account quota polling and
   system-wide provider-account selection.
 - Universal rules, normalized events, read-only OpenRouter observers, annotations,
@@ -164,6 +165,8 @@ attribution.
   suppress account changes, stale/out-of-order samples, and authentication transitions.
 - [x] Persist reset evidence: before/after values, expected reset, observed time,
   classification, confidence, and suppression reason. Maintain a browsable reset log.
+- [x] Let users review a suspected reset as discarded detection evidence, or as manual Codex
+  usage where that explanation is provider-valid; reviewed events no longer drive alert state.
 - [x] Add a purple in-app reset indicator and optional sound only for confirmed unexpected
   reset events; support per-device mute and deduplication.
 
@@ -216,6 +219,9 @@ attribution.
   between panes or create pane-edge splits, with exact insertion and split previews.
 - [x] Make Project rows and tabs directly draggable without space-consuming handles while
   keeping session-row layout grouping unambiguous.
+- [x] Replace native HTML drag loops with a pointer-capture gesture that provides a ghost,
+  forgiving nearest-slot insertion, pane-edge/tab-bar indicators, and complete Escape/cancel/
+  lost-capture cleanup across responsive transitions.
 
 ### Unified workspace panes
 
@@ -227,9 +233,14 @@ attribution.
 - [x] Migrate layout versions 1–5 on read. Convert a visible legacy resource workspace into
   an adjacent pane and treat a hidden workspace as closed; tolerate obsolete config fields
   without exposing them as current settings.
-- [x] Move desktop app identity, daemon status, and pane-grouped workspace tabs into one
-  persistent top rail. Add device-local sidebar drag sizing/collapse and bottom-aligned,
-  separate Claude/Codex account-status rows.
+- [x] Move desktop app identity and daemon status into a persistent rail above the sidebar while
+  keeping workspace tabs attached to their owning panes. Add device-local sidebar drag
+  sizing/collapse and bottom-aligned, separate Claude/Codex account-status rows.
+- [x] Keep one independent tab strip per desktop pane and project every pane into one mobile
+  tab rail without mutating persisted desktop geometry. Preserve mobile tab creation, close,
+  terminal rendering, and non-secure-context browser ID fallbacks.
+- [x] Add a Projects manager independent of active sidebar visibility so configured Projects
+  can be hidden without losing their sessions, layout, notes, settings, files, or history.
 
 ### Typed per-Project options
 
@@ -273,12 +284,29 @@ attribution.
   opt-in decision gate if Web Speech reliability becomes product-limiting. Do not add an
   STT service merely for feature symmetry.
 
+### Searchable session archive
+
+- [x] Make History an ordinary split/movable workspace tab with mobile unified-tab
+  projection, role-aware match excerpts, transcript match navigation, and composed
+  Project/provider/state/origin/time filters.
+- [x] Add a rebuildable versioned SQLite FTS index over native user prompts and agent replies;
+  preserve vendor transcripts as authoritative read-only sources.
+- [x] Add cancellable Project-scoped complete-history scans with most-specific-root
+  attribution, progress/results, parser/source watermarks, and serialized bounded writes.
+- [x] Show chronological provider-native start/final-message times in result rows and timestamps
+  on transcript messages. Handle out-of-order Claude records, current/legacy Codex record
+  deduplication, and explicitly unavailable native timestamps.
+- [x] Restore lazily initialized terminal-owned session notes for shell and agent sessions,
+  expose them from terminal context menus and History, and persist note identity across exit.
+
 ### Phase 3 exit criteria
 
 - [x] Ordering, Project options, prompt templates, and notification preferences persist and
   work with keyboard, pointer, responsive, and multi-client flows.
 - [x] Prompt templates never submit or execute implicitly.
 - [x] Root completion sounds exclude subagent-only stops and remain optional per device.
+- [x] Project registry visibility, session-note recovery, searchable-history timestamps, and
+  responsive workspace projection have regression coverage and current design/interface docs.
 
 ## Phase 4 — Persistent manual prompt queue
 

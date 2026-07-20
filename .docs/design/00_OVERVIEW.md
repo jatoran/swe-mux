@@ -5,7 +5,9 @@
 - Windows-native browser terminal multiplexer for long-lived shell, Claude Code, and Codex
   sessions.
 - The daemon owns every ConPTY; browser reloads and disconnects do not stop sessions.
-- Explicit Projects bind sessions, layouts, notes, and file browsing to canonical folders.
+- Explicit Projects bind sessions, layouts, notes, history scans, and file browsing to canonical
+  folders. The Project registry is independent of whether a Project is currently shown in the
+  navigation sidebar.
 
 ## Surfaces
 
@@ -32,7 +34,9 @@
 - Fleet attention and intelligence: `features/fleet-intelligence.md`
 - Git awareness and worktrees: `features/git.md`
 - Sessions: `features/sessions.md`
-- Projects, Groups, notes, and files: `features/projects-and-notes.md`
+- Project registry and Groups: `features/projects.md`
+- Project/session notes, files, ignores, and watches: `features/project-resources.md`
+- Mixed-view panes, tabs, drag/drop, and mobile projection: `features/workspace-layout.md`
 - History: `features/history.md`
 - Legacy hook compatibility: `features/meta-hooks.md`
 - Durable operational evidence: `features/operational-telemetry.md`
@@ -46,21 +50,31 @@
 - Usage analytics: `features/usage.md`
 - Read aloud and dictation: `features/voice.md`
 
+### Technical
+
+- Technical index: `../technical/00_INDEX.md`
+- Backend package responsibilities: `../technical/backend/packages.md`
+- Shared SQLite operation rules: `../technical/backend/sqlite.md`
+- Frontend package responsibilities: `../technical/frontend/packages.md`
+- Workspace state and persistence: `../technical/frontend/workspace-state.md`
+
 ## Global invariants
 
 - A session belongs to exactly one explicit Project for its entire lifetime.
 - New sessions start at their Project's canonical root. Runtime cwd is display/Git
   telemetry and never changes ownership.
 - A Group organizes Project rows only.
-- Each Project has one project note and one folder browser; opened files are project-owned
-  resource tabs.
+- Each Project has one project note and one folder browser. Any terminal may lazily create a
+  distinct session note; opened notes and files are project-owned resource tabs.
 - Worktrees remain backend Git capability, not a sidebar, tab, or session-creation concept.
 - Native transcripts stay in vendor locations and are never deleted by swe-mux.
 - Live provider system auth is authoritative. Startup never restores an older saved account;
   explicit switching replaces auth only while config, skills, transcripts, and running processes
   remain shared and provider-native.
-- Sessions are processes; panes and resource tabs are viewports. Closing a viewport never
-  implies process or file deletion.
+- Sessions are processes; pane stacks and their tabs are viewports. Desktop split geometry is
+  durable Project state, while the one-pane mobile workspace is only a projection. Closing a
+  resource viewport never implies process or file deletion; closing a terminal requires an
+  explicit inline kill confirmation.
 - Automation observers cannot type, approve, spawn, execute scripts, or mutate projects.
 - Delivery readiness is read-only and fail-closed: `unknown` never authorizes PTY input, and
   child-agent completion never implies root-agent readiness.

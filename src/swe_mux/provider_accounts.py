@@ -99,6 +99,32 @@ def _reset_timestamp(value: object) -> float | None:
             return None
 
 
+def _scoped_weekly_window(payload: dict[str, Any], display_name: str) -> dict[str, Any] | None:
+    """Extract a per-model weekly cap from the ``limits`` array.
+
+    Claude exposes model-scoped weekly quotas (e.g. Fable) as ``weekly_scoped``
+    entries with ``scope.model.display_name`` rather than a dedicated top-level
+    field, so they are matched by display name here.
+    """
+    for entry in payload.get("limits") or []:
+        item = _record(entry)
+        if item.get("group") != "weekly":
+            continue
+        model = _record(_record(item.get("scope")).get("model"))
+        name = _string(model.get("display_name"))
+        if name is None or name.lower() != display_name.lower():
+            continue
+        percent = _number(item.get("percent"))
+        if percent is None:
+            return None
+        return {
+            "used_percent": min(100.0, max(0.0, percent)),
+            "window_minutes": 10080,
+            "resets_at": _reset_timestamp(item.get("resets_at")),
+        }
+    return None
+
+
 def _window(raw: object, minutes: int, *, backend: bool = False) -> dict[str, Any] | None:
     item = _record(raw)
     percent = _number(item.get("used_percent" if backend else "utilization"))
@@ -870,6 +896,7 @@ class ProviderAccountManager:
         return {
             "session": _window(payload.get("five_hour"), 300),
             "weekly": _window(payload.get("seven_day"), 10080),
+            "fable": _scoped_weekly_window(payload, "Fable"),
             "source": "oauth",
         }, updated
 

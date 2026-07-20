@@ -140,6 +140,7 @@ class Config:
     mobile_scroll_direction: str = "natural"
     mobile_scroll_sensitivity: float = 1.0
     mobile_long_press: str = "context_menu"
+    terminal_auto_copy_selection: bool = True
     notes_default_open: str = "dock"
     ccusage_enabled: bool = False
     ccusage_refresh_minutes: int = 0

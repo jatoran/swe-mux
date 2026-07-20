@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 import uuid
 from contextlib import suppress
@@ -161,9 +162,7 @@ async def test_unexpected_reset_requires_two_fresh_samples_and_auth_transitions_
     reset_summary = await reopened.reset_summary()
     assert reset_summary["count"] >= 1
     durable = await reopened.snapshot(account_id="account-a")
-    durable_weekly = next(
-        item for item in durable["quota"]["resets"] if item["id"] == weekly["id"]
-    )
+    durable_weekly = next(item for item in durable["quota"]["resets"] if item["id"] == weekly["id"])
     assert durable_weekly["confirmed"] == 1
     reopened.close()
 
@@ -189,6 +188,77 @@ async def test_scheduled_reset_uses_expected_time_tolerance(phase2_path: Path) -
     reset = next(item for item in result["reset_events"] if item["window"] == "session")
     assert reset["classification"] == "scheduled"
     assert reset["confirmed"] == 1
+    store.close()
+
+
+async def test_quota_reset_user_review_is_durable_and_removes_alert(
+    phase2_path: Path,
+) -> None:
+    store = OperationalTelemetryStore(phase2_path)
+    now = 1_800_000_000.0
+    for reset_id, provider in (("codex-reset", "codex"), ("claude-reset", "claude")):
+        store._db.execute(
+            "INSERT INTO quota_reset_events(id,provider,account_id,window,before_sample_id,"
+            "after_sample_id,before_value,after_value,observed_at,classification,confidence,"
+            "confirmed,suppression_reason,created_at,confirmed_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                reset_id,
+                provider,
+                f"{provider}-account",
+                "weekly",
+                1,
+                2,
+                80,
+                2,
+                now,
+                "unexpected",
+                "high",
+                1,
+                None,
+                now,
+                now,
+            ),
+        )
+    store._db.commit()
+
+    reviewed = await store.review_quota_reset("codex-reset", "manual_usage")
+    assert reviewed["review_status"] == "manual_usage"
+    assert reviewed["reviewed_at"] is not None
+    with pytest.raises(ValueError, match="only valid for Codex"):
+        await store.review_quota_reset("claude-reset", "manual_usage")
+    discarded = await store.review_quota_reset("claude-reset", "discarded")
+    assert discarded["review_status"] == "discarded"
+    assert (await store.reset_summary()) == {"count": 0, "latest": None}
+    store.close()
+
+    reopened = OperationalTelemetryStore(phase2_path)
+    snapshot = await reopened.snapshot()
+    statuses = {item["id"]: item["review_status"] for item in snapshot["quota"]["resets"]}
+    assert statuses == {"codex-reset": "manual_usage", "claude-reset": "discarded"}
+    reopened.close()
+
+
+def test_legacy_quota_reset_schema_adds_review_columns(phase2_path: Path) -> None:
+    connection = sqlite3.connect(phase2_path)
+    connection.execute(
+        "CREATE TABLE quota_reset_events ("
+        "id TEXT PRIMARY KEY,provider TEXT NOT NULL,account_id TEXT NOT NULL,"
+        "window TEXT NOT NULL,before_sample_id INTEGER NOT NULL,"
+        "after_sample_id INTEGER NOT NULL,confirmation_sample_id INTEGER,"
+        "before_value REAL NOT NULL,after_value REAL NOT NULL,expected_reset_at REAL,"
+        "observed_at REAL NOT NULL,classification TEXT NOT NULL,confidence TEXT NOT NULL,"
+        "confirmed INTEGER NOT NULL DEFAULT 0,suppression_reason TEXT,"
+        "created_at REAL NOT NULL,confirmed_at REAL)"
+    )
+    connection.execute("PRAGMA user_version=1")
+    connection.commit()
+    connection.close()
+
+    store = OperationalTelemetryStore(phase2_path)
+    columns = {row["name"] for row in store._db.execute("PRAGMA table_info(quota_reset_events)")}
+    assert {"review_status", "reviewed_at"} <= columns
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 2
     store.close()
 
 
@@ -605,6 +675,7 @@ def test_operational_telemetry_route_is_registered(phase2_path: Path) -> None:
     app = create_app(Config(data_dir=phase2_path.with_suffix(".data")))
     routes = {(route.method, route.resource.canonical) for route in app.router.routes()}
     assert ("GET", "/api/telemetry/operational") in routes
+    assert ("PATCH", "/api/telemetry/quota-resets/{reset_id}") in routes
 
 
 def test_native_transcript_scanners_count_only_explicit_skills_and_compactions(

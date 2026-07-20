@@ -1,0 +1,70 @@
+# Projects and Groups
+
+## What it is
+
+Projects are the durable catalog of canonical folders swe-mux can own. The Projects manager
+owns that catalog; the sidebar is a filtered active-navigation view of it. Optional Groups and
+persisted ordering organize Project rows without acquiring behavioral ownership.
+
+## Ownership model
+
+- A Project has a stable ID, user-controlled name, one canonical existing folder, optional
+  Group, persisted position, and `sidebar_visible` state.
+- A Project is the only container for sessions, layout, notes, file resources, Project options,
+  and Project-scoped history work. A session's `project_id` is immutable.
+- Every spawn begins at the canonical Project root. Later `cd` commands update runtime/Git
+  telemetry only and never retarget ownership.
+- A Group owns a name, order, and Project membership only. It never owns a folder, layout,
+  session, note, setting, or behavior.
+- Git scopes, repository IDs, and repository groups are derived metadata. They cannot replace
+  or retarget the explicit Project.
+
+## Project registry and sidebar
+
+- The Projects manager lists every configured Project and is the only catalog-management UI.
+  It can add, rename, group, open, show/hide, configure, and delete registrations.
+- Hiding a Project removes it from desktop/mobile navigation and numeric Project shortcuts. It
+  preserves the registration, `.swe-mux/` content, layout, history, settings, and live sessions.
+- The sidebar renders only visible Projects, ordered by Group and normalized Project position.
+  Whole-row pointer dragging and Move up/down actions use the same persisted reorder contract.
+- Creating a Project validates the root and initializes `.swe-mux/config.toml` plus
+  `.swe-mux/notes/project.md`. The registration is not inferred from Git or current cwd.
+- A Project cannot be deleted while live or historical sessions reference it. Deleting a Group
+  ungroups its Projects and changes nothing else.
+
+## Configuration boundary
+
+Project-owned `.swe-mux/config.toml` is versioned and permits only typed portable options:
+`default_shell_profile`, `preferred_backend`, `prompt_library_scope`,
+`notification_sounds_enabled`, and additive `ignore_patterns`. Effective precedence is explicit
+request where supported, database Project override, portable Project value, then global default.
+
+Repository-owned Project configuration cannot authorize commands, executables, hooks, network
+bindings, automatic actions, credentials, or secrets.
+
+## API shape
+
+```text
+GET|POST /api/projects
+PATCH|DELETE /api/projects/{project_id}
+PUT /api/projects/order
+GET|POST /api/project-groups
+PATCH|DELETE /api/project-groups/{group_id}
+```
+
+Project layout writes are revision checked. Whole-order reorder writes are validated as a
+complete permutation of every registered Project ID and normalized transactionally.
+
+## Key files
+
+- `src/swe_mux/projects.py`
+- `src/swe_mux/history.py`
+- `src/swe_mux/project_files.py`
+- `frontend/src/ProjectsManager.tsx`
+- `frontend/src/App.tsx`
+
+## Relates to
+
+- `project-resources.md`: Project-owned notes, files, ignores, and watches.
+- `workspace-layout.md`: Project-owned pane/tab placement.
+- `sessions.md`: immutable Project ownership and spawning.

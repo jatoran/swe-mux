@@ -23,6 +23,7 @@ type Config = {
   mobile_vertical_drag:'smart'|'terminal'|'application'|'disabled'
   mobile_scroll_direction:'natural'|'wheel';mobile_scroll_sensitivity:number
   mobile_long_press:'context_menu'|'disabled'
+  terminal_auto_copy_selection:boolean
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
   ccusage_claude_command:string[]; ccusage_codex_command:string[]
   custom_theme:CustomTheme
@@ -451,7 +452,8 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <label>Vertical drag<select value={draft.mobile_vertical_drag} onChange={e=>change('mobile_vertical_drag',e.currentTarget.value as Config['mobile_vertical_drag'])}><option value="smart">Smart: app wheel or scrollback</option><option value="terminal">Terminal scrollback only</option><option value="application">Application wheel</option><option value="disabled">Disabled</option></select></label>
           <label>Scroll direction<select value={draft.mobile_scroll_direction} onChange={e=>change('mobile_scroll_direction',e.currentTarget.value as Config['mobile_scroll_direction'])}><option value="natural">Natural touch</option><option value="wheel">Mouse wheel</option></select></label>
           <label>Scroll sensitivity<input type="number" min="0.25" max="4" step="0.25" value={draft.mobile_scroll_sensitivity} onInput={e=>change('mobile_scroll_sensitivity',Number(e.currentTarget.value))} /></label>
-          <label>Long press<select value={draft.mobile_long_press} onChange={e=>change('mobile_long_press',e.currentTarget.value as Config['mobile_long_press'])}><option value="context_menu">Terminal context menu</option><option value="disabled">Disabled</option></select></label>
+          <label>Long press<select value={draft.mobile_long_press} onChange={e=>change('mobile_long_press',e.currentTarget.value as Config['mobile_long_press'])}><option value="context_menu">Select terminal text</option><option value="disabled">Disabled</option></select></label>
+          <label class="check"><span>Copy terminal selection automatically</span><input type="checkbox" checked={draft.terminal_auto_copy_selection} onChange={e=>change('terminal_auto_copy_selection',e.currentTarget.checked)}/></label>
           <div class="keybinding-heading"><div><strong>KEYBOARD::SHORTCUTS</strong><p>Click a command, then press the new shortcut. Changes apply when Settings is saved.</p></div><button onClick={()=>{setBindings({...bindingDefaults});setCapturingCommand(null);setBindingError('')}}>Restore shortcut defaults</button></div>
           {capturingCommand&&<div class="keybinding-capture" role="status"><span>PRESS KEYS FOR</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label||capturingCommand}</strong><button onClick={()=>{setCapturingCommand(null);setBindingError('')}}>Cancel</button></div>}
           {bindingError&&<p class="keybinding-error" role="alert">{bindingError}</p>}

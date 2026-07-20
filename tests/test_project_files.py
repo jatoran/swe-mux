@@ -8,7 +8,9 @@ from swe_mux.git_projects import ProjectIdentity
 from swe_mux.project_files import (
     effective_project_ignores,
     ignored_project_path,
+    initialize_note,
     list_project_directory,
+    note_exists,
     parse_project_config,
     read_note,
     read_project_config,
@@ -65,6 +67,26 @@ async def test_project_note_round_trips_and_detects_external_edits(tmp_path: Pat
     path.write_text(path.read_text(encoding="utf-8") + "external\n", encoding="utf-8")
     with pytest.raises(ValueError, match="changed externally"):
         await write_note(tmp_path, "projects", "project-id", "overwrite", saved["revision"])
+
+
+async def test_session_note_is_lazily_initialized_and_never_overwritten(tmp_path: Path) -> None:
+    note = await initialize_note(tmp_path, "sessions", "terminal-123")
+    path = Path(note["path"])
+    assert path == tmp_path / ".swe-mux" / "notes" / "sessions" / "terminal-123.md"
+    assert note["exists"]
+    assert note["markdown"] == ""
+    assert note_exists(tmp_path, "sessions", "terminal-123")
+
+    saved = await write_note(
+        tmp_path, "sessions", "terminal-123", "# Durable session context\n", note["revision"]
+    )
+    reopened = await initialize_note(tmp_path, "sessions", "terminal-123")
+    assert reopened["markdown"] == saved["markdown"]
+    assert reopened["revision"] == saved["revision"]
+
+    unsafe = await initialize_note(tmp_path, "sessions", "external:provider/run")
+    assert Path(unsafe["path"]).parent == path.parent
+    assert Path(unsafe["path"]).name.startswith("id-")
 
 
 @pytest.mark.parametrize(

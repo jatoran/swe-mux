@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
 from .git_projects import ProjectIdentity
 from .models import MuxEvent, ProjectGroupRecord, ProjectRecord, SessionRecord
 from .sqlite_store import database_operation_lock, run_sqlite_operation
+from .transcript_view import (
+    TRANSCRIPT_PARSER_VERSION,
+    parse_transcript,
+    searchable_transcript_messages,
+    transcript_time_summary,
+)
 
 T = TypeVar("T")
 
@@ -29,7 +37,7 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 CREATE TABLE IF NOT EXISTS history (
   id TEXT PRIMARY KEY, native_id TEXT NOT NULL, backend TEXT NOT NULL,
-  name TEXT NOT NULL, cwd TEXT NOT NULL, project_id TEXT,
+  name TEXT NOT NULL, cwd TEXT NOT NULL, project_id TEXT, note_id TEXT,
   spawned_at REAL NOT NULL, exited_at REAL, exit_reason TEXT,
   tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
   transcript_path TEXT, external INTEGER NOT NULL DEFAULT 0,
@@ -42,8 +50,37 @@ CREATE TABLE IF NOT EXISTS history (
   compaction_capability TEXT, compaction_confidence TEXT,
   project_scope_id TEXT, repo_group_id TEXT,
   auto_named INTEGER NOT NULL DEFAULT 1,
-  transcript_mtime_ns INTEGER, transcript_size INTEGER
+  transcript_mtime_ns INTEGER, transcript_size INTEGER,
+  native_started_at REAL, last_message_at REAL, last_message_role TEXT,
+  time_summary_mtime_ns INTEGER, time_summary_size INTEGER
 );
+CREATE TABLE IF NOT EXISTS history_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  history_id TEXT NOT NULL, ordinal INTEGER NOT NULL, role TEXT NOT NULL,
+  ts TEXT, text TEXT NOT NULL, source_mtime_ns INTEGER NOT NULL,
+  source_size INTEGER NOT NULL, parser_version INTEGER NOT NULL,
+  UNIQUE(history_id, ordinal)
+);
+CREATE TABLE IF NOT EXISTS history_transcript_index (
+  history_id TEXT PRIMARY KEY, source_mtime_ns INTEGER NOT NULL,
+  source_size INTEGER NOT NULL, parser_version INTEGER NOT NULL,
+  message_count INTEGER NOT NULL, indexed_at REAL NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS history_messages_fts USING fts5(
+  text, content='history_messages', content_rowid='id', tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS history_messages_ai AFTER INSERT ON history_messages BEGIN
+  INSERT INTO history_messages_fts(rowid,text) VALUES(new.id,new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS history_messages_ad AFTER DELETE ON history_messages BEGIN
+  INSERT INTO history_messages_fts(history_messages_fts,rowid,text)
+  VALUES('delete',old.id,old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS history_messages_au AFTER UPDATE ON history_messages BEGIN
+  INSERT INTO history_messages_fts(history_messages_fts,rowid,text)
+  VALUES('delete',old.id,old.text);
+  INSERT INTO history_messages_fts(rowid,text) VALUES(new.id,new.text);
+END;
 CREATE TABLE IF NOT EXISTS events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, session_id TEXT,
   source TEXT NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL
@@ -71,7 +108,33 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, ts);
 CREATE INDEX IF NOT EXISTS idx_history_spawned ON history(spawned_at DESC);
+CREATE INDEX IF NOT EXISTS idx_history_messages_history ON history_messages(history_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_history_messages_source
+  ON history_messages(history_id, source_mtime_ns, source_size, parser_version);
 """
+
+
+def _fts_query(value: str) -> str:
+    """Create a literal prefix-token FTS query; never expose raw FTS syntax."""
+    tokens = re.findall(r"\w+", value, flags=re.UNICODE)
+    return " AND ".join(f'"{token.replace(chr(34), chr(34) * 2)}"*' for token in tokens)
+
+
+def _message_timestamp(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        stamp = float(value)
+        return stamp / 1000 if stamp > 10_000_000_000 else stamp
+    if isinstance(value, str) and value.strip():
+        text = value.strip()
+        try:
+            stamp = float(text)
+        except ValueError:
+            try:
+                return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                return None
+        return stamp / 1000 if stamp > 10_000_000_000 else stamp
+    return None
 
 
 def _tune_connection(db: sqlite3.Connection) -> None:
@@ -141,6 +204,7 @@ class HistoryIndex:
                 "ALTER TABLE history ADD COLUMN agent_visible INTEGER NOT NULL DEFAULT 0"
             ),
             "project_id": "ALTER TABLE history ADD COLUMN project_id TEXT",
+            "note_id": "ALTER TABLE history ADD COLUMN note_id TEXT",
             "repository_id": "ALTER TABLE history ADD COLUMN repository_id TEXT",
             "project_label": "ALTER TABLE history ADD COLUMN project_label TEXT",
             "project_root": "ALTER TABLE history ADD COLUMN project_root TEXT",
@@ -161,10 +225,46 @@ class HistoryIndex:
             "auto_named": ("ALTER TABLE history ADD COLUMN auto_named INTEGER NOT NULL DEFAULT 1"),
             "transcript_mtime_ns": "ALTER TABLE history ADD COLUMN transcript_mtime_ns INTEGER",
             "transcript_size": "ALTER TABLE history ADD COLUMN transcript_size INTEGER",
+            "last_message_at": "ALTER TABLE history ADD COLUMN last_message_at REAL",
+            "last_message_role": "ALTER TABLE history ADD COLUMN last_message_role TEXT",
+            "native_started_at": "ALTER TABLE history ADD COLUMN native_started_at REAL",
+            "time_summary_mtime_ns": (
+                "ALTER TABLE history ADD COLUMN time_summary_mtime_ns INTEGER"
+            ),
+            "time_summary_size": "ALTER TABLE history ADD COLUMN time_summary_size INTEGER",
         }
+        message_summary_added = (
+            "last_message_at" not in columns
+            or "last_message_role" not in columns
+            or "native_started_at" not in columns
+        )
         for column, statement in migrations.items():
             if column not in columns:
                 self._db.execute(statement)
+        self._db.execute("UPDATE history SET note_id=id WHERE note_id IS NULL")
+        if message_summary_added:
+            rows = self._db.execute(
+                "SELECT h.id,first.ts AS first_ts,last.ts AS last_ts,last.role FROM history h "
+                "LEFT JOIN history_messages first ON first.id=(SELECT earliest.id "
+                "FROM history_messages earliest WHERE earliest.history_id=h.id "
+                "ORDER BY earliest.ordinal LIMIT 1) "
+                "LEFT JOIN history_messages last ON last.id=(SELECT latest.id "
+                "FROM history_messages latest WHERE latest.history_id=h.id "
+                "ORDER BY latest.ordinal DESC LIMIT 1)"
+            ).fetchall()
+            self._db.executemany(
+                "UPDATE history SET native_started_at=?,last_message_at=?,last_message_role=? "
+                "WHERE id=?",
+                [
+                    (
+                        _message_timestamp(row["first_ts"]),
+                        _message_timestamp(row["last_ts"]),
+                        row["role"],
+                        row["id"],
+                    )
+                    for row in rows
+                ],
+            )
         self._db.execute("UPDATE history SET agent_visible=1 WHERE backend IN ('claude','codex')")
         self._db.execute(
             "DELETE FROM history WHERE backend='shell' AND agent_visible=0 AND "
@@ -330,12 +430,12 @@ class HistoryIndex:
         def op() -> None:
             self._db.execute(
                 "INSERT OR REPLACE INTO history"
-                "(id,native_id,backend,name,cwd,project_id,spawned_at,"
+                "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,"
                 "tokens_in,tokens_out,transcript_path,executable,argv_json,"
                 "pinned_attention,shell_profile_id,agent_visible,repository_id,project_label,"
                 "project_root,context_window,final_context_pct,peak_context_pct,model,"
                 "measurement_source,project_scope_id,repo_group_id,auto_named) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     session.id,
                     session.native_session_id,
@@ -343,6 +443,7 @@ class HistoryIndex:
                     session.name,
                     session.cwd,
                     session.project_id,
+                    session.id,
                     session.created_at,
                     session.tokens_in,
                     session.tokens_out,
@@ -467,15 +568,16 @@ class HistoryIndex:
             run_id = session.agent_run_id or session.id
             self._db.execute(
                 "INSERT INTO history"
-                "(id,native_id,backend,name,cwd,project_id,spawned_at,tokens_in,tokens_out,"
+                "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,tokens_in,tokens_out,"
                 "transcript_path,executable,argv_json,pinned_attention,shell_profile_id,"
                 "agent_visible,repository_id,project_label,project_root,context_window,"
                 "final_context_pct,peak_context_pct,model,measurement_source,"
                 "project_scope_id,repo_group_id,auto_named) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET native_id=excluded.native_id,"
                 "backend=excluded.backend,name=excluded.name,cwd=excluded.cwd,"
                 "project_id=excluded.project_id,transcript_path=excluded.transcript_path,"
+                "note_id=excluded.note_id,"
                 "agent_visible=1,repository_id=excluded.repository_id,"
                 "project_label=excluded.project_label,project_root=excluded.project_root,"
                 "project_scope_id=excluded.project_scope_id,repo_group_id=excluded.repo_group_id,"
@@ -487,6 +589,7 @@ class HistoryIndex:
                     session.name,
                     session.run_cwd or session.cwd,
                     session.project_id,
+                    session.id,
                     session.agent_run_started_at or session.created_at,
                     session.tokens_in,
                     session.tokens_out,
@@ -553,6 +656,7 @@ class HistoryIndex:
         cwd: str,
         spawned_at: float,
         transcript_path: str,
+        project_id: str | None = None,
         repository_id: str | None = None,
         project_label: str | None = None,
         project_root: str | None = None,
@@ -578,14 +682,16 @@ class HistoryIndex:
             if not exists:
                 self._db.execute(
                     "INSERT INTO history"
-                    "(id,native_id,backend,name,cwd,spawned_at,transcript_path,external,"
+                    "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,transcript_path,external,"
                     "agent_visible,repository_id,project_label,project_root,context_window,"
                     "final_context_pct,peak_context_pct,tokens_in,tokens_out,model,"
                     "measurement_source,project_scope_id,repo_group_id,"
                     "transcript_mtime_ns,transcript_size) "
-                    "VALUES(?,?,?,?,?,?,?,1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET "
                     "name=excluded.name,cwd=excluded.cwd,spawned_at=excluded.spawned_at,"
+                    "project_id=COALESCE(excluded.project_id,history.project_id),"
+                    "note_id=COALESCE(history.note_id,excluded.note_id),"
                     "transcript_path=excluded.transcript_path,repository_id=excluded.repository_id,"
                     "project_label=excluded.project_label,project_root=excluded.project_root,"
                     "context_window=excluded.context_window,"
@@ -602,6 +708,8 @@ class HistoryIndex:
                         backend,
                         name,
                         cwd,
+                        project_id,
+                        row_id,
                         spawned_at,
                         transcript_path,
                         repository_id,
@@ -623,6 +731,240 @@ class HistoryIndex:
                 self._db.commit()
 
         await self._run(op)
+
+    async def session_note_owned(self, project_id: str, note_id: str) -> bool:
+        def op() -> bool:
+            return bool(
+                self._db.execute(
+                    "SELECT 1 FROM history WHERE project_id=? AND note_id=? LIMIT 1",
+                    (project_id, note_id),
+                ).fetchone()
+            )
+
+        return await self._run(op)
+
+    async def native_history_ids(self) -> dict[tuple[str, str], str]:
+        def op() -> dict[tuple[str, str], str]:
+            rows = self._db.execute(
+                "SELECT id,backend,native_id,external FROM history WHERE agent_visible=1 "
+                "ORDER BY external ASC"
+            ).fetchall()
+            result: dict[tuple[str, str], str] = {}
+            for row in rows:
+                result.setdefault((str(row["backend"]), str(row["native_id"])), str(row["id"]))
+            return result
+
+        return await self._run(op)
+
+    async def assign_native_project(
+        self,
+        backend: str,
+        native_id: str,
+        *,
+        project_id: str,
+        project_label: str,
+        project_root: str,
+    ) -> str | None:
+        """Attach a discovered native run to one registered Project."""
+
+        def op() -> str | None:
+            row = self._db.execute(
+                "SELECT id FROM history WHERE backend=? AND native_id=? "
+                "ORDER BY external ASC LIMIT 1",
+                (backend, native_id),
+            ).fetchone()
+            if not row:
+                return None
+            self._db.execute(
+                "UPDATE history SET project_id=?,project_label=?,project_root=? WHERE id=?",
+                (project_id, project_label, project_root, row["id"]),
+            )
+            self._db.commit()
+            return str(row["id"])
+
+        return await self._run(op)
+
+    async def message_index_watermarks(self) -> dict[str, tuple[int, int, int]]:
+        def op() -> dict[str, tuple[int, int, int]]:
+            rows = self._db.execute(
+                "SELECT history_id,source_mtime_ns AS mtime,source_size AS size,"
+                "parser_version AS parser FROM history_transcript_index"
+            ).fetchall()
+            return {
+                str(row["history_id"]): (int(row["mtime"]), int(row["size"]), int(row["parser"]))
+                for row in rows
+            }
+
+        return await self._run(op)
+
+    async def replace_history_messages(
+        self,
+        history_id: str,
+        messages: list[dict[str, Any]],
+        *,
+        mtime_ns: int,
+        size: int,
+        parser_version: int = TRANSCRIPT_PARSER_VERSION,
+    ) -> int:
+        records = searchable_transcript_messages(messages)
+        timestamped = [
+            (stamp, record)
+            for record in records
+            if (stamp := _message_timestamp(record.get("ts"))) is not None
+        ]
+        first_message = (
+            min(timestamped, key=lambda item: (item[0], item[1]["ordinal"]))
+            if timestamped
+            else None
+        )
+        last_message = (
+            max(timestamped, key=lambda item: (item[0], item[1]["ordinal"]))
+            if timestamped
+            else None
+        )
+        native_started_at = first_message[0] if timestamped else None
+        last_message_at = last_message[0] if timestamped else None
+        last_message_role = str(last_message[1]["role"]) if timestamped else None
+
+        def op() -> int:
+            with self._db:
+                self._db.execute("DELETE FROM history_messages WHERE history_id=?", (history_id,))
+                self._db.executemany(
+                    "INSERT INTO history_messages"
+                    "(history_id,ordinal,role,ts,text,source_mtime_ns,source_size,parser_version) "
+                    "VALUES(?,?,?,?,?,?,?,?)",
+                    [
+                        (
+                            history_id,
+                            int(item["ordinal"]),
+                            str(item["role"]),
+                            None if item.get("ts") is None else str(item["ts"]),
+                            str(item["text"]),
+                            mtime_ns,
+                            size,
+                            parser_version,
+                        )
+                        for item in records
+                    ],
+                )
+                self._db.execute(
+                    "INSERT INTO history_transcript_index"
+                    "(history_id,source_mtime_ns,source_size,parser_version,"
+                    "message_count,indexed_at) "
+                    "VALUES(?,?,?,?,?,?) ON CONFLICT(history_id) DO UPDATE SET "
+                    "source_mtime_ns=excluded.source_mtime_ns,source_size=excluded.source_size,"
+                    "parser_version=excluded.parser_version,message_count=excluded.message_count,"
+                    "indexed_at=excluded.indexed_at",
+                    (history_id, mtime_ns, size, parser_version, len(records), time.time()),
+                )
+                self._db.execute(
+                    "UPDATE history SET native_started_at=?,last_message_at=?,last_message_role=?,"
+                    "time_summary_mtime_ns=?,time_summary_size=? WHERE id=?",
+                    (
+                        native_started_at,
+                        last_message_at,
+                        last_message_role,
+                        mtime_ns,
+                        size,
+                        history_id,
+                    ),
+                )
+            return len(records)
+
+        return await self._run(op)
+
+    async def refresh_time_summaries(self, items: list[dict[str, Any]]) -> int:
+        """Refresh bounded first/last-message metadata for changed visible transcripts."""
+        semaphore = asyncio.Semaphore(4)
+
+        async def inspect(item: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
+            transcript = item.get("transcript_path")
+            if not transcript or item.get("backend") not in {"claude", "codex"}:
+                return None
+            path = Path(str(transcript))
+            try:
+                stat = await asyncio.to_thread(path.stat)
+            except OSError:
+                return None
+            if (
+                item.get("time_summary_mtime_ns") == stat.st_mtime_ns
+                and item.get("time_summary_size") == stat.st_size
+            ):
+                return None
+            try:
+                async with semaphore:
+                    summary = await asyncio.to_thread(
+                        transcript_time_summary, path, str(item["backend"])
+                    )
+            except OSError:
+                return None
+            return item, summary
+
+        refreshed = [
+            result
+            for result in await asyncio.gather(*(inspect(item) for item in items))
+            if result is not None
+        ]
+        if not refreshed:
+            return 0
+
+        def op() -> None:
+            with self._db:
+                self._db.executemany(
+                    "UPDATE history SET native_started_at=?,last_message_at=?,"
+                    "last_message_role=?,time_summary_mtime_ns=?,time_summary_size=? WHERE id=?",
+                    [
+                        (
+                            _message_timestamp(summary["native_started_ts"]),
+                            _message_timestamp(summary["last_message_ts"]),
+                            summary["last_message_role"],
+                            summary["mtime_ns"],
+                            summary["size"],
+                            item["id"],
+                        )
+                        for item, summary in refreshed
+                    ],
+                )
+
+        await self._run(op)
+        for item, summary in refreshed:
+            item["native_started_at"] = _message_timestamp(summary["native_started_ts"])
+            item["last_message_at"] = _message_timestamp(summary["last_message_ts"])
+            item["last_message_role"] = summary["last_message_role"]
+            item["time_summary_mtime_ns"] = summary["mtime_ns"]
+            item["time_summary_size"] = summary["size"]
+        return len(refreshed)
+
+    async def index_transcript(
+        self, history_id: str, transcript_path: str | Path, backend: str, *, force: bool = False
+    ) -> tuple[str, int]:
+        """Index one native transcript without blocking the event loop."""
+        path = Path(transcript_path)
+        stat = await asyncio.to_thread(path.stat)
+        watermark = (stat.st_mtime_ns, stat.st_size, TRANSCRIPT_PARSER_VERSION)
+
+        def current_watermark() -> tuple[int, int, int] | None:
+            row = self._db.execute(
+                "SELECT source_mtime_ns,source_size,parser_version "
+                "FROM history_transcript_index WHERE history_id=?",
+                (history_id,),
+            ).fetchone()
+            return (
+                (int(row["source_mtime_ns"]), int(row["source_size"]), int(row["parser_version"]))
+                if row
+                else None
+            )
+
+        if not force and await self._run(current_watermark) == watermark:
+            return "unchanged", 0
+        messages = await asyncio.to_thread(parse_transcript, path, backend)
+        count = await self.replace_history_messages(
+            history_id,
+            messages,
+            mtime_ns=stat.st_mtime_ns,
+            size=stat.st_size,
+        )
+        return "indexed", count
 
     async def external_watermarks(self) -> dict[str, tuple[int, int]]:
         """Return ``{transcript_path: (mtime_ns, size)}`` for indexed external rows.
@@ -699,45 +1041,79 @@ class HistoryIndex:
         self,
         *,
         query: str = "",
+        search_scope: str = "all",
         backend: str | None = None,
         state: str | None = None,
         project_id: str | None = None,
         external: bool | None = None,
         date_from: float | None = None,
         date_to: float | None = None,
+        time_basis: str = "started",
         cursor: str | None = None,
         limit: int = 50,
     ) -> dict[str, Any]:
         limit = max(1, min(limit, 200))
-        sql = "SELECT * FROM history WHERE agent_visible=1 AND backend IN ('claude','codex')"
+        if search_scope not in {"all", "user", "assistant", "metadata"}:
+            raise ValueError("history search scope must be all, user, assistant, or metadata")
+        if time_basis not in {"started", "last_message"}:
+            raise ValueError("history time basis must be started or last_message")
+        sql = (
+            "SELECT h.* FROM history h WHERE h.agent_visible=1 AND h.backend IN ('claude','codex')"
+        )
         args: list[Any] = []
+        match_query = _fts_query(query)
         if query:
-            sql += " AND (name LIKE ? OR cwd LIKE ? OR COALESCE(project_label,'') LIKE ?)"
-            args += [f"%{query}%", f"%{query}%", f"%{query}%"]
+            metadata_sql = "(h.name LIKE ? OR h.cwd LIKE ? OR COALESCE(h.project_label,'') LIKE ?)"
+            metadata_args = [f"%{query}%", f"%{query}%", f"%{query}%"]
+            message_sql = (
+                "EXISTS (SELECT 1 FROM history_messages hm "
+                "JOIN history_messages_fts ON history_messages_fts.rowid=hm.id "
+                "WHERE hm.history_id=h.id AND history_messages_fts MATCH ?"
+            )
+            message_args: list[Any] = [match_query]
+            if search_scope in {"user", "assistant"}:
+                message_sql += " AND hm.role=?"
+                message_args.append(search_scope)
+            message_sql += ")"
+            if search_scope == "metadata" or not match_query:
+                sql += f" AND {metadata_sql}"
+                args.extend(metadata_args)
+            elif search_scope == "all":
+                sql += f" AND ({metadata_sql} OR {message_sql})"
+                args.extend(metadata_args + message_args)
+            else:
+                sql += f" AND {message_sql}"
+                args.extend(message_args)
         filters = {"backend": backend, "final_state": state}
         for column, value in filters.items():
             if value:
-                sql += f" AND {column}=?"
+                sql += f" AND h.{column}=?"
                 args.append(value)
         if project_id == "__ungrouped__":
-            sql += " AND project_id IS NULL"
+            sql += " AND h.project_id IS NULL"
         elif project_id:
-            sql += " AND project_id=?"
+            sql += " AND h.project_id=?"
             args.append(project_id)
         if external is not None:
-            sql += " AND external=?"
+            sql += " AND h.external=?"
             args.append(int(external))
+        time_column = (
+            "CASE WHEN h.external=1 THEN h.native_started_at "
+            "ELSE COALESCE(h.native_started_at,h.spawned_at) END"
+            if time_basis == "started"
+            else "h.last_message_at"
+        )
         if date_from is not None:
-            sql += " AND spawned_at>=?"
+            sql += f" AND {time_column}>=?"
             args.append(date_from)
         if date_to is not None:
-            sql += " AND spawned_at<=?"
+            sql += f" AND {time_column}<=?"
             args.append(date_to)
         if cursor:
             stamp, row_id = cursor.split(":", 1)
-            sql += " AND (spawned_at<? OR (spawned_at=? AND id<?))"
+            sql += " AND (h.spawned_at<? OR (h.spawned_at=? AND h.id<?))"
             args.extend([float(stamp), float(stamp), row_id])
-        sql += " ORDER BY spawned_at DESC,id DESC LIMIT ?"
+        sql += " ORDER BY h.spawned_at DESC,h.id DESC LIMIT ?"
         args.append(limit + 1)
 
         def op() -> dict[str, Any]:
@@ -745,10 +1121,58 @@ class HistoryIndex:
             has_more = len(rows) > limit
             page = rows[:limit]
             items = [dict(row) for row in page]
+            if query and match_query:
+                role = search_scope if search_scope in {"user", "assistant"} else None
+                for item in items:
+                    match_args: list[Any] = [match_query, item["id"]]
+                    role_sql = ""
+                    if role:
+                        role_sql = " AND hm.role=?"
+                        match_args.append(role)
+                    matches = self._db.execute(
+                        "SELECT hm.ordinal,hm.role,hm.ts,"
+                        "snippet(history_messages_fts,0,'','',' … ',24) AS excerpt "
+                        "FROM history_messages hm JOIN history_messages_fts "
+                        "ON history_messages_fts.rowid=hm.id "
+                        "WHERE history_messages_fts MATCH ? AND hm.history_id=?"
+                        f"{role_sql} ORDER BY bm25(history_messages_fts),hm.ordinal LIMIT 4",
+                        match_args,
+                    ).fetchall()
+                    item["matches"] = [dict(match) for match in matches[:3]]
+                    item["match_count"] = len(matches) if len(matches) < 4 else 4
             next_cursor = (
                 f"{page[-1]['spawned_at']}:{page[-1]['id']}" if has_more and page else None
             )
             return {"items": items, "next_cursor": next_cursor}
+
+        return await self._run(op)
+
+    async def history_message_matches(
+        self, history_id: str, query: str, search_scope: str = "all", limit: int = 500
+    ) -> list[dict[str, Any]]:
+        match_query = _fts_query(query)
+        if not match_query or search_scope == "metadata":
+            return []
+        if search_scope not in {"all", "user", "assistant"}:
+            raise ValueError("history search scope must be all, user, assistant, or metadata")
+
+        def op() -> list[dict[str, Any]]:
+            args: list[Any] = [match_query, history_id]
+            role_sql = ""
+            if search_scope in {"user", "assistant"}:
+                role_sql = " AND hm.role=?"
+                args.append(search_scope)
+            args.append(max(1, min(limit, 2000)))
+            rows = self._db.execute(
+                "SELECT hm.ordinal,hm.role,hm.ts,"
+                "snippet(history_messages_fts,0,'','',' … ',24) AS excerpt "
+                "FROM history_messages hm JOIN history_messages_fts "
+                "ON history_messages_fts.rowid=hm.id "
+                "WHERE history_messages_fts MATCH ? AND hm.history_id=?"
+                f"{role_sql} ORDER BY hm.ordinal LIMIT ?",
+                args,
+            ).fetchall()
+            return [dict(row) for row in rows]
 
         return await self._run(op)
 
@@ -822,10 +1246,14 @@ class HistoryIndex:
 
     async def delete_history_entry(self, session_id: str) -> bool:
         def op() -> bool:
-            cursor = self._db.execute(
-                "DELETE FROM history WHERE id=? AND agent_visible=1", (session_id,)
-            )
-            self._db.commit()
+            with self._db:
+                self._db.execute("DELETE FROM history_messages WHERE history_id=?", (session_id,))
+                self._db.execute(
+                    "DELETE FROM history_transcript_index WHERE history_id=?", (session_id,)
+                )
+                cursor = self._db.execute(
+                    "DELETE FROM history WHERE id=? AND agent_visible=1", (session_id,)
+                )
             return bool(cursor.rowcount)
 
         return await self._run(op)

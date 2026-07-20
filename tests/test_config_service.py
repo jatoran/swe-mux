@@ -231,6 +231,7 @@ def test_mobile_input_defaults_are_hot_reloadable_and_validated(tmp_path: Path) 
     assert config.mobile_scroll_direction == "natural"
     assert config.mobile_scroll_sensitivity == 1.0
     assert config.mobile_long_press == "context_menu"
+    assert config.terminal_auto_copy_selection is True
 
     hot, restart = update_config(
         config,
@@ -239,6 +240,7 @@ def test_mobile_input_defaults_are_hot_reloadable_and_validated(tmp_path: Path) 
             "mobile_scroll_direction": "wheel",
             "mobile_scroll_sensitivity": 1.5,
             "mobile_long_press": "disabled",
+            "terminal_auto_copy_selection": False,
         },
     )
 
@@ -247,6 +249,7 @@ def test_mobile_input_defaults_are_hot_reloadable_and_validated(tmp_path: Path) 
         "mobile_scroll_direction",
         "mobile_scroll_sensitivity",
         "mobile_long_press",
+        "terminal_auto_copy_selection",
     }
     assert restart == set()
     with pytest.raises(ValueError, match="smart, terminal, application, or disabled"):

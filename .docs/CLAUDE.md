@@ -3,10 +3,14 @@
 - Changing process/session lifecycle or package boundaries: `design/architecture.md`,
   `design/features/sessions.md`, `design/features/backends.md`,
   `design/features/delivery-readiness.md`
-- Changing Project/Group ownership, notes, files, ignores, or watches:
-  `design/features/projects-and-notes.md`, `design/data-model.md`, `design/interfaces.md`
-- Changing browser layout, sidebar, tabs, or editor interaction: `design/features/ui.md`,
-  `design/features/projects-and-notes.md`
+- Changing Project/Group registration, ownership, ordering, or sidebar visibility:
+  `design/features/projects.md`, `design/data-model.md`, `design/interfaces.md`
+- Changing Project/session notes, files, ignores, or watches:
+  `design/features/project-resources.md`, `design/data-model.md`, `design/interfaces.md`
+- Changing panes, tabs, splits, drag/drop, or the mobile workspace projection:
+  `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
+- Changing browser chrome, sidebar interaction, settings, focus, or overlays:
+  `design/features/ui.md`, `technical/frontend/packages.md`
 - Changing reusable prompt templates: `design/features/prompt-library.md`,
   `design/interfaces.md`, `design/data-model.md`
 - Changing root-session or quota-reset sounds: `design/features/notifications.md`,
@@ -29,3 +33,5 @@
   `design/features/remote-access.md`
 - Planning remaining work: `development/ROADMAP.md`; control-plane ideas:
   `development/CONTROL_PLANE_IDEAS.md`
+- Changing backend package ownership or shared SQLite behavior:
+  `technical/backend/packages.md`, `technical/backend/sqlite.md`

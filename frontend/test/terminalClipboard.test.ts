@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { MAX_TERMINAL_CLIPBOARD_CHARS, ResilientClipboardProvider, clipboardImage, hasTerminalImage, isTerminalImage } from '../src/terminalClipboard.ts'
+import { MAX_TERMINAL_CLIPBOARD_CHARS, ResilientClipboardProvider, clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage } from '../src/terminalClipboard.ts'
 
 test('ordinary paste events prefer an image file when one is present', () => {
   const image = new Blob(['png'], { type: 'image/png' })
@@ -35,4 +35,21 @@ test('OSC 52 clipboard payloads are bounded', async () => {
   )
   await provider.writeText('c', 'x'.repeat(MAX_TERMINAL_CLIPBOARD_CHARS + 1))
   assert.match(rejected, /safety limit/)
+})
+
+test('manual copy fallback runs synchronously while mobile activation is live', async () => {
+  const calls:string[] = []
+  const textarea = {
+    focus: () => calls.push('focus'),
+    select: () => calls.push('select'),
+    setSelectionRange: (start:number,end:number) => calls.push(`range:${start}:${end}`),
+  } as HTMLTextAreaElement
+  const copied = await copyPreparedText(
+    'mobile text',
+    textarea,
+    { writeText: async () => { calls.push('modern'); throw new Error('blocked') } },
+    () => { calls.push('legacy'); return true },
+  )
+  assert.equal(copied, true)
+  assert.deepEqual(calls.slice(0,5), ['modern', 'focus', 'select', 'range:0:11', 'legacy'])
 })

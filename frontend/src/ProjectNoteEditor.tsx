@@ -1,16 +1,18 @@
-import { useRef, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import type {
   ContinuityChangeDetail,
   ContinuityEditorElement,
   ContinuityRequestDetail,
 } from '@continuity-editor/editor'
 import { ContinuityEditor } from '@continuity-editor/editor/react'
+import { insertEditorTab, prefersPlainMobileEditor } from './editorText'
 import { noteQueueKey, noteSaveQueue } from './noteSaveQueue'
 
 type Props = {
   projectId: string
   resourceId: string
   initialText: string
+  label?: string
 }
 
 // Continuity's defaults bind these to bullet / task toggles but flag them
@@ -22,6 +24,28 @@ const NOTE_SHORTCUTS = {
   'mod+r': 'editor.toggle_bullet_at_line_start',
   'mod+e': 'markdown.toggle_task',
 } as const
+
+function usePlainMobileEditor(): boolean {
+  const readPreference = () => prefersPlainMobileEditor(
+    window.matchMedia('(max-width: 760px)').matches,
+    window.matchMedia('(pointer: coarse)').matches,
+  )
+  const [preferred, setPreferred] = useState(readPreference)
+
+  useEffect(() => {
+    const narrow = window.matchMedia('(max-width: 760px)')
+    const coarse = window.matchMedia('(pointer: coarse)')
+    const update = () => setPreferred(prefersPlainMobileEditor(narrow.matches, coarse.matches))
+    narrow.addEventListener('change', update)
+    coarse.addEventListener('change', update)
+    return () => {
+      narrow.removeEventListener('change', update)
+      coarse.removeEventListener('change', update)
+    }
+  }, [])
+
+  return preferred
+}
 
 /** Route the editor's host requests through the app's ordinary browser policies. */
 function routeRequest(detail: ContinuityRequestDetail): void {
@@ -56,18 +80,44 @@ function routeRequest(detail: ContinuityRequestDetail): void {
  * different note loads, so switching notes constructs a fresh engine and cannot
  * leak text or revisions between notes.
  */
-export function ProjectNoteEditor({ projectId, resourceId, initialText }: Props) {
+export function ProjectNoteEditor({ projectId, resourceId, initialText, label = 'Project note' }: Props) {
   const editorRef = useRef<ContinuityEditorElement>(null)
+  const plainMobileEditor = usePlainMobileEditor()
   const [engine, setEngine] = useState<{ text: string; revision: number }>({
     text: initialText,
     revision: 0,
   })
   const key = noteQueueKey(projectId, resourceId)
 
+  const commitUserText = (text: string) => {
+    setEngine(current => ({ text, revision: current.revision + 1 }))
+    noteSaveQueue.submit(key, text)
+  }
+
+  if (plainMobileEditor) {
+    return <textarea
+      class="note-editor mobile-note-editor"
+      aria-label={label}
+      defaultValue={engine.text}
+      spellcheck={false}
+      autoCapitalize="sentences"
+      onInput={event => commitUserText(event.currentTarget.value)}
+      onKeyDown={event => {
+        if (event.key !== 'Tab') return
+        event.preventDefault()
+        const input = event.currentTarget
+        const next = insertEditorTab(input.value, input.selectionStart, input.selectionEnd)
+        input.value = next.text
+        input.setSelectionRange(next.caret, next.caret)
+        commitUserText(next.text)
+      }}
+    />
+  }
+
   return (
     <ContinuityEditor
       ref={editorRef}
-      aria-label="Project note"
+      aria-label={label}
       class="note-editor"
       style={{
         display: 'block',

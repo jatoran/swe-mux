@@ -30,16 +30,3 @@ export function reorderTargetFromContainer(container:HTMLElement,draggedId:strin
   }).filter(item=>item.id)
   return reorderTargetForPoint(items,draggedId,point)
 }
-
-export function beginDragPreview(event:{dataTransfer:DataTransfer|null},label:string):void{
-  const transfer=event.dataTransfer
-  if(!transfer)return
-  transfer.effectAllowed='move'
-  transfer.setData('text/plain',label)
-  const ghost=document.createElement('div')
-  ghost.className='mux-drag-ghost'
-  ghost.textContent=label
-  document.body.appendChild(ghost)
-  transfer.setDragImage(ghost,18,14)
-  window.setTimeout(()=>ghost.remove(),0)
-}

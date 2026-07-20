@@ -11,6 +11,7 @@ from typing import Any
 
 from .git_projects import ProjectIdentity, resolve_project
 from .history import HistoryIndex
+from .transcript_view import TRANSCRIPT_PARSER_VERSION
 
 CLAUDE_CONTEXT_WINDOWS = {
     "claude-opus-4-8": 1_000_000,
@@ -101,7 +102,9 @@ def inspect_codex(path: Path) -> ExternalTranscript | None:
     return None
 
 
-def scan_external_transcripts(home: Path | None = None) -> list[ExternalTranscript]:
+def scan_external_transcripts(
+    home: Path | None = None, *, limit: int | None = 2000
+) -> list[ExternalTranscript]:
     user_home = home or Path.home()
     codex_home = (
         home / ".codex"
@@ -119,7 +122,7 @@ def scan_external_transcripts(home: Path | None = None) -> list[ExternalTranscri
         paths = sorted(
             root.glob(f"**/{pattern}"), key=lambda item: item.stat().st_mtime, reverse=True
         )
-        for path in paths[:2000]:
+        for path in paths if limit is None else paths[:limit]:
             if transcript := inspect(path):
                 found.append(transcript)
     return found
@@ -196,9 +199,17 @@ async def reconcile_external_history(history: HistoryIndex, home: Path | None = 
     # reconcile so unchanged native files are never re-read/re-parsed. The
     # watermark is persisted per external row, so this holds across restarts.
     watermarks = await history.external_watermarks()
+    history_ids = await history.native_history_ids()
+    message_watermarks = await history.message_index_watermarks()
     projects: dict[str, ProjectIdentity] = {}
     for item in transcripts:
-        if watermarks.get(str(item.path)) == (item.mtime_ns, item.size):
+        history_id = history_ids.get((item.backend, item.native_id))
+        messages_current = bool(
+            history_id
+            and message_watermarks.get(history_id)
+            == (item.mtime_ns, item.size, TRANSCRIPT_PARSER_VERSION)
+        )
+        if watermarks.get(str(item.path)) == (item.mtime_ns, item.size) and messages_current:
             continue
         if item.cwd not in projects:
             projects[item.cwd] = await resolve_project(item.cwd)
@@ -222,4 +233,7 @@ async def reconcile_external_history(history: HistoryIndex, home: Path | None = 
             size=item.size,
             **summary,
         )
+        history_id = (await history.native_history_ids()).get((item.backend, item.native_id))
+        if history_id:
+            await history.index_transcript(history_id, item.path, item.backend)
     return len(transcripts)

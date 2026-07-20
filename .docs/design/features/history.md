@@ -5,14 +5,38 @@
 - SQLite indexes durable Claude/Codex run lifetimes and append-only daemon events. Plain
   shells remain provisional and disappear from history when they exit without promotion.
 - Each mux-created history row carries canonical `project_id`; Git repository/scope fields
-  remain separate display metadata. Externally reconciled native transcripts may be
-  unassigned until resumed into an explicit Project.
-- History search is cursor-paginated across query, backend, Project, state, date, and origin.
+  remain separate display metadata. Startup-reconciled native transcripts may be unassigned;
+  an explicit Project scan assigns only transcripts whose recorded cwd belongs to that
+  registered Project, preferring the most-specific registered root.
+- Each row also carries the owning terminal `note_id`. Opening `Session note` lazily creates or
+  reopens the Project file for that terminal; nested agent-run IDs never fork the terminal note.
+- History is an ordinary workspace pane tab. Desktop panes can split/move it; mobile projects
+  it into the unified tab rail without changing desktop layout.
+- History search is cursor-paginated across provider, Project, state, origin, and four text
+  scopes: all content, user prompts, agent replies, or metadata. Date ranges explicitly target
+  either session start or the final timestamped conversational message.
+- Searchable user/assistant text lives in a rebuildable local SQLite FTS5 index. Native
+  transcripts remain authoritative and are never mutated. Search results include role-aware
+  excerpts; opening a result provides ordered previous/next transcript match navigation.
+- Session rows show the chronological minimum and maximum provider-native conversational
+  timestamps plus the final speaker, so out-of-order native JSONL records cannot produce a start
+  after the last message. Transcript cards show each provider-native message timestamp.
+  Missing/invalid native message timestamps remain unavailable; process exit and file mtime are
+  never presented as message time.
 - Resume requires a valid target Project, native ID, transcript, cwd record, and adapter. It
   creates a new Project-owned session at the target root and atomically updates its layout.
 - Index deletion never deletes or edits the native transcript.
-- Startup reconciliation reads recent Claude/Codex transcript directories in a worker and
-  never moves vendor files.
+- Startup reconciliation reads the newest 2,000 Claude/Codex transcript files in a worker,
+  incrementally indexes changed message bodies, and never moves vendor files.
+- Managed transcripts are indexed once more after session exit so the list's last-message
+  summary is current without waiting for the periodic reconciler.
+- Visible History pages refresh changed timestamp summaries from bounded transcript head/tail
+  reads. Codex indexing prefers current `response_item/message` user/assistant records and
+  suppresses their duplicate legacy `event_msg` copies; older event-only transcripts remain
+  supported.
+- `Scan historical sessions` is an explicit, project-scoped background job. It bypasses the
+  startup cap, scans the complete shared native history, fingerprints unchanged transcripts,
+  batches serialized SQLite writes, exposes progress/results, and supports cancellation.
 - EventBus persistence precedes fanout; reconnect catch-up uses monotonic sequence IDs.
 - Current context telemetry remains on live sessions and history. Explicit provider-native
   compaction records increment durable count/last-time/capability/confidence summaries;
@@ -26,5 +50,7 @@
 - `src/swe_mux/history.py`
 - `src/swe_mux/event_bus.py`
 - `src/swe_mux/reconcile.py`
+- `src/swe_mux/history_backfill.py`
 - `src/swe_mux/transcript_view.py`
 - `src/swe_mux/operational_telemetry.py`
+- `frontend/src/HistoryBrowser.tsx`

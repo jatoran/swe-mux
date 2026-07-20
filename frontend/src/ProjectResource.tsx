@@ -6,13 +6,14 @@ import { ProjectNoteEditor } from './ProjectNoteEditor'
 import { noteQueueKey, noteSaveQueue, type NoteSaveState } from './noteSaveQueue'
 import type { Project } from './types'
 
-export type ProjectResourceIdentity={kind:'note'|'files'|'file';id:string}
+export type ProjectResourceIdentity={kind:'note'|'session-note'|'files'|'file';id:string}
 
 type NotePayload={revision:string;markdown:string;status:string;path:string}
 type FilePayload={revision:string;status:string;path:string;size:number;text?:string}
 type DirectoryItem={name:string;path:string;kind:'directory'|'file';size:number|null}
 type DirectoryPayload={path:string;parent:string|null;items:DirectoryItem[];truncated:boolean}
 type ResourceEvent={projectId:string;paths:string[]}
+type NoteResourceEvent={projectId:string;kind:'note'|'session-note';noteId:string|null;revision:string}
 type TreeMenu={item:DirectoryItem;x:number;y:number}
 type FileDraft={revision:string;text:string;baseline:string;status:string;saveState:'idle'|'modified'|'saving'|'saved'|'error';error:string}
 type BrowserState={directories:Record<string,DirectoryPayload>;expanded:Set<string>}
@@ -34,6 +35,11 @@ const parentPath=(path:string)=>path.includes('/')?path.slice(0,path.lastIndexOf
 const watchIdentity=()=>`resource-${Date.now()}-${Math.random().toString(36).slice(2)}`
 
 export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
+  const isNote=resource.kind==='note'||resource.kind==='session-note'
+  const noteEndpoint=resource.kind==='session-note'
+    ?`/api/projects/${project.id}/session-notes/${encodeURIComponent(resource.id)}`
+    :`/api/projects/${project.id}/note`
+  const noteLabel=resource.kind==='session-note'?'Session note':'Project note'
   const resourceKey=`${project.id}\0${resource.kind}\0${resource.id}`
   const cachedFile=resource.kind==='file'?fileDrafts.get(resourceKey):undefined
   const cachedBrowser=resource.kind==='files'?browserStates.get(resourceKey):undefined
@@ -49,9 +55,10 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
   // A fresh note load remounts the editor so a new Continuity engine is built.
   const [loadGeneration,setLoadGeneration]=useState(0)
   const [noteSave,setNoteSave]=useState<NoteSaveState>({status:'idle',storageRevision:'missing',banner:null})
-  const noteKey=noteQueueKey(project.id,resource.id)
+  const noteKey=noteQueueKey(project.id,`${resource.kind}:${resource.id}`)
   const watchId=useRef(watchIdentity())
   const treeMenuPanel=useRef<HTMLDivElement>(null)
+  const noteLoadGeneration=useRef(0)
   const textRef=useRef(text)
   const baselineRef=useRef(baseline)
   textRef.current=text;baselineRef.current=baseline
@@ -65,17 +72,19 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
 
   const loadText=async()=>{
     if(resource.kind==='files')return
+    const requestGeneration=isNote?++noteLoadGeneration.current:0
     setStatus('loading');setError('')
-    const path=resource.kind==='note'
-      ?`/api/projects/${project.id}/note`
+    const path=isNote
+      ?noteEndpoint
       :`/api/projects/${project.id}/file?path=${encodeURIComponent(resource.id)}`
     try{
       const payload=await api<NotePayload|FilePayload>('GET',path)
+      if(isNote&&requestGeneration!==noteLoadGeneration.current)return
       const next='markdown' in payload?payload.markdown:payload.text||''
       setRevision(payload.revision);setText(next);setBaseline(next);setStatus(payload.status);setSaveState('idle')
-      if(resource.kind==='note'){
+      if(isNote){
         // The queue owns the daemon storage revision; the editor starts fresh at 0.
-        noteSaveQueue.reset(noteKey,project.id,payload.revision)
+        noteSaveQueue.reset(noteKey,project.id,payload.revision,resource.kind==='session-note'?resource.id:null)
         setLoadGeneration(generation=>generation+1)
       }
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause));setStatus('error')}
@@ -156,7 +165,42 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
     return()=>window.removeEventListener('mux:project-files-changed',changed)
   },[project.id,resource.kind,resource.id,directories])
 
-  // Files save on demand; project notes persist through the resource-scoped queue.
+  useEffect(()=>{
+    if(!isNote)return
+    const follow=async(remoteRevision='')=>{
+      if(!noteSaveQueue.canFollowRemote(noteKey,remoteRevision))return
+      const requestGeneration=++noteLoadGeneration.current
+      try{
+        const payload=await api<NotePayload>('GET',noteEndpoint)
+        if(requestGeneration!==noteLoadGeneration.current)return
+        // Typing may have started while the GET was in flight. In that case the
+        // local editor wins and the existing revision-conflict path stays armed.
+        if(!noteSaveQueue.canFollowRemote(noteKey,payload.revision))return
+        setRevision(payload.revision);setText(payload.markdown);setBaseline(payload.markdown)
+        setStatus(payload.status);setSaveState('idle');setError('')
+        noteSaveQueue.reset(noteKey,project.id,payload.revision,resource.kind==='session-note'?resource.id:null)
+        setLoadGeneration(generation=>generation+1)
+      }catch(cause){
+        if(requestGeneration===noteLoadGeneration.current)setError(cause instanceof Error?cause.message:String(cause))
+      }
+    }
+    const changed=(event:Event)=>{
+      const detail=(event as CustomEvent<NoteResourceEvent>).detail
+      if(detail.projectId!==project.id||detail.kind!==resource.kind)return
+      if(resource.kind==='session-note'&&detail.noteId!==resource.id)return
+      void follow(detail.revision)
+    }
+    const reconnected=()=>void follow()
+    window.addEventListener('mux:note-changed',changed)
+    window.addEventListener('mux:events-connected',reconnected)
+    return()=>{
+      window.removeEventListener('mux:note-changed',changed)
+      window.removeEventListener('mux:events-connected',reconnected)
+      noteLoadGeneration.current++
+    }
+  },[isNote,noteKey,noteEndpoint,project.id,resource.kind,resource.id])
+
+  // Files save on demand; notes persist through the resource-scoped queue.
   const save=async(content=text,expectedRevision=revision)=>{
     setSaveState('saving')
     try{
@@ -169,13 +213,13 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
   // Notes persist through the resource-scoped save queue (outside this component
   // so a pane close cannot cancel a save); we only mirror its state for display.
   useEffect(()=>{
-    if(resource.kind!=='note')return
+    if(!isNote)return
     return noteSaveQueue.subscribe(noteKey,setNoteSave)
-  },[resource.kind,noteKey])
+  },[isNote,noteKey])
 
   const resolveKeepMine=async()=>{
     try{
-      const payload=await api<NotePayload>('GET',`/api/projects/${project.id}/note`)
+      const payload=await api<NotePayload>('GET',noteEndpoint)
       noteSaveQueue.overwrite(noteKey,payload.revision)
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
@@ -241,12 +285,12 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
     setText(result.text)
     requestAnimationFrame(()=>editor.setSelectionRange(result.caret,result.caret))
   }
-  const stateLabel=resource.kind==='note'?(noteSave.status==='idle'?status:noteSave.status):(saveState==='idle'?status:saveState)
-  const closeResource=()=>{if(resource.kind==='note')noteSaveQueue.flush(noteKey);else fileDrafts.delete(resourceKey);onClose()}
+  const stateLabel=isNote?(noteSave.status==='idle'?status:noteSave.status):(saveState==='idle'?status:saveState)
+  const closeResource=()=>{if(isNote)noteSaveQueue.flush(noteKey);else fileDrafts.delete(resourceKey);onClose()}
   return <section class="project-resource file-editor">
-    <header><div><strong>{resource.kind==='note'?'Project note':resource.id}</strong><span>{project.name} · {stateLabel}</span></div><div class="resource-actions">{resource.kind==='file'&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}<button aria-label={`Close ${resource.kind==='note'?'Project note':resource.id} tab`} title="Close tab" onClick={closeResource}>×</button></div></header>
+    <header><div><strong>{isNote?noteLabel:resource.id}</strong><span>{project.name} · {stateLabel}</span></div><div class="resource-actions">{resource.kind==='file'&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}<button aria-label={`Close ${isNote?noteLabel:resource.id} tab`} title="Close tab" onClick={closeResource}>×</button></div></header>
     {error&&<p class="resource-error">{error}</p>}
-    {resource.kind==='note'&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
-    {editable?(resource.kind==='note'?<ProjectNoteEditor key={`${project.id}:${resource.id}:${loadGeneration}`} projectId={project.id} resourceId={resource.id} initialText={text}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>):<div class="resource-unavailable">{status==='binary'?'Binary files cannot be edited here.':status==='too-large'?'This file exceeds the 2 MiB editor limit.':'This resource is read-only.'}</div>}
+    {isNote&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
+    {editable?(isNote?<ProjectNoteEditor key={`${project.id}:${resource.kind}:${resource.id}:${loadGeneration}`} projectId={project.id} resourceId={`${resource.kind}:${resource.id}`} initialText={text} label={noteLabel}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>):<div class="resource-unavailable">{status==='binary'?'Binary files cannot be edited here.':status==='too-large'?'This file exceeds the 2 MiB editor limit.':'This resource is read-only.'}</div>}
   </section>
 }

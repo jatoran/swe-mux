@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { insertEditorTab } from '../src/editorText.ts'
+import { insertEditorTab, prefersPlainMobileEditor } from '../src/editorText.ts'
 import {
   NoteSaveQueue,
   noteQueueKey,
@@ -11,16 +11,22 @@ import {
 type Deferred = { resolve: (ack: NoteSaveAck) => void; reject: (error: unknown) => void }
 
 function makeTransport() {
-  const calls: { projectId: string; markdown: string; revision: string }[] = []
+  const calls: { projectId: string; markdown: string; revision: string; sessionNoteId?:string }[] = []
   const deferreds: Deferred[] = []
-  const transport = (projectId: string, markdown: string, revision: string) => {
-    calls.push({ projectId, markdown, revision })
+  const transport = (projectId: string, markdown: string, revision: string, sessionNoteId?:string|null) => {
+    calls.push({...{ projectId, markdown, revision },...(sessionNoteId?{sessionNoteId}:{})})
     return new Promise<NoteSaveAck>((resolve, reject) => deferreds.push({ resolve, reject }))
   }
   return { transport, calls, deferreds }
 }
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
+
+test('coarse pointers and narrow screens use the native mobile note editor', () => {
+  assert.equal(prefersPlainMobileEditor(true, false), true)
+  assert.equal(prefersPlainMobileEditor(false, true), true)
+  assert.equal(prefersPlainMobileEditor(false, false), false)
+})
 
 test('Tab inserts a literal tab and replaces the active selection', () => {
   assert.deepEqual(insertEditorTab('hello world', 5, 5), { text: 'hello\t world', caret: 6 })
@@ -93,4 +99,32 @@ test('reset adopts a fresh revision and clears conflict/pending state', () => {
   assert.equal(state.storageRevision, 'rev9')
   assert.equal(state.status, 'idle')
   assert.equal(state.banner, null)
+})
+
+test('live follow is allowed only for a different remote revision while locally clean', async () => {
+  const { transport, deferreds } = makeTransport()
+  const queue = new NoteSaveQueue(transport)
+  const key = noteQueueKey('p', 'r')
+  queue.reset(key, 'p', 'rev0')
+  assert.equal(queue.canFollowRemote(key, 'rev1'), true)
+  assert.equal(queue.canFollowRemote(key, 'rev0'), false)
+
+  queue.submit(key, 'local edit')
+  assert.equal(queue.canFollowRemote(key, 'rev1'), false)
+  queue.flush(key)
+  assert.equal(queue.canFollowRemote(key, 'rev1'), false)
+  deferreds[0].resolve({ revision: 'rev1', status: 'ready' })
+  await tick()
+  assert.equal(queue.canFollowRemote(key, 'rev1'), false)
+  assert.equal(queue.canFollowRemote(key, 'rev2'), true)
+})
+
+test('session notes retain their storage identity through queued saves', () => {
+  const { transport, calls } = makeTransport()
+  const queue = new NoteSaveQueue(transport)
+  const key = noteQueueKey('project', 'session-note:terminal')
+  queue.reset(key, 'project', 'rev0', 'terminal')
+  queue.submit(key, 'session context')
+  queue.flush(key)
+  assert.deepEqual(calls, [{projectId:'project',markdown:'session context',revision:'rev0',sessionNoteId:'terminal'}])
 })

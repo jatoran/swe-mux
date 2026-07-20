@@ -6,7 +6,7 @@ from uuid import uuid4
 LAYOUT_VERSION = 6
 MAX_LAYOUT_LEAVES = 64
 MAX_LAYOUT_DEPTH = 24
-LEAF_KINDS = {"terminal", "note", "preview"}
+LEAF_KINDS = {"terminal", "note", "preview", "history"}
 SPLIT_DIRECTIONS = {"horizontal", "vertical"}
 
 

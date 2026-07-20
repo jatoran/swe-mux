@@ -131,16 +131,34 @@ def speechify(text: str, max_chars: int) -> str:
 
 
 def last_reply_text(messages: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> str:
-    """Concatenated assistant text from a last_turn slice (user turn + reply)."""
+    """Text from the newest turn containing a meaningful assistant reply.
+
+    Provider control operations can append a synthetic assistant acknowledgement
+    after the real turn. Walk backward across turn boundaries so those records do
+    not become the user-facing "latest reply".
+    """
     parts: list[str] = []
-    for message in messages:
-        if message.get("role") != "assistant":
+    found_turn = False
+    for message in reversed(messages):
+        role = message.get("role")
+        if role == "user":
+            if found_turn:
+                break
             continue
+        if role != "assistant":
+            continue
+        message_parts: list[str] = []
         for block in message.get("content") or []:
-            if block.get("type") == "text":
-                value = str(block.get("text") or "")
-                if value.strip():
-                    parts.append(value)
+            if block.get("type") != "text":
+                continue
+            value = str(block.get("text") or "")
+            if value.strip().casefold() in {"no response requested."}:
+                continue
+            if value.strip():
+                message_parts.append(value)
+        if message_parts:
+            parts[0:0] = message_parts
+            found_turn = True
     return "\n\n".join(parts).strip()
 
 

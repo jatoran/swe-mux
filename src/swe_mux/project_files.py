@@ -4,6 +4,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import tomllib
 from collections.abc import Sequence
 from dataclasses import asdict
@@ -31,11 +32,33 @@ FORBIDDEN_PROJECT_FIELDS = {
     "executable",
     "command",
 }
-NOTE_KINDS = {"projects"}
+NOTE_KINDS = {"projects", "sessions"}
+_SAFE_NOTE_ID = re.compile(r"[A-Za-z0-9._-]{1,120}\Z")
 
 
 def revision(data: bytes | None) -> str:
     return hashlib.sha256(data or b"").hexdigest()[:24] if data is not None else "missing"
+
+
+def safe_note_filename(identity: str) -> str:
+    if _SAFE_NOTE_ID.fullmatch(identity):
+        return identity
+    if not identity or len(identity) > 512 or any(ord(character) < 32 for character in identity):
+        raise ValueError("note identity must be a non-empty printable string up to 512 characters")
+    return f"id-{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]}"
+
+
+def note_path(root: str | Path, kind: str, identity: str) -> Path:
+    if kind not in NOTE_KINDS:
+        raise ValueError("note kind must be projects or sessions")
+    mux_dir = Path(root).resolve() / ".swe-mux" / "notes"
+    if kind == "projects":
+        return mux_dir / "project.md"
+    return mux_dir / "sessions" / f"{safe_note_filename(identity)}.md"
+
+
+def note_exists(root: str | Path, kind: str, identity: str) -> bool:
+    return note_path(root, kind, identity).is_file()
 
 
 def _note_body(text: str) -> str:
@@ -50,6 +73,15 @@ def _atomic_write(path: Path, data: bytes) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_bytes(data)
     os.replace(temporary, path)
+
+
+def _create_note_file(path: Path, header: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(header)
+    except FileExistsError:
+        pass
 
 
 def project_path(root: str | Path, relative_path: str = "") -> Path:
@@ -315,9 +347,13 @@ async def write_project_config(
 
 async def read_note(cwd: str | Path, kind: str, identity: str) -> dict[str, Any]:
     if kind not in NOTE_KINDS:
-        raise ValueError("project note kind must be projects")
+        raise ValueError("note kind must be projects or sessions")
     project, mux_dir = await project_status(cwd)
-    path = mux_dir / "notes" / "project.md"
+    path = (
+        mux_dir / "notes" / "project.md"
+        if kind == "projects"
+        else mux_dir / "notes" / "sessions" / f"{safe_note_filename(identity)}.md"
+    )
     if not path.exists():
         return {
             "project": asdict(project),
@@ -374,4 +410,15 @@ async def write_note(
     if not markdown.startswith("---\nswe_mux_note = 1\n"):
         body = header + markdown
     _atomic_write(Path(current["path"]), body.encode("utf-8"))
+    return await read_note(cwd, kind, identity)
+
+
+async def initialize_note(cwd: str | Path, kind: str, identity: str) -> dict[str, Any]:
+    """Create an empty durable note without overwriting an existing note."""
+    current = await read_note(cwd, kind, identity)
+    if current["exists"]:
+        return current
+    path = Path(current["path"])
+    header = f"---\nswe_mux_note = 1\nkind = {json.dumps(kind)}\nid = {json.dumps(identity)}\n---\n"
+    _create_note_file(path, header)
     return await read_note(cwd, kind, identity)

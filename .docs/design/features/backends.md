@@ -75,4 +75,4 @@
 - Hook command: `src/swe_mux/hook_client.py`
 - CLI shims: `src/swe_mux/launchers.py`, `src/swe_mux/agent_launcher.py`
 - Promotion lifecycle: `src/swe_mux/session.py`
-- Replay/readiness contract: `features/delivery-readiness.md`
+- Replay/readiness contract: `delivery-readiness.md`

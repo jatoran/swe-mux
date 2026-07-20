@@ -444,6 +444,68 @@ async def test_codex_backend_quota_mapping(tmp_path: Path) -> None:
     assert updated is None
 
 
+async def test_claude_quota_maps_fable_scoped_weekly(tmp_path: Path) -> None:
+    manager = ProviderAccountManager(tmp_path, EventBus(), home=tmp_path / "home")
+
+    async def request(
+        self: ProviderAccountManager,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        data: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        return 200, {
+            "five_hour": {"utilization": 29, "resets_at": "2026-07-20T17:49:59+00:00"},
+            "seven_day": {"utilization": 90, "resets_at": "2026-07-23T06:59:59+00:00"},
+            "seven_day_opus": None,
+            "limits": [
+                {"kind": "session", "group": "session", "percent": 29},
+                {"kind": "weekly_all", "group": "weekly", "percent": 90, "scope": None},
+                {
+                    "kind": "weekly_scoped",
+                    "group": "weekly",
+                    "percent": 80,
+                    "resets_at": "2026-07-23T06:59:59+00:00",
+                    "scope": {"model": {"id": None, "display_name": "Fable"}},
+                },
+            ],
+        }
+
+    manager._json_request = MethodType(request, manager)  # type: ignore[method-assign]
+    quota, updated = await manager._fetch_claude({"claudeAiOauth": {"accessToken": "secret"}})
+
+    assert quota["session"]["used_percent"] == 29
+    assert quota["weekly"]["used_percent"] == 90
+    assert quota["fable"]["used_percent"] == 80
+    assert quota["fable"]["window_minutes"] == 10080
+    assert quota["fable"]["resets_at"] is not None
+    assert updated is None
+
+
+async def test_claude_quota_fable_absent_is_none(tmp_path: Path) -> None:
+    manager = ProviderAccountManager(tmp_path, EventBus(), home=tmp_path / "home")
+
+    async def request(
+        self: ProviderAccountManager,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        data: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        return 200, {
+            "five_hour": {"utilization": 10, "resets_at": "2026-07-20T17:49:59+00:00"},
+            "seven_day": {"utilization": 20, "resets_at": "2026-07-23T06:59:59+00:00"},
+            "limits": [{"kind": "weekly_all", "group": "weekly", "percent": 20, "scope": None}],
+        }
+
+    manager._json_request = MethodType(request, manager)  # type: ignore[method-assign]
+    quota, _ = await manager._fetch_claude({"claudeAiOauth": {"accessToken": "secret"}})
+
+    assert quota["fable"] is None
+
+
 def test_provider_account_routes_are_registered(tmp_path: Path) -> None:
     app = create_app(Config(data_dir=tmp_path))
     routes = {(route.method, route.resource.canonical) for route in app.router.routes()}

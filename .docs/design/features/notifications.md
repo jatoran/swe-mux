@@ -8,6 +8,9 @@ failure, and confirmed unexpected quota reset. Reset sounds are emitted only aft
 quota classifier's timer, drop-size, floor, independent-confirmation, and account/auth gates all
 pass. EventBus semantic deduplication collapses hook and transcript duplicates; the browser adds
 a short sequence-aware guard. Events explicitly scoped to subagents/sidechains are rejected.
+The account popover can persistently classify a Codex alert as manual usage or discard any alert
+as a detection error. Reviewed evidence remains in telemetry history but leaves the active alert
+summary; review cannot retract a sound already emitted for the original confirmed event.
 
 Preferences live only in browser localStorage: master enable, volume, quiet hours (including
 overnight ranges), per-event mute, a selected bundled preset, or an audio file no larger than

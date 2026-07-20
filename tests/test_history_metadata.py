@@ -41,6 +41,7 @@ async def test_history_migration_adds_metadata_without_losing_rows(tmp_path: Pat
     assert row["argv_json"] is None
     assert row["pinned_attention"] == 0
     assert row["shell_profile_id"] is None
+    assert row["note_id"] == "legacy"
     history.close()
 
     reopened = HistoryIndex(path)
@@ -56,6 +57,12 @@ async def test_history_migration_adds_metadata_without_losing_rows(tmp_path: Pat
         "last_compaction_at",
         "compaction_capability",
         "compaction_confidence",
+        "last_message_at",
+        "last_message_role",
+        "native_started_at",
+        "time_summary_mtime_ns",
+        "time_summary_size",
+        "note_id",
     } <= columns
     assert await reopened.history_entry("legacy") is not None
     reopened.close()

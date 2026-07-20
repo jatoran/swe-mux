@@ -40,7 +40,7 @@ KEYBINDING_COMMANDS = (
     ("session.reveal", "Reveal selected session directory", "session"),
     ("session.resume", "Resume selected agent session", "session"),
     ("session.broadcastMembership", "Toggle selected session broadcast", "session"),
-    ("session.projectNote", "Open selected session project note", "notes"),
+    ("session.note", "Open selected session note", "notes"),
     ("project.create", "Create project", "project"),
     ("project.newTerminal", "New terminal in selected project", "project"),
     ("project.newTerminalCustom", "New custom terminal in selected project", "project"),

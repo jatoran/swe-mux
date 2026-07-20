@@ -124,6 +124,18 @@ def test_recursive_layout_validates_splits_ratios_and_unique_resources() -> None
     assert layout["root"]["second"]["first"]["children"] == [
         {"type": "leaf", "kind": "note", "id": "notes"}
     ]
+    history_layout = normalize_layout(
+        {
+            "version": 6,
+            "root": {
+                "type": "stack",
+                "id": "history-pane",
+                "active_child_id": "history:archive",
+                "children": [{"type": "leaf", "kind": "history", "id": "history:archive"}],
+            },
+        }
+    )
+    assert history_layout["root"]["children"][0]["kind"] == "history"
     with pytest.raises(ValueError, match="same resource"):
         normalize_layout(
             {

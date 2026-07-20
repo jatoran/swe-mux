@@ -80,14 +80,38 @@ export class ResilientClipboardProvider implements IClipboardProvider {
   }
 }
 
-export async function copyPreparedText(text: string, textarea?: HTMLTextAreaElement | null): Promise<boolean> {
+type ClipboardWriter = { writeText: (text: string) => Promise<void> }
+type LegacyCopy = () => boolean
+
+export async function copyPreparedText(
+  text: string,
+  textarea?: HTMLTextAreaElement | null,
+  clipboard: ClipboardWriter | null | undefined = navigator.clipboard,
+  legacyCopy: LegacyCopy = () => document.execCommand('copy'),
+): Promise<boolean> {
+  let modernWrite: Promise<void> | null = null
   try {
-    await navigator.clipboard.writeText(text)
-    return true
+    modernWrite = clipboard?.writeText(text) ?? null
   } catch {
-    if (!textarea) return false
+    modernWrite = null
+  }
+
+  // Keep this synchronous with the button gesture. Mobile browsers commonly
+  // expire activation before a rejected Clipboard promise settles.
+  if (textarea) {
     textarea.focus()
     textarea.select()
-    try { return document.execCommand('copy') } catch { return false }
+    textarea.setSelectionRange?.(0, text.length)
+    try {
+      if (legacyCopy()) {
+        // The modern write was intentionally started in the same user gesture;
+        // consume a later rejection even though the synchronous fallback won.
+        void modernWrite?.catch(() => {})
+        return true
+      }
+    } catch { /* use the modern result */ }
   }
+
+  if (!modernWrite) return false
+  try { await modernWrite; return true } catch { return false }
 }

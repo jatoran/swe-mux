@@ -26,9 +26,11 @@ from aiohttp.multipart import BodyPartReader
 
 from .adapters import BackendAdapter, ClaudeAdapter, CodexAdapter, ShellAdapter
 from .automation import (
+    MAX_SLICE_BYTES,
     OBSERVER_SCHEMAS,
     AutomationEngine,
     RuleValidationError,
+    TranscriptSliceService,
     normalize_event,
     parse_rules,
     serialize_rules,
@@ -42,6 +44,7 @@ from .fleet_intelligence import FleetIntelligence
 from .git_monitor import GitMonitor, _git
 from .git_projects import ProjectIdentity, resolve_project
 from .history import HistoryIndex
+from .history_backfill import HistoryBackfillManager
 from .keybindings import (
     DEFAULT_KEYBINDINGS,
     KEYBINDING_COMMANDS,
@@ -59,7 +62,9 @@ from .processes import PreviewRegistry, ProcessInspector
 from .profiles import profile_payload, resolve_profile
 from .project_files import (
     effective_project_ignores,
+    initialize_note,
     list_project_directory,
+    note_exists,
     project_path,
     read_note,
     read_project_config,
@@ -82,7 +87,7 @@ from .spawn_contract import SpawnRequest
 from .tailscale import is_tailscale_ip, tailscale_status
 from .transcript_view import parse_transcript_cached
 from .usage import UsageManager
-from .voice import VoiceError, VoiceService, VoiceStore, clip_snapshot
+from .voice import VoiceError, VoiceService, VoiceStore, clip_snapshot, last_reply_text
 from .win_jobobj import ReaperJob
 
 log = logging.getLogger(__name__)
@@ -283,6 +288,9 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.delete("/api/projects/{project_id}", delete_project),
             web.get("/api/projects/{project_id}/note", get_project_note),
             web.put("/api/projects/{project_id}/note", put_project_note),
+            web.get("/api/projects/{project_id}/session-notes/{note_id}", get_session_note),
+            web.post("/api/projects/{project_id}/session-notes/{note_id}", initialize_session_note),
+            web.put("/api/projects/{project_id}/session-notes/{note_id}", put_session_note),
             web.get("/api/projects/{project_id}/files", list_project_files),
             web.get("/api/projects/{project_id}/file", get_project_file),
             web.put("/api/projects/{project_id}/file", put_project_file),
@@ -307,6 +315,7 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.get("/api/sessions", list_sessions),
             web.post("/api/sessions", spawn_session),
             web.get("/api/sessions/{sid}", get_session),
+            web.get("/api/sessions/{sid}/last-reply", session_last_reply),
             web.patch("/api/sessions/{sid}", patch_session),
             web.delete("/api/sessions/{sid}", delete_session),
             web.post("/api/sessions/{sid}/input", session_input),
@@ -318,6 +327,10 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.post("/api/sessions/{sid}/demote", demote_session),
             web.get("/api/history", list_history),
             web.get("/api/history/projects", list_history_projects),
+            web.get("/api/history/backfills", list_history_backfills),
+            web.post("/api/history/backfills", start_history_backfill),
+            web.get("/api/history/backfills/{job_id}", get_history_backfill),
+            web.delete("/api/history/backfills/{job_id}", cancel_history_backfill),
             web.get("/api/history/{sid}/transcript", history_transcript),
             web.post("/api/history/{sid}/resume", resume_history),
             web.delete("/api/history/{sid}", delete_history_entry),
@@ -332,6 +345,7 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.post("/api/usage/refresh", refresh_usage),
             web.delete("/api/usage/cache", clear_usage_cache),
             web.get("/api/telemetry/operational", operational_telemetry),
+            web.patch("/api/telemetry/quota-resets/{reset_id}", review_quota_reset),
             web.get("/api/provider-accounts", get_provider_accounts),
             web.post("/api/provider-accounts/refresh", refresh_provider_accounts),
             web.post("/api/provider-accounts/{provider}/capture", capture_provider_account),
@@ -382,6 +396,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await telemetry.prune(process_retention_days=config.process_evidence_retention_days)
     projects = ProjectManager(history)
     await projects.start()
+    history_backfills = HistoryBackfillManager(history, projects)
     reaper = ReaperJob()
     adapters: dict[str, BackendAdapter] = {
         "shell": ShellAdapter(config.shell_exe),
@@ -466,6 +481,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         history=history,
         events=events,
         projects=projects,
+        history_backfills=history_backfills,
         sessions=sessions,
         reaper=reaper,
         git_monitor=git_monitor,
@@ -491,6 +507,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         if not reconcile_task.done():
             reconcile_task.cancel()
         await asyncio.gather(reconcile_task, return_exceptions=True)
+    await history_backfills.stop()
     for task in tuple(app["automation_tasks"]):
         task.cancel()
     await asyncio.gather(*app["automation_tasks"], return_exceptions=True)
@@ -1647,6 +1664,64 @@ async def put_project_note(request: web.Request) -> web.Response:
         "project_note_changed",
         source="user",
         project_id=project.id,
+        revision=result["revision"],
+    )
+    result.update({"project_id": project.id, "project_name": project.name})
+    return json_response(result)
+
+
+async def _session_note_owner(request: web.Request):  # type: ignore[no-untyped-def]
+    project_id = request.match_info["project_id"]
+    note_id = request.match_info["note_id"]
+    project = request.app["projects"].projects.get(project_id)
+    if not project:
+        raise ValueError("unknown project")
+    live = request.app["sessions"].sessions.get(note_id)
+    live_owned = bool(live and live.record.project_id == project_id)
+    historical = await request.app["history"].session_note_owned(project_id, note_id)
+    if not live_owned and not historical and not note_exists(project.root, "sessions", note_id):
+        raise ValueError("session note is not owned by this project")
+    return project, note_id
+
+
+async def get_session_note(request: web.Request) -> web.Response:
+    project, note_id = await _session_note_owner(request)
+    note = await read_note(project.root, "sessions", note_id)
+    note.update({"project_id": project.id, "project_name": project.name})
+    return json_response(note)
+
+
+async def initialize_session_note(request: web.Request) -> web.Response:
+    project, note_id = await _session_note_owner(request)
+    note = await initialize_note(project.root, "sessions", note_id)
+    await request.app["events"].emit(
+        "session_note_initialized", source="user", project_id=project.id, note_id=note_id
+    )
+    note.update({"project_id": project.id, "project_name": project.name})
+    return json_response(note, 201)
+
+
+async def put_session_note(request: web.Request) -> web.Response:
+    project, note_id = await _session_note_owner(request)
+    body = await request.json()
+    try:
+        result = await write_note(
+            project.root,
+            "sessions",
+            note_id,
+            str(body.get("markdown") or ""),
+            str(body.get("revision") or "missing"),
+        )
+    except ValueError as exc:
+        if "changed externally" in str(exc):
+            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        raise
+    await request.app["events"].emit(
+        "session_note_changed",
+        source="user",
+        project_id=project.id,
+        note_id=note_id,
+        revision=result["revision"],
     )
     result.update({"project_id": project.id, "project_name": project.name})
     return json_response(result)
@@ -1907,6 +1982,11 @@ async def list_sessions(request: web.Request) -> web.Response:
     readiness = request.app["fleet"].readiness
     for session in manager.sessions.values():
         item = session.record.snapshot()
+        item["note_id"] = session.record.id
+        project = request.app["projects"].projects.get(session.record.project_id)
+        item["note_exists"] = bool(
+            project and note_exists(project.root, "sessions", session.record.id)
+        )
         delivery = readiness.evaluate(session, record_metrics=False)
         item["delivery_readiness"] = {
             "state": delivery["delivery_state"],
@@ -2356,9 +2436,7 @@ async def _project_snapshot(request: web.Request, project) -> dict[str, Any]:  #
         else "project_file"
         if values.get("default_shell_profile")
         else "global",
-        "prompt_library_scope": "project_file"
-        if values.get("prompt_library_scope")
-        else "global",
+        "prompt_library_scope": "project_file" if values.get("prompt_library_scope") else "global",
         "notification_sounds_enabled": "project_file"
         if "notification_sounds_enabled" in values
         else "global",
@@ -2419,16 +2497,12 @@ async def reorder_projects(request: web.Request) -> web.Response:
     ):
         raise ValueError({"expected_order": "must be the last observed Project order"})
     try:
-        projects = await request.app["projects"].reorder(
-            ordered_ids, expected_order=expected_order
-        )
+        projects = await request.app["projects"].reorder(ordered_ids, expected_order=expected_order)
     except ValueError as exc:
         if "order changed" in str(exc):
             return json_response({"error": str(exc), "code": "order_conflict"}, 409)
         raise
-    await request.app["events"].emit(
-        "projects_reordered", source="user", project_ids=ordered_ids
-    )
+    await request.app["events"].emit("projects_reordered", source="user", project_ids=ordered_ids)
     return json_response(
         await asyncio.gather(*(_project_snapshot(request, item) for item in projects))
     )
@@ -2591,21 +2665,50 @@ async def list_history(request: web.Request) -> web.Response:
     external_value = request.query.get("external")
     page = await request.app["history"].history_page(
         query=request.query.get("q", ""),
+        search_scope=request.query.get("scope", "all"),
         backend=request.query.get("backend"),
         project_id=request.query.get("project"),
         state=request.query.get("state"),
         external=(external_value.lower() == "true") if external_value is not None else None,
         date_from=float(request.query["date_from"]) if request.query.get("date_from") else None,
         date_to=float(request.query["date_to"]) if request.query.get("date_to") else None,
+        time_basis=request.query.get("time_basis", "started"),
         cursor=request.query.get("cursor"),
         limit=int(request.query.get("limit", min(50, request.app["config"].history_limit))),
     )
+    await request.app["history"].refresh_time_summaries(page["items"])
     await _decorate_generated_titles(request.app, page["items"])
     return json_response(page)
 
 
 async def list_history_projects(request: web.Request) -> web.Response:
     return json_response({"items": await request.app["history"].history_projects()})
+
+
+async def start_history_backfill(request: web.Request) -> web.Response:
+    body = await request.json()
+    project_id = str(body.get("project_id") or "")
+    if not project_id:
+        raise ValueError("project_id is required")
+    return json_response({"job": request.app["history_backfills"].start(project_id)}, 202)
+
+
+async def list_history_backfills(request: web.Request) -> web.Response:
+    return json_response(
+        {"items": request.app["history_backfills"].list(request.query.get("project_id"))}
+    )
+
+
+async def get_history_backfill(request: web.Request) -> web.Response:
+    return json_response(
+        {"job": request.app["history_backfills"].get(request.match_info["job_id"])}
+    )
+
+
+async def cancel_history_backfill(request: web.Request) -> web.Response:
+    return json_response(
+        {"job": request.app["history_backfills"].cancel(request.match_info["job_id"])}
+    )
 
 
 async def history_transcript(request: web.Request) -> web.Response:
@@ -2623,11 +2726,21 @@ async def history_transcript(request: web.Request) -> web.Response:
     messages = await asyncio.to_thread(
         parse_transcript_cached, Path(transcript), str(row["backend"])
     )
+    stat = await asyncio.to_thread(Path(transcript).stat)
+    await request.app["history"].replace_history_messages(
+        str(row["id"]), messages, mtime_ns=stat.st_mtime_ns, size=stat.st_size
+    )
+    row = await request.app["history"].history_entry(str(row["id"])) or row
+    matches = await request.app["history"].history_message_matches(
+        str(row["id"]), request.query.get("q", ""), request.query.get("scope", "all")
+    )
     annotations = await request.app["automation_store"].annotations(
         agent_run_id=str(row["id"]), limit=200
     )
     await _decorate_generated_titles(request.app, [row])
-    return json_response({"entry": row, "messages": messages, "annotations": annotations})
+    return json_response(
+        {"entry": row, "messages": messages, "annotations": annotations, "matches": matches}
+    )
 
 
 async def resume_history(request: web.Request) -> web.Response:
@@ -2727,6 +2840,31 @@ async def voice_status(request: web.Request) -> web.Response:
     return json_response(await voice.status())
 
 
+async def session_last_reply(request: web.Request) -> web.Response:
+    """Return normalized assistant text without routing through terminal OSC 52."""
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    if session.record.backend not in {"claude", "codex"}:
+        return json_response({"error": "last reply is available only for agent sessions"}, 409)
+    path = session.transcript_path
+    if not path or not path.exists():
+        return json_response({"error": "the agent transcript is not available yet"}, 409)
+    try:
+        transcript = await TranscriptSliceService().build(
+            path,
+            session.record.backend,
+            "last_n_messages",
+            max_bytes=MAX_SLICE_BYTES,
+        )
+    except (OSError, TimeoutError, ValueError) as exc:
+        return json_response({"error": str(exc) or "the agent transcript could not be read"}, 409)
+    text = last_reply_text(transcript.messages)
+    if not text:
+        return json_response(
+            {"error": "no assistant reply text was found in the recent transcript"}, 409
+        )
+    return json_response({"text": text, "agent_run_id": session.record.agent_run_id})
+
+
 async def voice_generate(request: web.Request) -> web.Response:
     voice: VoiceService = request.app["voice"]
     session = request.app["sessions"].resolve(request.match_info["sid"])
@@ -2798,6 +2936,21 @@ async def operational_telemetry(request: web.Request) -> web.Response:
     )
 
 
+async def review_quota_reset(request: web.Request) -> web.Response:
+    body = await request.json()
+    resolution = str(body.get("resolution") or "")
+    telemetry: OperationalTelemetryStore = request.app["telemetry"]
+    reviewed = await telemetry.review_quota_reset(request.match_info["reset_id"], resolution)
+    await request.app["events"].emit(
+        "quota_reset_reviewed",
+        source="user",
+        reset_id=reviewed["id"],
+        provider=reviewed["provider"],
+        resolution=reviewed["review_status"],
+    )
+    return json_response({"item": reviewed, "reset_alert": await telemetry.reset_summary()})
+
+
 async def get_provider_accounts(request: web.Request) -> web.Response:
     accounts: ProviderAccountManager = request.app["provider_accounts"]
     snapshot = await accounts.reconcile_current()
@@ -2813,9 +2966,7 @@ async def get_provider_accounts(request: web.Request) -> web.Response:
 async def refresh_provider_accounts(request: web.Request) -> web.Response:
     accounts: ProviderAccountManager = request.app["provider_accounts"]
     body = await request.json() if request.can_read_body else {}
-    return json_response(
-        await accounts.refresh(body.get("account_id"), force_identity_probe=True)
-    )
+    return json_response(await accounts.refresh(body.get("account_id"), force_identity_probe=True))
 
 
 async def capture_provider_account(request: web.Request) -> web.Response:

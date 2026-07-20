@@ -3,7 +3,7 @@
 ## What it is
 
 Daemon-owned interactive ConPTY processes with immutable Project ownership, bounded replay,
-and detachable browser viewports.
+and reattachable browser viewports.
 
 ## Model
 
@@ -37,6 +37,9 @@ and detachable browser viewports.
 - Slow subscribers receive a gap frame and deterministic bounded replay.
 - Explicit kill attempts adapter-specific graceful exit before process-tree termination.
 - Ended sessions remain visible until explicitly dismissed; history remains durable.
+- Every terminal type can lazily initialize a Project-owned session note from its context menu.
+  The note survives terminal exit and daemon restart as a file under `.swe-mux/notes/sessions/`;
+  agent History retains the terminal note identity so it can be reopened later.
 - Resume requires a target Project and a valid native identity/transcript. The new process
   starts at the selected Project root and receives a new mux identity.
 
@@ -52,5 +55,6 @@ and detachable browser viewports.
 
 ## Relates to
 
-- `projects-and-notes.md`: canonical ownership and resources.
+- `projects.md`: canonical ownership and Project registration.
+- `project-resources.md`: terminal-owned session notes.
 - `history.md`: durable agent-run lifecycle.

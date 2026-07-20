@@ -23,6 +23,20 @@ def test_mobile_workspace_and_recovery_contracts_remain_available() -> None:
     assert "mobile-session-switcher" not in combined
     assert "mobile-new-session" not in combined
     assert ".pane-stack>.stack-tabs{display:flex;flex-wrap:nowrap" in css
+    assert "mobileWorkspaceProjection" in combined
+    assert "mobile-unified-tabs" in combined
+    assert ".pane-stack:not(.focused-pane):not(.empty-workspace-pane):not(.mobile-unified-workspace){display:none}" in css
+    assert "contextMenu.source!=='mobile'" in combined
+    assert "tabMenu.source==='mobile'" in combined
+    assert "beginWorkspaceTabDrag" in combined
+    assert "beginProjectPointerDrag" in combined
+    assert "beginSessionPointerDrag" in combined
+    assert "showPointerDropIndicator" in combined
+    assert 'data-pointer-drop-indicator="split-bottom"' in css
+    assert 'data-pointer-drop-indicator="tab-bar"' in css
+    assert 'data-pointer-drop-indicator="group-session"' in css
+    assert "draggable=" not in source("App.tsx")
+    assert "onDragStart=" not in source("App.tsx")
     assert "clipboardImage(Array.from(event.clipboardData.items))" in combined
     assert "host.current.addEventListener('drop', drop)" in combined
     assert "interactive-widget=resizes-content" in index
@@ -68,6 +82,8 @@ def test_project_resources_share_unified_mixed_view_panes() -> None:
     css = source("style.css")
 
     assert "openProjectNotes" in app
+    assert "openSessionNotes" in app
+    assert "Open session note" in app
     assert "openProjectFiles" in app
     assert "openProjectFile" in app
     assert "ProjectResource" in app
@@ -78,6 +94,7 @@ def test_project_resources_share_unified_mixed_view_panes() -> None:
     assert "showNoteWorkspace" not in app
     assert not (ROOT / "frontend" / "src" / "NotesWorkspace.tsx").exists()
     assert "/api/projects/${project.id}/note" in resource
+    assert "/api/projects/${project.id}/session-notes/${encodeURIComponent(resource.id)}" in resource
     assert "/api/projects/${project.id}/files" in resource
     assert "/api/projects/${project.id}/file" in resource
     assert "onOpenFile" in resource
@@ -128,3 +145,17 @@ def test_browser_title_stays_stable_without_attention_count() -> None:
 
     assert "<title>swe-mux</title>" in index
     assert "document.title" not in combined
+
+
+def test_history_filters_fit_narrow_split_panes() -> None:
+    css = source("style.css")
+    history = source("HistoryBrowser.tsx")
+
+    assert ".history-workspace { container-type:inline-size" in css
+    assert ".history-search>* { min-width:0;max-width:100% }" in css
+    assert ".history-search { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px }" in css
+    assert "@container (max-width:620px)" in css
+    assert "time_basis" in history
+    assert "Time: last message" in history
+    assert "timestampLabel(message.ts)" in history
+    assert "Started {timestampLabel(historyStart(entry))}" in history

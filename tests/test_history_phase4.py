@@ -44,6 +44,23 @@ async def test_shell_history_is_hidden_then_promotion_converts_one_row(tmp_path:
     assert rows[0]["id"] == "one"
     assert rows[0]["native_id"] == "claude-native"
     assert rows[0]["spawned_at"] == 123.0
+    assert rows[0]["note_id"] == "one"
+    history.close()
+
+
+async def test_nested_agent_history_keeps_the_owning_terminal_note_id(tmp_path: Path) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    session = agent("terminal-id", "shell", tmp_path)
+    await history.session_started(session, None)
+    session.backend = "codex"
+    session.native_session_id = "codex-native"
+    session.agent_run_id = "agent-run-id"
+    await history.session_promoted(session, str(tmp_path / "codex.jsonl"))
+
+    row = await history.history_entry("agent-run-id")
+    assert row is not None
+    assert row["note_id"] == "terminal-id"
+    assert await history.session_note_owned("project", "terminal-id")
     history.close()
 
 

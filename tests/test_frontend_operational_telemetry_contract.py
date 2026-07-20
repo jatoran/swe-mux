@@ -44,6 +44,9 @@ def test_reset_indicator_is_purple_deduplicated_and_sound_is_device_local() -> N
     assert "swe-mux:last-seen-reset" in accounts
     assert "swe-mux:session-sounds-v1" in sounds
     assert "unexpected_quota_reset" in sounds
+    assert "/api/telemetry/quota-resets/" in accounts
+    assert "manual Codex usage" in accounts
+    assert "discard as error" in accounts
     assert "Enable sounds on this device" in sound_settings
     assert "#a855f7" in styles
 

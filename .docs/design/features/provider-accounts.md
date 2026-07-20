@@ -72,6 +72,9 @@
 - Confirmed unexpected resets expose a purple UI indicator and optional deduplicated
   per-device sound. Attribution shows estimate ranges, ambiguity, provider lag, and an
   explicit external/unassigned remainder; it never claims shared-account identity.
+- The account popover can review a reset as manual Codex usage or discard it as a detection
+  error. Review is server-persisted, removes the row from active notifications, retains it in
+  the evidence log, and rejects manual-usage classification for Claude rows.
 - Desktop status uses one bottom-sidebar row per provider: terminal-style icon, current
   identity, 5-hour/weekly quota percentages with compact reset countdowns, and live
   quota/auth state. The full switcher is a viewport-level overlay anchored to this status
@@ -90,6 +93,7 @@ POST   /api/provider-accounts/{provider}/login
 PATCH  /api/provider-accounts/{provider}/{account-id}
 POST   /api/provider-accounts/{provider}/{account-id}/select
 DELETE /api/provider-accounts/{provider}/{account-id}
+PATCH  /api/telemetry/quota-resets/{reset-id}
 ```
 
 ```ts

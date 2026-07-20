@@ -13,6 +13,7 @@ import { detectedServers, type DetectedServer } from './sessionProcesses'
 import { PreviewPane } from './PreviewPane'
 import { Notifications, type NotificationData, type UiNotification } from './Notifications'
 import { UsageDashboard } from './UsageDashboard'
+import { HistoryBrowser } from './HistoryBrowser'
 import { AccountSwitcher } from './ProviderAccounts'
 import { PromptLibrary } from './PromptLibrary'
 import { AutomationDashboard } from './AutomationDashboard'
@@ -26,10 +27,11 @@ import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } fr
 import { bindingFor, displayChord, runCommand, searchCommands, type Command } from './commands'
 import { clampContextMenuLeft } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
+import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, resolveInitialFocus, viewUrl } from './viewState'
-import { beginDragPreview, reorderForHover, reorderTargetFromContainer, type DropSide } from './dragReorder'
+import { reorderForHover, reorderTargetFromContainer, type DropSide } from './dragReorder'
 import {
-  emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf,
+  browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
   activateContainingStack, activateStackChild, addToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, openTab, paneNeighborIds, paneStacks, reorderStack, resolveLayout, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
   type PaneDirection, type PaneLeaf, type PaneLeafKind, type PaneNode, type SplitDirection,
@@ -79,6 +81,7 @@ type HistoryEntry = {
   tokens_in?: number; tokens_out?: number; model?: string; measurement_source?: string
   compaction_count?:number;last_compaction_at?:number;compaction_capability?:string;compaction_confidence?:string
   auto_named?:number;generated_title?:string
+  note_id?:string
 }
 type DerivedAnnotation={id:string;tag:string;content:string;provenance:string;resolved_model?:string;confidence?:number;cost_usd?:number;created_at:number}
 type Transcript = { entry: HistoryEntry; messages: Array<{ role: string; content: Array<{ type: string; text?: string; name?: string; input?: unknown }> }>;annotations:DerivedAnnotation[] }
@@ -88,13 +91,13 @@ type ReviewState={entry:HistoryEntry;instructions:string;project:string;preview:
 type HandoffState={entry:HistoryEntry;markdown:string;message:string}
 type HistoryPage = { items: HistoryEntry[]; next_cursor: string | null }
 type HistoryProject = { project_id: string | null; label: string; root?: string; sessions: number; last_activity: number }
-type ContextState = { session: Session; x: number; y: number; source: 'sidebar'|'tab'|'pane' } | null
+type ContextState = { session: Session; x: number; y: number; source: 'sidebar'|'tab'|'pane'|'mobile' } | null
 type ProjectContext = { project: Project; x: number; y: number } | null
 type SidebarContext = { x:number;y:number } | null
 type NoteContext = { resourceId:string;projectId:string;x:number;y:number } | null
-type TabContext = { leaf:PaneLeaf;label:string;projectId:string;x:number;y:number } | null
+type TabContext = { leaf:PaneLeaf;label:string;projectId:string;x:number;y:number;source:'tab'|'mobile' } | null
 type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; project: Project }
-type NoteTarget={projectId:string;terminalSessionId:string|null;kind:'note'|'files'|'file';ownerLabel:string}
+type NoteTarget={projectId:string;terminalSessionId:string|null;kind:'note'|'session-note'|'files'|'file';ownerLabel:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
 type PendingSpawnPlacement = {
@@ -233,7 +236,7 @@ export function App() {
   const [usageOpen, setUsageOpen] = useState(false)
   const [automationOpen,setAutomationOpen]=useState(false)
   const [projectGroups,setProjectGroups]=useState<ProjectGroup[]>([])
-  const [dragSessionId,setDragSessionId]=useState<string|null>(null)
+  const dragSessionTargetRef=useRef<{sessionId?:string;stackId?:string;projectId:string}|null>(null)
   type ProjectDrag={id:string;previewIds:string[];overId:string|null;side:DropSide|null}
   type PaneDropZone='tabs'|'left'|'right'|'top'|'bottom'
   type StackTabDrag={stackId:string;childId:string;kind:PaneLeafKind;targetStackId:string;zone:PaneDropZone;previewIds:string[];overId:string|null;side:DropSide|null}
@@ -241,17 +244,82 @@ export function App() {
   const dragProjectRef=useRef<ProjectDrag|null>(null)
   const [dragStackTab,setDragStackTabState]=useState<StackTabDrag|null>(null)
   const dragStackTabRef=useRef<StackTabDrag|null>(null)
+  const suppressDragClickRef=useRef<string|null>(null)
+  const pointerDropIndicatorRef=useRef<HTMLElement|null>(null)
   const setDragProject=(next:ProjectDrag|null)=>{dragProjectRef.current=next;setDragProjectState(next)}
   const setDragStackTab=(next:StackTabDrag|null)=>{dragStackTabRef.current=next;setDragStackTabState(next)}
+  const previewDragStackTab=(next:StackTabDrag)=>{dragStackTabRef.current=next}
   const [promptLibraryOpen,setPromptLibraryOpen]=useState(false)
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [mobileInput, setMobileInput] = useState<MobileInputSettings>(defaultMobileInputSettings)
+  const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
   const [profiles, setProfiles] = useState<ShellProfile[]>([])
   const [defaultProfile, setDefaultProfile] = useState('default')
   const [launcherProfile, setLauncherProfile] = useState(localStorage.getItem('mux.lastProfile') || '')
   const [clientStartupTimings,setClientStartupTimings]=useState<Record<string,ClientStartupTiming>>({})
   const clientStartupTimingValues=useRef<Record<string,ClientStartupTiming>>({})
+
+  const showPointerDropIndicator=(element:HTMLElement|null,indicator?:string)=>{
+    const current=pointerDropIndicatorRef.current
+    if(current===element&&element?.dataset.pointerDropIndicator===indicator)return
+    current?.removeAttribute('data-pointer-drop-indicator')
+    pointerDropIndicatorRef.current=element
+    if(element&&indicator)element.dataset.pointerDropIndicator=indicator
+  }
+
+  const beginPointerDrag=(
+    event:JSX.TargetedPointerEvent<HTMLElement>,label:string,identity:string,
+    onStart:()=>void,onMove:(event:PointerEvent)=>void,onDrop:()=>void,onCancel:()=>void,
+  )=>{
+    if(event.button!==0||!event.isPrimary)return
+    const source=event.currentTarget
+    const pointerId=event.pointerId,startX=event.clientX,startY=event.clientY
+    let active=false,done=false,ghost:HTMLDivElement|null=null
+    const cleanup=()=>{
+      window.removeEventListener('pointermove',move)
+      window.removeEventListener('pointerup',up)
+      window.removeEventListener('pointercancel',cancelPointer)
+      window.removeEventListener('blur',cancel)
+      window.removeEventListener('keydown',key,true)
+      source.removeEventListener('lostpointercapture',lostCapture)
+      if(source.hasPointerCapture(pointerId))source.releasePointerCapture(pointerId)
+      document.body.classList.remove('workspace-pointer-dragging')
+      showPointerDropIndicator(null)
+      ghost?.remove()
+    }
+    const finish=(commit:boolean)=>{
+      if(done)return
+      done=true;cleanup()
+      if(!active)return
+      window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
+      if(commit)onDrop();else onCancel()
+    }
+    const move=(pointer:PointerEvent)=>{
+      if(pointer.pointerId!==pointerId)return
+      if(!active&&Math.hypot(pointer.clientX-startX,pointer.clientY-startY)<5)return
+      if(!active){
+        active=true;suppressDragClickRef.current=identity;document.body.classList.add('workspace-pointer-dragging')
+        source.setPointerCapture(pointerId)
+        ghost=document.createElement('div');ghost.className='mux-pointer-drag-ghost';ghost.textContent=label;document.body.appendChild(ghost)
+        onStart()
+      }
+      pointer.preventDefault()
+      if(ghost)ghost.style.transform=`translate3d(${pointer.clientX+14}px,${pointer.clientY+12}px,0)`
+      onMove(pointer)
+    }
+    const up=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(true)}
+    const cancelPointer=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(false)}
+    const lostCapture=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(false)}
+    const cancel=()=>finish(false)
+    const key=(keyboard:KeyboardEvent)=>{if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
+    window.addEventListener('pointermove',move,{passive:false})
+    window.addEventListener('pointerup',up)
+    window.addEventListener('pointercancel',cancelPointer)
+    window.addEventListener('blur',cancel)
+    window.addEventListener('keydown',key,true)
+    source.addEventListener('lostpointercapture',lostCapture)
+  }
   const startupOrigins=useRef<Record<string,number>>({})
   const pendingSpawns=useRef<Record<string,PendingSpawnPlacement>>({})
   const spawning = useRef(false)
@@ -448,6 +516,7 @@ export function App() {
     const connect = () => {
       if(retry){clearTimeout(retry);retry=undefined}
       socket = openWebSocket('/events')
+      socket.onopen = () => window.dispatchEvent(new CustomEvent('mux:events-connected'))
       socket.onmessage = message => {
         queueRefresh()
         try {
@@ -468,6 +537,7 @@ export function App() {
           }
           if (event.type === 'configuration_changed') void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>{})
           if(event.type==='project_files_changed')window.dispatchEvent(new CustomEvent('mux:project-files-changed',{detail:{projectId:event.payload?.project_id,paths:event.payload?.paths||[]}}))
+          if(event.type==='project_note_changed'||event.type==='session_note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{projectId:String(event.payload?.project_id||''),kind:event.type==='session_note_changed'?'session-note':'note',noteId:event.type==='session_note_changed'?String(event.payload?.note_id||''):null,revision:String(event.payload?.revision||'')}}))
         } catch { /* malformed events are ignored */ }
       }
       socket.onclose = () => { retry = window.setTimeout(connect, 1500) }
@@ -493,6 +563,13 @@ export function App() {
 
   useEffect(()=>{if(!notificationToast)return;const timer=window.setTimeout(()=>setNotificationToast(null),5000);return()=>clearTimeout(timer)},[notificationToast])
 
+  useEffect(()=>{
+    const query=window.matchMedia('(max-width:760px)')
+    const changed=()=>setMobileWorkspace(query.matches)
+    changed();query.addEventListener('change',changed)
+    return()=>query.removeEventListener('change',changed)
+  },[])
+
   const active = sessions.find(session => session.id === activeId)
   const attention = sessions.filter(session => session.state === 'awaiting').length
   const activeProject = projects.find(project => project.id === projectId)
@@ -517,12 +594,13 @@ export function App() {
   useEffect(()=>{
     if(!window.matchMedia('(max-width:760px)').matches)return
     const frame=requestAnimationFrame(()=>{
-      const selected=document.querySelector<HTMLElement>('.pane-stack.focused-pane .stack-tabs [role="tab"][aria-selected="true"]')
+      const selected=document.querySelector<HTMLElement>('.mobile-unified-tabs [role="tab"][aria-selected="true"]')
+        ||document.querySelector<HTMLElement>('.pane-stack.focused-pane .stack-tabs [role="tab"][aria-selected="true"]')
         ||document.querySelector<HTMLElement>('.pane-stack .stack-tabs [role="tab"][aria-selected="true"]')
       selected?.scrollIntoView({block:'nearest',inline:'nearest'})
     })
     return()=>cancelAnimationFrame(frame)
-  },[projectId,focusedViewId,activeId])
+  },[projectId,focusedViewId,activeId,mobileWorkspace])
 
   useEffect(() => {
     if (focusHydrated || projects.length === 0) return
@@ -571,7 +649,8 @@ export function App() {
     const project='root' in value?value:projects.find(item=>item.id===value.project_id)
     return {projectId:project?.id||value.id,terminalSessionId:'backend' in value&&!isEndedSession(value)?value.id:null,kind:'note',ownerLabel:project?.name||'Project note'}
   }
-  const noteIdForTarget=(target:NoteTarget)=>noteResourceId(target.kind,target.kind==='file'?target.ownerLabel:target.projectId)
+  const sessionNoteTarget=(session:Session):NoteTarget=>({projectId:session.project_id,terminalSessionId:isEndedSession(session)?null:session.id,kind:'session-note',ownerLabel:session.note_id||session.id})
+  const noteIdForTarget=(target:NoteTarget)=>noteResourceId(target.kind,target.kind==='file'||target.kind==='session-note'?target.ownerLabel:target.projectId)
   const noteTargetForResource=(resourceId:string,targetProject=projectId):NoteTarget|null=>{
     const identity=parseNoteResourceId(resourceId)
     if(!identity)return null
@@ -579,7 +658,18 @@ export function App() {
   }
   const openNoteDefault=(target:NoteTarget)=>void showResourceForTarget(target)
   const openProjectNotes=(value:Project|Session)=>openNoteDefault(projectNoteTarget(value))
-  const openSessionNotes=(session:Session)=>{setActiveId(session.id);openProjectNotes(session)}
+  const initializeAndOpenSessionNote=async(target:NoteTarget)=>{
+    try{
+      await api('POST',`/api/projects/${target.projectId}/session-notes/${encodeURIComponent(target.ownerLabel)}`)
+      setSessions(items=>items.map(item=>item.id===target.terminalSessionId||item.id===target.ownerLabel?{...item,note_id:target.ownerLabel,note_exists:true}:item))
+      await showResourceForTarget(target)
+    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+  }
+  const openSessionNotes=(session:Session)=>{setActiveId(session.id);void initializeAndOpenSessionNote(sessionNoteTarget(session))}
+  const openHistorySessionNote=(entry:HistoryEntry)=>{
+    if(!entry.project_id||!entry.note_id){setError('This historical session is not linked to a Project note owner.');return}
+    void initializeAndOpenSessionNote({projectId:entry.project_id,terminalSessionId:null,kind:'session-note',ownerLabel:entry.note_id})
+  }
   const openProjectFiles=(project:Project)=>openNoteDefault({projectId:project.id,terminalSessionId:null,kind:'files',ownerLabel:project.id})
   const openProjectFile=(project:Project,path:string,targetViewId?:string)=>void showResourceForTarget({projectId:project.id,terminalSessionId:null,kind:'file',ownerLabel:path},targetViewId)
   const openNotifications = () => { setNotificationsOpen(true);setNotificationUnread(0);setMainMenuOpen(false);void loadNotifications() }
@@ -608,32 +698,60 @@ export function App() {
     setProjectMenu(null)
     void commitProjectOrder(ids)
   }
-  const previewProjectDrop=(event:JSX.TargetedDragEvent<HTMLElement>,peerIds:string[])=>{
-    const current=dragProjectRef.current
-    if(!current||!peerIds.includes(current.id))return
-    event.preventDefault();if(event.dataTransfer)event.dataTransfer.dropEffect='move'
-    const target=reorderTargetFromContainer(event.currentTarget,current.id,'vertical',event.clientY)
-    if(!target)return
-    const previewIds=reorderForHover(current.previewIds,current.id,target.id,target.side)
-    if(previewIds===current.previewIds&&current.overId===target.id&&current.side===target.side)return
-    setDragProject({...current,previewIds,overId:target.id,side:target.side})
+  const beginProjectPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,project:Project,peerIds:string[])=>{
+    const bucket=event.currentTarget.closest<HTMLElement>('.sidebar-project-bucket')
+    const initial:ProjectDrag={id:project.id,previewIds:orderedProjects.map(item=>item.id),overId:null,side:null}
+    beginPointerDrag(event,project.name,`project:${project.id}`,
+      ()=>{cancelLongPress();dragProjectRef.current=initial},
+      pointer=>{
+        const current=dragProjectRef.current
+        if(!current||!bucket||!peerIds.includes(current.id)){showPointerDropIndicator(null);return}
+        const target=reorderTargetFromContainer(bucket,current.id,'vertical',pointer.clientY)
+        if(!target){showPointerDropIndicator(null);return}
+        const previewIds=reorderForHover(current.previewIds,current.id,target.id,target.side)
+        dragProjectRef.current={...current,previewIds,overId:target.id,side:target.side}
+        const targetElement=Array.from(bucket.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).find(item=>item.dataset.reorderId===target.id)||null
+        showPointerDropIndicator(targetElement,`insert-${target.side}`)
+      },
+      ()=>{const current=dragProjectRef.current;setDragProject(null);if(current)void commitProjectOrder(current.previewIds)},
+      ()=>setDragProject(null),
+    )
   }
-  const dropProject=(event:JSX.TargetedDragEvent<HTMLElement>,peerIds:string[])=>{
-    const current=dragProjectRef.current
-    if(!current||!peerIds.includes(current.id))return
-    event.preventDefault();event.stopPropagation();setDragProject(null)
-    void commitProjectOrder(current.previewIds)
+  const beginSessionPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,session:Session)=>{
+    beginPointerDrag(event,sessionName(session),`session:${session.id}`,
+      ()=>{cancelLongPress();dragSessionTargetRef.current=null},
+      pointer=>{
+        const hit=document.elementFromPoint(pointer.clientX,pointer.clientY) as HTMLElement|null
+        const sessionTarget=hit?.closest<HTMLElement>('[data-sidebar-session-id]')
+        const targetSessionId=sessionTarget?.dataset.sidebarSessionId
+        if(targetSessionId&&targetSessionId!==session.id){
+          const targetProjectId=sessionTarget.dataset.sidebarProjectId||session.project_id
+          dragSessionTargetRef.current={sessionId:targetSessionId,projectId:targetProjectId}
+          showPointerDropIndicator(sessionTarget,targetProjectId===session.project_id?'group-session':'invalid')
+          return
+        }
+        const stackTarget=hit?.closest<HTMLElement>('[data-sidebar-stack-id]')
+        const stackId=stackTarget?.dataset.sidebarStackId
+        if(stackId){
+          const targetProjectId=stackTarget.dataset.sidebarProjectId||session.project_id
+          dragSessionTargetRef.current={stackId,projectId:targetProjectId}
+          showPointerDropIndicator(stackTarget,targetProjectId===session.project_id?'join-stack':'invalid')
+          return
+        }
+        dragSessionTargetRef.current=null
+        showPointerDropIndicator(null)
+      },
+      ()=>{
+        const target=dragSessionTargetRef.current;dragSessionTargetRef.current=null
+        if(!target)return
+        if(target.projectId!==session.project_id){setError('Move the session into this project before changing its layout group.');return}
+        const current=layoutValues.current[session.project_id]||layoutMap[session.project_id]||parseLayout(projects.find(item=>item.id===session.project_id)?.layout)
+        if(target.sessionId){void updateLayout(session.project_id,groupTerminalsInStack(current,target.sessionId,session.id));return}
+        if(target.stackId){const without=removeLeaf(current,'terminal',session.id);void updateLayout(session.project_id,addToStack(without,target.stackId,session.id))}
+      },
+      ()=>{dragSessionTargetRef.current=null},
+    )
   }
-
-  useEffect(()=>{
-    if(!dragProject&&!dragStackTab&&!dragSessionId)return
-    const cancelDrag=(event:KeyboardEvent)=>{
-      if(event.key!=='Escape')return
-      setDragProject(null);setDragStackTab(null);setDragSessionId(null)
-    }
-    window.addEventListener('keydown',cancelDrag,true)
-    return()=>window.removeEventListener('keydown',cancelDrag,true)
-  },[!!dragProject,!!dragStackTab,!!dragSessionId])
 
   useEffect(() => {
     if (!contextMenu && !projectMenu && !sidebarMenu && !noteMenu && !tabMenu && !emptyMenu && !mainMenuOpen && !renameTarget) return
@@ -686,7 +804,7 @@ export function App() {
     if(!target){setError('Project is not available yet.');return}
     spawning.current = true
     const startupOrigin=performance.now()
-    const pendingId=`pending-${crypto.randomUUID()}`
+    const pendingId=`pending-${browserUuid()}`
     const currentLayout=layoutValues.current[targetProject]||layoutMap[targetProject]||parseLayout(target.layout)
     const focused=targetSessionId??(targetProject===projectId?focusedViewId||activeId:leaves(currentLayout)[0]?.id||null)
     const placement:PendingSpawnPlacement={projectId:targetProject,split,targetId:focused,position}
@@ -1010,12 +1128,12 @@ export function App() {
   }
 
   const showHistory = async () => {
-    setTranscript(null); setHistoryOpen(true); setHistoryQuery(''); setHistoryBackend(''); setHistoryProject(''); setHistoryState(''); setHistoryExternal(''); setHistoryFrom(''); setHistoryTo('')
-    try {
-      const projects = await api<{items:HistoryProject[]}>('GET', '/api/history/projects')
-      setHistoryProjects(projects.items)
-    } catch (cause) { setHistoryError(cause instanceof Error ? cause.message : String(cause)) }
-    await loadHistory({ query: '', backend: '', project: '', state: '', external: '', from: '', to: '' })
+    if(!activeProject){setError('Select a Project before opening History.');return}
+    const id='history:archive'
+    const current=resolveLayout(layoutValues.current[activeProject.id],activeProject.layout)
+    const next=openTab(current,focusedViewId,resourceLeaf('history',id))
+    setFocusedViewId(id)
+    await updateLayout(activeProject.id,next)
   }
 
   const deleteHistory = async (entry: HistoryEntry) => {
@@ -1041,7 +1159,7 @@ export function App() {
     try {
       const result=await api<{markdown:string}>('GET',`/api/history/${entry.id}/handoff`)
       setHandoffState({entry,markdown:result.markdown,message:'Review this export before using it as agent context.'})
-    } catch(cause){setHistoryError(cause instanceof Error?cause.message:String(cause))}
+    } catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
 
   const previewSecondOpinion = async (entry:HistoryEntry,instructions='',targetProject=entry.project_id||projectId) => {
@@ -1049,7 +1167,7 @@ export function App() {
     try {
       const result=await api<{preview:ReviewPreview}>('POST',`/api/history/${entry.id}/second-opinion`,{confirm:false,instructions})
       setReviewState({entry,instructions,project:targetProject,preview:result.preview,dirty:false,loading:false,error:''})
-    } catch(cause){setHistoryError(cause instanceof Error?cause.message:String(cause))}
+    } catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
 
   const refreshSecondOpinion = async () => {
@@ -1075,7 +1193,7 @@ export function App() {
       const resumed = await api<Session>('POST', `/api/history/${entry.id}/resume`, { project_id: projectId, target_session_id: activeId })
       setSessions(items => [...items, resumed]); setActiveId(resumed.id); setHistoryOpen(false)
       await refresh()
-    } catch (cause) { setHistoryError(cause instanceof Error ? cause.message : String(cause)) }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
   const resumeSession = async (session: Session) => {
@@ -1124,7 +1242,7 @@ export function App() {
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {setAutomationOpen(true);setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
     { id: 'notes.open', label: 'Open current project note', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectNotes(activeProject) },
-    { id: 'session.projectNote', label: 'Open selected session project note', category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession&&openProjectNotes(commandSession) },
+    { id: 'session.note', label: 'Open selected session note', category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession&&openSessionNotes(commandSession) },
     { id: 'project.note', label: 'Open selected project note', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => commandProject&&openProjectNotes(commandProject) },
     { id: 'processes.open', label: 'Inspect selected session processes and previews', category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => {if(commandSession)openProcessViewer(commandSession)} },
     { id: 'processes.all', label: 'Open unified process viewer', category: 'view', available: true, run: () => openProcessViewer() },
@@ -1153,6 +1271,7 @@ export function App() {
     { id: 'session.resume', label: 'Resume selected agent as new', category: 'history', available: !!commandSession && isAgent(commandSession) && ['exited', 'crashed'].includes(commandSession.state), disabledReason: 'Select an exited Claude or Codex session', run: () => commandSession && void resumeSession(commandSession) },
     { id: 'project.newTerminal', label: 'New terminal in selected project', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => { if (commandProject) void spawnTerminal(commandProject.id); setProjectMenu(null) } },
     { id: 'project.newTerminalCustom', label: 'New custom terminal in selected project', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => { if (commandProject) openLauncher(commandProject.id); setProjectMenu(null) } },
+    { id: 'project.reveal', label: 'Reveal selected project in Explorer', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => { if (commandProject) void api('POST', '/api/reveal', { path: commandProject.root }); setProjectMenu(null) } },
     { id: 'project.rename', label: 'Rename selected project', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => commandProject && openRename({ kind: 'project', project: commandProject }) },
     { id:'project.moveUp',label:'Move selected Project up',category:'project',available:!!commandProject&&orderedProjects.filter(item=>(item.group_id||null)===(commandProject.group_id||null))[0]?.id!==commandProject.id,disabledReason:'Project is already first in its Group',run:()=>commandProject&&moveProjectRelative(commandProject,-1) },
     { id:'project.moveDown',label:'Move selected Project down',category:'project',available:!!commandProject&&orderedProjects.filter(item=>(item.group_id||null)===(commandProject.group_id||null)).at(-1)?.id!==commandProject.id,disabledReason:'Project is already last in its Group',run:()=>commandProject&&moveProjectRelative(commandProject,1) },
@@ -1281,10 +1400,60 @@ export function App() {
     setContextMenu({session,x,y,source})
   }
 
-  const openTabMenu=(leaf:PaneLeaf,label:string,x:number,y:number)=>{
+  const openTabMenu=(leaf:PaneLeaf,label:string,x:number,y:number,source:'tab'|'mobile'='tab')=>{
     setContextMenu(null);setNoteMenu(null);setProjectMenu(null);setSidebarMenu(null);setMainMenuOpen(false)
     setFocusedViewId(leaf.id);if(leaf.kind==='terminal')setActiveId(leaf.id)
-    setTabMenu({leaf,label,projectId,x,y})
+    setTabMenu({leaf,label,projectId,x,y,source})
+  }
+
+  const beginWorkspaceTabDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,initial:StackTabDrag,label:string)=>{
+    beginPointerDrag(event,label,`tab:${initial.childId}`,
+      ()=>{dragStackTabRef.current=initial},
+      pointer=>{
+        const hit=document.elementFromPoint(pointer.clientX,pointer.clientY) as HTMLElement|null
+        const paneElement=hit?.closest<HTMLElement>('.pane-stack[data-pane-stack-id]')
+        const targetStackId=paneElement?.dataset.paneStackId
+        if(!paneElement||!targetStackId){showPointerDropIndicator(null);return}
+        const latest=layoutValues.current[projectId]||activeLayout
+        const targetPane=paneStacks(latest).find(pane=>pane.id===targetStackId)
+        const current=dragStackTabRef.current
+        if(!targetPane||!current){showPointerDropIndicator(null);return}
+        const tabStrip=paneElement.querySelector<HTMLElement>(':scope > .stack-tabs')
+        const tabBox=tabStrip?.getBoundingClientRect()
+        if(tabStrip&&tabBox&&pointer.clientY>=tabBox.top&&pointer.clientY<=tabBox.bottom){
+          const target=reorderTargetFromContainer(tabStrip,current.childId,'horizontal',pointer.clientX)
+          const base=current.targetStackId===targetStackId&&current.zone==='tabs'?current.previewIds:[...targetPane.children.map(child=>child.id),current.childId]
+          const previewIds=target?reorderForHover(base,current.childId,target.id,target.side):base
+          previewDragStackTab({...current,targetStackId,zone:'tabs',previewIds,overId:target?.id||null,side:target?.side||null})
+          const targetElement=target?Array.from(tabStrip.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).find(item=>item.dataset.reorderId===target.id)||null:null
+          showPointerDropIndicator(targetElement||tabStrip,targetElement?`insert-${target?.side}`:'tab-bar')
+          return
+        }
+        const box=paneElement.getBoundingClientRect(),x=(pointer.clientX-box.left)/box.width,y=(pointer.clientY-box.top)/box.height
+        const edges:[PaneDropZone,number][]=[['left',x],['right',1-x],['top',y],['bottom',1-y]]
+        const nearest=edges.sort((a,b)=>a[1]-b[1])[0]
+        const zone:PaneDropZone=nearest[1]<.2?nearest[0]:'tabs'
+        const previewIds=zone==='tabs'?[...targetPane.children.filter(child=>child.id!==current.childId).map(child=>child.id),current.childId]:targetPane.children.map(child=>child.id)
+        previewDragStackTab({...current,targetStackId,zone,previewIds,overId:null,side:null})
+        showPointerDropIndicator(zone==='tabs'?(tabStrip||paneElement):paneElement,zone==='tabs'?'tab-bar':`split-${zone}`)
+      },
+      ()=>{
+        const current=dragStackTabRef.current
+        setDragStackTab(null)
+        if(!current)return
+        setFocusedViewId(current.childId);if(current.kind==='terminal')setActiveId(current.childId)
+        const latest=layoutValues.current[projectId]||activeLayout
+        if(!paneStacks(latest).some(pane=>pane.id===current.targetStackId))return
+        if(current.zone!=='tabs'){
+          const direction=current.zone==='left'||current.zone==='right'?'horizontal':'vertical'
+          const position=current.zone==='left'||current.zone==='top'?'before':'after'
+          void updateLayout(projectId,moveLeafToSplit(latest,current.kind,current.childId,current.targetStackId,direction,position));return
+        }
+        const moved=current.stackId===current.targetStackId?latest:moveLeafToStack(latest,current.kind,current.childId,current.targetStackId)
+        void updateLayout(projectId,reorderStack(moved,current.targetStackId,current.previewIds))
+      },
+      ()=>setDragStackTab(null),
+    )
   }
 
   const renderPaneNode = (node: PaneNode|PaneLeaf, path = '', insideStack = false): ComponentChildren => {
@@ -1298,40 +1467,6 @@ export function App() {
     if(node.type==='stack'){
       const activeChild=node.children.find(child=>child.id===node.active_child_id)||node.children[0]
       const previewIds=dragStackTab?.targetStackId===node.id&&dragStackTab.zone==='tabs'?dragStackTab.previewIds:node.children.map(child=>child.id)
-      const previewTabDrop=(event:JSX.TargetedDragEvent<HTMLDivElement>)=>{
-        const current=dragStackTabRef.current
-        if(!current)return
-        event.preventDefault();event.stopPropagation();if(event.dataTransfer)event.dataTransfer.dropEffect='move'
-        const target=reorderTargetFromContainer(event.currentTarget,current.childId,'horizontal',event.clientX)
-        if(!target)return
-        const base=current.targetStackId===node.id&&current.zone==='tabs'?current.previewIds:[...node.children.map(child=>child.id),current.childId]
-        const nextIds=reorderForHover(base,current.childId,target.id,target.side)
-        if(nextIds===current.previewIds&&current.targetStackId===node.id&&current.zone==='tabs'&&current.overId===target.id&&current.side===target.side)return
-        setDragStackTab({...current,targetStackId:node.id,zone:'tabs',previewIds:nextIds,overId:target.id,side:target.side})
-      }
-      const previewPaneDrop=(event:JSX.TargetedDragEvent<HTMLElement>)=>{
-        const current=dragStackTabRef.current;if(!current)return
-        event.preventDefault();if(event.dataTransfer)event.dataTransfer.dropEffect='move'
-        const box=event.currentTarget.getBoundingClientRect(),x=(event.clientX-box.left)/box.width,y=(event.clientY-box.top)/box.height
-        const edges:[PaneDropZone,number][]=[['left',x],['right',1-x],['top',y],['bottom',1-y]]
-        const nearest=edges.sort((a,b)=>a[1]-b[1])[0]
-        const zone:PaneDropZone=nearest[1]<.2?nearest[0]:'tabs'
-        const nextIds=zone==='tabs'?[...node.children.filter(child=>child.id!==current.childId).map(child=>child.id),current.childId]:node.children.map(child=>child.id)
-        if(current.targetStackId===node.id&&current.zone===zone&&nextIds.join('\0')===current.previewIds.join('\0'))return
-        setDragStackTab({...current,targetStackId:node.id,zone,previewIds:nextIds,overId:null,side:null})
-      }
-      const dropTab=()=>{
-        const current=dragStackTabRef.current;if(!current||current.targetStackId!==node.id)return
-        setDragStackTab(null);setFocusedViewId(current.childId);if(current.kind==='terminal')setActiveId(current.childId)
-        const latest=layoutValues.current[projectId]||activeLayout
-        if(current.zone!=='tabs'){
-          const direction=current.zone==='left'||current.zone==='right'?'horizontal':'vertical'
-          const position=current.zone==='left'||current.zone==='top'?'before':'after'
-          void updateLayout(projectId,moveLeafToSplit(latest,current.kind,current.childId,node.id,direction,position));return
-        }
-        const moved=current.stackId===node.id?latest:moveLeafToStack(latest,current.kind,current.childId,node.id)
-        void updateLayout(projectId,reorderStack(moved,node.id,current.previewIds))
-      }
       const paneDropClass=dragStackTab?.targetStackId===node.id?`tab-drop-active drop-zone-${dragStackTab.zone}`:''
       const focusedPane=!!focusedViewId&&node.children.some(child=>child.id===focusedViewId)
       const closeTab=(child:PaneLeaf,label:string,session?:Session)=>{
@@ -1341,7 +1476,7 @@ export function App() {
         const title=terminal
           ? confirming?(ended?'Confirm remove session':'Confirm kill terminal'):(ended?'Remove session':'Close and kill terminal')
           : `Close ${label} tab`
-        return <button class={`tab-close ${confirming?'confirming':''}`} draggable={false} disabled={terminal&&(!session||!!session.pending)} aria-label={`${title}: ${label}`} title={title} onPointerDown={event=>event.stopPropagation()} onDragStart={event=>{event.preventDefault();event.stopPropagation()}} onClick={event=>{
+        return <button class={`tab-close ${confirming?'confirming':''}`} disabled={terminal&&(!session||!!session.pending)} aria-label={`${title}: ${label}`} title={title} onPointerDown={event=>event.stopPropagation()} onClick={event=>{
           event.preventDefault();event.stopPropagation()
           if(terminal){if(session&&!session.pending)requestKill(session);return}
           if(child.kind==='note'){void removeWorkspaceNote(projectId,child.id);return}
@@ -1349,23 +1484,27 @@ export function App() {
           void updateLayout(projectId,removeLeaf(latest,child.kind,child.id))
         }}>{confirming?'✓':'×'}</button>
       }
-      return <section class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={()=>setFocusedViewId(activeChild.id)} onDragOver={previewPaneDrop} onDrop={event=>{if(!dragStackTabRef.current)return;event.preventDefault();event.stopPropagation();dropTab()}}><div class="stack-tabs" role="tablist" aria-label="Workspace tabs" onDragOver={previewTabDrop} onDrop={event=>{if(!dragStackTabRef.current)return;event.preventDefault();event.stopPropagation();dropTab()}}>
+      return <section data-pane-stack-id={node.id} class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={()=>setFocusedViewId(activeChild.id)}><div class="stack-tabs" role="tablist" aria-label="Workspace tabs">
         {node.children.map(child=>{
-          const activate=()=>{setFocusedViewId(child.id);if(child.kind==='terminal')setActiveId(child.id);if(child.id!==activeChild.id)void updateLayout(projectId,activateStackChild(activeLayout,node.id,child.id))}
+          const activate=()=>{if(suppressDragClickRef.current===`tab:${child.id}`){suppressDragClickRef.current=null;return}setFocusedViewId(child.id);if(child.kind==='terminal')setActiveId(child.id);if(child.id!==activeChild.id)void updateLayout(projectId,activateStackChild(activeLayout,node.id,child.id))}
           const dragClass=dragStackTab?.overId===child.id&&dragStackTab.side?`drag-over drop-${dragStackTab.side}`:''
           const dragStyle={order:previewIds.indexOf(child.id)}
           if(child.kind==='preview'){
             const preview=previews[child.id]
             const label=preview?.url||child.id
-            return <div key={child.id} data-reorder-id={child.id} draggable style={dragStyle} class={`stack-tab-shell draggable-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onDragStart={event=>{beginDragPreview(event,label);setDragStackTab({stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null})}} onDragEnd={()=>setDragStackTab(null)}><button role="tab" aria-label={`${label} preview tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main preview-tab ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◱</span>{preview?`:${preview.port}`:child.id}</button>{closeTab(child,label)}</div>
+            return <div key={child.id} data-reorder-id={child.id} style={dragStyle} class={`stack-tab-shell draggable-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} preview tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main preview-tab ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◱</span>{preview?`:${preview.port}`:child.id}</button>{closeTab(child,label)}</div>
           }
           if(child.kind==='note'){
             const label=noteTabLabel(child.id)
-            return <div key={child.id} data-reorder-id={child.id} draggable style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onDragStart={event=>{beginDragPreview(event,label);setDragStackTab({stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null})}} onDragEnd={()=>setDragStackTab(null)}><button role="tab" aria-label={`${label} resource tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◇</span>{label}</button>{closeTab(child,label)}</div>
+            return <div key={child.id} data-reorder-id={child.id} style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} resource tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◇</span>{label}</button>{closeTab(child,label)}</div>
+          }
+          if(child.kind==='history'){
+            const label='History'
+            return <div key={child.id} data-reorder-id={child.id} style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label="History tab" title="Search session history" aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◷</span>{label}</button>{closeTab(child,label)}</div>
           }
           const session=sessions.find(item=>item.id===child.id)
           const label=session?.name||child.id
-          return <div key={child.id} data-reorder-id={child.id} draggable={!session?.pending} style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onDragStart={event=>{if(session?.pending){event.preventDefault();return}beginDragPreview(event,label);setDragStackTab({stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null})}} onDragEnd={()=>setDragStackTab(null)}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={`state-dot ${session?.state||'running'}`}/>{label}</button>{closeTab(child,label,session)}</div>
+          return <div key={child.id} data-reorder-id={child.id} style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={`state-dot ${session?.state||'running'}`}/>{label}</button>{closeTab(child,label,session)}</div>
         })}
         <button class="stack-add" style={{order:node.children.length}} aria-label="New terminal tab" title="New terminal tab" disabled={!activeProject} onClick={()=>activeProject&&void spawnTerminal(activeProject.id,'stack',undefined,activeChild.id)}>+</button>
       </div><div class="stack-active">{renderPaneNode(activeChild,`${path}t`,true)}</div></section>
@@ -1375,6 +1514,7 @@ export function App() {
       if(!identity||!activeProject)return <section class="workspace-leaf-placeholder note-unavailable"><strong>resource unavailable</strong><span>{node.id}</span><button onClick={()=>void removeWorkspaceNote(projectId,node.id)}>close tab</button></section>
       return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>openProjectFile(activeProject,path,node.id)} onClose={()=>void removeWorkspaceNote(projectId,node.id)}/>
     }
+    if(node.kind==='history')return <HistoryBrowser key={`${activeProject?.id||projectId}:${node.id}`} projects={projects} initialProjectId={activeProject?.id||projectId} onResume={resumeHistoryEntry} onProjectNote={openProjectNotes} onSessionNote={openHistorySessionNote} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>
     if (node.kind === 'preview') {
       const preview = previews[node.id]
       if (!preview) return <section class="workspace-leaf-placeholder"><strong>preview unavailable</strong><span>{node.id}</span></section>
@@ -1420,7 +1560,7 @@ export function App() {
     const noteLayout=resolveLayout(layoutMap[targetProject],projects.find(item=>item.id===targetProject)?.layout)
     const workspaceOpen=workspaceNoteIds(targetProject).includes(resourceId)
     const selected=targetProject===projectId&&stackForView(noteLayout,resourceId)?.active_child_id===resourceId
-    const label=identity.kind==='note'?'Project note':identity.kind==='files'?'Files':identity.id.split('/').pop()||'File'
+    const label=identity.kind==='note'?'Project note':identity.kind==='session-note'?'Session note':identity.kind==='files'?'Files':identity.id.split('/').pop()||'File'
     return <button class={`sidebar-note-row ${selected?'active':''} ${workspaceOpen?'open':''}`} title={`${label} · opens in the focused pane`} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openNoteContext(resourceId,targetProject,event.clientX,event.clientY)}} onClick={event=>{event.stopPropagation();showNoteResource(resourceId,targetProject);setSidebarOpen(false)}}>
       <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>{label}</strong></span>
     </button>
@@ -1458,12 +1598,14 @@ export function App() {
     // rendered by that row instead.
     const spawnedServers=detectedServers(sessionProcesses[session.id]||[])
       .filter(server=>!spawnedPreviews.some(preview=>preview.port===server.port))
-    return <div class="session-entry"><button draggable={!session.pending} class={`session-row ${activeId === session.id ? 'active' : ''} ${session.state} ${session.pending?'pending-terminal-row':''} ${dragSessionId===session.id?'dragging':''}`} onDragStart={event=>{if(session.pending){event.preventDefault();return}beginDragPreview(event,sessionName(session));setDragSessionId(session.id)}} onDragEnd={()=>setDragSessionId(null)} onDragOver={event=>{if(dragSessionId&&dragSessionId!==session.id){event.preventDefault();if(event.dataTransfer)event.dataTransfer.dropEffect='move'}}} onDrop={event=>{if(!dragSessionId||session.pending)return;event.preventDefault();const dragged=sessions.find(item=>item.id===dragSessionId);if(!dragged||dragged.id===session.id)return;if(dragged.project_id!==session.project_id){setError('Move the session into this project before grouping it.');return}void updateLayout(session.project_id,groupTerminalsInStack(layoutMap[session.project_id]||emptyLayout(),session.id,dragged.id));setDragSessionId(null)}} onPointerDown={event=>{if(!session.pending)beginLongPress(event,(x,y)=>openSessionMenu(session,x,y,'sidebar'))}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => void selectSession(session)}>
+    const sessionNoteId=noteResourceId('session-note',session.note_id||session.id)
+    const showSessionNote=!!session.note_exists||workspaceNoteIds(session.project_id).includes(sessionNoteId)
+    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} class={`session-row ${activeId === session.id ? 'active' : ''} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){beginLongPress(event,(x,y)=>openSessionMenu(session,x,y,'sidebar'));beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       <span class={`state-dot ${session.state}`} />
       <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`}>[{session.backend}]</span>}{sessionName(session)}{relation==='tab'&&<span class="layout-affinity tab" title="Shares one pane region with the other bracketed sessions">▤</span>}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
       <span class="session-meta">{isAgent(session) && <em class={`state-label ${session.state}`}>{session.state === 'idle' ? 'ready' : session.state}</em>}</span>
-      {!session.pending&&<span class="row-actions" onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
-    </button>{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}{spawnedServers.map(server=>sidebarServerRow(server,session))}</div>
+      {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
+    </button>{showSessionNote&&sidebarNoteRow(sessionNoteId,session.project_id)}{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}{spawnedServers.map(server=>sidebarServerRow(server,session))}</div>
   }
   const sidebarNode=(node:PaneNode|PaneLeaf|null|undefined,relation?:'tab'):ComponentChildren=>{
     if(!node)return null
@@ -1474,12 +1616,12 @@ export function App() {
     }
     const nodeLayout:PaneLayout={...emptyLayout(),root:node}
     const ids=terminalIds(nodeLayout)
-    const dropGroup=(event:JSX.TargetedDragEvent<HTMLElement>)=>{if(!dragSessionId)return;event.preventDefault();event.stopPropagation();const dragged=sessions.find(item=>item.id===dragSessionId);if(!dragged)return;const owner=sessions.find(item=>ids.includes(item.id));if(!owner||dragged.project_id!==owner.project_id){setError('Move the session into this project before changing its layout group.');return}if(node.type!=='stack'){setError('Drop onto a session to create a tab group, or onto an existing tab bracket to add a tab.');return}const sourceLayout=layoutMap[dragged.project_id]||parseLayout(projects.find(item=>item.id===dragged.project_id)?.layout);const without=removeLeaf(sourceLayout,'terminal',dragged.id);void updateLayout(dragged.project_id,addToStack(without,node.id,dragged.id));setDragSessionId(null)}
     const branches=(node.type==='stack'?node.children:[node.first,node.second]).filter(child=>child.type==='leaf'?child.kind==='terminal':terminalIds({...emptyLayout(),root:child}).length>0)
     if(branches.length===0)return null
     if(branches.length===1)return sidebarNode(branches[0],relation)
     const label=node.type==='stack'?'Sessions sharing one tabbed pane':`${node.direction} split branches`
-    return <section class={`layout-cluster ${node.type} ${node.type==='split'?node.direction:''}`} role="group" aria-label={label} onDragOver={event=>{if(dragSessionId)event.preventDefault()}} onDrop={dropGroup}>
+    const owner=sessions.find(item=>ids.includes(item.id))
+    return <section data-sidebar-stack-id={node.type==='stack'?node.id:undefined} data-sidebar-project-id={node.type==='stack'?owner?.project_id:undefined} class={`layout-cluster ${node.type} ${node.type==='split'?node.direction:''}`} role="group" aria-label={label}>
       <span class="layout-cluster-glyph" aria-hidden="true" title={label}>{node.type==='stack'?'▤':node.direction==='horizontal'?'↔':'↕'}</span>
       {branches.map((child,index)=><div class={`layout-branch ${index===0?'first':''} ${index===branches.length-1?'last':''}`} key={child.id}>{sidebarNode(child,node.type==='stack'?'tab':undefined)}</div>)}
     </section>
@@ -1488,6 +1630,10 @@ export function App() {
   const noteTabLabel=(resourceId:string)=>{
     const identity=parseNoteResourceId(resourceId)
     if(identity?.kind==='note')return 'Project note'
+    if(identity?.kind==='session-note'){
+      const owner=sessions.find(session=>(session.note_id||session.id)===identity.id)
+      return owner?`Note · ${sessionName(owner)}`:'Session note'
+    }
     if(identity?.kind==='files')return 'Files'
     return identity?.id.split('/').pop()||'File'
   }
@@ -1496,6 +1642,51 @@ export function App() {
     ...[...projectGroups].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)).map(group=>({id:group.id,name:group.name,items:visibleProjects.filter(project=>project.group_id===group.id)})),
     {id:'ungrouped',name:'Projects',items:visibleProjects.filter(project=>!project.group_id||!projectGroups.some(group=>group.id===project.group_id))},
   ].filter(bucket=>bucket.items.length>0)
+
+  const mobileProjection=mobileWorkspaceProjection(activeLayout,focusedViewId,activeId)
+  const activateMobileTab=(leaf:PaneLeaf)=>{
+    setFocusedViewId(leaf.id)
+    if(leaf.kind==='terminal')setActiveId(leaf.id)
+    const current=layoutValues.current[projectId]||activeLayout
+    const pane=stackForView(current,leaf.id)
+    if(pane&&pane.active_child_id!==leaf.id)void updateLayout(projectId,activateStackChild(current,pane.id,leaf.id))
+  }
+  const focusAfterMobileClose=(leaf:PaneLeaf)=>{
+    const next=adjacentMobileTab(mobileProjection.tabs,leaf.id)
+    setFocusedViewId(next?.id||null)
+    if(next?.kind==='terminal')setActiveId(next.id)
+  }
+  const closeMobileTab=(leaf:PaneLeaf,session?:Session)=>{
+    if(leaf.kind==='terminal'){
+      if(!session||session.pending)return
+      if(confirmKillId===leaf.id)focusAfterMobileClose(leaf)
+      requestKill(session);return
+    }
+    focusAfterMobileClose(leaf)
+    if(leaf.kind==='note'){void removeWorkspaceNote(projectId,leaf.id);return}
+    const current=layoutValues.current[projectId]||activeLayout
+    void updateLayout(projectId,removeLeaf(current,leaf.kind,leaf.id))
+  }
+  const mobileTab=(leaf:PaneLeaf):ComponentChildren=>{
+    const selected=leaf.id===mobileProjection.selected?.id
+    const session=leaf.kind==='terminal'?sessions.find(item=>item.id===leaf.id):undefined
+    const preview=leaf.kind==='preview'?previews[leaf.id]:undefined
+    const label=leaf.kind==='terminal'?session?.name||leaf.id:leaf.kind==='preview'?preview?.url||leaf.id:leaf.kind==='history'?'History':noteTabLabel(leaf.id)
+    const visibleLabel=leaf.kind==='preview'?(preview?`:${preview.port}`:leaf.id):label
+    const glyph=leaf.kind==='terminal'?<span class={`state-dot ${session?.state||'running'}`}/>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':'◇'}</span>
+    const confirming=leaf.kind==='terminal'&&confirmKillId===leaf.id
+    return <div key={`${leaf.kind}:${leaf.id}`} class="stack-tab-shell mobile-unified-tab">
+      <button role="tab" aria-label={`${label} ${leaf.kind} tab`} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>activateMobileTab(leaf)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activateMobileTab(leaf);if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'mobile');else if(leaf.kind!=='terminal')openTabMenu(leaf,label,event.clientX,event.clientY,'mobile')}}>{glyph}{visibleLabel}</button>
+      <button class={`tab-close ${confirming?'confirming':''}`} disabled={leaf.kind==='terminal'&&(!session||!!session.pending)} aria-label={`${confirming?'Confirm close':'Close'} ${label}`} title={confirming?'Confirm kill terminal':`Close ${label}`} onClick={event=>{event.stopPropagation();closeMobileTab(leaf,session)}}>{confirming?'✓':'×'}</button>
+    </div>
+  }
+  const mobileUnifiedWorkspace=<section class="pane-stack mobile-unified-workspace">
+    <div class="stack-tabs mobile-unified-tabs" role="tablist" aria-label="All Project tabs">
+      {mobileProjection.tabs.map(mobileTab)}
+      <button class="stack-add" aria-label="New terminal tab" title="New terminal tab" disabled={!activeProject} onClick={()=>{if(!activeProject)return;const target=mobileProjection.selected&&stackForView(activeLayout,mobileProjection.selected.id)?mobileProjection.selected.id:null;void (target?spawnTerminal(activeProject.id,'stack',undefined,target):spawnTerminal(activeProject.id))}}>+</button>
+    </div>
+    <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Open a terminal, Project note, Files, or a preview to begin.</p></div>}</div>
+  </section>
 
   return <div class="app-shell">
     <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{attention ? `${attention} agent${attention === 1 ? '' : 's'} awaiting attention` : 'No agents awaiting attention'}</div>
@@ -1515,7 +1706,7 @@ export function App() {
       <aside class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         <div class="project-tree">
           {visibleProjects.length===0&&<button class="empty-project-cta" onClick={openProjectsManager}><strong>{projects.length?'No Projects shown':'Create your first Project'}</strong><small>{projects.length?'Open Projects to show or add an active Project.':'Open Projects to add a canonical folder.'}</small></button>}
-          {projectBuckets.map(bucket=>{const peerIds=bucket.items.map(item=>item.id);return <section class="sidebar-project-bucket" key={bucket.id} onDragOver={event=>previewProjectDrop(event,peerIds)} onDrop={event=>dropProject(event,peerIds)}><header><span>{bucket.name}</span>{bucket.id!=='ungrouped'&&<><button title="Rename group" onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)setGroupEdit({id:group.id,name:group.name})}}>✎</button><button title="Remove group (projects become ungrouped)" onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)void deleteGroup(group)}}>×</button></>}</header>{bucket.items.map(project => {
+          {projectBuckets.map(bucket=>{const peerIds=bucket.items.map(item=>item.id);return <section class="sidebar-project-bucket" key={bucket.id}><header><span>{bucket.name}</span>{bucket.id!=='ungrouped'&&<><button title="Rename group" onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)setGroupEdit({id:group.id,name:group.name})}}>✎</button><button title="Remove group (projects become ungrouped)" onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)void deleteGroup(group)}}>×</button></>}</header>{bucket.items.map(project => {
             const children = sessions
               .filter(session => session.project_id === project.id)
               .sort((a,b)=>a.created_at-b.created_at||a.id.localeCompare(b.id))
@@ -1524,7 +1715,7 @@ export function App() {
             const unpanedChildren=children.filter(session=>!projectPaneIds.includes(session.id))
             const dropClass=dragProject?.overId===project.id&&dragProject.side?`project-drop-target drop-${dragProject.side}`:''
             return <section key={project.id} data-reorder-id={project.id} style={{order:projectPreviewIds.indexOf(project.id)}} class={`project-group ${project.id === projectId ? 'active' : ''} ${dropClass}`}>
-              <div draggable class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title="Drag to reorder Project" onDragStart={event=>{cancelLongPress();beginDragPreview(event,project.name);setDragProject({id:project.id,previewIds:orderedProjects.map(item=>item.id),overId:null,side:null})}} onDragEnd={()=>setDragProject(null)} onPointerDown={event=>beginLongPress(event,(x,y)=>setProjectMenu({project,x,y}))} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setProjectMenu({ project, x: event.clientX, y: event.clientY }) }} onClick={() => setProjectId(project.id)}>
+              <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title="Drag to reorder Project" onPointerDown={event=>{beginLongPress(event,(x,y)=>setProjectMenu({project,x,y}));beginProjectPointerDrag(event,project,peerIds)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setProjectMenu({ project, x: event.clientX, y: event.clientY }) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}setProjectId(project.id)}}>
                 <span class="project-chevron" aria-hidden="true">{project.id === projectId ? '◆' : '◇'}</span><strong>{project.name}</strong>
               </div>
               <div class="project-note-list">{sidebarNoteRow(noteResourceId('note',project.id),project.id)}{sidebarNoteRow(noteResourceId('files',project.id),project.id)}</div>
@@ -1546,7 +1737,7 @@ export function App() {
       <main class="main-stage" onContextMenu={event => { if (!activeLayout.root) { event.preventDefault(); setEmptyMenu({ x: event.clientX, y: event.clientY }) } }}>
         <div class="project-workspace unified-workspace">
           <div class="terminal-workspace">
-            {(activeLayout.root||focusedOutsideLayout) ? <div class="pane-tree">{renderPaneNode(zoomedId ? stackForView(activeLayout,zoomedId)||activeLayout.root! : focusedOutsideLayout&&activeId ? paneStack([terminalLeaf(activeId)],activeId) : activeLayout.root!)}</div> : <div class="pane-tree"><section class="pane-stack empty-workspace-pane">
+            {mobileWorkspace?mobileUnifiedWorkspace:(activeLayout.root||focusedOutsideLayout) ? <div class="pane-tree">{renderPaneNode(zoomedId ? stackForView(activeLayout,zoomedId)||activeLayout.root! : focusedOutsideLayout&&activeId ? paneStack([terminalLeaf(activeId)],activeId) : activeLayout.root!)}</div> : <div class="pane-tree"><section class="pane-stack empty-workspace-pane">
               <div class="stack-tabs" role="tablist" aria-label="Workspace tabs"><button class="stack-add" aria-label="New terminal tab" title="New terminal tab" disabled={!activeProject} onClick={()=>activeProject&&void spawnTerminal(activeProject.id)}>+</button></div>
               <div class="stack-active empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Open a terminal, Project note, Files, or a preview to begin.</p></div>
             </section></div>}
@@ -1588,21 +1779,19 @@ export function App() {
       </div>
       <button onClick={() => runNamedCommand('session.rename')}>Rename</button>
       {contextMenu.source==='sidebar'&&<button onClick={() => runNamedCommand('session.open')}>Open in focused pane</button>}
-      {isAgent(contextMenu.session) && <button onClick={() => runNamedCommand('session.pinAttention')}>{contextMenu.session.pinned_attention ? 'Unpin attention' : 'Pin attention'}</button>}
       {['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button onClick={() => runNamedCommand('session.resume')}>Resume as new…</button>}
       <button onClick={() => runNamedCommand('session.copyId')}>Copy session ID</button>
       <button onClick={() => runNamedCommand('session.copyCwd')}>Copy working directory</button>
+      <button onClick={() => runNamedCommand('session.note')}>Open session note</button>
       <button onClick={()=>{setContextMenu(null);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
-      {directionRow('Open in split:',option=>{const leaf=terminalLeaf(contextMenu.session.id);if(contextMenu.source==='tab'||contextMenu.source==='pane')void splitExistingLeaf(leaf,contextMenu.session.project_id,option.direction,option.position);else{const current=resolveLayout(layoutMap[contextMenu.session.project_id],projects.find(project=>project.id===contextMenu.session.project_id)?.layout);const target=leaves(current).find(item=>item.id!==contextMenu.session.id)?.id||null;void openInSplit(contextMenu.session,option.direction,option.position,target)}},()=>contextMenu.source==='sidebar'||(stackForView(activeLayout,contextMenu.session.id)?.children.length||0)>1)}
-      {contextMenu.source==='sidebar'&&<button disabled={!activeId||activeId===contextMenu.session.id} onClick={()=>runNamedCommand('session.groupStack')}>Stack with focused terminal</button>}
-      <button onClick={() => runNamedCommand('session.reveal')}>Reveal in Explorer</button>
-      <button onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
-      {directionRow('New terminal in split:',option=>{setContextMenu(null);void spawnTerminal(contextMenu.session.project_id,option.direction,undefined,contextMenu.session.id,option.position)})}
-      <button onClick={()=>runNamedCommand('pane.stackNew')}>New terminal as tab</button>
+      {contextMenu.source!=='mobile'&&directionRow('Open in split:',option=>{const leaf=terminalLeaf(contextMenu.session.id);if(contextMenu.source==='tab'||contextMenu.source==='pane')void splitExistingLeaf(leaf,contextMenu.session.project_id,option.direction,option.position);else{const current=resolveLayout(layoutMap[contextMenu.session.project_id],projects.find(project=>project.id===contextMenu.session.project_id)?.layout);const target=leaves(current).find(item=>item.id!==contextMenu.session.id)?.id||null;void openInSplit(contextMenu.session,option.direction,option.position,target)}},()=>contextMenu.source==='sidebar'||(stackForView(activeLayout,contextMenu.session.id)?.children.length||0)>1)}
+      {contextMenu.source!=='mobile'&&directionRow('New terminal in split:',option=>{setContextMenu(null);void spawnTerminal(contextMenu.session.project_id,option.direction,undefined,contextMenu.session.id,option.position)})}
       {(contextMenu.source==='tab'||contextMenu.source==='pane')&&directionRow('Move tab:',option=>void moveTabDirection(terminalLeaf(contextMenu.session.id),contextMenu.session.project_id,option.id),direction=>!!paneNeighborIds(activeLayout,contextMenu.session.id)[direction])}
-      {activeStack&&activeStack.children.length>1&&<button onClick={()=>runNamedCommand('stack.dissolve')}>Dissolve tab stack into splits</button>}
-      <button onClick={() => runNamedCommand('session.customSplit')}>New terminal custom in split…</button>
-      <button disabled={workspacePanes.length < 2} onClick={() => runNamedCommand('pane.zoom')}>{zoomedId?'Restore pane layout':'Zoom pane'}</button>
+      {contextMenu.source==='sidebar'&&<button disabled={!activeId||activeId===contextMenu.session.id} onClick={()=>runNamedCommand('session.groupStack')}>Stack with focused terminal</button>}
+      <button onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
+      <button onClick={()=>runNamedCommand('pane.stackNew')}>New terminal as tab</button>
+      {contextMenu.source!=='mobile'&&activeStack&&activeStack.children.length>1&&<button onClick={()=>runNamedCommand('stack.dissolve')}>Dissolve tab stack into splits</button>}
+      {contextMenu.source!=='mobile'&&<button onClick={() => runNamedCommand('session.customSplit')}>New terminal custom in split…</button>}
       {voiceStatus?.enabled&&isAgent(contextMenu.session)&&<>
         <div class="context-subtitle">READ ALOUD</div>
         {(['off','on_demand','auto'] as VoiceMode[]).map(mode=><button key={mode} onClick={()=>{void setVoiceMode(contextMenu.session,mode);setContextMenu(null)}}>{effectiveVoiceMode(contextMenu.session)===mode?'✓ ':''}{mode==='off'?'Off':mode==='on_demand'?'On demand':'Auto on reply'}</button>)}
@@ -1618,6 +1807,7 @@ export function App() {
       <button onClick={() => runNamedCommand('project.newTerminal')}>New terminal</button>
       <button onClick={() => runNamedCommand('project.newTerminalCustom')}>New terminal custom…</button>
       <button onClick={()=>{openProjectFiles(projectMenu.project);setProjectMenu(null)}}>Browse files…</button>
+      <button onClick={() => runNamedCommand('project.reveal')}>Reveal in Explorer</button>
       <label class="context-select">Group<select value={projectMenu.project.group_id||''} onChange={event=>{const target=projectMenu.project;const group_id=event.currentTarget.value||null;void api<Project>('PATCH',`/api/projects/${target.id}`,{group_id}).then(updated=>setProjects(items=>items.map(item=>item.id===updated.id?updated:item)));setProjectMenu(null)}}><option value="">Ungrouped</option>{projectGroups.map(group=><option value={group.id}>{group.name}</option>)}</select></label>
       <button onClick={() => runNamedCommand('project.rename')}>Rename project</button>
       <button disabled={!commands.find(item=>item.id==='project.moveUp')?.available} onClick={()=>runNamedCommand('project.moveUp')}>Move Project up</button>
@@ -1642,16 +1832,17 @@ export function App() {
 
     {noteMenu&&<div class="context-menu" role="menu" aria-label="Resource view actions" style={{left:clampContextMenuLeft(noteMenu.x,innerWidth),top:Math.max(4,Math.min(noteMenu.y,innerHeight-220))}}>
       <div class="context-title"><strong>{noteTabLabel(noteMenu.resourceId)}</strong></div>
-      <button onClick={()=>void placeNoteResourceInFocusedPane(noteMenu.resourceId,noteMenu.projectId)}>Open in focused pane</button>
-      {directionRow('Open in split:',option=>void splitNoteResource(noteMenu.resourceId,noteMenu.projectId,option.direction,option.position))}
+      <button onClick={()=>void placeNoteResourceInFocusedPane(noteMenu.resourceId,noteMenu.projectId)}>{mobileWorkspace?'Open tab':'Open in focused pane'}</button>
+      {!mobileWorkspace&&directionRow('Open in split:',option=>void splitNoteResource(noteMenu.resourceId,noteMenu.projectId,option.direction,option.position))}
       {workspaceNoteIds(noteMenu.projectId).includes(noteMenu.resourceId)&&<><div class="context-rule"/><button onClick={()=>{const target=noteMenu;setNoteMenu(null);void removeWorkspaceNote(target.projectId,target.resourceId)}}>Close resource tab</button></>}
     </div>}
 
     {tabMenu&&<div class="context-menu tab-context-menu" role="menu" aria-label={`Tab actions for ${tabMenu.label}`} style={{left:clampContextMenuLeft(tabMenu.x,innerWidth),top:Math.max(4,Math.min(tabMenu.y,innerHeight-300))}}>
       <div class="context-title"><strong>{tabMenu.label}</strong></div>
-      {directionRow('Open in split:',option=>void splitExistingLeaf(tabMenu.leaf,tabMenu.projectId,option.direction,option.position),()=>{const current=resolveLayout(layoutMap[tabMenu.projectId],projects.find(project=>project.id===tabMenu.projectId)?.layout);return (stackForView(current,tabMenu.leaf.id)?.children.length||0)>1})}
-      {directionRow('New terminal in split:',option=>{const target=tabMenu;setTabMenu(null);void spawnTerminal(target.projectId,option.direction,undefined,target.leaf.id,option.position)})}
-      {directionRow('Move tab:',option=>void moveTabDirection(tabMenu.leaf,tabMenu.projectId,option.id),direction=>{const current=resolveLayout(layoutMap[tabMenu.projectId],projects.find(project=>project.id===tabMenu.projectId)?.layout);return !!paneNeighborIds(current,tabMenu.leaf.id)[direction]})}
+      {tabMenu.source==='tab'&&directionRow('Open in split:',option=>void splitExistingLeaf(tabMenu.leaf,tabMenu.projectId,option.direction,option.position),()=>{const current=resolveLayout(layoutMap[tabMenu.projectId],projects.find(project=>project.id===tabMenu.projectId)?.layout);return (stackForView(current,tabMenu.leaf.id)?.children.length||0)>1})}
+      {tabMenu.source==='tab'&&directionRow('New terminal in split:',option=>{const target=tabMenu;setTabMenu(null);void spawnTerminal(target.projectId,option.direction,undefined,target.leaf.id,option.position)})}
+      {tabMenu.source==='tab'&&directionRow('Move tab:',option=>void moveTabDirection(tabMenu.leaf,tabMenu.projectId,option.id),direction=>{const current=resolveLayout(layoutMap[tabMenu.projectId],projects.find(project=>project.id===tabMenu.projectId)?.layout);return !!paneNeighborIds(current,tabMenu.leaf.id)[direction]})}
+      {tabMenu.source==='mobile'&&<button onClick={()=>{const target=tabMenu;setTabMenu(null);void spawnTerminal(target.projectId,'stack',undefined,target.leaf.id)}}>New terminal as tab</button>}
       <div class="context-rule"/><button onClick={()=>{const target=tabMenu;setTabMenu(null);const current=resolveLayout(layoutMap[target.projectId],projects.find(project=>project.id===target.projectId)?.layout);void updateLayout(target.projectId,removeLeaf(current,target.leaf.kind,target.leaf.id))}}>Close tab</button>
     </div>}
 

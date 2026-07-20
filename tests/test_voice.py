@@ -15,6 +15,7 @@ from swe_mux.config import load_config, update_config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.openrouter import OpenRouterResult
+from swe_mux.server import session_last_reply
 from swe_mux.voice import (
     VOICE_RULE_ID,
     VoiceError,
@@ -49,6 +50,19 @@ REPLY_MESSAGES: list[dict[str, Any]] = [
             {"type": "text", "text": "## Done\n\nThe test passes now. See `foo.py`."},
             {"type": "text", "text": "```python\nassert True\n```\nNext I suggest a rerun."},
         ],
+    },
+]
+
+CONTROL_ACK_MESSAGES: list[dict[str, Any]] = [
+    {"role": "user", "content": [{"type": "text", "text": "complete the implementation"}]},
+    {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Implemented it and all checks pass."}],
+    },
+    {"role": "user", "content": [{"type": "text", "text": "provider control operation"}]},
+    {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "No response requested."}],
     },
 ]
 
@@ -209,6 +223,40 @@ def test_last_reply_text_collects_only_assistant_text() -> None:
     text = last_reply_text(REPLY_MESSAGES)
     assert "The test passes now" in text and "Next I suggest a rerun" in text
     assert "fix the failing test" not in text
+
+
+def test_last_reply_text_skips_provider_control_acknowledgement() -> None:
+    assert last_reply_text(CONTROL_ACK_MESSAGES) == "Implemented it and all checks pass."
+    assert last_reply_text(CONTROL_ACK_MESSAGES[-2:]) == ""
+
+
+async def test_last_reply_route_returns_normalized_agent_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transcript_path = tmp_path / "transcript.jsonl"
+    transcript_path.write_text("{}\n", encoding="utf-8")
+
+    class SliceStub:
+        async def build(
+            self, _path: Path, _backend: str, kind: str, **_kwargs: Any
+        ) -> TranscriptSlice:
+            assert kind == "last_n_messages"
+            return make_slice(CONTROL_ACK_MESSAGES)
+
+    monkeypatch.setattr("swe_mux.server.TranscriptSliceService", SliceStub)
+    session = SimpleNamespace(
+        transcript_path=transcript_path,
+        record=SimpleNamespace(backend="codex", agent_run_id="run-1"),
+    )
+    request = SimpleNamespace(
+        app={"sessions": SimpleNamespace(resolve=lambda _sid: session)},
+        match_info={"sid": "s1"},
+    )
+    response = await session_last_reply(cast(Any, request))
+    payload = json.loads(response.text)
+    assert response.status == 200
+    assert payload["agent_run_id"] == "run-1"
+    assert payload["text"] == "Implemented it and all checks pass."
 
 
 async def test_generate_verbatim_produces_ready_clip_and_event(tmp_path: Path) -> None:

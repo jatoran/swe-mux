@@ -48,6 +48,31 @@ def test_terminal_find_is_inline_and_feature_complete() -> None:
     assert "setFindResult(found ? 'match' : 'no match')" in pane
 
 
+def test_terminal_clipboard_rail_and_selection_autocopy_are_wired() -> None:
+    root = Path(__file__).parents[1]
+    pane = (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
+    css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert 'class="terminal-action-rail"' in pane
+    assert "Copy reply" in pane and "manual-terminal-paste" in pane
+    assert "/last-reply" in pane
+    assert "autoCopySelection" in pane and "requestAnimationFrame(autoCopySelection)" in pane
+    assert ".terminal-action-rail" in css
+
+
+def test_mobile_terminal_ime_streams_composition_without_xterm_overlay() -> None:
+    root = Path(__file__).parents[1]
+    pane = (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
+    ime = (root / "frontend" / "src" / "mobileTerminalIme.ts").read_text(encoding="utf-8")
+    css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert 'class="mobile-terminal-live-input"' in pane
+    assert "mobileImeDelta(mobileInputValue,next)" in pane
+    assert "term.input(data,true)" in pane
+    assert "TERMINAL_DELETE.repeat" in ime
+    assert ".terminal-surface .xterm .composition-view{display:none!important}" in css
+
+
 def test_drag_reorder_keeps_native_source_mounted_and_commits_latest_preview() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
     app = (root / "App.tsx").read_text(encoding="utf-8")
@@ -57,23 +82,21 @@ def test_drag_reorder_keeps_native_source_mounted_and_commits_latest_preview() -
     assert "dragProjectRef.current" in app
     assert "dragStackTabRef.current" in app
     assert (
-        "reorderTargetFromContainer(event.currentTarget,current.id,'vertical',event.clientY)" in app
+        "reorderTargetFromContainer(bucket,current.id,'vertical',pointer.clientY)" in app
     )
     assert (
-        "reorderTargetFromContainer(event.currentTarget,current.childId,'horizontal',event.clientX)"
+        "reorderTargetFromContainer(tabStrip,current.childId,'horizontal',pointer.clientX)"
         in app
     )
-    assert "onDragOver={event=>previewProjectDrop(event,peerIds)}" in app
+    assert "beginProjectPointerDrag(event,project,peerIds)" in app
+    assert "showPointerDropIndicator(targetElement,`insert-${target.side}`)" in app
     assert "data-reorder-id={project.id}" in app
     assert "data-reorder-id={child.id}" in app
     assert "moveLeafToStack" in app
     assert "moveLeafToSplit" in app
     assert "targetStackId" in app
     assert "class={`project-group" in app
-    assert (
-        "const dropGroup=(event:JSX.TargetedDragEvent<HTMLElement>)=>{if(!dragSessionId)return"
-        in app
-    )
+    assert "dragSessionTargetRef.current={stackId,projectId:targetProjectId}" in app
     assert ".project-group.project-drop-target" in css
     assert ".drop-before:after" in css
     assert ".drop-after:after" in css
