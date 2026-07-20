@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from .event_bus import EventBus
 from .models import GitState
 from .session import Session, SessionManager
+from .subprocess_flags import background_creation_flags
 
 GIT_TIMEOUT_SECONDS = 4.0
 GIT_CONCURRENCY = 4
@@ -27,6 +28,7 @@ async def _git(
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            creationflags=background_creation_flags(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)

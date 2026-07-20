@@ -24,6 +24,8 @@ def test_default_bindings_reference_valid_commands() -> None:
         ("shift+a", "Shift alone shadows typing"),
         ("ctrl+w", "browser-reserved"),
         ("ctrl+c", "terminal-reserved"),
+        # Ctrl+Enter is the agent newline chord, so a command must not shadow it.
+        ("ctrl+enter", "terminal-reserved"),
         ("ctrl+shift+p", "browser-reserved"),
         ("ctrl+ctrl+x", "duplicate modifier"),
         ("ctrl+hyper+x", "unknown modifier"),

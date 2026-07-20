@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .config import Config, ShellProfile
+from .subprocess_flags import background_creation_flags
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +34,7 @@ def _wsl_distros() -> list[str]:
             check=False,
             capture_output=True,
             timeout=3,
+            creationflags=background_creation_flags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -123,7 +125,14 @@ def _wsl_cwd(executable: str, args: list[str], cwd: Path) -> str:
         command.extend(["--distribution", distro])
     command.extend(["--", "wslpath", "-a", "-u", str(cwd)])
     try:
-        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=3)
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+            creationflags=background_creation_flags(),
+        )
         translated = result.stdout.strip()
         if result.returncode == 0 and translated.startswith("/"):
             return translated
@@ -153,17 +162,27 @@ def resolve_profile(
     argv = list(profile.args)
     capabilities = list(profile.capabilities)
     executable_name = Path(executable).name.casefold()
-    if interactive and profile.cwd_integration and executable_name in {
-        "powershell",
-        "powershell.exe",
-        "pwsh",
-        "pwsh.exe",
-    }:
+    if (
+        interactive
+        and profile.cwd_integration
+        and executable_name
+        in {
+            "powershell",
+            "powershell.exe",
+            "pwsh",
+            "pwsh.exe",
+        }
+    ):
         if any(item.casefold() in {"-command", "-c", "-file", "-f"} for item in argv):
             raise ValueError(
                 {"profile_id": "cwd integration cannot wrap a profile with Command/File arguments"}
             )
         script = (
+            # $PROFILE scripts commonly rebuild PATH from the registry, which
+            # silently drops the mux agent-shim directory the daemon prepended.
+            # This -Command block runs after the profile, so restore it here.
+            "if($env:MUX_SHIM_DIR -and -not (($env:PATH -split ';') -contains $env:MUX_SHIM_DIR))"
+            '{$env:PATH="$($env:MUX_SHIM_DIR);$env:PATH"};'
             "$global:__swe_mux_prompt=$function:prompt;"
             "function global:prompt {"
             "try {$u=[System.Uri]::new((Get-Location).ProviderPath).AbsoluteUri;"

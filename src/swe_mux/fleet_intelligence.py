@@ -355,24 +355,6 @@ class FleetIntelligence:
             if item.record.agent_run_id and item.record.state not in {"exited", "crashed"}
         ]
         live_ids = {item.record.id for item in live}
-        branches: dict[tuple[str, str], list[Session]] = defaultdict(list)
-        for session in live:
-            scope = session.record.trusted_scope_id
-            branch = session.record.git.branch
-            if scope and branch:
-                branches[(scope, branch)].append(session)
-        for (scope, branch), members in branches.items():
-            if len(members) < 2:
-                continue
-            await self._emit_interlock(
-                "same_branch",
-                [item.record.id for item in members],
-                [
-                    {"signal": "project_scope_id", "value": scope},
-                    {"signal": "git_branch", "value": branch},
-                ],
-                now,
-            )
         listeners: dict[tuple[str, int], set[str]] = defaultdict(set)
         registered_previews: dict[tuple[str, int], set[str]] = defaultdict(set)
         for preview in self.previews.items.values():
@@ -402,6 +384,10 @@ class FleetIntelligence:
                     },
                 ],
                 now,
+                title="Port collision",
+                message=(
+                    f"{self._labels(sorted(session_ids))} are all listening on {host}:{port}."
+                ),
             )
         providers_by_port: dict[int, set[str]] = defaultdict(set)
         preview_providers_by_port: dict[int, set[str]] = defaultdict(set)
@@ -442,7 +428,19 @@ class FleetIntelligence:
                                 },
                             ],
                             now,
+                            title="Shared dev server",
+                            message=(
+                                f"{self._label(item.session_id)} is talking to the dev server "
+                                f"{self._label(provider_session)} owns on port {remote_port}."
+                            ),
                         )
+
+    def _label(self, session_id: str) -> str:
+        session = self.sessions.sessions.get(session_id)
+        return (session.record.name if session else None) or session_id
+
+    def _labels(self, session_ids: list[str]) -> str:
+        return ", ".join(self._label(sid) for sid in session_ids)
 
     async def _emit_interlock(
         self,
@@ -450,6 +448,9 @@ class FleetIntelligence:
         session_ids: list[str],
         evidence: list[dict[str, Any]],
         now: float,
+        *,
+        title: str,
+        message: str,
     ) -> None:
         fingerprint = hashlib.sha256(
             json.dumps([kind, session_ids, evidence], sort_keys=True).encode()
@@ -473,8 +474,8 @@ class FleetIntelligence:
             session_id=session_ids[0],
             rule_id=None,
             kind="environment_interlock",
-            title=kind.replace("_", " "),
-            message=f"Sessions {', '.join(session_ids)} share a conflicting environment.",
+            title=title,
+            message=message,
             severity="warning",
             evidence=evidence,
         )

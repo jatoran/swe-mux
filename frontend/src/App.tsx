@@ -16,6 +16,7 @@ import { UsageDashboard } from './UsageDashboard'
 import { HistoryBrowser } from './HistoryBrowser'
 import { AccountSwitcher } from './ProviderAccounts'
 import { PromptLibrary } from './PromptLibrary'
+import { SessionNotesBrowser, type SessionNoteSummary } from './SessionNotesBrowser'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
 import { MicButton, VoicePlayer } from './VoicePlayer'
@@ -34,7 +35,7 @@ import { reorderForHover, reorderTargetFromContainer, type DropSide } from './dr
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
-  activateContainingStack, activateStackChild, addToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, openTab, paneNeighborIds, paneStacks, reorderStack, resolveLayout, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
+  activateContainingStack, activateStackChild, addToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, openTab, paneNeighborIds, paneStacks, placeCompanionLeaf, reorderStack, resolveLayout, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
   type PaneDirection, type PaneLeaf, type PaneLeafKind, type PaneNode, type SplitDirection,
 } from './layout'
 
@@ -182,6 +183,13 @@ export function App() {
   const [paletteIndex, setPaletteIndex] = useState(0)
   const [error, setError] = useState('')
   const [historyOpen, setHistoryOpen] = useState(false)
+  // '' browses every Project; a Project id prefilters the archive to it.
+  const [historyScope,setHistoryScope]=useState('')
+  const [processScope,setProcessScope]=useState<string|null>(null)
+  // Which Project's templates join the global ones. Unlike the other surfaces
+  // this is additive rather than restrictive, so the app menu still passes the
+  // active Project: opening "unscoped" would remove templates, not filters.
+  const [promptScope,setPromptScope]=useState<Project|null>(null)
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [historyProjects, setHistoryProjects] = useState<HistoryProject[]>([])
   const [historyNext, setHistoryNext] = useState<string | null>(null)
@@ -222,6 +230,8 @@ export function App() {
   const [projectCreate,setProjectCreate]=useState<{name:string;root:string;group_id:string}>({name:'',root:'',group_id:''})
   const [projectCreateOpen,setProjectCreateOpen]=useState(false)
   const [projectsManagerOpen,setProjectsManagerOpen]=useState(false)
+  // null closed; a string scopes the browser to one project, '' shows every project.
+  const [sessionNotesScope,setSessionNotesScope]=useState<string|null>(null)
   const [folderPickerOpen,setFolderPickerOpen]=useState(false)
   const [groupEdit,setGroupEdit]=useState<{id?:string;name:string}|null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -689,6 +699,18 @@ export function App() {
     if(!entry.project_id||!entry.note_id){setError('This historical session is not linked to a Project note owner.');return}
     void initializeAndOpenSessionNote({projectId:entry.project_id,terminalSessionId:null,kind:'session-note',ownerLabel:entry.note_id})
   }
+  // The browser lists notes from disk, so an owner may be long gone. Route through
+  // the same initialize-then-open path: initialization is idempotent and keeps a
+  // note whose file was removed underneath the listing from opening onto nothing.
+  const openBrowsedSessionNote=(note:SessionNoteSummary)=>{
+    setSessionNotesScope(null)
+    void initializeAndOpenSessionNote({
+      projectId:note.project_id,
+      terminalSessionId:sessions.some(item=>item.id===note.note_id&&!isEndedSession(item))?note.note_id:null,
+      kind:'session-note',
+      ownerLabel:note.note_id,
+    })
+  }
   const openProjectFiles=(project:Project)=>openNoteDefault({projectId:project.id,terminalSessionId:null,kind:'files',ownerLabel:project.id})
   const openProjectFile=(project:Project,path:string,targetViewId?:string)=>void showResourceForTarget({projectId:project.id,terminalSessionId:null,kind:'file',ownerLabel:path},targetViewId)
   const openNotifications = () => { setNotificationsOpen(true);setNotificationUnread(0);setMainMenuOpen(false);void loadNotifications() }
@@ -1047,7 +1069,13 @@ export function App() {
     const focused=targetViewId||(targetProject===projectId&&focusedViewId&&stackForView(current,focusedViewId)?focusedViewId:null)||target.terminalSessionId||terminalIds(current)[0]||leaves(current)[0]?.id||null
     setProjectId(targetProject);if(target.terminalSessionId)setActiveId(target.terminalSessionId);setFocusedViewId(resourceId)
     setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setMainMenuOpen(false);setEmptyMenu(null)
-    await updateLayout(targetProject,openTab(current,focused,resourceLeaf('note',resourceId)))
+    // A session note accompanies its terminal, so it opens beside it rather than
+    // as a tab covering it. An explicit target (drag, file open) still wins.
+    const leaf=resourceLeaf('note',resourceId)
+    const next=target.kind==='session-note'&&!targetViewId
+      ?placeCompanionLeaf(current,target.terminalSessionId&&stackForView(current,target.terminalSessionId)?target.terminalSessionId:focused,leaf)
+      :openTab(current,focused,leaf)
+    await updateLayout(targetProject,next)
   }
 
   const showNoteResource=(resourceId:string,targetProject:string)=>{
@@ -1084,8 +1112,9 @@ export function App() {
     setNoteMenu({resourceId,projectId:targetProject,x,y})
   }
 
-  const openProcessViewer=(session:Session|null=null)=>{
-    setProcessSession(session);setProcessViewerOpen(true);setContextMenu(null);setSidebarMenu(null);setMainMenuOpen(false)
+  const openProcessViewer=(session:Session|null=null,scope:string|null=null)=>{
+    setProcessSession(session);setProcessScope(scope);setProcessViewerOpen(true)
+    setContextMenu(null);setSidebarMenu(null);setMainMenuOpen(false);setProjectMenu(null)
   }
 
   const removeWorkspaceNote = async (targetProject:string,resourceId:string) => {
@@ -1166,13 +1195,20 @@ export function App() {
     finally { setHistoryLoading(false) }
   }
 
-  const showHistory = async () => {
-    if(!activeProject){setError('Select a Project before opening History.');return}
+  // Scope belongs to the menu that opened the surface: the app menu browses
+  // everything, a Project row browses that Project. History lives in a
+  // Project's workspace, so a scoped open also hosts the tab in that Project.
+  const showHistory = async (scope:Project|null=null) => {
+    const host=scope||activeProject
+    if(!host){setError('Select a Project before opening History.');return}
+    setHistoryScope(scope?scope.id:'')
     const id='history:archive'
-    const current=resolveLayout(layoutValues.current[activeProject.id],activeProject.layout)
-    const next=openTab(current,focusedViewId,resourceLeaf('history',id))
+    const current=resolveLayout(layoutValues.current[host.id],host.layout)
+    const next=openTab(current,host.id===projectId?focusedViewId:null,resourceLeaf('history',id))
+    setProjectId(host.id)
     setFocusedViewId(id)
-    await updateLayout(activeProject.id,next)
+    setMainMenuOpen(false);setProjectMenu(null)
+    await updateLayout(host.id,next)
   }
 
   const deleteHistory = async (entry: HistoryEntry) => {
@@ -1269,11 +1305,16 @@ export function App() {
   const commandProject = projectMenu?.project || activeProject
   const commands: Command[] = [
     { id: 'palette.open', label: 'Open command palette', category: 'view', available: true, run: () => setPaletteOpen(true) },
-    { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptLibraryOpen(true);setMainMenuOpen(false)} },
+    { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
+    { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
     { id: 'session.spawnShell', label: 'New terminal in current project', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => void spawnTerminal() },
     { id: 'session.quickLaunch', label: 'New terminal custom…', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => openLauncher() },
+    // `project.create` predates this and opens the registry; adding a Project is
+    // the common intent, so it gets its own direct entry.
+    { id: 'project.add', label: 'Add project', category: 'project', available: true, run: () => { setSidebarMenu(null);setMainMenuOpen(false);setProjectMenu(null);void createProject() } },
     { id: 'project.create', label: 'Manage projects', category: 'project', available: true, run: openProjectsManager },
     { id: 'history.open', label: 'Browse session history', category: 'view', available: true, run: () => void showHistory() },
+    { id: 'history.openProject', label: 'Browse selected project’s session history', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => void showHistory(commandProject||null) },
     { id: 'project.files', label: 'Browse current project files', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectFiles(activeProject) },
     { id: 'settings.open', label: 'Open Settings', category: 'view', available: true, run: () => openSettings() },
     { id: 'settings.project', label: 'Open current project settings', category: 'view', available: !!activeProject, disabledReason: 'No project is selected', run: () => activeProject&&openSettings('Current project',activeProject.root) },
@@ -1282,9 +1323,12 @@ export function App() {
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
     { id: 'notes.open', label: 'Open current project note', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectNotes(activeProject) },
     { id: 'session.note', label: 'Open selected session note', category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession&&openSessionNotes(commandSession) },
+    { id: 'notes.browse', label: 'Browse session notes', category: 'view', available: true, run: () => { setMainMenuOpen(false);setProjectMenu(null);setSessionNotesScope('') } },
+    { id: 'notes.browseProject', label: 'Browse this project’s session notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => { setMainMenuOpen(false);setProjectMenu(null);setSessionNotesScope(activeProject?.id||'') } },
     { id: 'project.note', label: 'Open selected project note', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => commandProject&&openProjectNotes(commandProject) },
     { id: 'processes.open', label: 'Inspect selected session processes and previews', category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => {if(commandSession)openProcessViewer(commandSession)} },
     { id: 'processes.all', label: 'Open unified process viewer', category: 'view', available: true, run: () => openProcessViewer() },
+    { id: 'processes.project', label: 'Inspect selected project’s processes', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => openProcessViewer(null,commandProject?.id||null) },
     { id: 'terminal.find', label: 'Find in focused terminal', category: 'terminal', available: !!active, disabledReason: 'No focused terminal', run: () => window.dispatchEvent(new CustomEvent('mux:terminal-find', { detail: activeId })) },
     ...(['copy', 'paste', 'selectAll', 'clear'] as const).map((action): Command => ({
       id: `terminal.${action}`, label: `${action === 'selectAll' ? 'Select all' : action[0].toUpperCase() + action.slice(1)} in focused terminal`,
@@ -1553,7 +1597,7 @@ export function App() {
       if(!identity||!activeProject)return <section class="workspace-leaf-placeholder note-unavailable"><strong>resource unavailable</strong><span>{node.id}</span><button onClick={()=>void removeWorkspaceNote(projectId,node.id)}>close tab</button></section>
       return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>openProjectFile(activeProject,path,node.id)} onClose={()=>void removeWorkspaceNote(projectId,node.id)}/>
     }
-    if(node.kind==='history')return <HistoryBrowser key={`${activeProject?.id||projectId}:${node.id}`} projects={projects} initialProjectId={activeProject?.id||projectId} onResume={resumeHistoryEntry} onProjectNote={openProjectNotes} onSessionNote={openHistorySessionNote} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>
+    if(node.kind==='history')return <HistoryBrowser key={`${historyScope}:${node.id}`} projects={projects} initialProjectId={historyScope} onResume={resumeHistoryEntry} onSessionNote={openHistorySessionNote} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>
     if (node.kind === 'preview') {
       const preview = previews[node.id]
       if (!preview) return <section class="workspace-leaf-placeholder"><strong>preview unavailable</strong><span>{node.id}</span></section>
@@ -1580,7 +1624,7 @@ export function App() {
       <div class="pane-bar" onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
         <div><span class={`pane-state ${session.state}`} title={[session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}</span></div>
         <div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>
-        <div class="pane-tools"><button class="pane-tool-label" aria-label={`Inspect processes for ${sessionName(session)}`} title="Processes and previews" onClick={() => {setActiveId(session.id);openProcessViewer(session)}}>proc</button>{voiceStatus?.enabled&&isAgent(session)&&<button class={`pane-tool-label voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}{voiceStatus?.stt_enabled&&isAgent(session)&&<MicButton sessionId={session.id}/>}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
+        <div class="pane-tools"><button class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button><button class="pane-tool-label" aria-label={`Inspect processes for ${sessionName(session)}`} title="Processes and previews" onClick={() => {setActiveId(session.id);openProcessViewer(session)}}>proc</button>{voiceStatus?.enabled&&isAgent(session)&&<button class={`pane-tool-label voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}{voiceStatus?.stt_enabled&&isAgent(session)&&<MicButton sessionId={session.id}/>}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
       {voiceStripVisible&&voiceStatus&&<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} onSession={updateSession} />}
       <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} mobileInput={mobileInput} />
@@ -1593,6 +1637,21 @@ export function App() {
   }
 
   const workspaceNoteIds=(targetProject:string)=>leaves(resolveLayout(layoutMap[targetProject],projects.find(item=>item.id===targetProject)?.layout),'note').map(leaf=>leaf.id)
+  // The chip reports whether this terminal has anything written down, which is
+  // most of its value: `open` when its note is the focused tab, `written` when
+  // the note holds text, `empty` otherwise.
+  const noteChipState=(session:Session):'open'|'written'|'empty'=>{
+    const resourceId=noteResourceId('session-note',session.note_id||session.id)
+    const layout=resolveLayout(layoutMap[session.project_id],projects.find(item=>item.id===session.project_id)?.layout)
+    if(stackForView(layout,resourceId)?.active_child_id===resourceId)return 'open'
+    return session.note_exists?'written':'empty'
+  }
+  const noteChipTitle=(session:Session)=>({
+    open:'Session note · open · click to focus it',
+    written:'Session note · has content · click to open it beside this terminal',
+    empty:'Session note · empty · click to start one beside this terminal',
+  })[noteChipState(session)]
+  const noteChipLabel=(session:Session)=>`${noteChipState(session)==='empty'?'Start':'Open'} session note for ${sessionName(session)}`
   const sidebarNoteRow=(resourceId:string,targetProject:string)=>{
     const identity=parseNoteResourceId(resourceId)
     if(!identity)return null
@@ -1642,7 +1701,6 @@ export function App() {
     return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} class={`session-row ${activeId === session.id ? 'active' : ''} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){beginLongPress(event,(x,y)=>openSessionMenu(session,x,y,'sidebar'));beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       <span class={`state-dot ${session.state}`} />
       <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`}>[{session.backend}]</span>}{sessionName(session)}{relation==='tab'&&<span class="layout-affinity tab" title="Shares one pane region with the other bracketed sessions">▤</span>}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
-      <span class="session-meta">{isAgent(session) && <em class={`state-label ${session.state}`}>{session.state === 'idle' ? 'ready' : session.state}</em>}</span>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
     </button>{showSessionNote&&sidebarNoteRow(sessionNoteId,session.project_id)}{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}{spawnedServers.map(server=>sidebarServerRow(server,session))}</div>
   }
@@ -1733,7 +1791,7 @@ export function App() {
       <button class="nav-toggle mobile-nav-toggle" onClick={() => setSidebarOpen(value => !value)}>:nav</button>
       <strong class="mobile-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>
       <button class="mobile-run-trigger" disabled={!activeProject} onClick={event=>activeProject&&openRunMenu(activeProject,event.currentTarget)}>▶ Run</button>
-      <AccountSwitcher compact onManage={()=>openSettings('Accounts')}/>
+      <AccountSwitcher variant="compact" onManage={()=>openSettings('Accounts')}/>
     </div>
 
     <ContinuityBanner />
@@ -1772,6 +1830,18 @@ export function App() {
         </div>
         <div class="sidebar-footer"><button class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button class="project-trigger" onClick={openProjectsManager}><span>◇</span> projects</button></div>
       </aside>
+      {/* The collapsed strip keeps the sidebar's own controls reachable rather
+          than forcing an expand round-trip for menu, projects, or status. */}
+      {sidebarCollapsed&&<nav class="sidebar-rail" aria-label="Sidebar shortcuts">
+        {/* Status above, actions at the very bottom, mirroring the expanded
+            sidebar where menu and projects are the last rows. */}
+        <div class="rail-status">
+          <ResourceUsageSummary compact snapshot={processFleet} sessions={sessions} projects={projects} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
+          <AccountSwitcher variant="rail" placement="up" onManage={()=>openSettings('Accounts')}/>
+        </div>
+        <button class="rail-button" aria-label="Open swe-mux menu" title="Menu" onClick={()=>setMainMenuOpen(value=>!value)}>:</button>
+        <button class="rail-button" aria-label="Manage projects" title="Projects" onClick={openProjectsManager}>◇</button>
+      </nav>}
       <div class="sidebar-resizer" role="separator" tabindex={0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={190} aria-valuemax={480} aria-valuenow={Math.round(sidebarWidth)} title="Drag to resize · arrow keys adjust · double-click to reset" onPointerDown={beginSidebarResize} onDblClick={()=>persistSidebarWidth(254)} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();persistSidebarWidth(event.key==='Home'?190:event.key==='End'?480:sidebarWidth+(event.key==='ArrowLeft'?-10:10))}} />
 
       <main class="main-stage" onContextMenu={event => { if (!activeLayout.root) { event.preventDefault(); setEmptyMenu({ x: event.clientX, y: event.clientY }) } }}>
@@ -1844,11 +1914,18 @@ export function App() {
       <button class="danger" onClick={() => runNamedCommand('session.killImmediate')}>{isEndedSession(contextMenu.session) ? 'Remove from sidebar' : 'Kill session'}</button>
     </div>}
 
-    {projectMenu && <div class="context-menu" role="menu" aria-label={`Project actions for ${projectMenu.project.name}`} style={{ left: clampContextMenuLeft(projectMenu.x, innerWidth), top: Math.max(4, Math.min(projectMenu.y, innerHeight - 310)) }}>
+    {projectMenu && <div class="context-menu" role="menu" aria-label={`Project actions for ${projectMenu.project.name}`} style={{ left: clampContextMenuLeft(projectMenu.x, innerWidth), top: Math.max(4, Math.min(projectMenu.y, innerHeight - 470)) }}>
       <div class="context-title"><strong>{projectMenu.project.name}</strong></div>
       <button onClick={() => runNamedCommand('project.newTerminal')}>New terminal</button>
       <button onClick={() => runNamedCommand('project.newTerminalCustom')}>New terminal custom…</button>
+      {/* The same surfaces the app menu opens globally, prefiltered to this Project. */}
+      <div class="context-subtitle">BROWSE THIS PROJECT</div>
+      <button onClick={() => runNamedCommand('history.openProject')}>Session history…</button>
+      <button onClick={()=>{const target=projectMenu.project;setProjectMenu(null);setSessionNotesScope(target.id)}}>Session notes…</button>
+      <button onClick={() => runNamedCommand('processes.project')}>Processes…</button>
+      <button onClick={() => runNamedCommand('prompts.openProject')}>Prompt library…</button>
       <button onClick={()=>{openProjectFiles(projectMenu.project);setProjectMenu(null)}}>Browse files…</button>
+      <div class="context-subtitle">PROJECT</div>
       <button onClick={() => runNamedCommand('project.reveal')}>Reveal in Explorer</button>
       <label class="context-select">Group<select value={projectMenu.project.group_id||''} onChange={event=>{const target=projectMenu.project;const group_id=event.currentTarget.value||null;void api<Project>('PATCH',`/api/projects/${target.id}`,{group_id}).then(updated=>setProjects(items=>items.map(item=>item.id===updated.id?updated:item)));setProjectMenu(null)}}><option value="">Ungrouped</option>{projectGroups.map(group=><option value={group.id}>{group.name}</option>)}</select></label>
       <button onClick={() => runNamedCommand('project.rename')}>Rename project</button>
@@ -1863,11 +1940,14 @@ export function App() {
       </>}
     </div>}
 
-    {sidebarMenu&&<div class="context-menu" role="menu" aria-label="Sidebar actions" style={{left:clampContextMenuLeft(sidebarMenu.x,innerWidth),top:Math.max(4,Math.min(sidebarMenu.y,innerHeight-190))}}>
+    {sidebarMenu&&<div class="context-menu" role="menu" aria-label="Sidebar actions" style={{left:clampContextMenuLeft(sidebarMenu.x,innerWidth),top:Math.max(4,Math.min(sidebarMenu.y,innerHeight-300))}}>
       <div class="context-title"><strong>PROJECTS</strong></div>
+      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('project.add')}}>Add project…</button>
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('project.create')}}>Manage projects…</button>
       <button onClick={()=>{setSidebarMenu(null);setGroupEdit({name:''})}}>Create group</button>
-      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('processes.all')}}>All processes and previews…</button>
+      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('history.open')}}>Session history</button>
+      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('notes.browse')}}>Session notes…</button>
+      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('processes.all')}}>Process fleet…</button>
       <div class="context-rule" />
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('settings.open')}}>All Settings…</button>
     </div>}
@@ -1898,18 +1978,23 @@ export function App() {
 
     {mainMenuOpen && <div class="context-menu main-menu" role="menu" aria-label="swe-mux menu">
       <div class="context-title"><strong>swe-mux menu</strong></div>
-      <div class="context-subtitle">PROJECT</div>
-      <button onClick={() => { setMainMenuOpen(false); runNamedCommand('session.spawnShell') }}>New terminal in current project</button>
-      <button onClick={() => { setMainMenuOpen(false); runNamedCommand('session.quickLaunch') }}>New terminal custom…</button>
-      <button onClick={() => { setMainMenuOpen(false); runNamedCommand('history.open') }}>Session history</button>
-      <button onClick={() => runNamedCommand('project.create')}>Projects…</button>
+      {/* Everything under BROWSE opens across every Project. Right-clicking a
+          Project row opens the same surfaces prefiltered to it. */}
+      <div class="context-subtitle">BROWSE ALL PROJECTS</div>
+      <button onClick={() => runNamedCommand('history.open')}>Session history</button>
+      <button onClick={() => runNamedCommand('notes.browse')}>Session notes…</button>
       <button onClick={() => runNamedCommand('processes.all')}>Process fleet…</button>
       <button onClick={()=>runNamedCommand('prompts.open')}>Prompt library…</button>
+      <button onClick={() => runNamedCommand('usage.open')}>Usage analytics…</button>
       <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
+      <div class="context-subtitle">CURRENT PROJECT{activeProject?`::${activeProject.name}`:''}</div>
+      <button disabled={!activeProject} onClick={() => { setMainMenuOpen(false); runNamedCommand('session.spawnShell') }}>New terminal</button>
+      <button disabled={!activeProject} onClick={() => { setMainMenuOpen(false); runNamedCommand('session.quickLaunch') }}>New terminal custom…</button>
+      <button disabled={!activeProject} onClick={() => runNamedCommand('settings.project')}>Project settings…</button>
       <button onClick={() => { setMainMenuOpen(false); runNamedCommand('broadcast.toggle') }}>{broadcast ? 'Stop broadcast input' : 'Start broadcast input'}</button>
       <div class="context-subtitle">CONFIGURATION</div>
-      <button disabled={!activeProject} onClick={() => runNamedCommand('settings.project')}>Project settings…</button>
-      <button onClick={() => runNamedCommand('usage.open')}>Usage analytics…</button>
+      <button onClick={() => runNamedCommand('project.add')}>Add project…</button>
+      <button onClick={() => runNamedCommand('project.create')}>Manage projects…</button>
       <button onClick={() => runNamedCommand('hooks.open')}>Automation…</button>
       <button onClick={() => runNamedCommand('settings.open')}>All Settings…</button>
       <div class="context-subtitle">SHORTCUTS</div>
@@ -1925,6 +2010,8 @@ export function App() {
         <div class="modal-footer"><span>enter::save · esc::cancel</span><button type="button" onClick={() => setRenameTarget(null)}>Cancel</button><button class="primary" type="submit" disabled={!renameValue.trim()}>Rename</button></div>
       </form>
     </div>}
+
+    {sessionNotesScope!==null&&<SessionNotesBrowser projects={orderedProjects} initialProjectId={sessionNotesScope||null} onClose={()=>setSessionNotesScope(null)} onOpen={openBrowsedSessionNote}/>}
 
     {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} onClose={()=>setProjectsManagerOpen(false)} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onSettings={project=>{setProjectsManagerOpen(false);openSettings('Current project',project.root)}} onNote={project=>{setProjectsManagerOpen(false);openProjectNotes(project)}} onFiles={project=>{setProjectsManagerOpen(false);openProjectFiles(project)}} onPatch={patchManagedProject} onDelete={deleteProject}/>}
 
@@ -1959,7 +2046,7 @@ export function App() {
           {historyNext && !historyLoading && <button class="history-load-more" onClick={() => void loadHistory({ append: true })}>Load more</button>}
         </aside>
         <main>{transcript ? <><div class="transcript-heading"><button class="history-back" onClick={()=>setTranscript(null)}>← Back</button><div><h3>[{transcript.entry.backend}] {historyName(transcript.entry)}</h3><span>{transcript.entry.project_label || 'Ungrouped'} · {transcript.entry.cwd}</span><small>{transcript.entry.exit_reason || transcript.entry.final_state || 'indexed'} · {transcript.entry.model || 'model unavailable'} · {transcript.entry.external ? 'external' : 'mux session'}</small><small>{transcript.entry.context_window ? `context final ${Math.round((transcript.entry.final_context_pct || 0) * 100)}% · peak ${Math.round((transcript.entry.peak_context_pct || 0) * 100)}% · ${transcript.entry.measurement_source || 'native observation'}` : 'context unavailable'} · tokens in {transcript.entry.tokens_in || 0} / out {transcript.entry.tokens_out || 0}</small>{transcript.entry.compaction_count?<small>explicit compactions {transcript.entry.compaction_count} · last {transcript.entry.last_compaction_at?new Date(transcript.entry.last_compaction_at*1000).toLocaleString():'unknown'} · {transcript.entry.compaction_capability||'native evidence'} · confidence {transcript.entry.compaction_confidence||'unknown'}</small>:<small>compaction count unavailable — token drops are not treated as compaction evidence</small>}</div><button class="primary" onClick={() => void resumeHistoryEntry(transcript.entry)}>Resume as new</button></div>
-          <div class="transcript-actions">{transcript.entry.project_id&&<button onClick={()=>{const project=projects.find(item=>item.id===transcript.entry.project_id);if(project)openProjectNotes(project)}}>Project note</button>}<button onClick={()=>void openHandoff(transcript.entry)}>Export handoff</button><button class="primary" onClick={()=>void previewSecondOpinion(transcript.entry)}>Review with {transcript.entry.backend==='claude'?'Codex':'Claude'}</button></div>{lineage.length>0&&<section class="transcript-lineage"><h4>Work lineage</h4>{lineage.map(edge=><article><strong>{edge.relation}</strong><span>{edge.parent_run_id} → {edge.child_run_id}</span><small>{new Date(edge.created_at*1000).toLocaleString()}</small></article>)}</section>}{transcript.annotations.length>0&&<section class="transcript-annotations"><h4>Run notes</h4>{transcript.annotations.map(item=><details><summary>{item.tag} · {item.content}</summary><small>{new Date(item.created_at*1000).toLocaleString()} · {item.provenance} · model::{item.resolved_model||'deterministic'} · confidence::{item.confidence??'—'} · cost::{annotationMoney.format(item.cost_usd||0)}</small></details>)}</section>}<div class="messages">{transcript.messages.length ? transcript.messages.map(message => <article class={message.role}><header>{message.role}</header>{message.content.map(block => block.type === 'text' ? <p>{block.text}</p> : <pre>{block.type === 'tool_use' ? `${block.name}\n${JSON.stringify(block.input, null, 2)}` : block.type}</pre>)}</article>) : <div class="no-transcript">No native transcript is available for this session.</div>}</div></> : <div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Read its native transcript without resuming it.</p></div>}</main>
+          <div class="transcript-actions"><button onClick={()=>void openHandoff(transcript.entry)}>Export handoff</button><button class="primary" onClick={()=>void previewSecondOpinion(transcript.entry)}>Review with {transcript.entry.backend==='claude'?'Codex':'Claude'}</button></div>{lineage.length>0&&<section class="transcript-lineage"><h4>Work lineage</h4>{lineage.map(edge=><article><strong>{edge.relation}</strong><span>{edge.parent_run_id} → {edge.child_run_id}</span><small>{new Date(edge.created_at*1000).toLocaleString()}</small></article>)}</section>}{transcript.annotations.length>0&&<section class="transcript-annotations"><h4>Run notes</h4>{transcript.annotations.map(item=><details><summary>{item.tag} · {item.content}</summary><small>{new Date(item.created_at*1000).toLocaleString()} · {item.provenance} · model::{item.resolved_model||'deterministic'} · confidence::{item.confidence??'—'} · cost::{annotationMoney.format(item.cost_usd||0)}</small></details>)}</section>}<div class="messages">{transcript.messages.length ? transcript.messages.map(message => <article class={message.role}><header>{message.role}</header>{message.content.map(block => block.type === 'text' ? <p>{block.text}</p> : <pre>{block.type === 'tool_use' ? `${block.name}\n${JSON.stringify(block.input, null, 2)}` : block.type}</pre>)}</article>) : <div class="no-transcript">No native transcript is available for this session.</div>}</div></> : <div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Read its native transcript without resuming it.</p></div>}</main>
       </div>
     </div>}
 
@@ -1969,12 +2056,12 @@ export function App() {
 
     {settingsOpen && <Settings cwd={settingsCwd||activeProject?.root} initialSection={settingsSection} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false);setSettingsCwd(null); void refresh(); void loadProfiles(); void api<Record<string,unknown>>('GET','/api/config').then(config=>setMobileInput(mobileInputSettings(config))) }} />}
 
-    {promptLibraryOpen&&<PromptLibrary project={activeProject} backend={active?.backend} onClose={()=>setPromptLibraryOpen(false)} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}}))}/>}
+    {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={active?.backend} onClose={()=>setPromptLibraryOpen(false)} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}}))}/>}
 
     {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}
     {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
 
-    {processViewerOpen && <ProcessPanel initialSessionId={processSession?.id||null} sessions={sessions} projects={projects} onClose={() => {setProcessViewerOpen(false);setProcessSession(null)}} onAttached={(preview, project) => {
+    {processViewerOpen && <ProcessPanel initialSessionId={processSession?.id||null} initialProjectId={processScope} sessions={sessions} projects={projects} onClose={() => {setProcessViewerOpen(false);setProcessSession(null)}} onAttached={(preview, project) => {
       setPreviews(current => ({...current, [preview.id]: preview}))
       setProjects(items => items.map(item => item.id === project.id ? project : item))
       setLayoutMap(current => ({...current, [project.id]: parseLayout(project.layout)}))

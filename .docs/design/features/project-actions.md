@@ -24,6 +24,11 @@ that was active for the target Project, and the final tab receives focus. Sequen
 dependencies preserve start order only; swe-mux does not import VS Code background/readiness or
 completion-gating semantics.
 
+Each step is also marked as a one-shot terminal. Its stdout/stderr remains in the terminal's
+ConPTY, exit code `0` ends as **completed**, and a nonzero root exit remains **crashed** with the
+exit code retained. Interactive shells and agent terminals keep their separate long-lived
+lifecycle semantics.
+
 ## Trust boundary
 
 - Merely opening the Run menu never executes repository content.
@@ -87,6 +92,7 @@ imported actions follow in source sections.
 
 - `src/swe_mux/project_actions.py`
 - `src/swe_mux/action_runner.py`
+- `packaging/action_entry.py`
 - `src/swe_mux/server.py`
 - `frontend/src/ProjectRunMenu.tsx`
 - `frontend/src/App.tsx`

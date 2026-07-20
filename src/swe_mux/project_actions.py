@@ -483,13 +483,25 @@ def runner_spawn_body(
             separators=(",", ":"),
         ).encode()
     ).decode()
+    runner_executable, runner_prefix = action_runner_invocation()
     return {
         "project_id": project_id,
         "backend": "shell",
         "name": step.name,
-        "executable": sys.executable,
-        "argv": ["-m", "swe_mux.action_runner", payload],
+        "executable": runner_executable,
+        "argv": [*runner_prefix, payload],
+        "completion_mode": "one_shot",
     }
+
+
+def action_runner_invocation(
+    *, executable: str | None = None, frozen: bool | None = None
+) -> tuple[str, tuple[str, ...]]:
+    executable = executable or sys.executable
+    frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
+    if frozen:
+        return str(Path(executable).with_name("swe-mux-action.exe")), ()
+    return executable, ("-m", "swe_mux.action_runner")
 
 
 def _shell_command_args(executable: str, command: str) -> list[str]:

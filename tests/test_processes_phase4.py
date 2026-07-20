@@ -51,17 +51,13 @@ class ProjectInspector:
                 "available": True,
                 "session_id": "frontend",
                 "project_id": "project-a",
-                "processes": [
-                    {"pid": 11, "listeners": [listener_record("127.0.0.1", 37656)]}
-                ],
+                "processes": [{"pid": 11, "listeners": [listener_record("127.0.0.1", 37656)]}],
             },
             "backend": {
                 "available": True,
                 "session_id": "backend",
                 "project_id": "project-a",
-                "processes": [
-                    {"pid": 12, "listeners": [listener_record("127.0.0.1", 37655)]}
-                ],
+                "processes": [{"pid": 12, "listeners": [listener_record("127.0.0.1", 37655)]}],
             },
         }
 
@@ -122,9 +118,7 @@ async def test_preview_registration_attributes_a_printed_url_to_its_actual_proje
 
     # The frontend terminal printed its backend address. Endpoint ownership comes
     # from the live listener, not the terminal where the link happened to appear.
-    opened = await registry.register(
-        "frontend", "http://127.0.0.1:37655/", approved=True
-    )
+    opened = await registry.register("frontend", "http://127.0.0.1:37655/", approved=True)
     reopened = await registry.register("backend", "http://127.0.0.1:37655/")
 
     assert opened is reopened
@@ -411,6 +405,122 @@ async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources
     assert result["daemon"]["pid"] > 0
 
 
+def _fleet_inspector(monkeypatch: pytest.MonkeyPatch) -> Any:
+    from swe_mux import processes
+
+    monkeypatch.setattr(processes, "psutil", SimpleNamespace())
+    record = SimpleNamespace(
+        id="session-a",
+        project_id="project-a",
+        trusted_scope_id="scope-a",
+        agent_run_id=None,
+        run_repo_group_id=None,
+        spawn_repo_group_id="repo-a",
+    )
+    sessions = SimpleNamespace(sessions={"session-a": SimpleNamespace(record=record)})
+    inspector = ProcessInspector(cast(Any, sessions), EventBus())
+    live = OwnedProcess(55, 10, "session-a", "server", "server", 1.0, None, 5.0, 1024, [], [])
+    ended = OwnedProcess(56, 10, "session-a", "old", "old", 2.0, 100.0, 0, 0, [], [])
+    ended.evidence_state = "exited"
+    # A survivor of a session that no longer exists: still running, so still the
+    # operator's problem even though its session is gone.
+    orphan = OwnedProcess(88, 1, "session-gone", "stray", "stray", 3.0, None, 1.0, 512, [], [])
+    orphan.evidence_state = "suspected_orphan"
+    dead_only = OwnedProcess(99, 1, "session-dead", "past", "past", 4.0, 90.0, 0, 0, [], [])
+    dead_only.evidence_state = "exited"
+    inspector.owned = {
+        (55, 1.0): live,
+        (56, 2.0): ended,
+        (88, 3.0): orphan,
+        (99, 4.0): dead_only,
+    }
+    monkeypatch.setattr(inspector, "_collect_all", lambda: [live, orphan])
+    return inspector
+
+
+@pytest.mark.asyncio
+async def test_fleet_hides_ended_processes_but_never_hides_live_survivors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspector = _fleet_inspector(monkeypatch)
+
+    result = await inspector.snapshot_all()
+
+    groups = {group["session_id"]: group for group in result["sessions"]}
+    # The live session keeps only its running process.
+    assert [item["pid"] for item in groups["session-a"]["processes"]] == [55]
+    # A dead session that still has a running survivor stays visible.
+    assert [item["pid"] for item in groups["session-gone"]["processes"]] == [88]
+    # A dead session whose processes all ended disappears completely.
+    assert "session-dead" not in groups
+    assert result["totals"]["processes"] == 2
+
+
+@pytest.mark.asyncio
+async def test_fleet_returns_ended_processes_only_when_explicitly_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspector = _fleet_inspector(monkeypatch)
+
+    result = await inspector.snapshot_all(include_ended=True)
+
+    groups = {group["session_id"]: group for group in result["sessions"]}
+    assert [item["pid"] for item in groups["session-a"]["processes"]] == [55, 56]
+    assert "session-dead" in groups
+    # Ended records never inflate the resource totals, requested or not.
+    assert result["totals"]["processes"] == 2
+
+
+@pytest.mark.asyncio
+async def test_session_snapshot_hides_ended_processes_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspector = _fleet_inspector(monkeypatch)
+
+    default = await inspector.snapshot("session-a")
+    requested = await inspector.snapshot("session-a", include_ended=True)
+
+    assert [item["pid"] for item in default["processes"]] == [55]
+    assert [item["pid"] for item in requested["processes"]] == [55, 56]
+
+
+@pytest.mark.asyncio
+async def test_restore_skips_already_exited_durable_evidence() -> None:
+    """A previous run's dead processes must not repopulate the live fleet."""
+
+    class Telemetry:
+        def __init__(self) -> None:
+            self.persisted: list[dict[str, Any]] = []
+
+        async def record_process_observations(self, items: list[dict[str, Any]]) -> None:
+            self.persisted = items
+
+        async def process_candidates(self) -> list[dict[str, Any]]:
+            return [
+                {
+                    "pid": 10,
+                    "identity_id": "still-running",
+                    "session_id": "session-a",
+                    "creation_time": 1.0,
+                    "exited_at": None,
+                },
+                {
+                    "pid": 11,
+                    "identity_id": "long-gone",
+                    "session_id": "session-a",
+                    "creation_time": 2.0,
+                    "exited_at": 500.0,
+                },
+            ]
+
+    inspector = ProcessInspector(
+        cast(Any, fake_sessions()), EventBus(), telemetry=cast(Any, Telemetry())
+    )
+    await inspector.restore()
+
+    assert [item.identity_id for item in inspector.owned.values()] == ["still-running"]
+
+
 def test_daemon_resource_sample_excludes_session_attributed_descendants(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -425,12 +535,21 @@ def test_daemon_resource_sample_excludes_session_attributed_descendants(
 
     class FakeProcess:
         def __init__(
-            self, pid: int, created: float, memory: int, children: list[Any] | None = None
+            self,
+            pid: int,
+            created: float,
+            memory: int,
+            children: list[Any] | None = None,
+            *,
+            parent_pid: int = 1,
+            name: str = "helper.exe",
         ):
             self.pid = pid
             self.created = created
             self.memory = memory
             self._children = children or []
+            self.parent_pid = parent_pid
+            self.process_name = name
 
         def children(self, recursive: bool = False) -> list[Any]:
             assert recursive is True
@@ -448,10 +567,19 @@ def test_daemon_resource_sample_excludes_session_attributed_descendants(
         def memory_info(self) -> Any:
             return SimpleNamespace(rss=self.memory)
 
+        def ppid(self) -> int:
+            return self.parent_pid
+
+        def name(self) -> str:
+            return self.process_name
+
+        def cmdline(self) -> list[str]:
+            return [self.process_name, "--smoke"]
+
     daemon_pid = processes.os.getpid()
     attributed = FakeProcess(20, 2.0, 900)
-    helper = FakeProcess(30, 3.0, 300)
-    root = FakeProcess(daemon_pid, 1.0, 100, [attributed, helper])
+    helper = FakeProcess(30, 3.0, 300, parent_pid=daemon_pid)
+    root = FakeProcess(daemon_pid, 1.0, 100, [attributed, helper], name="swe-mux.exe")
     monkeypatch.setattr(
         processes,
         "psutil",
@@ -471,6 +599,34 @@ def test_daemon_resource_sample_excludes_session_attributed_descendants(
         "processes": 2,
         "cpu_pct": 0.0,
         "memory_bytes": 400,
+        "listeners": 0,
+        "connections": 0,
+        "members": [
+            {
+                "pid": daemon_pid,
+                "parent_pid": 1,
+                "executable": "swe-mux.exe",
+                "command": "swe-mux.exe --smoke",
+                "started_at": 1.0,
+                "cpu_pct": 0.0,
+                "memory_bytes": 100,
+                "listeners": [],
+                "connections": [],
+                "conditions": [],
+            },
+            {
+                "pid": 30,
+                "parent_pid": daemon_pid,
+                "executable": "helper.exe",
+                "command": "helper.exe --smoke",
+                "started_at": 3.0,
+                "cpu_pct": 0.0,
+                "memory_bytes": 300,
+                "listeners": [],
+                "connections": [],
+                "conditions": [],
+            },
+        ],
     }
     assert (20, 2.0) not in seen
     assert (daemon_pid, 1.0) in seen

@@ -6,15 +6,16 @@ from pathlib import Path
 
 import pytest
 
+import swe_mux.pty_host as pty_host_module
 from swe_mux import agent_launcher
 from swe_mux.adapters import ClaudeAdapter, ShellAdapter, SpawnOptions
 from swe_mux.agent_launcher import _claude, _codex
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
-from swe_mux.launchers import create_agent_shims, resolve_command
+from swe_mux.launchers import create_agent_shims, resolve_codex_pty_command, resolve_command
 from swe_mux.models import ProjectRecord, SessionRecord
-from swe_mux.pty_host import merge_environment
+from swe_mux.pty_host import PtyHost, create_pty, merge_environment
 from swe_mux.reconcile import reconcile_external_history
 from swe_mux.server import (
     SESSION_MEDIA_TTL_SECONDS,
@@ -23,6 +24,7 @@ from swe_mux.server import (
     session_media_directory,
     validate_session_media,
 )
+from swe_mux.session import terminal_exit_outcome
 from swe_mux.transcript_view import parse_transcript
 
 
@@ -35,6 +37,68 @@ def test_adapters_keep_executable_and_arguments_structured(tmp_path: Path) -> No
     shell_spec = ShellAdapter("powershell.exe").spawn_spec("ignored", SpawnOptions(tmp_path))
     assert shell_spec.executable == "powershell.exe"
     assert shell_spec.argv == ()
+
+
+def test_pty_host_reports_root_exit_status_only_after_exit() -> None:
+    class FakePty:
+        def __init__(self, alive: bool, status: int) -> None:
+            self.alive = alive
+            self.status = status
+            self.cancelled = False
+
+        def isalive(self) -> bool:
+            return self.alive
+
+        def get_exitstatus(self) -> int:
+            return self.status
+
+        def cancel_io(self) -> None:
+            self.cancelled = True
+
+    host = PtyHost("cmd.exe", [])
+    host._pty = FakePty(True, 7)  # type: ignore[assignment]
+    assert host.exit_status() is None
+    with pytest.raises(RuntimeError, match="live pseudoconsole"):
+        host.release()
+    ended = FakePty(False, 7)
+    host._pty = ended  # type: ignore[assignment]
+    assert host.exit_status() == 7
+    host.release()
+    assert ended.cancelled
+    assert host._pty is None
+
+
+def test_pty_host_reaps_a_delayed_replacement_console_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    host = PtyHost("cmd.exe", [])
+    host._root_started_at = 100.0
+    host._console_host_pid = 10
+    host._console_host_started_at = 100.0
+    killed: list[tuple[int, float]] = []
+
+    def kill_console_host(pid: int, started_at: float) -> bool:
+        killed.append((pid, started_at))
+        return pid == 20
+
+    monkeypatch.setattr(host, "_kill_console_host", kill_console_host)
+    monkeypatch.setattr(pty_host_module, "_console_host_children", lambda: {20: 100.1})
+    try:
+        host._reap_console_host()
+    finally:
+        pty_host_module._CLAIMED_CONSOLE_HOSTS.clear()
+
+    assert killed == [(10, 100.0), (20, 100.1)]
+
+
+def test_one_shot_terminal_exit_outcomes_preserve_failures() -> None:
+    assert terminal_exit_outcome(
+        "one_shot", stopping=False, exit_code=0, reason="process_exit"
+    ) == ("exited", "completed", "exit code 0")
+    assert terminal_exit_outcome(
+        "one_shot", stopping=False, exit_code=7, reason="process_exit"
+    ) == ("crashed", "process_exit", "exit code 7")
+    assert terminal_exit_outcome(
+        "interactive", stopping=False, exit_code=0, reason="process_exit"
+    ) == ("crashed", "process_exit", None)
 
 
 async def test_history_and_event_bus_persist_contract(tmp_path: Path) -> None:
@@ -139,6 +203,28 @@ def test_command_resolution_falls_back_from_exe_to_windows_shim(
     assert resolve_command("codex.exe") == r"C:\npm\codex.cmd"
 
 
+def test_codex_pty_resolution_bypasses_the_npm_batch_shim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    npm = tmp_path / "npm"
+    shim = npm / "codex.cmd"
+    script = npm / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    node = npm / "node.exe"
+    script.parent.mkdir(parents=True)
+    shim.write_text("@echo off", encoding="utf-8")
+    script.write_text("// fixture", encoding="utf-8")
+    node.write_bytes(b"fixture")
+    monkeypatch.setattr(
+        "swe_mux.launchers.shutil.which",
+        lambda command: str(shim) if command == "codex" else None,
+    )
+
+    assert resolve_codex_pty_command("codex.exe", windows=True) == (
+        str(node),
+        (str(script),),
+    )
+
+
 def test_agent_launcher_runs_batch_commands_through_comspec(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -182,6 +268,30 @@ def test_windows_environment_override_is_case_insensitive() -> None:
     assert merged["PATH"].startswith(r"C:\mux\bin")
     assert "Path" not in merged
     assert len([key for key in merged if key.casefold() == "path"]) == 1
+
+
+def test_conpty_creation_retries_only_the_private_pyo3_panic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PanicException(BaseException):
+        pass
+
+    PanicException.__module__ = "pyo3_runtime"
+    sentinel = object()
+    attempts = 0
+
+    def create(**_kwargs: int) -> object:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise PanicException("transient ConPTY initialization failure")
+        return sentinel
+
+    monkeypatch.setattr("swe_mux.pty_host.winpty.PTY", create)
+    monkeypatch.setattr("swe_mux.pty_host.time.sleep", lambda _seconds: None)
+
+    assert create_pty(120, 30) is sentinel
+    assert attempts == 2
 
 
 def test_official_claude_hook_envelope_cannot_shadow_mux_metadata() -> None:

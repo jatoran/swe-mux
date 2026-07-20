@@ -10,7 +10,12 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux.action_runner import command_argv
 from swe_mux.config import Config, ShellProfile
-from swe_mux.project_actions import ProjectActionService, loads_jsonc, runner_spawn_body
+from swe_mux.project_actions import (
+    ProjectActionService,
+    action_runner_invocation,
+    loads_jsonc,
+    runner_spawn_body,
+)
 from swe_mux.server import error_middleware, list_project_actions, run_project_action
 
 
@@ -116,6 +121,17 @@ def test_runner_payload_keeps_action_cwd_and_uses_noninteractive_profile(tmp_pat
     assert body["backend"] == "shell"
     assert body["name"] == "dev"
     assert body["argv"][:2] == ["-m", "swe_mux.action_runner"]
+    assert body["completion_mode"] == "one_shot"
+
+
+def test_packaged_actions_use_the_sibling_console_runner() -> None:
+    assert action_runner_invocation(
+        executable=r"C:\Program Files\swe-mux\swe-mux.exe", frozen=True
+    ) == (r"C:\Program Files\swe-mux\swe-mux-action.exe", ())
+    assert action_runner_invocation(executable=r"C:\Python\python.exe", frozen=False) == (
+        r"C:\Python\python.exe",
+        ("-m", "swe_mux.action_runner"),
+    )
 
 
 def test_action_cwd_cannot_escape_project(tmp_path: Path) -> None:

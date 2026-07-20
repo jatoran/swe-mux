@@ -34,12 +34,20 @@ and reattachable browser viewports.
   depend on the history row wait for this registration internally.
 - PTY attach replay and input handling never await attachment/input telemetry persistence.
   Startup metrics separate interactive `server_ready` from `durable_registration` latency.
+- Agent startup state uses semantic evidence first. Claude normally becomes ready through its
+  `SessionStart` hook; Codex (or a degraded Claude hook path) may use settled live PTY output as
+  a startup-only, lowest-priority readiness signal until its first native transcript event.
 - Claude/Codex promotion preserves the parent PTY's canonical Project and records an atomic
   agent-run history lifecycle.
 - Attach, detach, browser reconnect, and pane operations never change process state.
 - Slow subscribers receive a gap frame and deterministic bounded replay.
 - Explicit kill attempts adapter-specific graceful exit before process-tree termination.
-- Ended sessions remain visible until explicitly dismissed; history remains durable.
+- Once the root exit code is captured, an ended session releases its dead ConPTY host. The
+  reader keeps only a thread-local reference long enough to drain final output, and finalization
+  cancels any frozen pywinpty read still parked after root exit. Retained scrollback is independent
+  of the OS pseudoconsole handle. This lets ended sessions remain visible until explicitly
+  dismissed without retaining `OpenConsole.exe`/`conhost.exe`.
+- Ended-session history remains durable.
 - Every terminal type can lazily initialize a Project-owned session note from its context menu.
   The note survives terminal exit and daemon restart as a file under `.swe-mux/notes/sessions/`;
   agent History retains the terminal note identity so it can be reopened later.

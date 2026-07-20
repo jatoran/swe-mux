@@ -12,6 +12,14 @@ def test_spawn_contract_normalizes_structured_fields() -> None:
     assert request.executable == "pwsh"
     assert request.argv == ("-NoLogo",)
     assert request.project_id == "dev"
+    assert request.completion_mode == "interactive"
+
+
+def test_spawn_contract_accepts_one_shot_shell_completion() -> None:
+    request = SpawnRequest.parse(
+        {"backend": "shell", "project_id": "dev", "completion_mode": "one_shot"}
+    )
+    assert request.completion_mode == "one_shot"
 
 
 @pytest.mark.parametrize(
@@ -22,6 +30,10 @@ def test_spawn_contract_normalizes_structured_fields() -> None:
         ({"argv": "--bad"}, "argv"),
         ({"backend": "shell"}, "project_id"),
         ({"backend": "shell", "project_id": "dev", "cwd": "elsewhere"}, "cwd"),
+        (
+            {"backend": "shell", "project_id": "dev", "completion_mode": "eventually"},
+            "completion_mode",
+        ),
         ({"surprise": True}, "surprise"),
     ],
 )

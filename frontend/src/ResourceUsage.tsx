@@ -6,6 +6,10 @@ import type { Project, Session } from './types'
 import { anchoredPopoverStyle } from './providerAccountDisplay'
 import { combinedResourceTotals, projectResourceTotals } from './resourceTotals'
 
+/** RAM at rail width: `1.4G` / `512M`, since `1.4 GiB` does not fit. */
+export const compactMemoryLabel=(bytes:number)=>
+  bytes>=1073741824?`${(bytes/1073741824).toFixed(1)}G`:`${Math.round(bytes/1048576)}M`
+
 const totalLabel=(snapshot:FleetSnapshot|null)=>{
   if(!snapshot)return 'loading resources…'
   if(!snapshot.available)return 'resource data unavailable'
@@ -13,8 +17,9 @@ const totalLabel=(snapshot:FleetSnapshot|null)=>{
   return `cpu ${total.cpu_pct.toFixed(1)}% · ram ${memoryLabel(total.memory_bytes)}`
 }
 
-export function ResourceUsageSummary({snapshot,sessions,projects,onRefresh,onOpenFleet}:{
-  snapshot:FleetSnapshot|null;sessions:Session[];projects:Project[];onRefresh:()=>void;onOpenFleet:()=>void
+export function ResourceUsageSummary({snapshot,sessions,projects,compact=false,onRefresh,onOpenFleet}:{
+  snapshot:FleetSnapshot|null;sessions:Session[];projects:Project[];compact?:boolean
+  onRefresh:()=>void;onOpenFleet:()=>void
 }) {
   const [open,setOpen]=useState(false)
   const [popoverStyle,setPopoverStyle]=useState<Record<string,string>>({})
@@ -45,7 +50,11 @@ export function ResourceUsageSummary({snapshot,sessions,projects,onRefresh,onOpe
     </>}
     <footer><button onClick={onRefresh}>refresh</button><button onClick={()=>{setOpen(false);onOpenFleet()}}>open process fleet…</button></footer>
   </div>
-  return <div ref={root} class="resource-usage-control"><button class="resource-usage-summary" onClick={toggle} aria-expanded={open} aria-label={`Swe-mux owned process resources: ${totalLabel(snapshot)}`} title="Swe-mux daemon and owned process resources">
-    <div class="resource-usage-head"><span>resources</span><small>{snapshot?.available?`· ${combined.processes} proc`:'· open details'}</small></div><strong>{totalLabel(snapshot)}</strong>
-  </button>{popup&&createPortal(popup,document.body)}</div>
+  return <div ref={root} class={`resource-usage-control ${compact?'compact':''}`}>{compact
+    ? <button class="resource-usage-compact" onClick={toggle} aria-expanded={open} aria-label={`Swe-mux owned process resources: ${totalLabel(snapshot)}`} title={`resources · ${totalLabel(snapshot)}`}>
+        <span aria-hidden="true">ram</span><strong>{snapshot?.available?compactMemoryLabel(combined.memory_bytes):'—'}</strong>
+      </button>
+    : <button class="resource-usage-summary" onClick={toggle} aria-expanded={open} aria-label={`Swe-mux owned process resources: ${totalLabel(snapshot)}`} title="Swe-mux daemon and owned process resources">
+        <div class="resource-usage-head"><span>resources</span><small>{snapshot?.available?`· ${combined.processes} proc`:'· open details'}</small></div><strong>{totalLabel(snapshot)}</strong>
+      </button>}{popup&&createPortal(popup,document.body)}</div>
 }

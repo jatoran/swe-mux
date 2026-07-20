@@ -12,6 +12,7 @@ from typing import Any
 
 from .config import CCUSAGE_PACKAGE, Config
 from .event_bus import EventBus
+from .subprocess_flags import background_creation_flags
 
 MAX_USAGE_OUTPUT_BYTES = 10 * 1024 * 1024
 USAGE_TIMEOUT_SECONDS = 30.0
@@ -312,6 +313,7 @@ class UsageManager:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                creationflags=background_creation_flags(),
             )
         except OSError as exc:
             raise UsageAdapterError(

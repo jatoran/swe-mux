@@ -47,6 +47,10 @@ def test_shell_profile_cwd_integration_is_explicit_and_process_local(tmp_path: P
     script = wrapped.argv[-1]
     assert "$([char]27)]7;" in script
     assert "`e]7;" not in script
+    # Profiles that rebuild PATH from the registry must not lose the agent shims;
+    # the integration script restores the shim directory after $PROFILE ran.
+    assert "MUX_SHIM_DIR" in script
+    assert '$env:PATH="$($env:MUX_SHIM_DIR);$env:PATH"' in script
 
 
 @pytest.mark.asyncio

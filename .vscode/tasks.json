@@ -42,6 +42,71 @@
       "runOptions": {
         "instanceLimit": 1
       }
+    },
+    {
+      "label": "swe-mux: desktop (source)",
+      "type": "process",
+      "command": "uv",
+      "args": [
+        "run",
+        "--extra",
+        "desktop",
+        "swe-mux",
+        "--config",
+        "${workspaceFolder}\\.runtime\\config.toml"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONUNBUFFERED": "1"
+        }
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "focus": false,
+        "clear": true,
+        "showReuseMessage": false
+      },
+      "runOptions": {
+        "instanceLimit": 1
+      }
+    },
+    {
+      "label": "swe-mux: build desktop executable",
+      "type": "process",
+      "command": "uv",
+      "args": [
+        "run",
+        "--extra",
+        "desktop",
+        "--group",
+        "package",
+        "python",
+        "packaging/build_desktop.py"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONUNBUFFERED": "1"
+        }
+      },
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": false,
+        "clear": true,
+        "showReuseMessage": false
+      },
+      "runOptions": {
+        "instanceLimit": 1
+      }
     }
   ]
 }

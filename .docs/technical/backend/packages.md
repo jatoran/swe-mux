@@ -10,8 +10,12 @@ It should call domain packages rather than acquire their storage or process resp
 
 | Package | Owns | Does not own |
 |---|---|---|
-| `session.py` | live session registry, spawn/stop, PTY fanout, bounded replay | provider transcript parsing, Project mutation |
-| `pty_host.py` | ConPTY/process creation, resize, low-level I/O | HTTP, SQLite, layout |
+| `desktop.py` | Windows tray/WebView lifecycle, single instance, login startup, daemon child supervision | PTYs, HTTP composition, Project/session state |
+| `__main__.py` | daemon argument/config resolution and reusable aiohttp site lifecycle | desktop window/tray state |
+| `session.py` | live session registry, spawn/stop, PTY fanout, bounded replay, interactive vs one-shot exit lifecycle | provider transcript parsing, Project mutation |
+| `pty_host.py` | ConPTY/process creation, resize, low-level I/O, root exit status, dead-host release | HTTP, SQLite, layout |
+| `subprocess_flags.py` | consoleless flags for daemon-owned Windows background commands | interactive ConPTY children |
+| `build_support.py` | lock-safe staged frontend publication for desktop packaging | Vite compilation, runtime asset serving |
 | `projects.py` | Project/Group validation and lifecycle | Git-derived identity, file content |
 | `project_files.py` | safe Project config, notes, tree, file reads/writes | layout placement, browser drafts |
 | `project_watcher.py` | leased non-recursive directory watches | recursive Project crawl |
@@ -55,9 +59,28 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   event loop.
 - Interactive readiness and durable registration are distinct. Once a ConPTY is usable, publish
   the in-memory session and return; serialize history registration behind it.
+- A packaged one-shot Project Action must use the console-subsystem `swe-mux-action.exe` entry as
+  its ConPTY root. Do not launch it through windowed `swe-mux.exe`: Windows may allocate a separate
+  visible console for descendants and leave the in-app terminal blank. Exit code zero maps to
+  completed/exited; nonzero remains crashed and observable.
+- Frozen Windows startup may surface pywinpty's private `pyo3_runtime.PanicException` once with
+  `ERROR_SEM_NOT_FOUND`; `pty_host.py` retries only that exact allocation panic with a strict bound.
+  Other `BaseException` values retain normal control-flow semantics.
 - PTY attach/input paths never wait for observational event persistence.
+- Natural root exit captures status before detaching the dead ConPTY from the retained session.
+  Final output drains through the reader's local handle; finalization cancels a frozen read after
+  root exit so that local reference cannot leak. `pty_host.py` also binds pywinpty's daemon-sibling
+  `OpenConsole` helper (or its delayed frozen-build `conhost` replacement) by creation time and
+  revalidates PID, creation time, executable, and parent before reaping it. Durable/in-memory
+  scrollback, not an OS pseudoconsole reference, supplies ended-session replay.
 - Every poller/scan has an explicit bound, cancellation/stop path, freshness contract, and
   unavailable result. Optional integrations cannot make terminal operations fail.
+- Desktop presentation and daemon lifetime remain separate processes. Close/minimize hides the
+  WebView; only authenticated loopback Quit stops the daemon. Never expose shutdown through the
+  ordinary remote-control authority.
+- Windowed builds must route only allowlisted internal module entrypoints through `desktop.py`;
+  daemon-owned maintenance subprocesses use `subprocess_flags.py`, while interactive commands
+  remain under ConPTY so suppressing console flashes never suppresses terminal output.
 - Preview registration identity is Project endpoint, not clicked terminal. Resolve listener
   ownership across live sessions before attachment; do not weaken the iframe sandbox or let a
   browser dial raw loopback for cross-service traffic.

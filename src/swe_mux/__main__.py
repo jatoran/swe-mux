@@ -3,16 +3,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
+from collections.abc import Sequence
 from pathlib import Path
 
 from aiohttp import web
 
-from .config import LOOPBACK_HOSTS, load_config
+from .config import LOOPBACK_HOSTS, Config, load_config
 from .server import create_app
 from .tailscale import listener_hosts
 
 
-def main() -> None:
+def parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="muxd", description="swe-mux local daemon")
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
@@ -23,14 +25,21 @@ def main() -> None:
         action="store_true",
         help="disable the direct Tailscale listener for this run",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def load_daemon_config(
+    argv: Sequence[str] | None = None,
+) -> tuple[Config, argparse.Namespace]:
+    argument_parser = parser()
+    args = argument_parser.parse_args(argv)
     try:
         config = load_config(args.config)
     except ValueError as exc:
-        parser.error(f"invalid config: {exc}")
+        argument_parser.error(f"invalid config: {exc}")
     if args.host:
         if args.host not in LOOPBACK_HOSTS:
-            parser.error(
+            argument_parser.error(
                 "--host controls the local listener and must be loopback; "
                 "the Tailscale listener is detected automatically"
             )
@@ -39,22 +48,48 @@ def main() -> None:
         config.port = args.port
     if args.local_only:
         config.tailnet_enabled = False
-    logging.basicConfig(
-        level=logging.DEBUG if args.dev else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    hosts = asyncio.run(listener_hosts(config.host, config.tailnet_enabled))
+    return config, args
+
+
+async def serve(config: Config, *, desktop_control_token: str | None = None) -> None:
+    hosts = await listener_hosts(config.host, config.tailnet_enabled)
     if config.tailnet_enabled and len(hosts) == 1:
         logging.getLogger(__name__).warning(
             "Tailscale listener requested but no active Tailscale IPv4 address was "
             "detected; continuing on localhost"
         )
-    web.run_app(
-        create_app(config),
-        host=hosts,
-        port=config.port,
-        print=lambda message: print(message, flush=True),
+    shutdown_event = asyncio.Event()
+    app = create_app(
+        config,
+        desktop_control_token=desktop_control_token,
+        desktop_shutdown_event=shutdown_event if desktop_control_token else None,
     )
+    runner = web.AppRunner(app)
+    await runner.setup()
+    sites: list[web.TCPSite] = []
+    try:
+        for host in hosts:
+            site = web.TCPSite(runner, host=host, port=config.port)
+            await site.start()
+            sites.append(site)
+            rendered_host = f"[{host}]" if ":" in host else host
+            print(f"======== Running on http://{rendered_host}:{config.port} ========", flush=True)
+        await shutdown_event.wait()
+    finally:
+        await runner.cleanup()
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    config, args = load_daemon_config(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if args.dev else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    token = os.environ.get("SWE_MUX_DESKTOP_CONTROL_TOKEN") or None
+    try:
+        asyncio.run(serve(config, desktop_control_token=token))
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

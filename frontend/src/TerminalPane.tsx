@@ -12,7 +12,7 @@ import { api, openWebSocket, uploadTerminalImage } from './api'
 import type { Session } from './types'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
-import { terminalKeyDecision } from './terminalKeys'
+import { AGENT_NEWLINE, terminalKeyDecision } from './terminalKeys'
 import { isTerminalProtocolResponse } from './terminalProtocol'
 import { clampContextMenuLeft } from './menuPosition'
 import {
@@ -230,7 +230,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     window.addEventListener('mux:theme', onTheme)
     term.attachCustomKeyEventHandler(event => {
-      const decision = terminalKeyDecision(event, keybindings[keyChord(event)], term.hasSelection())
+      const decision = terminalKeyDecision(event, keybindings[keyChord(event)], term.hasSelection(), session.backend)
+      if (decision.kind === 'sendInput') {
+        event.preventDefault()
+        // term.input keeps the write on the normal onData path, so broadcast membership
+        // and the replay guard treat it exactly like a typed key.
+        term.input(decision.data, true)
+        return false
+      }
       if (decision.kind === 'command') {
         event.preventDefault()
         event.stopPropagation()
@@ -470,7 +477,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         Escape:'\x1b',Tab:'\t',
       }
       if(event.key==='Enter'&&!event.isComposing){
-        event.preventDefault();term.input('\r',true);markLineBreakSent();resetMobileInput();return
+        const agentNewline=(event.shiftKey||event.ctrlKey)&&!event.altKey&&!event.metaKey&&session.backend!=='shell'
+        event.preventDefault();term.input(agentNewline?AGENT_NEWLINE:'\r',true);markLineBreakSent();resetMobileInput();return
       }
       if(event.key==='Backspace'&&!mobileInputValue){
         event.preventDefault();term.input('\x7f',true);return

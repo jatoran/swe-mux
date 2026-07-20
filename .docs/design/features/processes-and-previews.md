@@ -20,22 +20,39 @@
 - Descendants leaving the current tree become `escaped`. After an ended root session's
   configurable grace, a matching survivor becomes `suspected_orphan`; swe-mux never
   auto-kills it. Startup revalidates persisted fingerprints and marks PID reuse or
-  unverifiable ownership stale.
+  unverifiable ownership stale. Startup restores only fingerprints that might still be
+  running: an already-exited durable record cannot become live again, so republishing it
+  would fill the fleet with a previous daemon run's dead processes.
+- The fleet and session snapshots report running processes. Ended records are excluded
+  unless `include_ended` is requested, and a session with no remaining process is dropped
+  once it is no longer live. This is a display and payload boundary, not a retention change:
+  ended records still reach `process_evidence`, still appear under `include_ended` for the
+  current daemon run, and were already absent from every resource total. Every live
+  observational state, including `escaped`, `suspected_orphan`, and `inaccessible`, is by
+  definition not ended and therefore always visible.
 - Interrupt, terminate-process, and terminate-tree include the durable identity fingerprint
   and re-check PID creation time plus live ownership immediately before acting. A request
   for a PID owned by another session or a reused fingerprint is rejected.
+- Terminating a root process can correctly leave its session in `crashed`, but session
+  finalization releases the ended ConPTY host. Its `OpenConsole.exe`/`conhost.exe`
+  infrastructure member therefore disappears from daemon accounting while the terminal's
+  scrollback and exit evidence remain available.
 - If optional process inspection support is unavailable, the API returns a typed diagnostic
   and all terminal/session behavior continues.
 - The inspector opens from session/terminal right-click, pane-header `proc`, sidebar
   `: menu` Process fleet, or the command palette. Fleet mode uses the coherent all-session
   snapshot when available and falls back to aggregating session-scoped snapshots for an
   older running daemon; listener rows expose the preview action at the point of discovery.
+  The coherent snapshot also exposes daemon/infrastructure members as a separate tree with
+  PID, parent, executable/command, CPU, RSS, and network detail. These rows are observational:
+  they allow PID copy but never interrupt/terminate actions against the swe-mux runtime.
 - The bottom-sidebar owned-resource summary reuses the cached fleet snapshot and reports
   aggregate CPU/RSS. Its anchored viewport popover groups live attributed processes by
   Project, shows a separate daemon/infrastructure bucket, and links to Process fleet.
   Daemon accounting includes the daemon plus descendant infrastructure PIDs not already
-  attributed to a session, preventing double counting. The closed popover causes no
-  additional process enumeration.
+  attributed to a session, preventing double counting. Process Fleet totals use that same
+  additive bucket, so its count and usage reconcile with the sidebar. The closed popover and
+  detailed fleet rows reuse the existing sample and cause no additional process enumeration.
 
 ## Preview contract
 

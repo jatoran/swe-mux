@@ -4,11 +4,12 @@ import asyncio
 import json
 import time
 from collections import deque
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+from swe_mux.adapters import ShellAdapter
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.models import SessionRecord
 from swe_mux.runtime_cwd import Osc7Parser
@@ -43,6 +44,67 @@ def test_scrollback_zero_capacity_retains_nothing() -> None:
     buffer = ScrollbackBuffer(0)
     buffer.append(b"ignored")
     assert buffer.bytes() == b""
+
+
+async def test_natural_exit_releases_conpty_but_retains_scrollback() -> None:
+    class EndedPty:
+        released = False
+
+        def exit_status(self) -> int:
+            return 9
+
+        def release(self) -> None:
+            self.released = True
+
+    class History:
+        ended: list[tuple[str, str]] = []
+
+        async def session_ended(self, record: SessionRecord, reason: str) -> None:
+            self.ended.append((record.id, reason))
+
+    class Events:
+        emitted: list[tuple[str, dict[str, Any]]] = []
+
+        async def emit(self, event_type: str, **payload: Any) -> None:
+            self.emitted.append((event_type, payload))
+
+    adapter = ShellAdapter()
+    history = History()
+    events = Events()
+    manager = SessionManager(
+        {"shell": adapter},
+        cast(Any, SimpleNamespace()),
+        cast(Any, history),
+        cast(Any, events),
+        1024,
+        "http://127.0.0.1:1",
+    )
+    record = SessionRecord(
+        "ended-session",
+        "ended",
+        "project",
+        "shell",
+        "native",
+        ".",
+        "cmd.exe",
+        [],
+        state="running",
+    )
+    pty = EndedPty()
+    session = Session(record, cast(Any, pty), adapter, 1024, "secret")
+    session.scrollback.append(b"retained output")
+    subscriber = session.subscribe()
+
+    await manager._mark_ended(session, "process_exit")
+
+    assert pty.released is True
+    assert session.record.state == "crashed"
+    assert session.record.exit_code == 9
+    assert session.scrollback.bytes() == b"retained output"
+    assert history.ended == [(record.id, "process_exit")]
+    exit_frame = await subscriber.queue.get()
+    assert exit_frame["type"] == "exit"
+    assert exit_frame["snapshot"]["state"] == "crashed"
 
 
 def test_scrollback_cursor_excludes_retained_output_and_tracks_new_tail() -> None:
@@ -166,6 +228,63 @@ async def test_fanout_records_first_output_and_prompt_startup_milestones() -> No
     assert events[0][0] == "session_startup_measured"
     assert events[0][1]["milestone"] == "first_prompt"
     assert events[0][1]["timing_ms"] == record.startup_timing_ms
+
+
+async def test_agent_startup_settles_to_ready_without_a_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("swe_mux.session.AGENT_STARTUP_QUIET_SECONDS", 0.01)
+    record = SessionRecord(
+        "mux",
+        "codex",
+        "default",
+        "codex",
+        "native",
+        ".",
+        "codex.exe",
+        [],
+        state="starting",
+    )
+    record.last_activity_ts = time.time()
+    updates: list[str] = []
+    session = SimpleNamespace(
+        record=record,
+        state_source_priority=-1,
+        pty=SimpleNamespace(isalive=lambda: True),
+        stopping=False,
+        agent_ready_task=None,
+        tasks=set(),
+        revision=0,
+        subscribers=set(),
+        publish_update=lambda: updates.append(record.state),
+    )
+    session.transition = MethodType(Session.transition, session)
+    emitted: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit(event_type: str, **payload: Any) -> None:
+        emitted.append((event_type, payload))
+
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    manager.events = SimpleNamespace(emit=emit)
+    SessionManager._queue_agent_ready_check(manager, session)
+    assert session.agent_ready_task is not None
+    await asyncio.wait_for(session.agent_ready_task, timeout=1)
+
+    assert record.state == "idle"
+    assert updates == ["idle"]
+    assert emitted == [
+        (
+            "state_changed",
+            {
+                "session_id": "mux",
+                "source": "pty",
+                "previous": "starting",
+                "state": "idle",
+                "detail": None,
+                "capability": "startup_quiet_fallback",
+            },
+        )
+    ]
 
 
 async def test_browser_startup_metrics_are_validated_and_persisted_once() -> None:

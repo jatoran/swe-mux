@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from .base import SpawnOptions, SpawnSpec
@@ -22,9 +23,11 @@ class CodexAdapter:
         default_exe: str = "codex.exe",
         notify: bool = False,
         default_args: list[str] | None = None,
+        command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
     ) -> None:
         self.default_exe = default_exe
         self.default_args = default_args or []
+        self.command_resolver = command_resolver
         self.notify_program = (
             [sys.executable, "-m", "swe_mux.hook_client", "codex_notify"] if notify else None
         )
@@ -36,13 +39,18 @@ class CodexAdapter:
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:
         del sid
-        return SpawnSpec(opts.exe or self.default_exe, tuple(self._args(opts.args)))
+        executable = opts.exe or self.default_exe
+        resolved, prefix = (
+            self.command_resolver(executable) if self.command_resolver else (executable, ())
+        )
+        return SpawnSpec(resolved, (*prefix, *self._args(opts.args)))
 
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
-        return SpawnSpec(
-            opts.exe or self.default_exe,
-            tuple(self._args(["resume", native_id, *opts.args])),
+        executable = opts.exe or self.default_exe
+        resolved, prefix = (
+            self.command_resolver(executable) if self.command_resolver else (executable, ())
         )
+        return SpawnSpec(resolved, (*prefix, *self._args(["resume", native_id, *opts.args])))
 
     def transcript_path(self, native_id: str, cwd: Path) -> None:
         del native_id, cwd

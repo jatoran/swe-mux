@@ -11,7 +11,8 @@
 
 ## Surfaces
 
-- Runtime: `muxd` aiohttp daemon, Preact browser client, and `mux` HTTP CLI.
+- Runtime: `muxd` aiohttp daemon, Preact browser client, `mux` HTTP CLI, and optional Windows
+  `swe-mux` WebView2/tray supervisor.
 - Data: volatile live sessions/previews/scrollback; SQLite Projects, Groups, history,
   events, durable process/quota/compaction/tool evidence, automation and indexes;
   project-owned `.swe-mux/` resources.
@@ -45,6 +46,7 @@
 - Prompt library: `features/prompt-library.md`
 - Session and reset notifications: `features/notifications.md`
 - Remote access and browser boundary: `features/remote-access.md`
+- Windows desktop and tray lifecycle: `features/desktop-shell.md`
 - Browser UI: `features/ui.md`
 - Shell profiles: `features/shell-profiles.md`
 - Provider accounts: `features/provider-accounts.md`
@@ -88,6 +90,8 @@
 - Preview registrations identify Project-wide loopback endpoints and follow the session that
   actually owns each listener. Preview tabs are layout state; closing one never unregisters a
   still-live service.
+- Desktop window close/minimize changes presentation only. Daemon termination requires the
+  explicit tray Quit path and a per-install secret accepted only from loopback.
 
 ## Key trade-offs
 

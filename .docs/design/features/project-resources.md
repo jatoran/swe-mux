@@ -12,6 +12,26 @@ views participate in the same pane/tab layout as terminals and previews.
 - Every shell, Claude, or Codex terminal can lazily initialize a distinct note at
   `.swe-mux/notes/sessions/<safe-session-id>.md`. Unsafe/external identities use a stable hashed
   filename. Opening an existing note never overwrites it.
+- Each terminal's pane bar carries a one-click `note` chip that starts, opens, or focuses that
+  terminal's note. It reports three states: empty, written (the note holds text), and open (the
+  note is the focused tab). `session.note` is the same action from the command palette and its
+  default `Ctrl+Alt+N` binding.
+- A session note opens *beside* its terminal, never stacked over it: an already-open copy is
+  focused, otherwise an existing non-terminal pane hosts it, otherwise the anchor pane splits and
+  the note takes the smaller share. Every entry point (pane chip, context menu, palette, sidebar
+  row) uses this rule. The note context menu's explicit `Open in focused pane` is unaffected.
+- The browser's per-session note signal is content, not file presence: a note created by a stray
+  chip click stays readable and writable but earns no sidebar row until it holds text. Note
+  authorization still keys on file existence, so an empty note is never locked out.
+- A session-notes browser lists every session note that holds text, filterable by Project and
+  searchable over owner, Project, and excerpt. It opens from a Project's sidebar context menu
+  (scoped to that Project), the main menu, or the `notes.browse` command. Selecting a row opens
+  that note through the ordinary companion placement rule.
+- The listing is derived from the filesystem, not from history, so a note stays reachable after
+  its terminal is dismissed, its history row is pruned, and the daemon restarts. Live sessions
+  and history rows only supply display labels; a note whose owner left no record anywhere still
+  lists under its own note identity. This is the only UI path to a plain shell terminal's note,
+  which History never shows and the file browser hides with the rest of `.swe-mux`.
 - A terminal and its nested agent runs share the terminal's stable `note_id`. Agent History rows
   retain that identity so `Session note` can reopen the same file after exit or daemon restart.
 - Session-note initialization accepts a live terminal, a History row owned by the Project, or a
@@ -77,6 +97,8 @@ file editor or Files tab preserves its unsaved draft or expanded-tree state.
 - `src/swe_mux/file_manager.py`
 - `frontend/src/ProjectResource.tsx`
 - `frontend/src/ProjectNoteEditor.tsx`
+- `frontend/src/SessionNotesBrowser.tsx`
+- `frontend/src/layout.ts` (`placeCompanionLeaf`)
 - `frontend/src/editorText.ts`
 - `frontend/src/noteSaveQueue.ts`
 

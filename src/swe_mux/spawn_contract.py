@@ -12,6 +12,7 @@ class SpawnRequest:
     executable: str | None = None
     argv: tuple[str, ...] = field(default_factory=tuple)
     name: str | None = None
+    completion_mode: str = "interactive"
 
     @classmethod
     def parse(cls, body: dict[str, Any]) -> SpawnRequest:
@@ -25,6 +26,7 @@ class SpawnRequest:
             "project_id",
             "project",
             "name",
+            "completion_mode",
         }
         unknown = set(body) - known
         if unknown:
@@ -46,6 +48,9 @@ class SpawnRequest:
         project_id = str(body.get("project_id") or body.get("project") or "").strip()
         if not project_id:
             raise ValueError({"project_id": "is required"})
+        completion_mode = str(body.get("completion_mode") or "interactive")
+        if completion_mode not in {"interactive", "one_shot"}:
+            raise ValueError({"completion_mode": "must be interactive or one_shot"})
         return cls(
             project_id=project_id,
             backend=backend,
@@ -53,4 +58,5 @@ class SpawnRequest:
             executable=str(executable) if executable else None,
             argv=tuple(raw_argv),
             name=str(body["name"]) if body.get("name") else None,
+            completion_mode=completion_mode,
         )

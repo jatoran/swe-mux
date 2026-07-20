@@ -84,6 +84,8 @@ class SessionRecord:
     voice_content: str | None = None
     startup_timing_ms: dict[str, float] = field(default_factory=dict)
     client_startup_timing_ms: dict[str, float] = field(default_factory=dict)
+    completion_mode: Literal["interactive", "one_shot"] = "interactive"
+    exit_code: int | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)

@@ -1,0 +1,80 @@
+# Windows desktop shell
+
+## What it is
+
+An optional Windows WebView2 window and system-tray supervisor around the same Preact/aiohttp
+surface used by ordinary desktop and mobile browsers. The daemon remains a separate process and
+continues to own every terminal.
+
+## Key concepts
+
+- Desktop supervisor: `swe-mux`; window/tray/login-startup owner.
+- Managed daemon: separate `muxd` child launched with a desktop control secret.
+- Hide: close/minimize removes the window from desktop presentation without daemon mutation.
+- Quit: explicit tray action that confirms live terminals and stops the managed daemon.
+
+## Operations
+
+- One instance exists per resolved config path. A second visible launch signals the existing
+  instance to restore/focus; a duplicate hidden login launch exits silently.
+- Startup probes `/api/health`. A healthy daemon is reused; otherwise the supervisor starts a
+  consoleless child and waits up to 30 seconds. Daemon logs use
+  `<data_dir>/desktop-daemon.log`.
+- Daemon-owned maintenance commands (Git, Tailscale, usage/account probes, hooks, profile
+  discovery, forced cleanup, and SAPI) use Windows no-window process creation. Interactive
+  shells and agents remain attached only through ConPTY; background work never flashes a console.
+- WebView2 uses persistent `<data_dir>/webview` storage and enables text selection. External
+  links continue in the system browser.
+- Window close is cancelled and hidden. Minimize hides after the native transition. Tray Open
+  shows/restores the same window; Open in browser preserves the ordinary browser surface.
+- Start with Windows writes the exact current executable/config command to the current-user Run
+  key. No machine-wide installation or elevation is required.
+- Tray Quit uses a native topmost Windows confirmation owned by the desktop supervisor, not the
+  WebView. Confirmation therefore works identically while the window is visible, minimized, or
+  hidden. Confirmed Quit reports the live terminal count, requests authenticated graceful
+  shutdown, stops the tray, and destroys the window. A desktop crash or forced window-process
+  exit leaves the daemon running for recovery.
+
+## Security boundary
+
+- `<data_dir>/desktop-control.token` is random, user-local control material.
+- The token reaches the child only through `SWE_MUX_DESKTOP_CONTROL_TOKEN`.
+- `/api/desktop/shutdown` is absent as authority for standalone daemons, rejects non-loopback
+  peers, and uses constant-time comparison. The browser never receives the token.
+- An already-running unmanaged daemon remains operational when the desktop shell exits; the
+  shell never guesses a PID or broadens network shutdown authority.
+
+## Packaging
+
+- Runtime extra: `uv sync --extra desktop`.
+- Build dependencies: `uv sync --extra desktop --group package`.
+- `packaging/build_desktop.py` builds the frontend in `.runtime/`, publishes hashed assets before
+  `index.html`, generates the ICO, and runs PyInstaller. It never empties the live static tree;
+  locked content-addressed stale assets may remain harmlessly until a later build.
+- `packaging/swe_mux.spec` emits windowed `dist/swe-mux/swe-mux.exe`, console-subsystem
+  `dist/swe-mux/swe-mux-action.exe`, and `_internal/`. The complete `onedir` folder is the
+  distributable unit; neither executable is standalone.
+- Packaged `--daemon-child` re-enters the daemon entry inside a separate process; source mode
+  uses `python -m swe_mux`.
+- Frozen Project Actions use the sibling console executable as their ConPTY root. It shares the
+  package but inherits the pseudoconsole correctly, so build tools cannot detach into a visible
+  external CMD window. Source mode uses `python -m swe_mux.action_runner`.
+- The windowed executable emulates only allowlisted internal `-m` entrypoints for hook delivery
+  and nested-agent launch. Arbitrary module dispatch is rejected.
+
+## Key files
+
+- Desktop runtime: `src/swe_mux/desktop.py`
+- Daemon runner: `src/swe_mux/__main__.py`
+- Shutdown boundary: `src/swe_mux/server.py`
+- Package metadata: `pyproject.toml`, `uv.lock`
+- Bundle entries/spec: `packaging/desktop_entry.py`, `packaging/action_entry.py`,
+  `packaging/swe_mux.spec`
+- Reproducible build: `packaging/build_desktop.py`
+- Lifecycle tests: `tests/test_desktop.py`
+
+## Relates to
+
+- `sessions.md`: daemon-owned terminals survive viewport closure.
+- `remote-access.md`: tailnet access remains separate from loopback desktop shutdown.
+- `ui.md`: the same browser UI runs inside WebView2.

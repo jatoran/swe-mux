@@ -732,6 +732,31 @@ class HistoryIndex:
 
         await self._run(op)
 
+    async def note_owner_labels(self, project_id: str) -> dict[str, dict[str, Any]]:
+        """Map every note identity this Project has recorded to its owning run.
+
+        Notes outlive their history rows (shell rows are pruned, agent rows can be
+        deleted), so this only enriches a filesystem listing and never bounds it.
+        """
+
+        def op() -> dict[str, dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT note_id,name,backend,spawned_at,exited_at FROM history "
+                "WHERE project_id=? AND note_id IS NOT NULL ORDER BY spawned_at ASC",
+                (project_id,),
+            ).fetchall()
+            return {
+                str(row["note_id"]): {
+                    "name": row["name"],
+                    "backend": row["backend"],
+                    "spawned_at": row["spawned_at"],
+                    "exited_at": row["exited_at"],
+                }
+                for row in rows
+            }
+
+        return await self._run(op)
+
     async def session_note_owned(self, project_id: str, note_id: str) -> bool:
         def op() -> bool:
             return bool(
@@ -822,9 +847,11 @@ class HistoryIndex:
             if timestamped
             else None
         )
-        native_started_at = first_message[0] if timestamped else None
-        last_message_at = last_message[0] if timestamped else None
-        last_message_role = str(last_message[1]["role"]) if timestamped else None
+        native_started_at = first_message[0] if first_message is not None else None
+        last_message_at = last_message[0] if last_message is not None else None
+        last_message_role = (
+            str(last_message[1]["role"]) if last_message is not None else None
+        )
 
         def op() -> int:
             with self._db:

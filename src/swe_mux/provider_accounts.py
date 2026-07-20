@@ -16,6 +16,7 @@ from typing import Any, Literal
 import aiohttp
 
 from .event_bus import EventBus
+from .subprocess_flags import background_creation_flags
 
 Provider = Literal["claude", "codex"]
 CurrentAccountState = Literal["saved", "external", "signed_out", "unreadable"]
@@ -721,6 +722,7 @@ class ProviderAccountManager:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                creationflags=background_creation_flags(),
             )
         except OSError as exc:
             raise ProviderAccountError(f"Could not start {provider}: {exc}") from exc
@@ -1014,6 +1016,7 @@ class ProviderAccountManager:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=env,
+                    creationflags=background_creation_flags(),
                 )
             except OSError:
                 return None, None

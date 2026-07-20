@@ -39,6 +39,9 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
 - Per-session hook secrets remain a separate loopback-only machine integration boundary.
   Hook ingress has a bounded body/burst, event allowlist, constant-time secret check, and
   rejects ended sessions.
+- Desktop daemon shutdown is a second machine-local boundary: unavailable for standalone
+  daemons, IP-loopback only, and gated by the desktop-generated bearer secret. Tailnet peers
+  cannot use it even when admitted to the ordinary UI/API.
 
 ## Operator guidance
 

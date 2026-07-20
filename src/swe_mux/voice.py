@@ -27,6 +27,7 @@ from .config import Config
 from .event_bus import EventBus
 from .openrouter import OpenRouterClient, OpenRouterError
 from .sqlite_store import database_operation_lock, run_sqlite_operation
+from .subprocess_flags import background_creation_flags
 
 if TYPE_CHECKING:
     from .automation_store import AutomationStore
@@ -639,6 +640,7 @@ class VoiceService:
                 capture_output=True,
                 text=True,
                 timeout=ENGINE_TIMEOUT_SECONDS,
+                creationflags=background_creation_flags(),
             )
         except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
             raise VoiceError(f"Windows SAPI synthesis failed: {exc}") from exc

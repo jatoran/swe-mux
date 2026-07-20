@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -51,7 +52,7 @@ from .keybindings import (
     keybinding_policy,
     normalize_binding,
 )
-from .launchers import create_agent_shims
+from .launchers import create_agent_shims, resolve_codex_pty_command, resolve_command
 from .layouts import attach_leaf, attach_terminal, stack_leaf
 from .meta_hooks import MetaHookEngine, parse_hook_rules
 from .models import MuxEvent
@@ -66,10 +67,12 @@ from .project_files import (
     initialize_note,
     list_project_directory,
     note_exists,
+    note_has_content,
     project_path,
     read_note,
     read_project_config,
     read_project_file,
+    session_note_summaries,
     write_note,
     write_project_config,
     write_project_file,
@@ -169,6 +172,14 @@ def browser_origin_matches_request(origin: str, raw_host: str) -> bool:
     return origin_port == request_port
 
 
+def is_loopback_peer(value: str) -> bool:
+    peer = value.split("%", 1)[0]
+    try:
+        return ipaddress.ip_address(peer).is_loopback
+    except ValueError:
+        return False
+
+
 def _apply_security_headers(response: web.StreamResponse, request: web.Request) -> None:
     """Stamp response security headers.
 
@@ -224,7 +235,15 @@ async def security_middleware(request: web.Request, handler: Handler) -> web.Str
     return response
 
 
-def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Application:
+def create_app(
+    config: Config,
+    *,
+    frontend_dir: Path | None = None,
+    desktop_control_token: str | None = None,
+    desktop_shutdown_event: asyncio.Event | None = None,
+) -> web.Application:
+    if (desktop_control_token is None) != (desktop_shutdown_event is None):
+        raise ValueError("desktop control requires both a token and shutdown event")
     app = web.Application(
         middlewares=[error_middleware, security_middleware], client_max_size=12 * 1024 * 1024
     )
@@ -233,11 +252,15 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
     app["preview_http_semaphore"] = asyncio.Semaphore(PREVIEW_HTTP_CONCURRENCY)
     app["preview_ws_semaphore"] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
     app["hook_ingress_windows"] = {}
+    if desktop_control_token is not None and desktop_shutdown_event is not None:
+        app["desktop_control_token"] = desktop_control_token
+        app["desktop_shutdown_event"] = desktop_shutdown_event
     app.cleanup_ctx.append(runtime_context)
     app.add_routes(
         [
             web.get("/", index),
             web.get("/api/health", health),
+            web.post("/api/desktop/shutdown", desktop_shutdown),
             web.get("/api/remote/status", remote_status),
             web.get("/api/config", get_config),
             web.patch("/api/config", patch_config),
@@ -292,6 +315,7 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.post("/api/projects/{project_id}/actions/run", run_project_action),
             web.get("/api/projects/{project_id}/note", get_project_note),
             web.put("/api/projects/{project_id}/note", put_project_note),
+            web.get("/api/session-notes", list_session_notes),
             web.get("/api/projects/{project_id}/session-notes/{note_id}", get_session_note),
             web.post("/api/projects/{project_id}/session-notes/{note_id}", initialize_session_note),
             web.put("/api/projects/{project_id}/session-notes/{note_id}", put_session_note),
@@ -405,7 +429,12 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     adapters: dict[str, BackendAdapter] = {
         "shell": ShellAdapter(config.shell_exe),
         "claude": ClaudeAdapter(config.claude_exe, config.data_dir, config.claude_args),
-        "codex": CodexAdapter(config.codex_exe, notify=True, default_args=config.codex_args),
+        "codex": CodexAdapter(
+            config.codex_exe,
+            notify=True,
+            default_args=config.codex_args,
+            command_resolver=resolve_codex_pty_command,
+        ),
     }
     child_env = create_agent_shims(config, adapters["claude"].settings_path)  # type: ignore[attr-defined]
     sessions = SessionManager(
@@ -587,6 +616,7 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
             if changed & relevant:
                 sessions.adapters[backend].configure(executable, args)
                 if backend != "shell":
+                    sessions.child_env[f"MUX_{backend.upper()}_EXE"] = resolve_command(executable)
                     sessions.child_env[f"MUX_{backend.upper()}_ARGS"] = json.dumps(args)
     git_monitor: GitMonitor | None = app.get("git_monitor")
     if git_monitor and "git_poll_seconds" in changed:
@@ -632,6 +662,24 @@ async def health(request: web.Request) -> web.Response:
     sessions: SessionManager = request.app.get("sessions")
     live = sum(s.pty.isalive() for s in sessions.sessions.values()) if sessions else 0
     return json_response({"ok": True, "live_sessions": live, "version": "0.1.0"})
+
+
+async def desktop_shutdown(request: web.Request) -> web.Response:
+    """Stop a desktop-managed daemon without exposing network shutdown authority."""
+    expected: str | None = request.app.get("desktop_control_token")
+    shutdown_event: asyncio.Event | None = request.app.get("desktop_shutdown_event")
+    if expected is None or shutdown_event is None:
+        raise web.HTTPNotFound()
+    if not is_loopback_peer(request.remote or ""):
+        raise web.HTTPForbidden(text="desktop control is loopback-only")
+    authorization = request.headers.get("Authorization", "")
+    supplied = authorization[7:].strip() if authorization.startswith("Bearer ") else ""
+    if not supplied or not secrets.compare_digest(supplied, expected):
+        raise web.HTTPForbidden(text="invalid desktop control token")
+    shutdown_event.set()
+    response = json_response({"status": "shutting_down"}, 202)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 async def remote_status(request: web.Request) -> web.Response:
@@ -1243,12 +1291,38 @@ async def export_handoff(request: web.Request) -> web.Response:
         for item in reversed(annotations)
         if item["tag"] in {"turn-summary", "summary", "handoff-suggestion"}
     ]
+    history_id = str(row["id"])
+    native_id = str(row.get("native_id") or "").strip()
+    transcript_path = str(row.get("transcript_path") or "").strip()
+    escaped_transcript_path = transcript_path.replace("`", "\\`")
+    transcript_available = bool(transcript_path and Path(transcript_path).is_file())
     lines = [
         f"# Handoff: {row['name']}",
         "",
         f"- Backend: {row['backend']}",
         f"- Working directory: {row['cwd']}",
-        f"- Agent run: {run_id}",
+        f"- swe-mux history ID: {history_id}",
+        f"- Provider session ID: {native_id or 'unavailable'}",
+        "",
+        "## Native transcript",
+        "",
+        (
+            f"`{escaped_transcript_path}`"
+            if escaped_transcript_path
+            else "Unavailable in the current swe-mux history index."
+        ),
+        "",
+        (
+            "Read this provider-native file directly to review the complete conversation. "
+            "The summary in this handoff is not a transcript copy."
+            if transcript_available
+            else (
+                "This recorded provider-native path is not currently available. Use the provider "
+                "session ID to locate the conversation."
+                if escaped_transcript_path
+                else "Use the provider session ID to locate the native conversation when available."
+            )
+        ),
         "",
         "## Progress",
         "",
@@ -1264,7 +1338,7 @@ async def export_handoff(request: web.Request) -> web.Response:
             "Generated from read-only swe-mux annotations. Review before using it as context.",
         ]
     )
-    return json_response({"run_id": run_id, "markdown": "\n".join(lines) + "\n"})
+    return json_response({"run_id": history_id, "markdown": "\n".join(lines) + "\n"})
 
 
 async def workload_telemetry(request: web.Request) -> web.Response:
@@ -1676,6 +1750,51 @@ async def put_project_note(request: web.Request) -> web.Response:
     return json_response(result)
 
 
+async def list_session_notes(request: web.Request) -> web.Response:
+    """List session notes that hold real text, newest first, for the notes browser.
+
+    The listing is filesystem-derived so a note remains reachable after its
+    session, its history row, and the daemon that created it are all gone.
+    History and live sessions only supply display labels.
+    """
+    manager: ProjectManager = request.app["projects"]
+    requested = request.query.get("project_id") or ""
+    projects = [
+        project
+        for project in manager.ordered_projects()
+        if not requested or project.id == requested
+    ]
+    if requested and not projects:
+        raise ValueError("unknown project")
+    live_names = {
+        session.record.id: session.record for session in request.app["sessions"].sessions.values()
+    }
+    items: list[dict[str, Any]] = []
+    for project in projects:
+        summaries = await asyncio.to_thread(session_note_summaries, project.root)
+        if not summaries:
+            continue
+        owners = await request.app["history"].note_owner_labels(project.id)
+        for summary in summaries:
+            note_id = str(summary["note_id"])
+            record = live_names.get(note_id)
+            owner = owners.get(note_id) or {}
+            live = record is not None and record.state not in {"exited", "crashed"}
+            items.append(
+                {
+                    **summary,
+                    "project_id": project.id,
+                    "project_name": project.name,
+                    "owner_label": (record.name if record else owner.get("name")) or note_id,
+                    "owner_backend": (record.backend if record else owner.get("backend")) or None,
+                    "owner_live": live,
+                    "owner_known": record is not None or bool(owner),
+                }
+            )
+    items.sort(key=lambda item: float(item["updated_at"]), reverse=True)
+    return json_response({"items": items})
+
+
 async def _session_note_owner(request: web.Request):  # type: ignore[no-untyped-def]
     project_id = request.match_info["project_id"]
     note_id = request.match_info["note_id"]
@@ -1990,8 +2109,10 @@ async def list_sessions(request: web.Request) -> web.Response:
         item = session.record.snapshot()
         item["note_id"] = session.record.id
         project = request.app["projects"].projects.get(session.record.project_id)
+        # Content, not presence: a note created by a stray click must not pin a
+        # permanent sidebar row under its terminal.
         item["note_exists"] = bool(
-            project and note_exists(project.root, "sessions", session.record.id)
+            project and note_has_content(project.root, "sessions", session.record.id)
         )
         delivery = readiness.evaluate(session, record_metrics=False)
         item["delivery_readiness"] = {
@@ -2066,6 +2187,8 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
         or project_values.get("preferred_backend")
         or config.default_backend
     )
+    if spec.completion_mode == "one_shot" and backend != "shell":
+        raise ValueError("one-shot completion is available only for shell sessions")
     if spec.profile_id and backend in {"claude", "codex"}:
         raise ValueError({"profile_id": "shell profiles cannot be used with agent backends"})
     cwd = owning_project.root
@@ -2103,6 +2226,8 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
         spawn_values["project"] = project
         spawn_values["startup_started_at"] = startup_started_at
         spawn_values["startup_timing_ms"] = startup_timing_ms
+    if spec.completion_mode != "interactive":
+        spawn_values["completion_mode"] = spec.completion_mode
     session = await manager.spawn(**spawn_values)
     return session
 
@@ -3125,9 +3250,12 @@ async def remove_provider_account(request: web.Request) -> web.Response:
 
 async def list_processes(request: web.Request) -> web.Response:
     session_id = request.query.get("session")
+    include_ended = request.query.get("include_ended", "").lower() in {"1", "true", "yes"}
     inspector: ProcessInspector = request.app["process_inspector"]
     return json_response(
-        await inspector.snapshot(session_id) if session_id else await inspector.snapshot_all()
+        await inspector.snapshot(session_id, include_ended=include_ended)
+        if session_id
+        else await inspector.snapshot_all(include_ended=include_ended)
     )
 
 

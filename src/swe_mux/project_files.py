@@ -61,6 +61,82 @@ def note_exists(root: str | Path, kind: str, identity: str) -> bool:
     return note_path(root, kind, identity).is_file()
 
 
+_NOTE_CONTENT_CACHE: dict[str, tuple[int, int, bool]] = {}
+
+
+def note_has_content(root: str | Path, kind: str, identity: str) -> bool:
+    """Report whether a note holds text the user actually wrote.
+
+    A one-click note affordance creates files on stray clicks. Presence alone
+    would then pin a permanent sidebar row per terminal, so the browser signal
+    is content, not existence. Authorization still uses `note_exists`: an empty
+    note must remain readable and writable.
+
+    Session listing is a polled path, so the answer is memoized against the
+    note's mtime and size and only re-read when the file actually changes.
+    """
+    path = note_path(root, kind, identity)
+    try:
+        stat = path.stat()
+    except OSError:
+        _NOTE_CONTENT_CACHE.pop(str(path), None)
+        return False
+    key = str(path)
+    signature = (stat.st_mtime_ns, stat.st_size)
+    cached = _NOTE_CONTENT_CACHE.get(key)
+    if cached and cached[:2] == signature:
+        return cached[2]
+    try:
+        body = _note_body(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return False
+    result = bool(body.strip())
+    if len(_NOTE_CONTENT_CACHE) > 4096:
+        _NOTE_CONTENT_CACHE.clear()
+    _NOTE_CONTENT_CACHE[key] = (*signature, result)
+    return result
+
+
+MAX_SESSION_NOTE_SUMMARIES = 500
+SESSION_NOTE_EXCERPT_CHARS = 240
+
+
+def session_note_summaries(root: str | Path) -> list[dict[str, Any]]:
+    """Summarize every session note in a Project that holds real text.
+
+    The browser lists notes from the filesystem rather than from history, so a
+    note survives its owning session, its history row, and daemon restarts. The
+    file stem is the note identity: `safe_note_filename` is idempotent over the
+    names it produces, so a hashed stem round-trips back to the same file.
+    """
+    directory = Path(root).resolve() / ".swe-mux" / "notes" / "sessions"
+    result: list[dict[str, Any]] = []
+    try:
+        entries = sorted(
+            directory.glob("*.md"), key=lambda item: item.stat().st_mtime, reverse=True
+        )
+    except OSError:
+        return []
+    for path in entries[:MAX_SESSION_NOTE_SUMMARIES]:
+        try:
+            stat = path.stat()
+            body = _note_body(path.read_text(encoding="utf-8", errors="replace")).strip()
+        except OSError:
+            continue
+        if not body:
+            continue
+        excerpt = " ".join(body.split())
+        result.append(
+            {
+                "note_id": path.stem,
+                "updated_at": stat.st_mtime,
+                "bytes": stat.st_size,
+                "excerpt": excerpt[:SESSION_NOTE_EXCERPT_CHARS],
+            }
+        )
+    return result
+
+
 def _note_body(text: str) -> str:
     if not text.startswith("---\nswe_mux_note = 1\n"):
         return text

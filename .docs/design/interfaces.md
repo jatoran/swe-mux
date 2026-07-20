@@ -3,6 +3,18 @@
 All JSON APIs are rooted at `/api`. PTY and event streams use `/pty/{session_id}` and
 `/events` WebSockets.
 
+## Desktop lifecycle control
+
+```text
+GET  /health
+POST /desktop/shutdown   Authorization: Bearer DESKTOP_CONTROL_TOKEN
+```
+
+`GET /health` remains ordinary local/tailnet diagnostics. Shutdown exists only when the daemon
+was launched with desktop control, accepts IP-loopback peers only, compares the generated token
+in constant time, and returns `202 {status: "shutting_down"}`. The token lives under the daemon
+data directory and never enters browser state or the tailnet API. Standalone `muxd` returns 404.
+
 ## Canonical Projects and Groups
 
 ```text
@@ -66,6 +78,7 @@ ordinary adjacent panes, while hidden docks remain closed.
 ## Project resources
 
 ```text
+GET     /session-notes[?project_id=]
 GET|PUT /projects/{project_id}/note
 GET      /projects/{project_id}/session-notes/{note_id}
 POST     /projects/{project_id}/session-notes/{note_id}   initialize if absent
@@ -79,6 +92,13 @@ PUT     /projects/{project_id}/watch  {watch_id?, paths: RELATIVE_DIRECTORY[]}
 DELETE  /projects/{project_id}/watch/{watch_id}
 GET|PUT /project/config               typed portable Project options
 ```
+
+`GET /session-notes` lists session notes that hold text, newest first, optionally scoped to one
+Project; an unknown `project_id` is rejected. Each row carries `note_id`, Project identity,
+`updated_at`, `bytes`, a bounded excerpt, and best-effort `owner_label`/`owner_backend`/
+`owner_live`/`owner_known` resolved from live sessions then history. The listing is derived from
+the filesystem, so it outlives sessions, history rows, and daemon restarts; per-Project scans are
+capped and empty notes are omitted.
 
 Paths are relative to the canonical root and may not escape it. Project and session-note writes
 are revision checked. A session note can be initialized only for a live terminal, a History row
@@ -180,6 +200,9 @@ GET    /history/{id}/handoff
 
 Resume/review confirmation must target an existing Project and starts at its root. Backfill
 jobs are daemon-local, cancellable, idempotent scans of complete shared native CLI history.
+Handoff Markdown exposes the swe-mux history ID, provider-native session ID, and recorded native
+transcript path; transcript bytes remain in the provider-owned file and are never copied into the
+export. A missing or stale transcript pointer is reported explicitly.
 History rows expose lifecycle `spawned_at`, nullable conversational `native_started_at`, nullable
 `last_message_at`, and nullable `last_message_role: user|assistant`. Start/last are chronological
 bounds of valid provider-native user/assistant timestamps, even when native records are written
@@ -208,6 +231,8 @@ not first-class frontend navigation.
 Process snapshots expose bounded observational states `active | exited | escaped |
 suspected_orphan | stale | inaccessible`. Actions revalidate PID, creation-time identity,
 and ownership immediately before signaling; no state triggers automatic termination.
+`GET /processes` returns running processes only; `include_ended=1` adds records that ended
+during the current daemon run. Ended records never contribute to resource totals.
 
 Preview URLs are HTTP(S), literal loopback, and credential/query/fragment-free. Registration
 deduplicates by canonical Project endpoint and records the session that owns the live listener,

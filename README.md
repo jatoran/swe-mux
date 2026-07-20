@@ -15,6 +15,28 @@ cd ..
 uv run muxd
 ```
 
+Windows desktop mode adds a WebView2 window and system-tray supervisor while keeping `muxd`
+as the independent terminal owner:
+
+```powershell
+uv sync --extra desktop
+uv run --extra desktop swe-mux
+```
+
+Closing or minimizing the desktop window hides it to the tray. The tray menu can restore the
+window, open the ordinary browser UI, enable login startup, or explicitly quit swe-mux. Quit
+confirms when terminals are live and then stops the daemon; closing the window does not.
+
+Build the distributable `dist/swe-mux/swe-mux.exe` folder with:
+
+```powershell
+uv sync --extra desktop --group package
+uv run --extra desktop --group package python packaging/build_desktop.py
+```
+
+The build is intentionally `onedir`: distribute the complete `dist/swe-mux/` folder, not only
+the executable. WebView2 Runtime is required on the target Windows machine.
+
 Open <http://127.0.0.1:8765>, create a project, and point it at an existing folder.
 `Ctrl+Alt+T` then creates a terminal at that project's canonical root. Type `claude`
 or `codex` normally; swe-mux

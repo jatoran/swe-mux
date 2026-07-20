@@ -14,6 +14,9 @@
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
   `design/features/ui.md`, `technical/frontend/packages.md`
+- Changing Windows desktop packaging, WebView, tray, login startup, or daemon shutdown:
+  `design/features/desktop-shell.md`, `design/architecture.md`, `design/interfaces.md`,
+  `design/features/remote-access.md`, `technical/backend/packages.md`
 - Changing reusable prompt templates: `design/features/prompt-library.md`,
   `design/interfaces.md`, `design/data-model.md`
 - Changing root-session or quota-reset sounds: `design/features/notifications.md`,

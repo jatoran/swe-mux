@@ -123,6 +123,21 @@ def test_codex_without_arguments_has_empty_argv(tmp_path: Path) -> None:
     assert CodexAdapter().spawn_spec("ignored", SpawnOptions(tmp_path)).argv == ()
 
 
+def test_codex_command_resolver_prepends_a_conpty_safe_launcher(tmp_path: Path) -> None:
+    adapter = CodexAdapter(
+        "codex.exe",
+        notify=True,
+        command_resolver=lambda _command: ("node.exe", (r"C:\npm\codex.js",)),
+    )
+
+    spec = adapter.spawn_spec("ignored", SpawnOptions(tmp_path))
+
+    assert spec.executable == "node.exe"
+    assert spec.argv[0] == r"C:\npm\codex.js"
+    assert spec.argv[1] == "-c"
+    assert spec.argv[2].startswith("notify=")
+
+
 def test_versioned_transcript_association_contracts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

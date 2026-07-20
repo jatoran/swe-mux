@@ -15,6 +15,14 @@ dependencies = [
 [project.scripts]
 mux = "swe_mux.cli:main"
 muxd = "swe_mux.__main__:main"
+swe-mux = "swe_mux.desktop:main"
+
+[project.optional-dependencies]
+desktop = [
+  "pillow>=11.0; sys_platform == 'win32'",
+  "pystray>=0.19.5; sys_platform == 'win32'",
+  "pywebview>=5.4; sys_platform == 'win32'",
+]
 
 [dependency-groups]
 dev = [
@@ -22,6 +30,9 @@ dev = [
   "pytest>=8.3",
   "pytest-asyncio>=0.25",
   "ruff>=0.11",
+]
+package = [
+  "pyinstaller>=6.15",
 ]
 
 [build-system]

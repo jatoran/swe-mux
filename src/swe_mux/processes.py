@@ -110,6 +110,9 @@ class ProcessInspector:
             "processes": 0,
             "cpu_pct": 0.0,
             "memory_bytes": 0,
+            "listeners": 0,
+            "connections": 0,
+            "members": [],
         }
 
     async def restore(self) -> None:
@@ -119,6 +122,13 @@ class ProcessInspector:
         for item in await self.telemetry.process_candidates():
             started = float(item.get("creation_time") or 0)
             if not started:
+                continue
+            # An already-exited fingerprint can never become live again, and its
+            # durable record stays in process_evidence regardless. Restoring it
+            # would only republish a previous daemon run's dead processes into
+            # the live fleet. Only candidates that might still be running are
+            # worth revalidating.
+            if item.get("exited_at"):
                 continue
             process = OwnedProcess(
                 pid=int(item["pid"]),
@@ -240,10 +250,10 @@ class ProcessInspector:
                 self.owned[key] = item
                 result.append(item)
         attributed_pids = {item.pid for item in result}
-        attributed_pids.update(
-            item.pid for item in self.owned.values() if item.exited_at is None
+        attributed_pids.update(item.pid for item in self.owned.values() if item.exited_at is None)
+        self._daemon_resources = self._collect_daemon_resources(
+            attributed_pids, seen, conn_map
         )
-        self._daemon_resources = self._collect_daemon_resources(attributed_pids, seen)
         now = time.time()
         self._revalidate_unseen(seen, conn_map, now, startup)
         self._cpu_samples = {
@@ -253,14 +263,27 @@ class ProcessInspector:
         return result
 
     def _collect_daemon_resources(
-        self, attributed_pids: set[int], seen: set[tuple[int, float]]
+        self,
+        attributed_pids: set[int],
+        seen: set[tuple[int, float]],
+        conn_map: dict[int, list[Any]] | None = None,
     ) -> dict[str, Any]:
         """Sample daemon/infrastructure processes not already owned by a session.
 
         Session descendants are children of the daemon too. Excluding their PIDs keeps
-        the resource footer additive without counting the same process twice.
+        the resource footer additive without counting the same process twice. Detailed
+        members let the fleet inspector explain that aggregate without granting session
+        process controls over swe-mux itself.
         """
-        empty = {"pid": os.getpid(), "processes": 0, "cpu_pct": 0.0, "memory_bytes": 0}
+        empty = {
+            "pid": os.getpid(),
+            "processes": 0,
+            "cpu_pct": 0.0,
+            "memory_bytes": 0,
+            "listeners": 0,
+            "connections": 0,
+            "members": [],
+        }
         if psutil is None or not hasattr(psutil, "Process"):
             return empty
         try:
@@ -272,6 +295,9 @@ class ProcessInspector:
         process_count = 0
         cpu_total = 0.0
         memory_total = 0
+        listener_total = 0
+        connection_total = 0
+        members: list[dict[str, Any]] = []
         sampled_pids: set[int] = set()
         for process in candidates:
             pid = int(process.pid)
@@ -295,14 +321,52 @@ class ProcessInspector:
                 seen.add(sample_key)
             except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                 continue
+            try:
+                parent_pid = int(process.ppid())
+            except (AttributeError, psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                parent_pid = None
+            try:
+                executable = str(process.name())
+            except (AttributeError, psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                executable = f"PID {pid}"
+            try:
+                command = " ".join(str(part) for part in process.cmdline())[:1000]
+            except (AttributeError, psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                command = ""
+            listeners, connections = self._network_from(pid, conn_map or {})
+            conditions: list[str] = []
+            if cpu >= 90:
+                conditions.append("high_cpu")
+            if memory >= HIGH_MEMORY_BYTES:
+                conditions.append("high_memory")
             process_count += 1
             cpu_total += cpu
             memory_total += memory
+            listener_total += len(listeners)
+            connection_total += len(connections)
+            members.append(
+                {
+                    "pid": pid,
+                    "parent_pid": parent_pid,
+                    "executable": executable,
+                    "command": command,
+                    "started_at": started_at,
+                    "cpu_pct": round(cpu, 1),
+                    "memory_bytes": memory,
+                    "listeners": listeners,
+                    "connections": connections,
+                    "conditions": conditions,
+                }
+            )
+        members.sort(key=lambda item: (item["pid"] != os.getpid(), item["pid"]))
         return {
             "pid": os.getpid(),
             "processes": process_count,
             "cpu_pct": round(cpu_total, 1),
             "memory_bytes": memory_total,
+            "listeners": listener_total,
+            "connections": connection_total,
+            "members": members,
         }
 
     def _revalidate_unseen(
@@ -543,7 +607,9 @@ class ProcessInspector:
     def _listeners_for(self, process: Any) -> list[dict[str, Any]]:
         return self._network_for(process)[0]
 
-    async def snapshot(self, session_id: str, *, force: bool = False) -> dict[str, Any]:
+    async def snapshot(
+        self, session_id: str, *, force: bool = False, include_ended: bool = False
+    ) -> dict[str, Any]:
         if session_id not in self.sessions.sessions and not any(
             item.session_id == session_id for item in self.owned.values()
         ):
@@ -567,7 +633,9 @@ class ProcessInspector:
             }
         await self._ensure_sampled(force=force)
         processes = [
-            item.snapshot() for item in self.owned.values() if item.session_id == session_id
+            item.snapshot()
+            for item in self.owned.values()
+            if item.session_id == session_id and (include_ended or item.exited_at is None)
         ]
         processes.sort(key=lambda item: (item["exited_at"] is not None, item["pid"]))
         live_session = self.sessions.sessions.get(session_id)
@@ -594,8 +662,14 @@ class ProcessInspector:
             "processes": processes[:MAX_PROCESSES_PER_SESSION],
         }
 
-    async def snapshot_all(self) -> dict[str, Any]:
-        """Return one coherently sampled process tree for every live mux session."""
+    async def snapshot_all(self, *, include_ended: bool = False) -> dict[str, Any]:
+        """Return one coherently sampled process tree for every live mux session.
+
+        Ended records are excluded by default. They carry no available action,
+        are already absent from every total, and their durable history lives in
+        `process_evidence`; including them would only grow a polled payload with
+        rows the operator cannot act on.
+        """
         if not self.available:
             return {
                 "available": False,
@@ -620,9 +694,18 @@ class ProcessInspector:
         for session_id in session_ids:
             session = self.sessions.sessions.get(session_id)
             processes = [
-                item.snapshot() for item in self.owned.values() if item.session_id == session_id
+                item.snapshot()
+                for item in self.owned.values()
+                if item.session_id == session_id and (include_ended or item.exited_at is None)
             ]
             processes.sort(key=lambda item: (item["exited_at"] is not None, item["pid"]))
+            # A session whose processes have all ended contributes nothing to act
+            # on. Keep live sessions listed even while empty so the operator can
+            # still see the session itself; drop dead sessions entirely. A
+            # survivor (escaped/suspected_orphan) is never ended, so a session
+            # holding one still appears.
+            if not processes and session is None:
+                continue
             all_processes.extend(processes)
             groups.append(
                 {
@@ -812,9 +895,7 @@ class PreviewRegistry:
         self, session: Any, url: str, *, host: str, port: int
     ) -> PreviewRegistration:
         parsed = urlsplit(url)
-        existing = self._existing_endpoint(
-            session.record.project_id, parsed.scheme, host, port
-        )
+        existing = self._existing_endpoint(session.record.project_id, parsed.scheme, host, port)
         if existing is not None:
             # Endpoint identity is project-wide. If it was first opened from a
             # terminal that merely printed another service's URL, retain its stable
@@ -951,12 +1032,8 @@ class PreviewRegistry:
         if owner is None and not approved:
             raise ValueError("preview listener is not owned by this session; approval is required")
         if owner is not None:
-            return self._record_detected(
-                owner, normalized_url, host=host, port=port
-            )
-        existing = self._existing_endpoint(
-            session.record.project_id, parsed.scheme, host, port
-        )
+            return self._record_detected(owner, normalized_url, host=host, port=port)
+        existing = self._existing_endpoint(session.record.project_id, parsed.scheme, host, port)
         if existing:
             return existing
         item = PreviewRegistration(

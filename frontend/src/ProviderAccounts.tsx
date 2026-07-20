@@ -2,7 +2,7 @@ import { createPortal } from 'preact/compat'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { setSoundPreferences, soundPreferences } from './sessionSounds'
-import { accountPopoverStyle, percent, quotaSummary, quotaWindowSummary } from './providerAccountDisplay'
+import { accountPopoverStyle, formatResetRemaining, percent, providerWeeklyUsage, quotaSummary, quotaWindowSummary, usageBand } from './providerAccountDisplay'
 
 export type ProviderName='claude'|'codex'
 type QuotaWindow={used_percent:number;window_minutes:number;resets_at?:number|null}
@@ -47,7 +47,12 @@ function useProviderAccounts(intervalMs=60_000) {
   return {status,setStatus,error,setError,load}
 }
 
-export function AccountSwitcher({compact=false,onManage}:{compact?:boolean;onManage:()=>void}) {
+export function AccountSwitcher({variant='full',placement,onManage}:{
+  // `variant` picks the trigger; `placement` is independent because the collapsed
+  // desktop rail wants a condensed trigger with an upward-opening popover.
+  variant?:'full'|'compact'|'rail';placement?:'up'|'down';onManage:()=>void
+}) {
+  const compact=variant!=='full'
   const {status,setStatus,error,setError}=useProviderAccounts()
   const [open,setOpen]=useState(false)
   const [busy,setBusy]=useState('')
@@ -92,7 +97,8 @@ export function AccountSwitcher({compact=false,onManage}:{compact?:boolean;onMan
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
   }
-  const position=()=>{const rect=root.current?.getBoundingClientRect();if(rect)setPopoverStyle(accountPopoverStyle(rect,compact,{width:window.innerWidth,height:window.innerHeight}))}
+  const opensDown=placement?placement==='down':compact
+  const position=()=>{const rect=root.current?.getBoundingClientRect();if(rect)setPopoverStyle(accountPopoverStyle(rect,opensDown,{width:window.innerWidth,height:window.innerHeight}))}
   const toggle=()=>{if(!open)position();setOpen(value=>!value)}
   const show=()=>{position();setOpen(true)}
   useEffect(()=>{
@@ -103,7 +109,7 @@ export function AccountSwitcher({compact=false,onManage}:{compact?:boolean;onMan
     const key=(event:KeyboardEvent)=>{if(event.key==='Escape')setOpen(false)}
     window.addEventListener('resize',reposition);window.addEventListener('scroll',reposition,true);window.addEventListener('pointerdown',dismiss);window.addEventListener('keydown',key)
     return()=>{window.removeEventListener('resize',reposition);window.removeEventListener('scroll',reposition,true);window.removeEventListener('pointerdown',dismiss);window.removeEventListener('keydown',key)}
-  },[open,compact])
+  },[open,opensDown])
   const popup=open&&<div ref={popover} class="account-popover account-popover-portal" style={popoverStyle} role="dialog" aria-label="Provider account switcher">
       <header><div><strong>ACCOUNTS</strong><span>session · weekly</span></div><button aria-label="Close account switcher" onClick={()=>setOpen(false)}>×</button></header>
       {(['claude','codex'] as ProviderName[]).map(provider=>{const current=status?.current[provider];const active=selected(provider);return <section><h4>{provider}</h4>{current?.state!=='saved'&&<p class={`account-current-notice ${current?.state||'signed_out'}`}>{currentDescription(current,active)}</p>}{status?.accounts.filter(account=>account.provider===provider).map(account=><button class={status.selected[provider]===account.id?'active':''} disabled={!!busy} onClick={()=>void choose(account)} title={quotaTitle(account)}><span>{status.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong><small>{quotaSummary(account)}{account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}> · {formatRefreshAge(account.quota.refreshed_at)}</i>:''}</small></button>)}{!status?.accounts.some(account=>account.provider===provider)&&<p>No saved accounts</p>}</section>})}
@@ -111,8 +117,33 @@ export function AccountSwitcher({compact=false,onManage}:{compact?:boolean;onMan
       {latestReset&&<section class="account-reset-alert"><h4>quota reset evidence</h4><p><strong>{latestReset.provider} {latestReset.window}</strong> moved {latestReset.before_value}% → {latestReset.after_value}% and was confirmed by a second fresh sample.</p><div>{latestReset.provider==='codex'&&<button disabled={!!busy} onClick={()=>void reviewReset('manual_usage')}>{busy==='reset-manual_usage'?'marking…':'manual Codex usage'}</button>}<button class="danger" disabled={!!busy} onClick={()=>void reviewReset('discarded')}>{busy==='reset-discarded'?'discarding…':'discard as error'}</button><button disabled={!!busy} onClick={dismissReset}>{resetUnread?'mark seen':'seen'}</button><button disabled={!!busy} onClick={toggleResetSound}>{resetSound?'mute reset sound':'enable reset sound'}</button></div></section>}
       <footer><button disabled={!!busy} onClick={()=>void refresh()}>{busy==='refresh'?'refreshing…':'refresh quotas'}</button><button onClick={()=>{setOpen(false);onManage()}}>manage…</button></footer>
     </div>
-  return <div ref={root} class={`account-switcher ${compact?'compact':''}`}>
-    {compact?<button class={`account-mobile-trigger ${resetUnread?'quota-reset-unread':''}`} aria-label="Provider accounts" aria-expanded={open} title={resetUnread?'Confirmed unexpected quota reset':'Provider accounts'} onClick={toggle}>acct{resetUnread?'!':''}</button>:<div class="account-summary">
+  const weekly=providerWeeklyUsage(status?.accounts||[],status?.selected||{})
+  const weeklyTitle=(provider:ProviderName)=>{
+    const window=weekly[provider]
+    if(!window)return `${provider} · weekly quota unavailable · open accounts`
+    const remaining=formatResetRemaining(window.resets_at)
+    return `${provider} weekly ${Math.round(window.used_percent)}% used${remaining?` · resets in ${remaining}`:''} · open accounts`
+  }
+  const railChip=(provider:ProviderName)=>{
+    const window=weekly[provider]
+    // Glyph above number: at rail width a side-by-side mark and percentage
+    // truncates at three digits, and the glyph is what identifies the provider.
+    return <button key={provider} class={`rail-quota usage-${usageBand(window?.used_percent)} ${resetUnread&&latestReset?.provider===provider?'quota-reset-unread':''}`} aria-label={weeklyTitle(provider)} aria-expanded={open} title={weeklyTitle(provider)} onClick={toggle}>
+      <span class={`provider-glyph ${provider}`} aria-hidden="true">{providerGlyph(provider)}</span>
+      <strong>{window?`${Math.round(window.used_percent)}%`:'—'}</strong>
+    </button>
+  }
+  return <div ref={root} class={`account-switcher ${compact?'compact':''} ${variant==='rail'?'rail':''}`}>
+    {variant==='rail'?(['claude','codex'] as ProviderName[]).map(railChip)
+    :variant==='compact'?(()=>{
+      // One number is all the mobile trigger can hold, so it reports the most
+      // consumed weekly window; the popover still has the full breakdown.
+      const worst=(['claude','codex'] as ProviderName[])
+        .map(provider=>weekly[provider]?.used_percent)
+        .filter((value):value is number=>typeof value==='number')
+        .sort((left,right)=>right-left)[0]
+      return <button class={`account-mobile-trigger usage-${usageBand(worst)} ${resetUnread?'quota-reset-unread':''}`} aria-label={typeof worst==='number'?`Highest weekly provider quota: ${Math.round(worst)}% used`:'Provider accounts'} aria-expanded={open} title={typeof worst==='number'?`Highest weekly quota ${Math.round(worst)}% used · open accounts`:resetUnread?'Confirmed unexpected quota reset':'Provider accounts'} onClick={toggle}>{typeof worst==='number'?`${Math.round(worst)}%`:'acct'}{resetUnread?'!':''}</button>
+    })():<div class="account-summary">
       {(['claude','codex'] as ProviderName[]).map(provider=>{const account=selected(provider);const current=status?.current[provider];const state=account?account.quota?.status||'pending':current?.state||'loading';return <button class={account?'tracked':current?.state==='external'?'external':'untracked'} aria-label={`${provider} account: ${currentLabel(current,account)}; ${currentSummary(current,account)}; ${state}`} aria-expanded={open} onClick={toggle} title={`${provider} · ${account?quotaTitle(account):currentDescription(current,account)}`}><span class={`provider-glyph ${provider}`} aria-hidden="true">{providerGlyph(provider)}</span><strong>{currentLabel(current,account)}</strong><small>{currentSummary(current,account)}</small>{state!=='ready'&&<em>{state}</em>}</button>})}
       {resetUnread&&<button class="quota-reset-indicator" title="Confirmed unexpected reset; open for evidence" onClick={show}><span>RESET</span><strong>unexpected quota reset</strong><small>{latestReset?.provider} · {latestReset?.window}</small></button>}
     </div>}

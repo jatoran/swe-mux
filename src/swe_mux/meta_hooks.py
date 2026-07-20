@@ -20,6 +20,7 @@ from aiohttp import ClientSession, ClientTimeout
 from .event_bus import EventBus
 from .models import MuxEvent
 from .session import SessionManager
+from .subprocess_flags import background_creation_flags
 
 log = logging.getLogger(__name__)
 
@@ -366,6 +367,7 @@ class MetaHookEngine:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
+            creationflags=background_creation_flags(),
         )
         try:
             code = await asyncio.wait_for(

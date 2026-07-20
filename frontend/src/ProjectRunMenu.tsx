@@ -69,10 +69,10 @@ export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessi
     <section class="project-run-menu" role="menu" aria-label={`Run in ${project.name}`} style={{left,top}}>
       <header><div><span>RUN</span><strong>{project.name}</strong></div><button aria-label="Close Run menu" onClick={onClose}>×</button></header>
       <div class="run-menu-section"><small>NEW SESSION</small>
-        <button role="menuitem" disabled={!!busy} onClick={()=>onLaunch('claude')}><span>[claude]</span> Claude</button>
-        <button role="menuitem" disabled={!!busy} onClick={()=>onLaunch('codex')}><span>[codex]</span> Codex</button>
-        <button role="menuitem" disabled={!!busy} onClick={()=>onLaunch('shell')}><span>&gt;_</span> Shell</button>
-        <button role="menuitem" disabled={!!busy} onClick={onCustom}><span>⋯</span> Custom terminal…</button>
+        <button role="menuitem" aria-label="Start Claude session" disabled={!!busy} onClick={()=>onLaunch('claude')}><span aria-hidden="true">▶</span><div><strong>Claude</strong></div></button>
+        <button role="menuitem" aria-label="Start Codex session" disabled={!!busy} onClick={()=>onLaunch('codex')}><span aria-hidden="true">▶</span><div><strong>Codex</strong></div></button>
+        <button role="menuitem" aria-label="Start shell session" disabled={!!busy} onClick={()=>onLaunch('shell')}><span aria-hidden="true">&gt;_</span><div><strong>Shell</strong></div></button>
+        <button role="menuitem" aria-label="Open custom terminal launcher" disabled={!!busy} onClick={onCustom}><span aria-hidden="true">⋯</span><div><strong>Custom terminal…</strong></div></button>
       </div>
       {loading?<p>Reading Project tasks…</p>:groups.map(group=><div class="run-menu-section" key={group.source}><small>{sourceLabel[group.source]}</small>{group.items.map(action=><button role="menuitem" key={action.id} disabled={!!busy} title={action.steps.map(step=>step.command).join('\n')} onClick={()=>void execute(action)}><span>{busy===action.id?'…':'▶'}</span><div><strong>{action.label}</strong>{action.steps.length>1&&<em>{action.steps.length} terminals</em>}</div></button>)}</div>)}
       {!loading&&groups.length===0&&<p>No Project tasks found.</p>}

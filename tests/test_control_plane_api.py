@@ -182,11 +182,16 @@ async def test_review_requires_preview_then_explicit_confirm_and_records_lineage
 
 
 async def test_handoff_export_contains_only_reviewable_annotation_summary(tmp_path: Path) -> None:
+    transcript_path = tmp_path / ".codex" / "sessions" / "run-source.jsonl"
+    transcript_path.parent.mkdir(parents=True)
+    transcript_path.write_text('{"type":"message"}\n', encoding="utf-8")
     source = {
         "id": "run-source",
+        "native_id": "provider-run-source",
         "backend": "codex",
         "name": "verifier",
         "cwd": str(tmp_path),
+        "transcript_path": str(transcript_path),
     }
     store = AutomationStore(tmp_path / "mux.db")
     await store.create_annotation(
@@ -210,6 +215,10 @@ async def test_handoff_export_contains_only_reviewable_annotation_summary(tmp_pa
 
     assert response.status == 200
     assert "# Handoff: verifier" in payload["markdown"]
+    assert "swe-mux history ID: run-source" in payload["markdown"]
+    assert "Provider session ID: provider-run-source" in payload["markdown"]
+    assert f"`{transcript_path}`" in payload["markdown"]
+    assert "Read this provider-native file directly" in payload["markdown"]
     assert "Tests pass after correcting the fixture" in payload["markdown"]
     assert "Review before using it as context" in payload["markdown"]
     store.close()

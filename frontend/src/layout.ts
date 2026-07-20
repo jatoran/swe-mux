@@ -241,6 +241,46 @@ export function addLeafToStack(layout:PaneLayout,stackId:string,next:PaneLeaf):P
   return {...layout,root:mapPanes(layout.root,pane=>pane.id===stackId?{...pane,children:[...pane.children,next],active_child_id:next.id}:pane)}
 }
 
+function setSplitRatioContaining(layout:PaneLayout,leafId:string,ratio:number):PaneLayout{
+  if(!layout.root)return layout
+  const visit=(node:PaneNode):PaneNode=>{
+    if(node.type==='stack')return node
+    const first=visit(node.first),second=visit(node.second)
+    const owns=(branch:PaneNode)=>branch.type==='stack'&&branch.children.some(child=>child.id===leafId)
+    const next={...node,first,second}
+    if(owns(node.first))return {...next,ratio:clampRatio(ratio)}
+    if(owns(node.second))return {...next,ratio:clampRatio(1-ratio)}
+    return next
+  }
+  return {...layout,root:visit(layout.root)}
+}
+
+/** Place a companion view (a session note) beside its anchor rather than over it.
+ *
+ * Stacking a note onto the terminal that opened it hides the terminal, which
+ * defeats jotting while an agent works. Preference order: an already-open copy,
+ * then an existing non-terminal pane, then a new split beside the anchor.
+ */
+export function placeCompanionLeaf(
+  layout:PaneLayout,
+  anchorId:string|null,
+  next:PaneLeaf,
+  direction:SplitDirection='horizontal',
+  ratio=1/3,
+):PaneLayout{
+  if(leaves(layout).some(leaf=>leaf.id===next.id))return activateContainingStack(layout,next.id)
+  if(!layout.root)return {...layout,root:paneStack([next])}
+  const anchorPane=anchorId?stackForView(layout,anchorId):null
+  const others=paneStacks(layout).filter(pane=>pane.id!==anchorPane?.id)
+  const companion=others.find(pane=>pane.children.every(child=>child.kind!=='terminal'))||others[0]
+  if(companion)return addLeafToStack(layout,companion.id,next)
+  const anchor=anchorPane?.children.find(child=>child.id===anchorId)?.id
+    ||anchorPane?.active_child_id
+    ||paneStacks(layout)[0]?.active_child_id
+    ||null
+  return setSplitRatioContaining(splitView(layout,anchor,next,direction),next.id,ratio)
+}
+
 export function moveLeafToStack(layout:PaneLayout,kind:PaneLeafKind,id:string,targetStackId:string,orderedIds?:string[]):PaneLayout{
   const leaf=leaves(layout).find(item=>item.kind===kind&&item.id===id)
   const source=stackForView(layout,id)

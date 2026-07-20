@@ -155,7 +155,7 @@ async def test_cross_session_dev_server_interlock_uses_owned_connections(
     store.close()
 
 
-async def test_same_branch_and_port_collision_interlocks_are_explainable(
+async def test_port_collision_interlock_is_explainable(
     tmp_path: Path,
 ) -> None:
     first = session("a", scope="scope-a", branch="main")
@@ -197,15 +197,14 @@ async def test_same_branch_and_port_collision_interlocks_are_explainable(
     interlocks = {
         item.payload["kind"]: item for item in events if item.type == "environment_interlock"
     }
-    assert set(interlocks) == {"same_branch", "port_collision"}
-    assert interlocks["same_branch"].payload["evidence"][1] == {
-        "signal": "git_branch",
-        "value": "main",
-    }
+    assert set(interlocks) == {"port_collision"}
     assert interlocks["port_collision"].payload["evidence"][1] == {
         "signal": "listener_port",
         "value": 5173,
     }
+    notifications = await store.notifications()
+    assert notifications[0]["title"] == "Port collision"
+    assert "127.0.0.1:5173" in notifications[0]["message"]
     store.close()
 
 

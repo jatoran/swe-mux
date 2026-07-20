@@ -3,9 +3,53 @@ import test from 'node:test'
 import {
   activateContainingStack, emptyLayout, groupTerminalsInStack, leaves, moveLeafToSplit,
   moveLeafToStack, noteResourceId, openTab, paneNeighborIds, paneStacks, parseLayout, parseNoteResourceId,
-  reconcilePreviews, removeLeaf, reorderStack, resourceLeaf, setSplitRatio, splitTerminal,
-  splitView, swapPanes, swapTerminals, terminalIds, terminalLeaf, visibleTerminalIds,
+  placeCompanionLeaf, reconcilePreviews, removeLeaf, reorderStack, resourceLeaf, setSplitRatio,
+  splitTerminal, splitView, swapPanes, swapTerminals, terminalIds, terminalLeaf, visibleTerminalIds,
 } from '../src/layout.ts'
+
+const noteLeaf=(id='sessions:one')=>resourceLeaf('note',noteResourceId('session-note',id))
+
+test('a companion note splits beside its terminal instead of covering it',()=>{
+  const layout=openTab(emptyLayout(),null,terminalLeaf('one'))
+  const placed=placeCompanionLeaf(layout,'one',noteLeaf())
+  assert.equal(placed.root?.type,'split')
+  // The terminal keeps its own pane and stays visible next to the note.
+  assert.deepEqual(visibleTerminalIds(placed),['one'])
+  assert.equal(paneStacks(placed).length,2)
+  const ratio=placed.root?.type==='split'?placed.root.ratio:0
+  assert.ok(ratio>.5&&ratio<.9,`terminal should keep the larger share, got ${ratio}`)
+})
+
+test('a companion note reuses an existing non-terminal pane',()=>{
+  let layout=openTab(emptyLayout(),null,terminalLeaf('one'))
+  layout=splitView(layout,'one',resourceLeaf('note','files:main'),'horizontal')
+  const placed=placeCompanionLeaf(layout,'one',noteLeaf())
+  assert.equal(paneStacks(placed).length,2)
+  const resourcePane=paneStacks(placed).find(pane=>pane.children.some(child=>child.id==='files:main'))
+  assert.ok(resourcePane?.children.some(child=>child.id===noteLeaf().id))
+  assert.equal(resourcePane?.active_child_id,noteLeaf().id)
+})
+
+test('a companion note that is already open is focused, never duplicated',()=>{
+  let layout=openTab(emptyLayout(),null,terminalLeaf('one'))
+  layout=placeCompanionLeaf(layout,'one',noteLeaf())
+  layout=openTab(layout,'one',terminalLeaf('two'))
+  const again=placeCompanionLeaf(layout,'one',noteLeaf())
+  assert.equal(leaves(again).filter(leaf=>leaf.id===noteLeaf().id).length,1)
+  const pane=paneStacks(again).find(item=>item.children.some(child=>child.id===noteLeaf().id))
+  assert.equal(pane?.active_child_id,noteLeaf().id)
+})
+
+test('a companion note never splits a terminal that shares a pane with peers',()=>{
+  let layout=openTab(emptyLayout(),null,terminalLeaf('one'))
+  layout=splitTerminal(layout,'one','two','horizontal')
+  const placed=placeCompanionLeaf(layout,'one',noteLeaf())
+  // 'two' already owns a separate pane, so the note lands there rather than
+  // splitting the workspace a third time.
+  assert.equal(paneStacks(placed).length,2)
+  const host=paneStacks(placed).find(pane=>pane.children.some(child=>child.id===noteLeaf().id))
+  assert.ok(host?.children.some(child=>child.id==='two'))
+})
 
 test('v6 keeps every region as a tab pane inside an arbitrary split tree',()=>{
   let layout=openTab(emptyLayout(),null,terminalLeaf('one'))

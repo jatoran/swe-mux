@@ -16,6 +16,29 @@ export const formatResetRemaining=(resetsAt?:number|null,nowSeconds=Date.now()/1
 export const quotaWindowSummary=(window?:QuotaWindowDisplay|null,nowSeconds=Date.now()/1000)=>window?`${percent(window)}${window.resets_at?` ${formatResetRemaining(window.resets_at,nowSeconds)}`:''}`:'—'
 export const quotaSummary=(account?:QuotaAccountDisplay,nowSeconds=Date.now()/1000)=>account?.quota?.status==='error'?'unavailable':`${quotaWindowSummary(account?.quota?.session,nowSeconds)} - ${quotaWindowSummary(account?.quota?.weekly,nowSeconds)}${account?.quota?.fable?` · fable ${percent(account.quota.fable)}`:''}`
 
+/** Each active account's weekly quota window, keyed by provider.
+ *
+ * Weekly is the window worth a permanent glance: the 5-hour session window
+ * churns constantly, and `fable` is a sub-window of one provider's plan rather
+ * than a comparable measure across providers.
+ */
+export function providerWeeklyUsage(
+  accounts:Array<{provider:string;id:string}&QuotaAccountDisplay>,
+  selected:Record<string,string|null>,
+):Record<string,QuotaWindowDisplay|null>{
+  const result:Record<string,QuotaWindowDisplay|null>={}
+  for(const account of accounts){
+    if(selected[account.provider]!==account.id)continue
+    const weekly=account.quota?.status==='error'?null:account.quota?.weekly
+    result[account.provider]=weekly&&typeof weekly.used_percent==='number'?weekly:null
+  }
+  return result
+}
+
+/** Shared severity band so every condensed indicator colours the same way. */
+export const usageBand=(percent?:number|null)=>
+  typeof percent!=='number'?'unknown':percent>=90?'critical':percent>=75?'warn':'ok'
+
 type PopoverRect={left:number;right:number;top:number;bottom:number}
 export function anchoredPopoverStyle(rect:PopoverRect,compact:boolean,viewport:{width:number;height:number}):Record<string,string> {
   const width=Math.min(340,Math.max(240,viewport.width-16))

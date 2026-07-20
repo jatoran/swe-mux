@@ -27,6 +27,30 @@ def resolve_command(command: str) -> str:
     return command
 
 
+def resolve_codex_pty_command(
+    command: str, *, windows: bool | None = None
+) -> tuple[str, tuple[str, ...]]:
+    """Resolve Codex to a ConPTY-safe executable plus immutable argv prefix.
+
+    npm exposes Codex as a batch shim on Windows. ConPTY cannot execute that shim
+    directly, and routing JSON-valued notify configuration through ``cmd.exe``
+    corrupts its quoting. Launch the npm package's JS entrypoint with Node instead.
+    """
+    resolved = resolve_command(command)
+    if windows is None:
+        windows = os.name == "nt"
+    path = Path(resolved)
+    if not windows or path.suffix.casefold() not in {".cmd", ".bat"}:
+        return resolved, ()
+    codex_js = path.parent / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    if codex_js.is_file():
+        bundled_node = path.parent / "node.exe"
+        node = str(bundled_node) if bundled_node.is_file() else shutil.which("node")
+        if node:
+            return node, (str(codex_js),)
+    return resolved, ()
+
+
 def create_agent_shims(config: Config, claude_settings: Path | None) -> dict[str, str]:
     bin_dir = config.data_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -81,12 +82,9 @@ def test_drag_reorder_keeps_native_source_mounted_and_commits_latest_preview() -
     assert "{node.children.map(child=>" in app
     assert "dragProjectRef.current" in app
     assert "dragStackTabRef.current" in app
+    assert "reorderTargetFromContainer(bucket,current.id,'vertical',pointer.clientY)" in app
     assert (
-        "reorderTargetFromContainer(bucket,current.id,'vertical',pointer.clientY)" in app
-    )
-    assert (
-        "reorderTargetFromContainer(tabStrip,current.childId,'horizontal',pointer.clientX)"
-        in app
+        "reorderTargetFromContainer(tabStrip,current.childId,'horizontal',pointer.clientX)" in app
     )
     assert "beginProjectPointerDrag(event,project,peerIds)" in app
     assert "showPointerDropIndicator(targetElement,`insert-${target.side}`)" in app
@@ -124,6 +122,40 @@ def test_pane_local_tab_rails_and_resizable_collapsible_sidebar_are_wired() -> N
     assert "grid-template-rows:34px minmax(0,1fr)" in css
 
 
+def test_collapsed_sidebar_rail_keeps_sidebar_controls_reachable() -> None:
+    root = Path(__file__).parents[1] / "frontend" / "src"
+    app = (root / "App.tsx").read_text(encoding="utf-8")
+    css = (root / "style.css").read_text(encoding="utf-8")
+    accounts = (root / "ProviderAccounts.tsx").read_text(encoding="utf-8")
+    resources = (root / "ResourceUsage.tsx").read_text(encoding="utf-8")
+
+    assert 'sidebarCollapsed&&<nav class="sidebar-rail"' in app
+    assert 'title="Menu"' in app and 'title="Projects"' in app
+    assert "<ResourceUsageSummary compact" in app
+    assert '<AccountSwitcher variant="rail" placement="up"' in app
+    assert ".sidebar-rail{" in css
+    assert ".rail-status{" in css
+
+    # Status sits above the actions, which stay pinned at the very bottom.
+    assert app.index('<div class="rail-status">') < app.index('title="Menu"')
+    assert app.index('title="Menu"') < app.index('title="Projects"')
+    assert ".rail-status{margin-top:auto" in css
+
+    # The rail resets the mobile trigger's 42px floor, or it overflows the strip.
+    assert "min-width:28px" in css
+    # Popover direction is independent of the condensed trigger so the rail, which
+    # sits at the bottom of the window, still opens upward.
+    assert "const opensDown=placement?placement==='down':compact" in accounts
+    # One chip per provider, each identified by its own mark, showing weekly usage.
+    assert "providerWeeklyUsage" in accounts
+    assert "const railChip=(provider:ProviderName)=>" in accounts
+    assert "providerGlyph(provider)" in accounts
+    assert ".rail-quota .provider-glyph" in css
+    # RAM, not CPU: a fluctuating percentage is not worth a permanent glance.
+    assert "compactMemoryLabel(combined.memory_bytes)" in resources
+    assert "resource-usage-compact" in resources
+
+
 def test_workspace_tabs_have_inline_close_controls_with_terminal_confirmation() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
     app = (root / "App.tsx").read_text(encoding="utf-8")
@@ -135,19 +167,25 @@ def test_workspace_tabs_have_inline_close_controls_with_terminal_confirmation() 
     assert "removeLeaf(latest,child.kind,child.id)" in app
     assert "{confirming?'✓':'×'}</button>" in app
     assert "terminal&&(!session||!!session.pending)" in app
-    assert ".stack-tab-shell>.tab-close{width:22px;min-width:22px;max-width:22px;flex:0 0 22px" in css
+    assert (
+        ".stack-tab-shell>.tab-close{width:22px;min-width:22px;max-width:22px;flex:0 0 22px" in css
+    )
     assert ".stack-tab-shell>.tab-close.confirming" in css
 
 
 def test_session_tab_context_menu_omits_redundant_focus_and_detach_actions() -> None:
-    app = (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(
-        encoding="utf-8"
-    )
+    app = (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
 
     assert "source: 'sidebar'|'tab'|'pane'" in app
     assert "openSessionMenu(session,event.clientX,event.clientY,'tab')" in app
-    assert "contextMenu.source==='sidebar'&&<button onClick={() => runNamedCommand('session.open')}>" in app
-    assert "contextMenu.source==='sidebar'&&<button disabled={!activeId||activeId===contextMenu.session.id}" in app
+    assert (
+        "contextMenu.source==='sidebar'&&<button onClick={() => runNamedCommand('session.open')}>"
+        in app
+    )
+    assert (
+        "contextMenu.source==='sidebar'&&<button "
+        "disabled={!activeId||activeId===contextMenu.session.id}" in app
+    )
     assert "id: 'pane.detach'" not in app
     assert "runNamedCommand('pane.detach')" not in app
 
@@ -155,20 +193,39 @@ def test_session_tab_context_menu_omits_redundant_focus_and_detach_actions() -> 
 def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None:
     root = Path(__file__).parents[1]
     app = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
-    manager = (root / "frontend" / "src" / "ProjectsManager.tsx").read_text(
-        encoding="utf-8"
-    )
+    manager = (root / "frontend" / "src" / "ProjectsManager.tsx").read_text(encoding="utf-8")
     layout = (root / "frontend" / "src" / "layout.ts").read_text(encoding="utf-8")
 
     assert "sidebar_visible" in manager
     assert "Configured Projects keep their notes, files, settings, and history" in manager
-    assert "visibleProjects = orderedProjects.filter(project => project.sidebar_visible !== false)" in app
+    assert (
+        "visibleProjects = orderedProjects.filter(project => project.sidebar_visible !== false)"
+        in app
+    )
     assert app.count('class="modal-layer project-registry-dialog-layer"') == 2
-    assert ".projects-manager-layer{z-index:40}.project-registry-dialog-layer{z-index:92}" in (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+    # Adding a Project is reachable in one step from the empty-sidebar menu, above
+    # the registry entry, rather than only through the registry.
+    assert "id: 'project.add'" in app
+    assert "runNamedCommand('project.add')}}>Add project…" in app
+    assert app.index("runNamedCommand('project.add')") < app.index(
+        "runNamedCommand('project.create')}}>Manage projects…"
+    )
+    # Ordering, not literal depths: the exact values must stay free to move above
+    # persistent chrome. test_dialog_layers_stack_above_persistent_chrome owns the
+    # full invariant.
+    style = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+    depths = {
+        name: int(value)
+        for name, value in re.findall(r"\.([a-z-]+)\s*\{[^}]*?z-index:(\d+)", style)
+    }
+    assert depths["project-registry-dialog-layer"] > depths["projects-manager-layer"]
     assert 'class="project-trigger" onClick={openProjectsManager}' in app
     assert "directionRow('Move tab:'" in app
     assert "directionRow('Open in split:'" in app
     assert "directionRow('New terminal in split:'" in app
     assert "export function paneNeighborIds" in layout
     assert "Swap pane with next" not in app
-    assert "Open project note…</button>" not in app[app.index("{contextMenu &&"):app.index("{projectMenu &&")]
+    assert (
+        "Open project note…</button>"
+        not in app[app.index("{contextMenu &&") : app.index("{projectMenu &&")]
+    )

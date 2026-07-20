@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .subprocess_flags import background_creation_flags
+
 
 @dataclass(frozen=True, slots=True)
 class ProjectIdentity:
@@ -51,6 +53,7 @@ async def _git(cwd: Path, *args: str) -> str | None:
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            creationflags=background_creation_flags(),
         )
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=3)
         if process.returncode == 0:

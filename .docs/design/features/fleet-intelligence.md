@@ -35,9 +35,12 @@ The shared attention-observer setting also enables the 30-minute unread-attentio
 ## User-initiated review and knowledge
 
 History can export a reviewable handoff from annotations or create a cross-vendor second
-opinion. The preview contains the full prompt plus bounded current Git status/diff-stat;
-confirmation must return its exact preview token. Only that typed user operation may spawn
-the other backend, after which it records a review lineage edge.
+opinion. A handoff identifies the swe-mux history row and provider-native session, embeds the
+authoritative native transcript path, and explicitly directs the recipient to inspect that file
+for the complete conversation; it does not copy transcript content. The review preview contains
+the full prompt plus bounded current Git status/diff-stat; confirmation must return its exact
+preview token. Only that typed user operation may spawn the other backend, after which it records
+a review lineage edge.
 
 The experience index stores error/resolution evidence across backends; the browser presents
 these entries as `Learned fixes`. A similar live tool failure may create a `prior-resolution`

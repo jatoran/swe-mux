@@ -8,6 +8,8 @@ import shutil
 import time
 from typing import Any
 
+from .subprocess_flags import background_creation_flags
+
 
 def _urls(value: Any) -> list[str]:
     found: list[str] = []
@@ -33,6 +35,7 @@ async def _status(executable: str, command: str) -> tuple[Any | None, str]:
             "--json",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            creationflags=background_creation_flags(),
         )
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=4)
     except (OSError, TimeoutError) as exc:
@@ -67,6 +70,7 @@ async def tailscale_ipv4(executable: str | None = None) -> str | None:
             "-4",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            creationflags=background_creation_flags(),
         )
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=4)
     except (OSError, TimeoutError):

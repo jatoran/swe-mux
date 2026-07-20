@@ -34,6 +34,7 @@ venv/
 dist/
 build/
 out/
+packaging/swe-mux.ico
 .runtime/
 
 # === JetBrains IDEs ===

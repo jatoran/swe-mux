@@ -3,6 +3,8 @@
 ## Vocabulary
 
 - Daemon: `muxd`; owns PTYs, persistence, HTTP, WebSockets, and background workers.
+- Desktop supervisor: optional Windows `swe-mux` process; owns WebView2 window, tray, login
+  startup, and a separately running managed daemon.
 - Project: explicit canonical folder and the only session/layout/resource container.
 - Group: optional sidebar-only organization of Projects.
 - Session: one ConPTY-hosted process with immutable Project ownership.
@@ -16,7 +18,9 @@
 ## Process model
 
 ```text
-Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell/agent CLI
+WebView2/browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell/agent CLI
+       ▲                                  ▲
+       └── Windows tray supervisor ───────┘ secret loopback shutdown only
                                │       │             └── descendants/listeners
                                │       ├── Projects + Groups + history/evidence in SQLite
                                │       ├── project `.swe-mux/` note/config/files
@@ -28,6 +32,9 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
 ## Package boundaries
 
 - `server.py`: transport composition and Project-bound session operations.
+- `desktop.py`: Windows single-instance shell, tray/window lifecycle, login startup, daemon
+  supervision, and desktop control token.
+- `__main__.py`: reusable aiohttp runner and standalone/desktop-child daemon entry.
 - `projects.py`: explicit Project and Group lifecycle.
 - `git_projects.py`: derived Git worktree/repository identity.
 - `project_files.py`: safe project config, note, directory, and file access.
@@ -87,11 +94,16 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
     twice-observed fresh unexpected reset may alert.
 13. Repository tasks execute only after explicit user selection and local trust in the exact
     current bytes of all supported task files. A changed fingerprint returns to untrusted.
+14. Desktop window close/minimize hides the viewport; it never stops the daemon or PTYs. Tray
+    Quit confirms live sessions and requests graceful daemon shutdown through a secret-gated
+    loopback route. A desktop crash leaves the separate daemon process running.
 
 ## Failure modes
 
 - Daemon crash closes the global job and terminates owned child processes.
 - Browser disconnect removes subscribers while PTYs and bounded scrollback remain live.
+- Desktop/tray crash removes only the local desktop viewport. A new supervisor reconnects to a
+  healthy daemon; an unmanaged daemon cannot be terminated through desktop control.
 - Invalid/missing Project roots block creation or spawn before a PTY is allocated.
 - Stale layout/file/note revisions return conflicts rather than overwriting newer data.
 - Project history scans are daemon-local and cancellable. A daemon restart loses job progress,

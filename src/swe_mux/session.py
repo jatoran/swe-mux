@@ -10,7 +10,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .adapters import BackendAdapter, SpawnOptions
 from .event_bus import EventBus
@@ -22,6 +22,41 @@ from .runtime_cwd import Osc7Parser, local_directory_from_osc7
 from .win_jobobj import ReaperJob
 
 log = logging.getLogger(__name__)
+
+# How often the observer looks for the agent having moved to another transcript,
+# how long the current transcript must be quiet first, and how fresh the
+# replacement must be to count as actively written.
+TRANSCRIPT_SWITCH_POLL_SECONDS = 2.0
+TRANSCRIPT_SWITCH_QUIET_SECONDS = 5.0
+TRANSCRIPT_SWITCH_FRESH_SECONDS = 5.0
+
+# A shell prompt rendered while a session is promoted means the nested CLI has
+# exited (the shell is otherwise blocked on it). Prompts within the grace window
+# of promotion are pipeline stragglers from before/around the launch.
+AGENT_EXIT_PROMPT_GRACE_SECONDS = 3.0
+AGENT_EXIT_TRANSCRIPT_QUIET_SECONDS = 2.0
+AGENT_EXIT_CONFIRM_ATTEMPTS = 10
+AGENT_EXIT_CHECK_INTERVAL_SECONDS = 1.0
+
+# Codex currently has no startup hook and does not create its rollout until the
+# first submitted turn.  A short quiet period after live PTY output is therefore
+# the last-resort signal that its interactive prompt has settled.
+AGENT_STARTUP_QUIET_SECONDS = 1.0
+
+
+def terminal_exit_outcome(
+    completion_mode: str, *, stopping: bool, exit_code: int | None, reason: str
+) -> tuple[SessionState, str, str | None]:
+    """Map a PTY root exit to the user-visible terminal lifecycle."""
+    completed = completion_mode == "one_shot" and exit_code == 0
+    state: SessionState = "exited" if stopping or completed else "crashed"
+    final_reason = "completed" if completed else reason
+    detail = (
+        f"exit code {exit_code}"
+        if completion_mode == "one_shot" and exit_code is not None
+        else None
+    )
+    return state, final_reason, detail
 
 
 class ScrollbackBuffer:
@@ -138,6 +173,14 @@ class Session:
             "root_completion_seen": False,
             "codex_scope": "root",
         }
+        # True while the observer replays transcript content that predates its
+        # attachment; state transitions and update fanout are suppressed then.
+        self.observation_replay = False
+        # Set when this PTY was promoted around a nested agent CLI; used to
+        # ignore shell-prompt echoes from just before/around the promotion.
+        self.agent_promoted_at: float | None = None
+        self.agent_exit_check_task: asyncio.Task[Any] | None = None
+        self.agent_ready_task: asyncio.Task[Any] | None = None
         self.output_window: deque[tuple[float, int]] = deque()
         # Native transcripts report tool results by opaque invocation id.  Keep
         # this correlation in memory only; normalized events expose the stable
@@ -285,11 +328,16 @@ class SessionManager:
         project: ProjectIdentity | None = None,
         startup_started_at: float | None = None,
         startup_timing_ms: dict[str, float] | None = None,
+        completion_mode: Literal["interactive", "one_shot"] = "interactive",
     ) -> Session:
         startup_started_at = startup_started_at or time.perf_counter()
         startup_timing_ms = dict(startup_timing_ms or {})
         if backend not in self.adapters:
             raise ValueError(f"unknown backend: {backend}")
+        if completion_mode not in {"interactive", "one_shot"}:
+            raise ValueError(f"unknown completion mode: {completion_mode}")
+        if completion_mode == "one_shot" and backend != "shell":
+            raise ValueError("one-shot completion is available only for shell sessions")
         sid = str(uuid.uuid4())
         native_id = resume_native_id or sid
         resolved_cwd = Path(cwd or Path.cwd()).resolve()
@@ -315,6 +363,7 @@ class SessionManager:
             auto_named=name is None,
             state="running" if backend == "shell" else "starting",
             startup_timing_ms=startup_timing_ms,
+            completion_mode=completion_mode,
         )
         if project is None:
             project_started_at = time.perf_counter()
@@ -561,6 +610,7 @@ class SessionManager:
                     "root_completion_seen": False,
                     "codex_scope": "root",
                 }
+                session.agent_promoted_at = time.time()
                 session.publish_update()
                 await self.history.session_promoted(session.record, str(path))
                 await self.events.emit(
@@ -609,6 +659,7 @@ class SessionManager:
         }
         session.record.state_detail = None
         session.state_source_priority = -1
+        session.agent_promoted_at = time.time()
         if session.record.auto_named:
             session.record.name = Path(session.record.run_cwd or session.record.cwd).name or backend
         session.publish_update()
@@ -664,6 +715,9 @@ class SessionManager:
             "root_completion_seen": False,
             "codex_scope": "root",
         }
+        session.observation_replay = False
+        session.agent_promoted_at = None
+        session.transcript_path = None
         session.record.agent_run_id = None
         session.record.agent_run_started_at = None
         session.record.run_cwd = None
@@ -702,14 +756,98 @@ class SessionManager:
                 session.record.created_at,
                 stop_event,
             )
-        if path:
+        while path and not stop_event.is_set():
             session.transcript_path = path
             native_id = adapter.transcript_native_id(path)
             if native_id:
                 session.record.native_session_id = native_id
             await self._await_registration(session)
             await self.history.session_promoted(session.record, str(path))
-            await observe_transcript(session, path, self.events, stop_event)
+            observe_task = asyncio.create_task(
+                observe_transcript(session, path, self.events, stop_event),
+                name=f"observe-tail-{session.record.id}",
+            )
+            try:
+                path = await self._watch_transcript_switch(session, path, stop_event, observe_task)
+            finally:
+                if not observe_task.done():
+                    observe_task.cancel()
+                await asyncio.gather(observe_task, return_exceptions=True)
+
+    async def _watch_transcript_switch(
+        self,
+        session: Session,
+        current: Path,
+        stop_event: asyncio.Event,
+        observe_task: asyncio.Task[Any],
+    ) -> Path | None:
+        """Follow the agent when it moves to another native conversation.
+
+        In-CLI resume/new-conversation switches the CLI to a different transcript
+        file without any daemon-visible lifecycle signal. When the observed file
+        goes quiet and another transcript for the same run cwd is being actively
+        written (and is not owned by another live session), observation moves.
+        """
+        while not stop_event.is_set() and not observe_task.done():
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=TRANSCRIPT_SWITCH_POLL_SECONDS)
+            except TimeoutError:
+                pass
+            if stop_event.is_set() or observe_task.done():
+                break
+            if session.record.backend not in {"claude", "codex"}:
+                break
+            candidate = self._transcript_switch_candidate(session, current)
+            if candidate is not None:
+                await self.events.emit(
+                    "transcript_retargeted",
+                    session_id=session.record.id,
+                    source="daemon",
+                    backend=session.record.backend,
+                    previous=str(current),
+                    path=str(candidate),
+                )
+                return candidate
+        return None
+
+    def _transcript_switch_candidate(self, session: Session, current: Path) -> Path | None:
+        record = session.record
+        now = time.time()
+        try:
+            current_mtime = current.stat().st_mtime
+        except OSError:
+            current_mtime = 0.0
+        if now - current_mtime < TRANSCRIPT_SWITCH_QUIET_SECONDS:
+            return None
+        started = record.agent_run_started_at or record.created_at
+        cwd = Path(record.run_cwd or record.cwd)
+        other_native_ids = {
+            other.record.native_session_id
+            for other in self.sessions.values()
+            if other is not session
+        }
+        other_paths = {
+            str(other.transcript_path)
+            for other in self.sessions.values()
+            if other is not session and other.transcript_path
+        }
+        best: tuple[float, Path] | None = None
+        try:
+            candidates = session.adapter.recent_transcripts(cwd, started)
+        except OSError:
+            return None
+        for modified, path, native_id in candidates:
+            if path == current or str(path) in other_paths:
+                continue
+            if native_id in other_native_ids:
+                continue
+            if (session.adapter.name, native_id) in session.ignored_detection_runs:
+                continue
+            if now - modified > TRANSCRIPT_SWITCH_FRESH_SECONDS:
+                continue
+            if best is None or modified > best[0]:
+                best = (modified, path)
+        return best[1] if best else None
 
     async def _fanout(self, session: Session) -> None:
         while True:
@@ -741,12 +879,96 @@ class SessionManager:
                 timing_changed = True
             for uri in prompt_uris:
                 self._queue_runtime_cwd(session, uri)
+            if prompt_uris and session.record.backend in {"claude", "codex"}:
+                self._queue_agent_exit_check(session)
             session.scrollback.append(chunk)
             session.publish_output(chunk)
+            if session.record.backend in {"claude", "codex"} and session.record.state == "starting":
+                self._queue_agent_ready_check(session)
             if timing_changed:
                 session.publish_update()
             if prompt_uris:
                 self._schedule_startup_measurement(session, "first_prompt")
+
+    def _queue_agent_ready_check(self, session: Session) -> None:
+        """Use settled PTY output only while semantic startup evidence is absent."""
+
+        task = session.agent_ready_task
+        if task is not None and not task.done():
+            return
+        task = asyncio.create_task(
+            self._confirm_agent_ready(session), name=f"agent-ready-{session.record.id}"
+        )
+        session.agent_ready_task = task
+        session.tasks.add(task)
+        task.add_done_callback(session.tasks.discard)
+
+    async def _confirm_agent_ready(self, session: Session) -> None:
+        while (
+            not session.stopping
+            and session.record.state == "starting"
+            and session.pty.isalive()
+        ):
+            quiet_for = time.time() - session.record.last_activity_ts
+            remaining = AGENT_STARTUP_QUIET_SECONDS - quiet_for
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+                continue
+            previous = session.record.state
+            if session.transition("idle", None, source="pty"):
+                await self.events.emit(
+                    "state_changed",
+                    session_id=session.record.id,
+                    source="pty",
+                    previous=previous,
+                    state="idle",
+                    detail=None,
+                    capability="startup_quiet_fallback",
+                )
+            return
+
+    def _queue_agent_exit_check(self, session: Session) -> None:
+        promoted_at = session.agent_promoted_at
+        if promoted_at is None or time.time() - promoted_at < AGENT_EXIT_PROMPT_GRACE_SECONDS:
+            return
+        if session.agent_exit_check_task and not session.agent_exit_check_task.done():
+            return
+        task = asyncio.create_task(
+            self._confirm_agent_exit(session), name=f"agent-exit-{session.record.id}"
+        )
+        session.agent_exit_check_task = task
+        session.tasks.add(task)
+        task.add_done_callback(session.tasks.discard)
+
+    async def _confirm_agent_exit(self, session: Session) -> None:
+        """Demote a promoted session once its shell prompt has returned.
+
+        The shim posts an authenticated demotion, but agents launched without it
+        (profile PATH rewrites, manual launches) would otherwise stay [claude]/
+        [codex] forever. The transcript-quiet requirement keeps a still-writing
+        agent from being demoted by any stray prompt sequence; the bounded retry
+        absorbs exit-time transcript writes.
+        """
+        for _attempt in range(AGENT_EXIT_CONFIRM_ATTEMPTS):
+            await asyncio.sleep(AGENT_EXIT_CHECK_INTERVAL_SECONDS)
+            if session.stop_event.is_set() or session.stopping:
+                return
+            backend = session.record.backend
+            if backend not in {"claude", "codex"}:
+                return
+            path = session.transcript_path
+            quiet = True
+            if path is not None:
+                try:
+                    quiet = (
+                        time.time() - path.stat().st_mtime >= AGENT_EXIT_TRANSCRIPT_QUIET_SECONDS
+                    )
+                except OSError:
+                    quiet = True
+            if quiet:
+                native_id = session.agent_lifecycle_id or session.record.native_session_id
+                await self.demote(session.record.id, backend, native_id)
+                return
 
     def _schedule_startup_measurement(self, session: Session, milestone: str) -> None:
         if session.startup_measurement_task is not None:
@@ -877,7 +1099,24 @@ class SessionManager:
     async def _mark_ended(self, session: Session, reason: str) -> None:
         if session.record.state in {"exited", "crashed"}:
             return
-        session.record.state = "exited" if session.stopping else "crashed"
+        exit_status = getattr(session.pty, "exit_status", None)
+        exit_code = exit_status() if callable(exit_status) else None
+        session.record.exit_code = exit_code
+        state, final_reason, detail = terminal_exit_outcome(
+            session.record.completion_mode,
+            stopping=session.stopping,
+            exit_code=exit_code,
+            reason=reason,
+        )
+        session.record.state = state
+        if detail is not None:
+            session.record.state_detail = detail
+        release_pty = getattr(session.pty, "release", None)
+        if callable(release_pty):
+            # Session scrollback is independent of ConPTY. Detach the ended
+            # pseudoconsole now so its conhost cannot live as long as this
+            # retained crashed/completed session record.
+            release_pty()
         session.record.last_activity_ts = time.time()
         self._schedule_startup_measurement(session, "session_end")
         if session.startup_measurement_task:
@@ -888,19 +1127,20 @@ class SessionManager:
             session.cwd_debounce_task.cancel()
         if session.record.agent_run_id:
             await self.history.update_agent_summary(session.record)
-            await self.history.agent_run_ended(session.record, reason)
+            await self.history.agent_run_ended(session.record, final_reason)
         for adapter in self.adapters.values():
             adapter.cleanup(session.record.id)
         if session.ownership_job:
             session.ownership_job.close()
             session.ownership_job = None
-        await self.history.session_ended(session.record, reason)
-        session.publish_exit(reason)
+        await self.history.session_ended(session.record, final_reason)
+        session.publish_exit(final_reason)
         await self.events.emit(
-            "session_exited" if session.stopping else "session_crashed",
+            "session_exited" if session.record.state == "exited" else "session_crashed",
             session_id=session.record.id,
             source="pty",
-            reason=reason,
+            reason=final_reason,
+            exit_code=exit_code,
         )
         if session.transcript_path and session.transcript_path.is_file():
             try:
