@@ -5,13 +5,13 @@ import pytest
 from swe_mux.spawn_contract import SpawnRequest
 
 
-def test_spawn_contract_normalizes_legacy_and_structured_fields() -> None:
+def test_spawn_contract_normalizes_structured_fields() -> None:
     request = SpawnRequest.parse(
-        {"backend": "shell", "exe": "pwsh", "exe_args": ["-NoLogo"], "space": "dev"}
+        {"backend": "shell", "exe": "pwsh", "exe_args": ["-NoLogo"], "project_id": "dev"}
     )
     assert request.executable == "pwsh"
     assert request.argv == ("-NoLogo",)
-    assert request.space_id == "dev"
+    assert request.project_id == "dev"
 
 
 @pytest.mark.parametrize(
@@ -20,6 +20,8 @@ def test_spawn_contract_normalizes_legacy_and_structured_fields() -> None:
         ({"backend": "claude", "profile_id": "pwsh"}, "profile_id"),
         ({"profile_id": "pwsh", "executable": "pwsh"}, "executable"),
         ({"argv": "--bad"}, "argv"),
+        ({"backend": "shell"}, "project_id"),
+        ({"backend": "shell", "project_id": "dev", "cwd": "elsewhere"}, "cwd"),
         ({"surprise": True}, "surprise"),
     ],
 )

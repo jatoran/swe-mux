@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, TypeVar
 
+from .sqlite_store import database_operation_lock, run_sqlite_operation
+
 T = TypeVar("T")
 
 AUTOMATION_SCHEMA = """
@@ -126,6 +128,7 @@ class AutomationStore:
 
     def __init__(self, path: Path) -> None:
         self._path = path
+        self._operation_lock = database_operation_lock(path)
         self._closed = False
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-automation-db")
         self._executor.submit(self._connect).result()
@@ -135,15 +138,18 @@ class AutomationStore:
         # executor), so there is never concurrent access. check_same_thread=False
         # additionally tolerates benign cross-thread introspection (tests reading
         # ``_db`` directly, a fallback close) without weakening that guarantee.
-        self._db = sqlite3.connect(self._path, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        _tune_connection(self._db)
-        self._db.executescript(AUTOMATION_SCHEMA)
-        self._db.commit()
+        with self._operation_lock:
+            self._db = sqlite3.connect(self._path, check_same_thread=False)
+            self._db.row_factory = sqlite3.Row
+            _tune_connection(self._db)
+            self._db.executescript(AUTOMATION_SCHEMA)
+            self._db.commit()
 
     async def _run(self, fn: Callable[[], T]) -> T:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, fn)
+        return await loop.run_in_executor(
+            self._executor, run_sqlite_operation, self._db, self._operation_lock, fn
+        )
 
     async def create_firing(
         self,
@@ -185,6 +191,7 @@ class AutomationStore:
                 )
                 self._db.commit()
             except sqlite3.IntegrityError:
+                self._db.rollback()
                 return None
             return identity
 

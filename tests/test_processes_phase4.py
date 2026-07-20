@@ -37,9 +37,7 @@ class FakeInspector:
 
 
 def fake_sessions() -> Any:
-    session = SimpleNamespace(
-        record=SimpleNamespace(id="session-a", space_id="default", pid=10)
-    )
+    session = SimpleNamespace(record=SimpleNamespace(id="session-a", project_id="default", pid=10))
     return SimpleNamespace(
         sessions={"session-a": session},
         resolve=lambda identity: session if identity == "session-a" else None,
@@ -63,9 +61,7 @@ async def test_preview_registration_requires_loopback_and_session_listener() -> 
         await registry.register("session-a", "http://127.0.0.1:4321/?target=other")
     with pytest.raises(ValueError, match="approval"):
         await registry.register("session-a", "http://127.0.0.1:9999/")
-    approved = await registry.register(
-        "session-a", "http://127.0.0.1:9999/", approved=True
-    )
+    approved = await registry.register("session-a", "http://127.0.0.1:9999/", approved=True)
     assert approved.source == "user-approved"
 
 
@@ -226,11 +222,9 @@ def test_preview_leaf_attaches_without_losing_terminal() -> None:
         direction="horizontal",
     )
     assert layout_terminal_ids(layout) == ["terminal-a"]
-    assert layout["root"]["second"] == {  # type: ignore[index]
-        "type": "leaf",
-        "kind": "preview",
-        "id": "preview-a",
-    }
+    assert layout["root"]["second"]["children"] == [  # type: ignore[index]
+        {"type": "leaf", "kind": "preview", "id": "preview-a"}
+    ]
 
 
 def test_process_reconciliation_records_descendant_exit(
@@ -240,9 +234,7 @@ def test_process_reconciliation_records_descendant_exit(
 
     monkeypatch.setattr(processes, "psutil", SimpleNamespace(net_connections=lambda **_: []))
     inspector = ProcessInspector(cast(Any, fake_sessions()), EventBus())
-    child = OwnedProcess(
-        55, 10, "session-a", "server", "server", 1.0, None, 0, 1, [], []
-    )
+    child = OwnedProcess(55, 10, "session-a", "server", "server", 1.0, None, 0, 1, [], [])
     samples = [[child], []]
 
     def collect(_session: Any, _conn_map: Any) -> list[OwnedProcess]:
@@ -265,7 +257,7 @@ async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources
     records = {
         "session-a": SimpleNamespace(
             id="session-a",
-            space_id="space-a",
+            project_id="project-a",
             trusted_scope_id="scope-a",
             agent_run_id=None,
             run_repo_group_id=None,
@@ -273,7 +265,7 @@ async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources
         ),
         "session-b": SimpleNamespace(
             id="session-b",
-            space_id="space-b",
+            project_id="project-b",
             trusted_scope_id="scope-b",
             agent_run_id="run-b",
             run_repo_group_id="repo-b",
@@ -301,7 +293,7 @@ async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources
     second = OwnedProcess(
         77, 20, "session-b", "worker", "worker", 2.0, None, 7.5, 64 * 1024 * 1024, [], []
     )
-    inspector.owned={(55,1.0):first,(77,2.0):second}
+    inspector.owned = {(55, 1.0): first, (77, 2.0): second}
     monkeypatch.setattr(inspector, "_collect_all", lambda: [first, second])
 
     result = await inspector.snapshot_all()
@@ -310,7 +302,7 @@ async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources
         "session-a",
         "session-b",
     ]
-    assert result["sessions"][0]["space_id"] == "space-a"
+    assert result["sessions"][0]["project_id"] == "project-a"
     assert result["totals"] == {
         "processes": 2,
         "cpu_pct": 20.0,
@@ -318,3 +310,68 @@ async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources
         "listeners": 1,
         "connections": 1,
     }
+    assert result["daemon"]["pid"] > 0
+
+
+def test_daemon_resource_sample_excludes_session_attributed_descendants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from swe_mux import processes
+
+    class OneShot:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    class FakeProcess:
+        def __init__(self, pid: int, created: float, memory: int, children: list[Any] | None = None):
+            self.pid = pid
+            self.created = created
+            self.memory = memory
+            self._children = children or []
+
+        def children(self, recursive: bool = False) -> list[Any]:
+            assert recursive is True
+            return self._children
+
+        def oneshot(self) -> OneShot:
+            return OneShot()
+
+        def create_time(self) -> float:
+            return self.created
+
+        def cpu_times(self) -> Any:
+            return SimpleNamespace(user=1.0, system=0.5)
+
+        def memory_info(self) -> Any:
+            return SimpleNamespace(rss=self.memory)
+
+    daemon_pid = processes.os.getpid()
+    attributed = FakeProcess(20, 2.0, 900)
+    helper = FakeProcess(30, 3.0, 300)
+    root = FakeProcess(daemon_pid, 1.0, 100, [attributed, helper])
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(
+            Process=lambda pid: root,
+            NoSuchProcess=RuntimeError,
+            AccessDenied=PermissionError,
+        ),
+    )
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+    seen: set[tuple[int, float]] = set()
+
+    result = inspector._collect_daemon_resources({20}, seen)
+
+    assert result == {
+        "pid": daemon_pid,
+        "processes": 2,
+        "cpu_pct": 0.0,
+        "memory_bytes": 400,
+    }
+    assert (20, 2.0) not in seen
+    assert (daemon_pid, 1.0) in seen
+    assert (30, 3.0) in seen

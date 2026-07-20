@@ -33,9 +33,7 @@ def _promote(backend: str, native_id: str) -> None:
 
 
 def _demote(backend: str, native_id: str) -> None:
-    _notify_lifecycle(
-        "MUX_DEMOTE_URL", {"backend": backend, "native_id": native_id}
-    )
+    _notify_lifecycle("MUX_DEMOTE_URL", {"backend": backend, "native_id": native_id})
 
 
 def _value_after(args: list[str], flag: str) -> str | None:
@@ -89,19 +87,11 @@ def _launch(executable: str, args: list[str]) -> int:
         resolved = shutil.which(Path(executable).stem, path=os.pathsep.join(search_entries))
     executable = resolved or executable
     executable_path = Path(executable)
-    if (
-        os.name == "nt"
-        and executable_path.name.casefold() in {"codex.cmd", "codex.bat"}
-    ):
+    if os.name == "nt" and executable_path.name.casefold() in {"codex.cmd", "codex.bat"}:
         # npm's batch shim cannot preserve Codex's JSON-valued `-c notify=...`
         # argument through cmd.exe. Launch its underlying JS entrypoint directly.
         codex_js = (
-            executable_path.parent
-            / "node_modules"
-            / "@openai"
-            / "codex"
-            / "bin"
-            / "codex.js"
+            executable_path.parent / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
         )
         if codex_js.is_file():
             bundled_node = executable_path.parent / "node.exe"

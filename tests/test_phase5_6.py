@@ -38,12 +38,8 @@ def test_shell_profile_cwd_integration_is_explicit_and_process_local(tmp_path: P
     executable = tmp_path / "pwsh.exe"
     executable.write_bytes(b"fixture")
     plain = ShellProfile("plain", "Plain", str(executable), ["-NoLogo"])
-    integrated = ShellProfile(
-        "live", "Live", str(executable), ["-NoLogo"], cwd_integration=True
-    )
-    config = Config(
-        shell_profiles=[plain, integrated], default_shell_profile=plain.id
-    )
+    integrated = ShellProfile("live", "Live", str(executable), ["-NoLogo"], cwd_integration=True)
+    config = Config(shell_profiles=[plain, integrated], default_shell_profile=plain.id)
     assert resolve_profile(config, plain.id, tmp_path).argv == ("-NoLogo",)
     wrapped = resolve_profile(config, integrated.id, tmp_path)
     assert "-Command" in wrapped.argv
@@ -58,9 +54,7 @@ async def test_multiple_agent_runs_in_one_shell_keep_distinct_history_owners(
     tmp_path: Path,
 ) -> None:
     history = HistoryIndex(tmp_path / "mux.db")
-    record = SessionRecord(
-        "pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", []
-    )
+    record = SessionRecord("pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", [])
     record.spawn_cwd = str(tmp_path)
     record.spawn_project_scope_id = "spawn-scope"
     await history.session_started(record, None)
@@ -91,9 +85,7 @@ async def test_multiple_agent_runs_in_one_shell_keep_distinct_history_owners(
 
 
 def test_hook_scope_is_authoritative_and_payload_cannot_spoof_it(tmp_path: Path) -> None:
-    record = SessionRecord(
-        "pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", []
-    )
+    record = SessionRecord("pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", [])
     record.spawn_project_scope_id = "trusted-spawn"
     record.runtime_project_scope_id = "untrusted-runtime"
     session = SimpleNamespace(record=record)
@@ -102,9 +94,7 @@ def test_hook_scope_is_authoritative_and_payload_cannot_spoof_it(tmp_path: Path)
         EventBus(),
         cast(Any, SimpleNamespace(sessions={"pty": session})),
     )
-    event = MuxEvent(
-        1, "pty", "pty", "command_failed", {"project_scope_id": "spoofed"}
-    )
+    event = MuxEvent(1, "pty", "pty", "command_failed", {"project_scope_id": "spoofed"})
     assert engine._matches(HookRule({"project_scope_id": "trusted-spawn"}, {}), event)
     assert not engine._matches(HookRule({"project_scope_id": "spoofed"}, {}), event)
     record.backend = "claude"
@@ -129,9 +119,7 @@ async def test_runtime_cwd_switch_rate_limit_prevents_poll_target_churn(
         return None
 
     monkeypatch.setattr(asyncio, "sleep", immediate_sleep)
-    record = SessionRecord(
-        "pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", []
-    )
+    record = SessionRecord("pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", [])
     fake = SimpleNamespace(
         record=record,
         stop_event=asyncio.Event(),
@@ -151,9 +139,7 @@ async def test_fallback_detection_ignores_a_native_run_that_already_exited(
 ) -> None:
     transcript = tmp_path / "native-ended.jsonl"
     transcript.write_text("{}\n", encoding="utf-8")
-    record = SessionRecord(
-        "pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", []
-    )
+    record = SessionRecord("pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", [])
 
     class Pty:
         checks = 0
@@ -170,9 +156,7 @@ async def test_fallback_detection_ignores_a_native_run_that_already_exited(
         record=record,
         pty=Pty(),
         stop_event=asyncio.Event(),
-        scrollback=SimpleNamespace(
-            position=0, bytes_since=lambda _position: b"PS> claude"
-        ),
+        scrollback=SimpleNamespace(position=0, bytes_since=lambda _position: b"PS> claude"),
         ignored_detection_runs={("claude", "native-ended")},
     )
     manager = cast(Any, SessionManager.__new__(SessionManager))
@@ -188,9 +172,7 @@ async def test_fallback_detection_ignores_a_native_run_that_already_exited(
 async def test_fallback_detection_ignores_agent_names_retained_before_demotion(
     tmp_path: Path,
 ) -> None:
-    record = SessionRecord(
-        "pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", []
-    )
+    record = SessionRecord("pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", [])
     scrollback = ScrollbackBuffer(128)
     scrollback.append(b"old Claude output mentioned codex\r\nPS> ")
 
@@ -241,9 +223,7 @@ async def test_codex_demotes_by_stable_launcher_id_after_native_id_discovery(
     manager = cast(Any, SessionManager.__new__(SessionManager))
     manager.sessions = {record.id: session}
     manager.adapters = {"shell": shell, "codex": codex}
-    manager.history = SimpleNamespace(
-        update_agent_summary=AsyncMock(), agent_run_ended=AsyncMock()
-    )
+    manager.history = SimpleNamespace(update_agent_summary=AsyncMock(), agent_run_ended=AsyncMock())
     manager.events = SimpleNamespace(emit=AsyncMock())
     manager._start_detection = lambda _session: None
 

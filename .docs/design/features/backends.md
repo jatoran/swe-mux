@@ -15,6 +15,9 @@
 
 ## Operations
 
+- Claude and Codex continue to use their ordinary shared home directories. Provider account
+  selection swaps only the system auth file, so adapters, shims, configuration, skills,
+  transcript discovery, and live-process behavior require no account-specific launch path.
 - Claude explicit spawn uses `--session-id`; resume uses `--resume`.
 - Shell child PATH begins with generated shims that resolve the real executable before
   PATH modification, assign/retain the native ID, inject hooks, then POST promotion
@@ -35,6 +38,9 @@
 - Codex explicit spawn receives a `notify` program; resume uses `codex resume`.
 - Hooks provide low-latency state changes. Native transcripts are authoritative fallbacks,
   including when an agent is launched outside a shim or an agent mode omits a hook.
+- Normalized lifecycle events carry `scope=root|subagent`. Claude sidechains and Agent/Task
+  tool lifecycles, Codex `sub_agent_activity`, and Codex child rollouts are child evidence;
+  none can make the root idle or ready.
 - Claude is working after user/tool activity, awaiting on permission/elicitation prompts,
   and ready after `Stop`, `turn_duration`, or a final text response whose
   `stop_reason` is `end_turn`.
@@ -53,6 +59,14 @@
 - Adapters own recent-transcript discovery and native-ID extraction. Codex matches the
   exact native ID when available and uses bounded cwd/time correlation only for new
   sessions whose CLI chooses the native ID internally.
+- Claude project directories use the CLI's current non-alphanumeric-to-hyphen cwd encoding.
+  Codex reads the active `CODEX_HOME` (falling back to `~/.codex`). Child rollouts with
+  `parent_thread_id` are excluded from promotion and external-history reconciliation.
+- Parser schema v2 publishes recognized/unknown counts and bounded signatures. Sustained
+  unknown-record drift degrades semantic capability and forces delivery readiness unknown.
+- Operational telemetry has provider-specific parser versions. It records explicit native
+  tool calls/results, duration/error evidence, named skill invocations, and compactions;
+  unsupported or unknown records remain coverage diagnostics rather than inferred events.
 
 ## Key files
 
@@ -61,3 +75,4 @@
 - Hook command: `src/swe_mux/hook_client.py`
 - CLI shims: `src/swe_mux/launchers.py`, `src/swe_mux/agent_launcher.py`
 - Promotion lifecycle: `src/swe_mux/session.py`
+- Replay/readiness contract: `features/delivery-readiness.md`

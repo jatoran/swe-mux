@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "Current Claude root transcripts encode a child lifecycle as an Agent tool call/result without letting the child complete the root.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "delegate"}}},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "tool_use", "id": "child-1", "name": "Agent"}], "stop_reason": "tool_use"}}},
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": [{"type": "tool_result", "tool_use_id": "child-1", "content": "child done", "is_error": false}]}}, "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "root done"}], "stop_reason": "end_turn"}}},
+    {"kind": "terminal", "mode": "normal"},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "Agent"},
+      {"type": "subagent_activity", "source": "transcript", "scope": "subagent", "kind": "started"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "Agent", "success": true},
+      {"type": "subagent_activity", "source": "transcript", "scope": "subagent", "kind": "completed"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "parser": {"status": "ready", "recognized": 4, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "safe",
+    "delivery_reason": "all_required_evidence_positive"
+  }
+}

@@ -1,5 +1,10 @@
 # Read aloud and dictation
 
+## What it is
+
+Optional per-session reply synthesis plus browser-native dictation, isolated from terminal,
+history, Project, and transcript correctness.
+
 ## Contract
 
 Read aloud converts an agent session's completed replies into playable audio clips. It is
@@ -53,6 +58,11 @@ PTY, session state, transcripts, history, or projects.
   HTTPS; plain tailnet HTTP cannot use the microphone) and inserts the transcript through
   the ordinary paste path without submitting. Mobile keyboards already provide dictation,
   so the chip hides on coarse pointers. No audio reaches the daemon.
+- The browser reports only capability facts: secure-context availability, recognizer
+  availability, backend name, and a diagnostic reason. Audio and recognized transcript text
+  are never retained as analytics. Browser/vendor support and privacy behavior vary; mobile
+  keyboard dictation is the fallback. Local Whisper/faster-whisper or Windows-native
+  recognition is a separate opt-in product decision, not an implicit daemon service.
 
 ## Key files
 

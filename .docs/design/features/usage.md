@@ -5,6 +5,10 @@
 - Optional cached summaries for Claude and Codex from one unified, locally installed
   `ccusage` CLI.
 - This is historical cost/token analytics, not live context-window truth or quota failover.
+- Provider subscription windows and account switching belong to
+  `provider-accounts.md`; the two caches and refresh workers are independent.
+- Durable quota/reset/correlation, explicit tool/skill metrics, and compaction history belong
+  to `operational-telemetry.md`; they share the dashboard but not the `ccusage` cache.
 
 ## Operations and invariants
 
@@ -38,4 +42,5 @@
 - Config: `src/swe_mux/config.py`
 - Settings UI: `frontend/src/Settings.tsx`
 - Dashboard UI: `frontend/src/UsageDashboard.tsx`
+- Operational store: `src/swe_mux/operational_telemetry.py`
 - Fixtures/tests: `tests/fixtures/usage/`, `tests/test_usage_phase4.py`

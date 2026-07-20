@@ -1,123 +1,84 @@
 # Architecture
 
-## Scope
-
-- In: process topology, ownership, package boundaries, session lifecycle.
-- Out: detailed endpoint schemas (`interfaces.md`); final feature roadmap (`../development/AGENT_MUX_SPEC.md`).
-
 ## Vocabulary
 
-- Daemon: `muxd`; owns PTYs, registries, event bus, persistence, HTTP, and WebSockets.
-- Session: one process hosted by one ConPTY.
-- Adapter: backend-specific spawn/resume/transcript/exit behavior.
-- Pane: browser layout leaf attached to a terminal, note, or preview resource.
-- Space: persistent named group of sessions and pane layout.
-- Project scope: concrete normalized worktree/filesystem root that owns `.swe-mux/` and
-  behavioral defaults. Repository group: Git common/remote-derived display/history
-  grouping only.
-- Artifact: durable project-resident file relationship with immutable owning scope and
-  last-known logical owner metadata.
-- Universal hook: one machine-owned normalized event rule. Observer: a stateless,
-  read-only OpenRouter call whose schema-validated result becomes an annotation or
-  provider-neutral notification. Annotation: durable derived metadata owned by an agent run.
+- Daemon: `muxd`; owns PTYs, persistence, HTTP, WebSockets, and background workers.
+- Project: explicit canonical folder and the only session/layout/resource container.
+- Group: optional sidebar-only organization of Projects.
+- Session: one ConPTY-hosted process with immutable Project ownership.
+- Pane/tab: one browser viewport region containing mixed terminal, preview, or Project-resource
+  tabs; presentation is independent of process/file lifetime.
+- Git scope/repository group: derived status/history metadata, not a canonical Project.
 
 ## Process model
 
 ```text
 Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell/agent CLI
                                │       │             └── descendants/listeners
-                               │       ├── global + nested Win32 jobs
-                               │       ├── Git/events/legacy hooks/usage workers
-                               │       ├── bounded automation queue ──> OpenRouter
-                               │       ├── fleet evidence + attention/interlocks
-                               │       └── project `.swe-mux/` files
-                               └── SQLite history/events/spaces/scopes/artifacts/automation
+                               │       ├── Projects + Groups + history/evidence in SQLite
+                               │       ├── project `.swe-mux/` note/config/files
+                               │       ├── Git/events/usage/account workers
+                               │       └── bounded automation ──> OpenRouter
+                               └── global + per-session Win32 jobs
 ```
 
-## Deployment topology
+## Package boundaries
 
-- aiohttp listens on localhost plus the detected Tailscale IPv4 when
-  `tailnet_enabled = true` (default). Failure to detect Tailscale degrades to localhost.
-- Listener selection never uses `0.0.0.0` or a LAN interface. `--local-only` suppresses
-  the tailnet site for one daemon run.
-- Direct tailnet HTTP is the primary remote path. Tailscale provides transport encryption
-  and policy; optional Tailscale Serve adds browser-recognized HTTPS.
-- No swe-mux remote bearer/login path exists.
-
-## Boundaries
-
-- `src/swe_mux/server.py`: transport composition; no backend-specific CLI knowledge.
-- `src/swe_mux/session.py`: live registry, spawn/stop, scrollback, PTY fanout.
-- `src/swe_mux/pty_host.py`: only module importing `winpty`.
-- `src/swe_mux/win_jobobj.py`: only module calling Win32 job APIs.
-- `src/swe_mux/adapters/`: executable flags, resume syntax, transcript paths, graceful exit keys.
-- `src/swe_mux/launchers.py` + `agent_launcher.py`: mux-local CLI shims and authenticated in-place shell promotion.
-- `src/swe_mux/history.py`: SQLite schema and serialized access.
-- `src/swe_mux/reconcile.py`: bounded background discovery of external native transcripts.
-- `src/swe_mux/project_files.py` + `projects.py`: concrete scope/repository grouping and
-  explicit, revisioned project-local config/Markdown notes.
-- `src/swe_mux/processes.py`: bounded descendant reconciliation, ownership-checked
-  actions, loopback listener discovery, and preview registration.
-- `src/swe_mux/usage.py`: optional, cached, non-blocking external usage normalization.
-- `src/swe_mux/automation.py`: normalized event/rule validation, transcript slices, bounded
-  scheduling, deterministic actions, observers, budgets, and built-in observer definitions.
-- `src/swe_mux/automation_store.py`: annotations, firing/action/call evidence, checkpoints,
-  budgets, notifications, lineage, experiences, batches, and model-cache persistence.
-- `src/swe_mux/openrouter.py` + `secret_store.py`: fixed-origin provider and write-only
-  platform secret boundary.
-- `src/swe_mux/fleet_intelligence.py`: deterministic attention evidence, environment
-  interlocks, absence reports, experience suggestions, and actuation-gate diagnostics.
-- `src/swe_mux/voice.py`: read-aloud clip pipeline — TTS engine boundary (edge-tts/SAPI),
-  bounded app-owned audio cache, and the only non-observer OpenRouter call (spoken
-  summaries, ledgered under `builtin:voice-summary`).
-- `src/swe_mux/meta_hooks.py`: isolated legacy last-known-good compatibility engine.
-- `frontend/src/`: Preact state and xterm rendering; talks only through public HTTP/WS contracts.
+- `server.py`: transport composition and Project-bound session operations.
+- `projects.py`: explicit Project and Group lifecycle.
+- `git_projects.py`: derived Git worktree/repository identity.
+- `project_files.py`: safe project config, note, directory, and file access.
+- `project_watcher.py`: leased, non-recursive watches for directories visible in open
+  resource tabs.
+- `session.py`: live registry, spawn/stop, scrollback, PTY fanout.
+- `history.py`: SQLite schema and serialized durable access.
+- `sqlite_store.py`: shared failed-transaction rollback guard for the History, Automation,
+  Operational Telemetry, and Voice connections that use the same WAL database.
+- `adapters/`: backend executable flags, resume syntax, transcripts, and exit behavior.
+- `processes.py`: descendant ownership, process actions, loopback previews.
+- `operational_telemetry.py`: durable bounded process, quota/reset, compaction, and tool
+  evidence plus transcript reconciliation and retention.
+- `provider_accounts.py`: private auth snapshots, provider selection, and safe quota polling.
+- `frontend/src/App.tsx`: Project/Group sidebar and layout coordination.
+- `frontend/src/ProjectResource.tsx`: project note, folder browser, and file tabs.
+- `frontend/src/ProjectNoteEditor.tsx`: controlled CodeMirror lifecycle; value creation and
+  reconciliation run in layout effects so stale props cannot overwrite browser input.
 
 ## Lifecycle invariants
 
-1. `POST /api/sessions` selects an adapter and allocates mux/native IDs.
-2. Adapter returns a platform-neutral `SpawnSpec` with executable, argv, and environment.
-   The PTY host owns platform command-line quoting.
-3. `PtyHost` spawns inside ConPTY, assigns PID to the shared reaper and a per-session
-   nested job, then process reconciliation attributes descendant identity by PID and
-   creation time.
-4. A single fanout task appends output to bounded scrollback and subscriber queues.
-5. Each `/pty/{id}` attach atomically subscribes, then receives revisioned state,
-   replay brackets/bytes, and live bytes/updates without an attach-boundary gap.
-6. Explicit kill attempts adapter-specific graceful exit, then process-tree force kill.
-7. Unexpected EOF records `crashed`; explicit stop records `exited`.
-8. Project files are data-only, revision checked, and created only by an explicit write.
-9. Preview registration accepts only a detected session-owned or explicitly approved
-   literal-loopback listener. Bounded HTTP/WebSocket traffic retains that immutable
-   destination; raw development ports never become tailnet listeners.
-10. A spawn records immutable spawn scope and agent promotion records immutable run scope.
-    Spaces have no project owner: project/run notes remain project-local while space notes
-    remain app-local, so mixed membership and `cd` never retarget an existing note.
-11. Layout v3 separates process and viewport: split/stack nodes arrange independently
-    killable session leaves, and removing a leaf never terminates its process.
-12. Event persistence precedes bounded automation evaluation. A provider call receives only
-    an explicit normalized slice; no prompt or slice is persisted. Every result is locally
-    schema checked and can map only to the rule-authored annotation/notification action.
-13. Cross-vendor reviews and observer batches require confirmation bound to the exact
-    preview token. Reviews are typed user operations with lineage, never automation actions.
+1. A Project must be created against an existing folder before any session can spawn.
+2. Project creation initializes `.swe-mux/config.toml` and `.swe-mux/notes/project.md`.
+3. `POST /api/sessions` requires `project_id`; the daemon ignores no alternate cwd and
+   always spawns at the canonical root.
+4. Session PATCH cannot change Project ownership. `cd` affects only validated runtime cwd.
+5. Resume and cross-vendor review require a valid target Project and also start at its root.
+6. Layout v6 stores one recursive split tree of mixed-view tab panes and uses optimistic
+   revisions. Closing panes/resources never kills processes or deletes files.
+7. Group updates only change sidebar organization.
+8. Worktree endpoints remain for Git tooling, but the primary UI does not create or display
+   worktrees as Projects, tabs, or sidebar rows.
+9. Preview proxying accepts only bounded loopback destinations attributable to a session or
+   explicitly approved by the user.
+10. Provider system auth is authoritative. Startup derives saved selection from it and never
+    restores registry memory into it; explicit switching atomically replaces only that auth file.
+11. Durable process actions use PID plus creation-time fingerprint and revalidate immediately
+    before acting; suspected orphans are never terminated automatically.
+12. Quota attribution remains probabilistic with an explicit external remainder; only a
+    twice-observed fresh unexpected reset may alert.
 
 ## Failure modes
 
-- Daemon crash ⇒ job handle closes ⇒ child processes terminate.
-- Browser disconnect ⇒ subscriber removed ⇒ PTY and scrollback remain live.
-- Slow browser ⇒ bounded queue drops chunks; reconnect replays current bounded scrollback.
-- Process exit ⇒ EOF sentinel reaches all current subscribers; history exit fields update.
-- Missing frontend build ⇒ `/` returns a build instruction; API remains operational.
-- Missing optional `psutil` or ccusage executable ⇒ the related surface reports a typed
-  unavailable/error status; terminal operation remains unaffected.
-- Missing/invalid OpenRouter key, stale model metadata, budget exhaustion, queue overflow,
-  provider timeout, invalid JSON, or cancellation ⇒ visible automation diagnostics; no PTY,
-  session state, note, transcript, history, or project mutation is affected.
-- TTS engine failure, missing edge-tts, or voice budget exhaustion ⇒ a failed clip record
-  and `voice_clip_failed` event; terminals and agent runs are unaffected.
-
-## References
-
-- `../../src/swe_mux/session.py`
-- `../../src/swe_mux/pty_host.py`
-- `../../frontend/src/TerminalPane.tsx`
+- Daemon crash closes the global job and terminates owned child processes.
+- Browser disconnect removes subscribers while PTYs and bounded scrollback remain live.
+- Invalid/missing Project roots block creation or spawn before a PTY is allocated.
+- Stale layout/file/note revisions return conflicts rather than overwriting newer data.
+- Missing optional integrations report typed unavailable states without affecting terminals.
+- History, automation, telemetry, and voice operations sharing one database are coordinated by
+  a process-wide per-database lock. Failed operations roll back, and returning with an open
+  transaction is rejected, so one feature worker cannot strand or contend for the WAL writer
+  slot and break unrelated terminal spawns or PTY attachment events.
+- Account/quota failures preserve live processes and retain recent successful quota data.
+- Reused/inaccessible process fingerprints remain stale/unverifiable instead of attaching to
+  a live PID. Parser drift remains visible as unknown/unmapped coverage.
+- Passive note-editor prop synchronization can replay the pre-edit value after the first
+  browser input; layout-synchronous creation/reconciliation prevents the resulting input loop.

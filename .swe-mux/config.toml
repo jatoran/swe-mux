@@ -1,1 +1,2 @@
 version = 1
+ignore_patterns = [".pytest-codex-demote", ".pytest-tmp-project-refactor", "test-tmp-codex", ".tmp-orca"]

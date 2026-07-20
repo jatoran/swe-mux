@@ -5,24 +5,26 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1] / "frontend" / "src"
 
 
-def test_automation_dashboard_exposes_rules_evidence_costs_and_reviewed_batches() -> None:
+def test_automation_dashboard_exposes_outcomes_diagnostics_and_reviewed_batches() -> None:
     dashboard = (ROOT / "AutomationDashboard.tsx").read_text(encoding="utf-8")
 
     for surface in (
-        "Canonical rules",
-        "Recent firings",
+        "System observers",
+        "Custom rules",
+        "Run notes",
+        "Attention inbox",
+        "What all-session health watches",
+        "Observed workload telemetry",
+        "What happened while I was away?",
+        "Learned fixes",
+        "Recent knowledge batches",
+        "Recent rule execution",
         "Action results",
         "Observer calls",
-        "Derived annotations",
-        "Attention inbox",
-        "Observed workload telemetry",
-        "Absence report",
-        "Experience index",
-        "Recent observer batches",
     ):
         assert surface in dashboard
-    assert "Select up to 25 ended agent runs" in dashboard
-    assert "never mutates a repository" in dashboard
+    assert "Select up to 25 ended runs" in dashboard
+    assert "never modify a repository" in dashboard
     assert "start reviewed batch" in dashboard
     assert "preview_token:String(batchPreview?.preview_token" in dashboard
 

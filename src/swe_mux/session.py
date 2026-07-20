@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import logging
 import secrets
 import time
 import uuid
@@ -12,12 +13,14 @@ from typing import Any
 
 from .adapters import BackendAdapter, SpawnOptions
 from .event_bus import EventBus
+from .git_projects import ProjectIdentity, resolve_project
 from .history import HistoryIndex
 from .models import GitState, SessionRecord, SessionState
-from .projects import ProjectIdentity, resolve_project
 from .pty_host import PtyHost
 from .runtime_cwd import Osc7Parser, local_directory_from_osc7
 from .win_jobobj import ReaperJob
+
+log = logging.getLogger(__name__)
 
 
 class ScrollbackBuffer:
@@ -99,6 +102,7 @@ class Session:
         self.ownership_job = ownership_job
         self.startup_started_at = startup_started_at or time.perf_counter()
         self.startup_measurement_task: asyncio.Task[Any] | None = None
+        self.registration_task: asyncio.Task[Any] | None = None
         self.attachments_seen = 0
         # Exactly one browser connection may write terminal-generated responses
         # and user keystrokes. Without this, two attached xterms both answer
@@ -124,6 +128,15 @@ class Session:
         self.cwd_switches: deque[float] = deque()
         self.cwd_telemetry_dropped = 0
         self.last_input_event_ts = 0.0
+        self.last_input_report_ts = 0.0
+        self.input_revision = 0
+        self.terminal_mode: str | None = None
+        self.terminal_mode_updated_at = 0.0
+        self.observation_state: dict[str, Any] = {
+            "root_turn_active": False,
+            "root_completion_seen": False,
+            "codex_scope": "root",
+        }
         self.output_window: deque[tuple[float, int]] = deque()
         # Native transcripts report tool results by opaque invocation id.  Keep
         # this correlation in memory only; normalized events expose the stable
@@ -261,7 +274,7 @@ class SessionManager:
         backend: str,
         name: str | None,
         cwd: str | None,
-        space_id: str,
+        project_id: str,
         exe: str | None = None,
         args: list[str] | None = None,
         resume_native_id: str | None = None,
@@ -291,7 +304,7 @@ class SessionManager:
         record = SessionRecord(
             sid,
             name or f"{backend}-{sid[:6]}",
-            space_id,
+            project_id,
             backend,
             native_id,
             str(resolved_cwd),
@@ -308,7 +321,7 @@ class SessionManager:
             startup_timing_ms["project_resolution"] = round(
                 (time.perf_counter() - project_started_at) * 1000, 1
             )
-        record.project_id = project.id
+        record.repository_id = project.id
         record.project_label = project_label or project.label
         record.project_root = project.root
         record.project_scope_id = project.id
@@ -349,13 +362,15 @@ class SessionManager:
             },
         )
         pty_started_at = time.perf_counter()
-        pty.spawn()
-        startup_timing_ms["pty_spawn"] = round(
-            (time.perf_counter() - pty_started_at) * 1000, 1
-        )
+        # winpty/ConPTY process creation is synchronous and can be slow when Windows
+        # security scanning or a shell profile is busy. Keep it off the aiohttp loop
+        # so the UI, event stream, and other terminals stay responsive meanwhile.
+        pty.prepare()
+        await asyncio.to_thread(pty.spawn)
+        startup_timing_ms["pty_spawn"] = round((time.perf_counter() - pty_started_at) * 1000, 1)
         record.pid = pty.pid
+        record.process_job_assignment = pty.reaper_assignment
         registration_started_at = time.perf_counter()
-        await self.history.register_project_scope(project)
         ownership_job: ReaperJob | None = None
         ownership_error: str | None = None
         create_child = getattr(self.reaper, "create_child", None)
@@ -363,8 +378,10 @@ class SessionManager:
             try:
                 ownership_job = create_child()
                 ownership_job.assign(record.pid)
+                record.process_job_assignment += ";nested_session_job_assigned"
             except OSError as exc:
                 ownership_error = str(exc)
+                record.process_job_assignment += f";nested_session_job_failed:{ownership_error}"
                 if ownership_job:
                     ownership_job.close()
                 ownership_job = None
@@ -379,22 +396,22 @@ class SessionManager:
         )
         self.sessions[sid] = session
         transcript = adapter.transcript_path(native_id, resolved_cwd)
-        await self.history.session_started(record, str(transcript) if transcript else None)
-        await self.events.emit(
-            "session_spawned",
-            session_id=sid,
-            backend=backend,
-            name=record.name,
-            project_scope_id=record.project_scope_id,
-            repo_group_id=record.repo_group_id,
+        # The PTY is usable now. Durable history/event registration shares SQLite
+        # with transcript reconciliation and can occasionally queue behind a large
+        # import. Never hide an already-running shell behind that bookkeeping.
+        registration_task = asyncio.create_task(
+            self._persist_spawn_registration(
+                session,
+                project,
+                str(transcript) if transcript else None,
+                ownership_error,
+                registration_started_at,
+            ),
+            name=f"register-{sid}",
         )
-        if ownership_error:
-            await self.events.emit(
-                "process_ownership_degraded",
-                session_id=sid,
-                source="process",
-                error=ownership_error,
-            )
+        session.registration_task = registration_task
+        session.tasks.add(registration_task)
+        registration_task.add_done_callback(session.tasks.discard)
         session.tasks.add(asyncio.create_task(self._fanout(session), name=f"fanout-{sid}"))
         session.tasks.add(asyncio.create_task(self._ticker(session), name=f"ticker-{sid}"))
         if backend in {"claude", "codex"}:
@@ -409,6 +426,53 @@ class SessionManager:
             (time.perf_counter() - startup_started_at) * 1000, 1
         )
         return session
+
+    async def _persist_spawn_registration(
+        self,
+        session: Session,
+        project: ProjectIdentity,
+        transcript: str | None,
+        ownership_error: str | None,
+        started_at: float,
+    ) -> None:
+        """Persist spawn metadata after the live session is already attachable."""
+
+        try:
+            await self.history.register_project_scope(project)
+            await self.history.session_started(session.record, transcript)
+            await self.events.emit(
+                "session_spawned",
+                session_id=session.record.id,
+                backend=session.record.backend,
+                name=session.record.name,
+                project_scope_id=session.record.project_scope_id,
+                repo_group_id=session.record.repo_group_id,
+            )
+            if ownership_error:
+                await self.events.emit(
+                    "process_ownership_degraded",
+                    session_id=session.record.id,
+                    source="process",
+                    error=ownership_error,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A persistence failure is operationally important, but it must not
+            # tear down the PTY or strand the browser's optimistic session tab.
+            log.exception("session spawn registration failed: %s", session.record.id)
+        finally:
+            session.record.startup_timing_ms["durable_registration"] = round(
+                (time.perf_counter() - started_at) * 1000,
+                1,
+            )
+            session.publish_update()
+
+    @staticmethod
+    async def _await_registration(session: Session) -> None:
+        task = getattr(session, "registration_task", None)
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            await asyncio.shield(task)
 
     def _start_observer(self, session: Session, transcript: Path | None) -> None:
         if session.observer_task and not session.observer_task.done():
@@ -488,6 +552,14 @@ class SessionManager:
                 session.record.parser_status = "waiting"
                 session.record.parser_diagnostic = None
                 session.record.parser_events_seen = 0
+                session.record.parser_unknown_events = 0
+                session.record.parser_unknown_signatures = {}
+                session.record.parser_schema_version = None
+                session.observation_state = {
+                    "root_turn_active": False,
+                    "root_completion_seen": False,
+                    "codex_scope": "root",
+                }
                 session.publish_update()
                 await self.history.session_promoted(session.record, str(path))
                 await self.events.emit(
@@ -526,6 +598,14 @@ class SessionManager:
         session.record.parser_status = "waiting"
         session.record.parser_diagnostic = None
         session.record.parser_events_seen = 0
+        session.record.parser_unknown_events = 0
+        session.record.parser_unknown_signatures = {}
+        session.record.parser_schema_version = None
+        session.observation_state = {
+            "root_turn_active": False,
+            "root_completion_seen": False,
+            "codex_scope": "root",
+        }
         session.record.state_detail = None
         session.state_source_priority = -1
         if session.record.auto_named:
@@ -547,6 +627,7 @@ class SessionManager:
 
     async def demote(self, sid: str, backend: str, native_id: str) -> Session:
         session = self.resolve(sid)
+        await self._await_registration(session)
         if session.record.backend != backend:
             return session
         lifecycle_id = session.agent_lifecycle_id or session.record.native_session_id
@@ -574,12 +655,20 @@ class SessionManager:
         session.record.parser_status = "not_applicable"
         session.record.parser_diagnostic = None
         session.record.parser_events_seen = 0
+        session.record.parser_unknown_events = 0
+        session.record.parser_unknown_signatures = {}
+        session.record.parser_schema_version = None
+        session.observation_state = {
+            "root_turn_active": False,
+            "root_completion_seen": False,
+            "codex_scope": "root",
+        }
         session.record.agent_run_id = None
         session.record.agent_run_started_at = None
         session.record.run_cwd = None
         session.record.run_project_scope_id = None
         session.record.run_repo_group_id = None
-        session.record.project_id = session.record.spawn_project_scope_id
+        session.record.repository_id = session.record.spawn_project_scope_id
         session.record.project_label = session.record.spawn_project_label
         session.record.project_root = session.record.spawn_project_root
         session.record.project_scope_id = session.record.spawn_project_scope_id
@@ -617,6 +706,7 @@ class SessionManager:
             native_id = adapter.transcript_native_id(path)
             if native_id:
                 session.record.native_session_id = native_id
+            await self._await_registration(session)
             await self.history.session_promoted(session.record, str(path))
             await observe_transcript(session, path, self.events, stop_event)
 
@@ -632,8 +722,7 @@ class SessionManager:
             if "first_output" not in session.record.startup_timing_ms:
                 first_output_at = getattr(session.pty, "first_output_at", None)
                 session.record.startup_timing_ms["first_output"] = round(
-                    ((first_output_at or time.perf_counter()) - session.startup_started_at)
-                    * 1000,
+                    ((first_output_at or time.perf_counter()) - session.startup_started_at) * 1000,
                     1,
                 )
                 timing_changed = True
@@ -738,6 +827,7 @@ class SessionManager:
 
     async def _begin_agent_run(self, session: Session, launch_cwd: str | None = None) -> None:
         """Capture immutable ownership for one agent invocation."""
+        await self._await_registration(session)
         if session.record.agent_run_id:
             return
         cwd = Path(
@@ -770,7 +860,7 @@ class SessionManager:
             session.record.runtime_project_scope_id = project.id
         # Compatibility fields describe the active authoritative owner. Explicit
         # spawn/runtime/run fields remove the old ambiguity for new clients.
-        session.record.project_id = project.id
+        session.record.repository_id = project.id
         session.record.project_label = project.label
         session.record.project_root = project.root
         session.record.project_scope_id = project.id
@@ -791,6 +881,7 @@ class SessionManager:
         self._schedule_startup_measurement(session, "session_end")
         if session.startup_measurement_task:
             await asyncio.gather(session.startup_measurement_task, return_exceptions=True)
+        await self._await_registration(session)
         session.agent_stop_event.set()
         if session.cwd_debounce_task and not session.cwd_debounce_task.done():
             session.cwd_debounce_task.cancel()

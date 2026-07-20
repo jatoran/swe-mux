@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "records": [
+    {"type": "assistant", "message": {"model": "claude-test", "content": [{"type": "tool_use", "id": "tool-1", "name": "Bash", "input": {"command": "<sanitized>"}}, {"type": "tool_use", "id": "skill-1", "name": "Skill", "input": {"skill": "review-code"}}]}},
+    {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-1", "is_error": true, "content": "<sanitized>"}]}},
+    {"type": "system", "subtype": "compact_boundary"},
+    {"type": "future-provider-record", "payload": {"redacted": true}}
+  ],
+  "expected": {"tools": 3, "skills": 1, "compactions": 1, "unknown": 1}
+}

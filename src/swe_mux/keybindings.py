@@ -14,7 +14,7 @@ DEFAULT_KEYBINDINGS = {
     "ctrl+alt+arrowright": "pane.next",
     "ctrl+alt+arrowleft": "pane.previous",
     "ctrl+alt+s": "settings.open",
-    **{f"ctrl+alt+{index}": f"space.activate({index})" for index in range(1, 10)},
+    **{f"ctrl+alt+{index}": f"project.activate({index})" for index in range(1, 10)},
 }
 
 KEYBINDING_COMMANDS = (
@@ -26,9 +26,9 @@ KEYBINDING_COMMANDS = (
     ("usage.open", "Open usage analytics", "view"),
     ("hooks.open", "Open hooks and notification settings", "view"),
     ("notifications.open", "Open notifications", "view"),
-    ("notes.open", "Open current space note", "view"),
+    ("notes.open", "Open current project note", "view"),
     ("processes.open", "Inspect session processes and previews", "view"),
-    ("session.spawnShell", "New terminal in current space", "session"),
+    ("session.spawnShell", "New terminal in current project", "session"),
     ("session.quickLaunch", "New terminal custom", "session"),
     ("session.open", "Open selected session", "session"),
     ("session.rename", "Rename selected session", "session"),
@@ -39,21 +39,16 @@ KEYBINDING_COMMANDS = (
     ("session.copyCwd", "Copy selected working directory", "session"),
     ("session.reveal", "Reveal selected session directory", "session"),
     ("session.resume", "Resume selected agent session", "session"),
-    ("session.worktreeCreate", "Create worktree and terminal", "session"),
-    ("session.worktreesManage", "Manage worktrees", "session"),
     ("session.broadcastMembership", "Toggle selected session broadcast", "session"),
-    ("session.notes", "Open selected agent-run note", "notes"),
     ("session.projectNote", "Open selected session project note", "notes"),
-    ("session.currentProjectNote", "Open runtime project note", "notes"),
-    ("session.notesSplit", "Open selected agent-run note in split", "notes"),
-    ("space.create", "Create space", "space"),
-    ("space.newTerminal", "New terminal in selected space", "space"),
-    ("space.newTerminalCustom", "New custom terminal in selected space", "space"),
-    ("space.rename", "Rename selected space", "space"),
-    ("space.settings", "Open selected space settings", "space"),
-    ("space.delete", "Delete selected space", "space"),
-    ("space.notes", "Open selected space note", "notes"),
-    ("space.notesSplit", "Open selected space note in split", "notes"),
+    ("project.create", "Create project", "project"),
+    ("project.newTerminal", "New terminal in selected project", "project"),
+    ("project.newTerminalCustom", "New custom terminal in selected project", "project"),
+    ("project.rename", "Rename selected project", "project"),
+    ("project.settings", "Open selected project settings", "project"),
+    ("project.delete", "Delete selected project", "project"),
+    ("project.note", "Open selected project note", "notes"),
+    ("project.files", "Browse selected project files", "project"),
     ("pane.splitHorizontal", "Split focused pane right", "pane"),
     ("pane.splitVertical", "Split focused pane below", "pane"),
     ("pane.stackNew", "New terminal as tab", "pane"),
@@ -76,14 +71,14 @@ KEYBINDING_COMMANDS = (
     ("terminal.selectAll", "Select all in focused terminal", "terminal"),
     ("terminal.clear", "Clear focused terminal", "terminal"),
     *tuple(
-        (f"space.activate({index})", f"Switch to space {index}", "space")
+        (f"project.activate({index})", f"Switch to project {index}", "project")
         for index in range(1, 10)
     ),
 )
 
 COMMAND_IDS = {command_id for command_id, _, _ in KEYBINDING_COMMANDS}
 
-_SPACE_COMMAND = re.compile(r"space\.activate\(([1-9])\)\Z")
+_PROJECT_COMMAND = re.compile(r"project\.activate\(([1-9])\)\Z")
 _MODIFIERS = {"ctrl", "shift", "alt", "meta"}
 _INTERCEPT_MODIFIERS = {"ctrl", "alt", "meta"}
 _BROWSER_RESERVED = {
@@ -160,6 +155,6 @@ def normalize_binding(chord: object, command: object) -> tuple[str, str]:
     if key in _TERMINAL_RESERVED:
         raise ValueError("terminal-reserved chord")
     command_id = str(command)
-    if command_id not in COMMAND_IDS and not _SPACE_COMMAND.fullmatch(command_id):
+    if command_id not in COMMAND_IDS and not _PROJECT_COMMAND.fullmatch(command_id):
         raise ValueError("unknown command id")
     return key, command_id

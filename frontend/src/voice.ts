@@ -120,7 +120,14 @@ function recognitionConstructor(): (new () => SpeechRecognitionLike) | null {
 }
 
 export function sttAvailable(): boolean {
-  return window.isSecureContext && recognitionConstructor() !== null
+  return sttCapability().available
+}
+
+export type SttCapability={available:boolean;backend:'browser-web-speech';secureContext:boolean;recognizer:boolean;reason:string;contentTelemetry:false}
+export function sttCapability():SttCapability{
+  const secureContext=window.isSecureContext,recognizer=recognitionConstructor()!==null
+  return {available:secureContext&&recognizer,backend:'browser-web-speech',secureContext,recognizer,
+    reason:!secureContext?'A secure browser context is required.':!recognizer?'This browser does not expose Web Speech Recognition.':'Browser Web Speech Recognition is available.',contentTelemetry:false}
 }
 
 export interface DictationHandlers {

@@ -62,9 +62,19 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         assert await ws.receive_json() == {"type": "replay_end", "reason": "attach"}
         await ws.send_json({"type": "claim_input"})
         assert await ws.receive_json() == {"type": "input_owner", "active": True}
-        await ws.send_json({"type": "input", "data": "\x1b[?1;2c"})
+        await ws.send_json({"type": "terminal_state", "mode": "normal"})
+        await ws.send_json(
+            {"type": "input", "kind": "terminal_response", "data": "\x1b[?1;2c"}
+        )
         await asyncio.sleep(0.01)
         assert writes == ["\x1b[?1;2c"]
+        assert session.terminal_mode == "normal"
+        assert session.input_revision == 0
+
+        await ws.send_json({"type": "input", "data": "\x1b[200~fixture\x1b[201~"})
+        await asyncio.sleep(0.01)
+        assert session.input_revision == 1
+        assert writes[-1] == "\x1b[200~fixture\x1b[201~"
 
         session.publish_output(b"live")
         live = await ws.receive()
@@ -86,12 +96,21 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         assert exit_frame["reason"] == "complete"
         await ws.close()
 
+    assert session.input_owner is None
+
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
 async def test_only_latest_claiming_browser_can_write_input() -> None:
     writes: list[str] = []
     record = SessionRecord(
-        "mux-id", "shell", "default", "shell", "mux-id", ".", "powershell.exe", [],
+        "mux-id",
+        "shell",
+        "default",
+        "shell",
+        "mux-id",
+        ".",
+        "powershell.exe",
+        [],
         state="running",
     )
     pty = cast(
@@ -129,6 +148,49 @@ async def test_only_latest_claiming_browser_can_write_input() -> None:
         await second.close()
 
     assert writes == ["one", "two"]
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_pty_replay_does_not_wait_for_event_persistence() -> None:
+    sink_started = asyncio.Event()
+    release_sink = asyncio.Event()
+
+    async def blocked_sink(_event: Any) -> int:
+        sink_started.set()
+        await release_sink.wait()
+        return 1
+
+    record = SessionRecord(
+        "mux-id", "shell", "default", "shell", "mux-id", ".", "pwsh.exe", [], state="running"
+    )
+    pty = cast(
+        Any,
+        SimpleNamespace(
+            write=lambda _data: None,
+            resize=lambda _cols, _rows: None,
+            isalive=lambda: True,
+        ),
+    )
+    session = Session(record, pty, cast(Any, SimpleNamespace()), 32, "secret")
+    session.scrollback.append(b"ready")
+    app = web.Application()
+    app["sessions"] = SimpleNamespace(
+        resolve=lambda _identity: session,
+        sessions={record.id: session},
+    )
+    app["events"] = EventBus(blocked_sink)
+    app.router.add_get("/pty/{sid}", pty_ws)
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/mux-id")
+        state = await asyncio.wait_for(ws.receive_json(), timeout=0.25)
+        assert state["type"] == "state"
+        await asyncio.wait_for(sink_started.wait(), timeout=0.25)
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert (await ws.receive()).data == b"ready"
+        assert (await ws.receive_json())["type"] == "replay_end"
+        release_sink.set()
+        await ws.close()
 
 
 async def test_server_broadcast_targets_each_included_live_session_once() -> None:

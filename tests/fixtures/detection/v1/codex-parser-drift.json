@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "backend": "codex",
+  "description": "A sustained unknown native schema degrades semantic capability and keeps readiness unknown.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
+    {"kind": "terminal", "mode": "normal"},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "unknown", "oracle_safe": false}
+  ],
+  "expected": {
+    "events": [
+      {"type": "capability_degraded", "source": "transcript"}
+    ],
+    "parser": {"status": "degraded", "recognized": 0, "unknown": 20, "unknown_signatures": {"codex:mystery:future": 20}},
+    "delivery_state": "unknown",
+    "delivery_reason": "no_root_lifecycle_evidence"
+  }
+}

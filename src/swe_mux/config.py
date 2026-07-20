@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 13
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {"light", "dark", "system", "solarized-dark", "tokyo-night", "custom"}
 CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "accent", "error"}
@@ -30,6 +30,33 @@ BUILTIN_THEME_PAIRS = {
     "tokyo-night": ("#1a1b26", "#c0caf5"),
 }
 CCUSAGE_PACKAGE = "ccusage@latest"
+DEFAULT_PROJECT_IGNORE_PATTERNS = [
+    ".git",
+    ".swe-mux",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+    "node_modules",
+    ".next",
+    ".nuxt",
+    ".turbo",
+    ".cache",
+    "dist",
+    "build",
+    "coverage",
+    "*.pyc",
+    "*.pyo",
+    "*.code-workspace",
+    "uv.lock",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+]
 
 
 def default_ccusage_command(provider: str) -> list[str]:
@@ -85,6 +112,13 @@ class Config:
     codex_args: list[str] = field(default_factory=list)
     scrollback_bytes: int = 5 * 1024 * 1024
     git_poll_seconds: float = 5.0
+    process_poll_seconds: float = 5.0
+    process_orphan_grace_seconds: float = 15.0
+    process_evidence_retention_days: int = 30
+    operational_telemetry_retention_days: int = 180
+    provider_quota_poll_minutes: int = 15
+    provider_quota_turn_refresh_enabled: bool = False
+    provider_quota_turn_refresh_min_minutes: int = 5
     reconcile_external_history: bool = True
     startup_cwd: str = ""
     history_limit: int = 200
@@ -118,6 +152,9 @@ class Config:
     default_shell_profile: str = "default"
     shell_profiles: list[ShellProfile] = field(default_factory=list)
     pinned_directories: list[str] = field(default_factory=list)
+    project_ignore_patterns: list[str] = field(
+        default_factory=lambda: list(DEFAULT_PROJECT_IGNORE_PATTERNS)
+    )
     automation_enabled: bool = False
     automation_retention_days: int = 90
     automation_concurrency: int = 2
@@ -163,6 +200,9 @@ class Config:
         result = asdict(self)
         result["data_dir"] = str(self.data_dir)
         result.pop("config_path", None)
+        # Legacy input is still accepted so existing config files start cleanly,
+        # but layout v6 has no dock/pop-out presentation preference.
+        result.pop("notes_default_open", None)
         result["access_mode"] = "local+tailnet" if self.tailnet_enabled else "loopback"
         result["requires_auth"] = False
         # The daemon retains exact bytes. Browsers retain an approximate line
@@ -185,9 +225,7 @@ def _validate(config: Config) -> None:
     if config.notes_default_open not in {"dock", "popout"}:
         errors["notes_default_open"] = "must be dock or popout"
     if config.mobile_vertical_drag not in {"smart", "terminal", "application", "disabled"}:
-        errors["mobile_vertical_drag"] = (
-            "must be smart, terminal, application, or disabled"
-        )
+        errors["mobile_vertical_drag"] = "must be smart, terminal, application, or disabled"
     if config.mobile_scroll_direction not in {"natural", "wheel"}:
         errors["mobile_scroll_direction"] = "must be natural or wheel"
     if not 0.25 <= config.mobile_scroll_sensitivity <= 4:
@@ -199,9 +237,21 @@ def _validate(config: Config) -> None:
         "codex_args",
         "ccusage_claude_command",
         "ccusage_codex_command",
+        "project_ignore_patterns",
     ):
-        if not all(isinstance(item, str) for item in getattr(config, field_name)):
+        value = getattr(config, field_name)
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             errors[field_name] = "must be an array of strings"
+    if isinstance(config.project_ignore_patterns, list) and (
+        len(config.project_ignore_patterns) > 256
+        or any(
+            not isinstance(pattern, str) or not pattern.strip() or len(pattern) > 200
+            for pattern in config.project_ignore_patterns
+        )
+    ):
+        errors["project_ignore_patterns"] = (
+            "must contain at most 256 non-empty patterns of 200 characters or fewer"
+        )
     for field_name in ("ccusage_claude_command", "ccusage_codex_command"):
         if config.ccusage_enabled and not getattr(config, field_name):
             errors[field_name] = "must not be empty while usage analytics is enabled"
@@ -211,6 +261,18 @@ def _validate(config: Config) -> None:
         errors["scrollback_bytes"] = "must be between 1 KiB and 1 GiB"
     if not 0.25 <= config.git_poll_seconds <= 3600:
         errors["git_poll_seconds"] = "must be between 0.25 and 3600 seconds"
+    if not 0.5 <= config.process_poll_seconds <= 60:
+        errors["process_poll_seconds"] = "must be between 0.5 and 60 seconds"
+    if not 1 <= config.process_orphan_grace_seconds <= 3600:
+        errors["process_orphan_grace_seconds"] = "must be between 1 and 3600 seconds"
+    if not 1 <= config.process_evidence_retention_days <= 3650:
+        errors["process_evidence_retention_days"] = "must be between 1 and 3650"
+    if not 1 <= config.operational_telemetry_retention_days <= 3650:
+        errors["operational_telemetry_retention_days"] = "must be between 1 and 3650"
+    if not 5 <= config.provider_quota_poll_minutes <= 1440:
+        errors["provider_quota_poll_minutes"] = "must be between 5 and 1440"
+    if not 1 <= config.provider_quota_turn_refresh_min_minutes <= 1440:
+        errors["provider_quota_turn_refresh_min_minutes"] = "must be between 1 and 1440"
     if not 1 <= config.history_limit <= 10000:
         errors["history_limit"] = "must be between 1 and 10000"
     if not 1 <= config.automation_retention_days <= 3650:
@@ -348,13 +410,49 @@ def _migrate_legacy_ccusage_commands(config: Config) -> bool:
     return changed
 
 
+def _default_shell_profile(executable: str) -> ShellProfile:
+    executable_name = Path(executable).name.casefold()
+    args = (
+        ["-NoLogo"]
+        if executable_name in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
+        else []
+    )
+    if executable_name in {"pwsh", "pwsh.exe"}:
+        return ShellProfile("default", "PowerShell 7", executable, args, marker="ps7")
+    if executable_name in {"powershell", "powershell.exe"}:
+        return ShellProfile("default", "Windows PowerShell", executable, args, marker="ps")
+    return ShellProfile("default", "Default shell", executable, args)
+
+
+def _is_auto_managed_windows_powershell_default(config: Config) -> bool:
+    if config.default_shell_profile != "default" or len(config.shell_profiles) != 1:
+        return False
+    profile = config.shell_profiles[0]
+    return (
+        Path(config.shell_exe).name.casefold() in {"powershell", "powershell.exe"}
+        and profile.id == "default"
+        and profile.label in {"Default shell", "Windows PowerShell"}
+        and Path(profile.executable).name.casefold() in {"powershell", "powershell.exe"}
+        and profile.args == ["-NoLogo"]
+        and profile.env == {}
+        and profile.platforms == ["windows"]
+        and profile.cwd_strategy == "native"
+        and profile.marker == "ps"
+        and profile.capabilities == ["interactive", "agent-aware"]
+        and not profile.cwd_integration
+        and profile.enabled
+    )
+
+
 def load_config(path: Path | None = None) -> Config:
     path = path or Path.home() / ".mux" / "config.toml"
     cfg = Config(data_dir=path.parent, config_path=path)
     migrated = False
+    raw: dict[str, Any] = {}
     if path.exists():
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
-        migrated = int(raw.get("schema_version", 0)) < SCHEMA_VERSION
+        source_schema = int(raw.get("schema_version", 0))
+        migrated = source_schema < SCHEMA_VERSION
         for key in Config.__dataclass_fields__:
             if key in {"config_path", "shell_profiles"}:
                 continue
@@ -362,15 +460,13 @@ def load_config(path: Path | None = None) -> Config:
                 setattr(cfg, key, Path(raw[key]) if key == "data_dir" else raw[key])
         cfg.shell_profiles = [ShellProfile(**item) for item in raw.get("shell_profiles", [])]
     if not cfg.shell_profiles:
-        args = (
-            ["-NoLogo"]
-            if Path(cfg.shell_exe).name.casefold()
-            in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
-            else []
-        )
-        cfg.shell_profiles = [
-            ShellProfile("default", "Default shell", cfg.shell_exe, args, marker="ps")
-        ]
+        if "shell_exe" not in raw and shutil.which("pwsh.exe"):
+            cfg.shell_exe = "pwsh.exe"
+        cfg.shell_profiles = [_default_shell_profile(cfg.shell_exe)]
+    elif _is_auto_managed_windows_powershell_default(cfg) and shutil.which("pwsh.exe"):
+        cfg.shell_exe = "pwsh.exe"
+        cfg.shell_profiles = [_default_shell_profile(cfg.shell_exe)]
+        migrated = True
     migrated = _migrate_legacy_ccusage_commands(cfg) or migrated
     cfg.schema_version = SCHEMA_VERSION
     _validate(cfg)

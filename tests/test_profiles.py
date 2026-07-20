@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 
 from swe_mux.config import Config, ShellProfile, load_config, update_config
-from swe_mux.models import SpaceRecord
+from swe_mux.models import ProjectRecord
 from swe_mux.profiles import detected_profiles, resolve_profile
 from swe_mux.server import resume_history, spawn_session
 
@@ -61,9 +61,7 @@ def test_resolve_profile_preserves_profile_owned_argv_and_environment(
 def test_detected_presets_include_native_shells_and_wsl_capability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "swe_mux.profiles._available", lambda command: rf"C:\bin\{command}"
-    )
+    monkeypatch.setattr("swe_mux.profiles._available", lambda command: rf"C:\bin\{command}")
     monkeypatch.setattr("swe_mux.profiles._wsl_distros", lambda: ["Ubuntu"])
 
     profiles = {item.id: item for item in detected_profiles()}
@@ -80,8 +78,12 @@ def test_wsl_profile_translates_windows_cwd(
     wsl = tmp_path / "wsl.exe"
     wsl.write_bytes(b"fixture")
     configured = ShellProfile(
-        "wsl-ubuntu", "WSL: Ubuntu", str(wsl), ["--distribution", "Ubuntu"],
-        cwd_strategy="wsl", capabilities=["interactive", "wsl"],
+        "wsl-ubuntu",
+        "WSL: Ubuntu",
+        str(wsl),
+        ["--distribution", "Ubuntu"],
+        cwd_strategy="wsl",
+        capabilities=["interactive", "wsl"],
     )
     config = Config(shell_profiles=[configured], default_shell_profile=configured.id)
     monkeypatch.setattr(
@@ -109,7 +111,9 @@ async def test_spawn_api_keeps_agent_and_profile_paths_distinct(tmp_path: Path) 
     app = {
         "config": config,
         "sessions": SimpleNamespace(spawn=spawn),
-        "spaces": SimpleNamespace(spaces={"default": SpaceRecord("default", "Main", 0)}),
+        "projects": SimpleNamespace(
+            projects={"default": ProjectRecord("default", "Main", str(tmp_path), 0)}
+        ),
     }
 
     class Request:
@@ -123,10 +127,10 @@ async def test_spawn_api_keeps_agent_and_profile_paths_distinct(tmp_path: Path) 
     await spawn_session(
         cast(
             Any,
-            Request({"backend": "shell", "profile_id": "pwsh", "cwd": str(tmp_path)}),
+            Request({"backend": "shell", "profile_id": "pwsh", "project_id": "default"}),
         )
     )
-    await spawn_session(cast(Any, Request({"backend": "claude", "cwd": str(tmp_path)})))
+    await spawn_session(cast(Any, Request({"backend": "claude", "project_id": "default"})))
     raw = tmp_path / "custom-shell.exe"
     raw.write_bytes(b"fixture")
     await spawn_session(
@@ -134,8 +138,10 @@ async def test_spawn_api_keeps_agent_and_profile_paths_distinct(tmp_path: Path) 
             Any,
             Request(
                 {
-                    "backend": "shell", "executable": str(raw),
-                    "argv": ["--exact"], "cwd": str(tmp_path),
+                    "backend": "shell",
+                    "executable": str(raw),
+                    "argv": ["--exact"],
+                    "project_id": "default",
                 }
             ),
         )
@@ -164,40 +170,47 @@ async def test_native_agent_history_resume_bypasses_shell_profiles(tmp_path: Pat
             )
         )
 
-    async def add_lineage(
-        parent: str, child: str, relation: str, metadata: dict[str, Any]
-    ) -> None:
+    async def add_lineage(parent: str, child: str, relation: str, metadata: dict[str, Any]) -> None:
         lineage.append((parent, child, relation, metadata))
 
-    async def update_space(*args: Any, **kwargs: Any) -> Any:
+    async def update_project(*args: Any, **kwargs: Any) -> Any:
         return (args, kwargs)
 
     history = SimpleNamespace(
         history_entry=lambda identity: _async_value(
             {
-                "id": identity, "backend": "codex", "name": "agent",
-                "cwd": str(tmp_path), "native_id": "native-codex", "agent_visible": 1,
+                "id": identity,
+                "backend": "codex",
+                "name": "agent",
+                "cwd": str(tmp_path),
+                "native_id": "native-codex",
+                "agent_visible": 1,
                 "transcript_path": str(transcript),
+                "project_id": "default",
             }
         )
     )
     manager = SimpleNamespace(spawn=spawn, adapters={"codex": object()}, sessions={})
-    spaces = SimpleNamespace(
-        spaces={
+    projects = SimpleNamespace(
+        projects={
             "default": SimpleNamespace(
-                layout={"version": 2, "root": None}, layout_revision=0
+                name="Main",
+                root=str(tmp_path),
+                layout={"version": 2, "root": None},
+                layout_revision=0,
             )
         },
-        update=update_space,
+        update=update_project,
     )
     request = SimpleNamespace(
         app={
             "history": history,
             "sessions": manager,
-            "spaces": spaces,
+            "projects": projects,
             "automation_store": SimpleNamespace(add_lineage=add_lineage),
         },
-        match_info={"sid": "history-id"}, can_read_body=False,
+        match_info={"sid": "history-id"},
+        can_read_body=False,
     )
 
     await resume_history(cast(Any, request))
@@ -210,7 +223,7 @@ async def test_native_agent_history_resume_bypasses_shell_profiles(tmp_path: Pat
             "history-id",
             "resumed-run",
             "resume",
-            {"backend": "codex", "space_id": "default"},
+            {"backend": "codex", "project_id": "default"},
         )
     ]
 

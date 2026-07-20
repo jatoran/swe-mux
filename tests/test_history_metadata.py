@@ -6,6 +6,7 @@ from pathlib import Path
 
 from swe_mux.history import HistoryIndex
 from swe_mux.models import SessionRecord
+from swe_mux.operational_telemetry import OperationalTelemetryStore
 
 
 def _create_legacy_database(path: Path) -> None:
@@ -46,9 +47,37 @@ async def test_history_migration_adds_metadata_without_losing_rows(tmp_path: Pat
     columns = {
         item["name"] for item in reopened._db.execute("PRAGMA table_info(history)").fetchall()
     }
-    assert {"executable", "argv_json", "pinned_attention", "shell_profile_id"} <= columns
+    assert {
+        "executable",
+        "argv_json",
+        "pinned_attention",
+        "shell_profile_id",
+        "compaction_count",
+        "last_compaction_at",
+        "compaction_capability",
+        "compaction_confidence",
+    } <= columns
     assert await reopened.history_entry("legacy") is not None
     reopened.close()
+
+    telemetry = OperationalTelemetryStore(path)
+    operational_tables = {
+        row[0]
+        for row in telemetry._db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert {
+        "process_evidence",
+        "quota_samples",
+        "quota_reset_events",
+        "quota_attributions",
+        "context_compactions",
+        "tool_events",
+        "transcript_telemetry_coverage",
+    } <= operational_tables
+    assert telemetry._db.execute("SELECT name FROM history WHERE id='legacy'").fetchone()
+    telemetry.close()
 
 
 async def test_plain_shell_history_is_provisional_and_removed_on_exit(tmp_path: Path) -> None:
@@ -74,7 +103,7 @@ async def test_plain_shell_history_is_provisional_and_removed_on_exit(tmp_path: 
 
     session.name = "Renamed"
     session.cwd = "D:/moved"
-    session.space_id = "work"
+    session.project_id = "work"
     session.exe = "pwsh.exe"
     session.args = ["-NoProfile", "-NoLogo"]
     session.pinned_attention = True
@@ -86,7 +115,7 @@ async def test_plain_shell_history_is_provisional_and_removed_on_exit(tmp_path: 
     assert updated is not None
     assert updated["name"] == "Renamed"
     assert updated["cwd"] == "D:/moved"
-    assert updated["space_id"] == "work"
+    assert updated["project_id"] == "work"
     assert updated["executable"] == "pwsh.exe"
     assert json.loads(updated["argv_json"]) == ["-NoProfile", "-NoLogo"]
     assert updated["pinned_attention"] == 1

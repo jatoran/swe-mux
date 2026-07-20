@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "backend": "codex",
+  "description": "Representative current Codex records cover tool, approval, compaction, token, and completion parser rules.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "session_meta", "payload": {"id": "root", "cwd": "."}}},
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_started"}}},
+    {"kind": "transcript", "record": {"type": "response_item", "payload": {"type": "function_call", "name": "shell_command", "call_id": "a"}}},
+    {"kind": "transcript", "record": {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "a", "output": "ok"}}},
+    {"kind": "transcript", "record": {"type": "response_item", "payload": {"type": "custom_tool_call", "name": "image", "call_id": "b"}}},
+    {"kind": "transcript", "record": {"type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": "b", "content": "ok"}}},
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "patch_apply_end", "success": true}}},
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "mcp_tool_call_end", "status": "failed"}}},
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "web_search_end", "status": "complete"}}},
+    {"kind": "transcript", "record": {"type": "compacted", "payload": {"type": "context_compacted"}}},
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "token_count", "info": {"model_context_window": 1000, "total_token_usage": {"input_tokens": 100, "output_tokens": 10}}}}},
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "exec_approval_request"}}, "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_started"}}},
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_complete"}}},
+    {"kind": "terminal", "mode": "normal"},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "shell_command"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "shell_command", "success": true},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "image"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "image", "success": true},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "apply_patch", "success": true},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "mcp_tool", "success": false},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "web_search", "success": true},
+      {"type": "context_compacted", "source": "transcript", "scope": "root"},
+      {"type": "approval_needed", "source": "transcript", "scope": "root", "kind": "approval"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "parser": {"status": "ready", "recognized": 14, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "safe",
+    "delivery_reason": "all_required_evidence_positive"
+  }
+}

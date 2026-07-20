@@ -18,8 +18,7 @@ class Osc7Parser:
     def feed(self, chunk: bytes) -> list[str]:
         data = self._tail + chunk
         values = [
-            match.group(1).decode("utf-8", "replace")
-            for match in OSC7_PATTERN.finditer(data)
+            match.group(1).decode("utf-8", "replace") for match in OSC7_PATTERN.finditer(data)
         ]
         # Retain only a possible incomplete OSC sequence, with a strict bound.
         marker = b"\x1b]7;"

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -19,6 +21,8 @@ from swe_mux.automation import (
 from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
+from swe_mux.git_projects import ProjectIdentity
+from swe_mux.history import HistoryIndex
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.openrouter import OpenRouterError, OpenRouterResult
 from swe_mux.secret_store import PlatformSecretStore
@@ -40,6 +44,88 @@ prompt = "Summarize without acting."
 schema = "summary_v1"
 on_result = { kind = "annotate", tag = "turn-summary", content = "{result.summary}" }
 """
+
+
+@pytest.mark.asyncio
+async def test_duplicate_firing_releases_shared_database_writer_lock(tmp_path: Path) -> None:
+    path = tmp_path / "mux.db"
+    history = HistoryIndex(path)
+    store = AutomationStore(path)
+    async def create_firing() -> str | None:
+        return await store.create_firing(
+            event_seq=7,
+            event_type="turn_ended",
+            agent_run_id="run-1",
+            session_id="session-1",
+            rule_id="dedupe-rule",
+            rule_revision="revision-1",
+            chain_id="chain-1",
+            chain_depth=0,
+            shadow=False,
+            trace=[],
+        )
+
+    try:
+        assert await create_firing() is not None
+        assert await create_firing() is None
+        sequence = await asyncio.wait_for(
+            history.append_event(
+                MuxEvent(time.time(), "session-1", "daemon", "terminal_attached", {})
+            ),
+            timeout=1,
+        )
+        assert sequence > 0
+    finally:
+        store.close()
+        history.close()
+
+
+@pytest.mark.asyncio
+async def test_feature_stores_coordinate_complete_database_operations(tmp_path: Path) -> None:
+    path = tmp_path / "mux.db"
+    history = HistoryIndex(path)
+    store = AutomationStore(path)
+    transaction_started = threading.Event()
+    release_transaction = threading.Event()
+
+    def shorten_history_busy_timeout() -> None:
+        history._db.execute("PRAGMA busy_timeout=50")
+
+    def hold_automation_transaction() -> None:
+        store._db.execute("BEGIN IMMEDIATE")
+        transaction_started.set()
+        if not release_transaction.wait(timeout=2):
+            raise TimeoutError("test did not release automation transaction")
+        store._db.rollback()
+
+    holder: asyncio.Task[None] | None = None
+    writer: asyncio.Task[dict[str, Any]] | None = None
+    try:
+        await history._run(shorten_history_busy_timeout)
+        holder = asyncio.create_task(store._run(hold_automation_transaction))
+        assert await asyncio.to_thread(transaction_started.wait, 1)
+        writer = asyncio.create_task(
+            history.register_project_scope(
+                ProjectIdentity("scope-1", "Project", str(tmp_path), "cwd")
+            )
+        )
+
+        # Longer than history's SQLite busy timeout: this only remains pending
+        # when the process-wide coordinator queues it before entering SQLite.
+        await asyncio.sleep(0.1)
+        assert not writer.done()
+        release_transaction.set()
+        await asyncio.wait_for(holder, timeout=1)
+        scope = await asyncio.wait_for(writer, timeout=1)
+        assert scope["id"] == "scope-1"
+    finally:
+        release_transaction.set()
+        if holder is not None:
+            await asyncio.gather(holder, return_exceptions=True)
+        if writer is not None:
+            await asyncio.gather(writer, return_exceptions=True)
+        store.close()
+        history.close()
 
 
 class FakeProvider:
@@ -190,7 +276,7 @@ def normalized_event(
         "backend": item.backend,
         "project_scope_id": "scope-1",
         "session_name": item.name,
-        "space_id": item.space_id,
+        "project_id": item.project_id,
         "state": item.state,
         "attended": False,
         "context_pct": item.context_pct,
@@ -227,11 +313,7 @@ def test_rules_are_stable_and_reject_actuation() -> None:
 
 def test_rules_reject_unknown_action_and_condition_fields() -> None:
     with pytest.raises(RuleValidationError, match="action has unknown fields"):
-        parse_rules(
-            RULES.replace(
-                'schema = "summary_v1"', 'schema = "summary_v1"\ncommand = "no"'
-            )
-        )
+        parse_rules(RULES.replace('schema = "summary_v1"', 'schema = "summary_v1"\ncommand = "no"'))
 
 
 def test_invalid_reload_keeps_last_known_good_rules(tmp_path: Path) -> None:
@@ -420,9 +502,7 @@ async def test_builtin_titler_reserves_one_paid_call_per_agent_run(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_missing_reported_cost_is_reconciled_by_generation_id(tmp_path: Path) -> None:
     transcript = tmp_path / "claude.jsonl"
-    transcript.write_text(
-        '{"type":"user","message":{"content":"check"}}\n', encoding="utf-8"
-    )
+    transcript.write_text('{"type":"user","message":{"content":"check"}}\n', encoding="utf-8")
     item = record(tmp_path)
     store = AutomationStore(tmp_path / "mux.db")
     engine = AutomationEngine(
@@ -714,15 +794,9 @@ async def test_hook_silence_emits_typed_capability_degradation(tmp_path: Path) -
     degraded = await asyncio.wait_for(monitor.get(), timeout=1)
     assert degraded.type == "capability_degraded"
     assert degraded.payload["capability"] == "native_hook"
-    assert engine.status()["capabilities"]["adapters"]["claude"][
-        "hook_silence_degraded"
-    ] == 1
-    await engine._probe_sources(
-        MuxEvent(32, item.id, "hook", "turn_ended", {}, 4), item
-    )
-    assert engine.status()["capabilities"]["adapters"]["claude"][
-        "hook_silence_degraded"
-    ] == 0
+    assert engine.status()["capabilities"]["adapters"]["claude"]["hook_silence_degraded"] == 1
+    await engine._probe_sources(MuxEvent(32, item.id, "hook", "turn_ended", {}, 4), item)
+    assert engine.status()["capabilities"]["adapters"]["claude"]["hook_silence_degraded"] == 0
     store.close()
 
 
@@ -764,9 +838,7 @@ async def test_phase7_observers_are_bounded_on_both_backend_fixtures(
     )
 
     reports = []
-    for sequence, event_type in enumerate(
-        ("stalled", "approval_needed", "context_pressure"), 10
-    ):
+    for sequence, event_type in enumerate(("stalled", "approval_needed", "context_pressure"), 10):
         reports.extend(await engine.evaluate(normalized_event(item, sequence, event_type)))
 
     assert all("error" not in report for report in reports)
@@ -846,6 +918,37 @@ def test_builtin_rules_are_cached_and_rebuild_on_flag_change(tmp_path: Path) -> 
     assert third is not first
     assert all(rule.id != "builtin.session-titler" for rule in third)
 
+    engine.store.close()
+
+
+def test_status_lists_enabled_and_disabled_builtin_observers(tmp_path: Path) -> None:
+    engine = AutomationEngine(
+        tmp_path / "rules.toml",
+        EventBus(),
+        SimpleNamespace(sessions={}),  # type: ignore[arg-type]
+        AutomationStore(tmp_path / "mux.db"),
+        Config(
+            data_dir=tmp_path,
+            observer_titler_enabled=True,
+            observer_summarizer_enabled=False,
+            phase7_observers_enabled=False,
+        ),
+        FakeProvider(),  # type: ignore[arg-type]
+    )
+
+    builtins = {item["id"]: item for item in engine.status()["built_in_rules"]}
+
+    assert set(builtins) == {
+        "builtin.session-titler",
+        "builtin.turn-summarizer",
+        "builtin.stalled-triage",
+        "builtin.approval_needed-triage",
+        "builtin.context-handoff",
+    }
+    assert builtins["builtin.session-titler"]["enabled"] is True
+    assert builtins["builtin.turn-summarizer"]["enabled"] is False
+    assert builtins["builtin.stalled-triage"]["setting_key"] == "phase7_observers_enabled"
+    assert builtins["builtin.context-handoff"]["model"] == "Standard model"
     engine.store.close()
 
 

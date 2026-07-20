@@ -20,9 +20,7 @@ def test_job_object_kills_child_after_forced_owner_exit() -> None:
         "print(child.pid,flush=True);"
         "os._exit(23)"
     )
-    owner = subprocess.Popen(
-        [sys.executable, "-c", script], stdout=subprocess.PIPE, text=True
-    )
+    owner = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True)
     assert owner.stdout is not None
     child_pid = int(owner.stdout.readline().strip())
     assert owner.wait(timeout=10) == 23
@@ -34,9 +32,7 @@ def test_job_object_kills_child_after_forced_owner_exit() -> None:
     kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
     kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
     kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    handle = kernel32.OpenProcess(
-        process_query_limited_information | synchronize, False, child_pid
-    )
+    handle = kernel32.OpenProcess(process_query_limited_information | synchronize, False, child_pid)
     if handle:
         try:
             assert kernel32.WaitForSingleObject(handle, 5000) == 0

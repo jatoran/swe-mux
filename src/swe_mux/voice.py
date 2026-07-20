@@ -26,6 +26,7 @@ from .automation import MAX_SLICE_BYTES, TranscriptSliceService
 from .config import Config
 from .event_bus import EventBus
 from .openrouter import OpenRouterClient, OpenRouterError
+from .sqlite_store import database_operation_lock, run_sqlite_operation
 
 if TYPE_CHECKING:
     from .automation_store import AutomationStore
@@ -164,21 +165,25 @@ class VoiceStore:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
+        self._operation_lock = database_operation_lock(path)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-voice-db")
         self._executor.submit(self._connect).result()
 
     def _connect(self) -> None:
-        self._db = sqlite3.connect(self._path, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute("PRAGMA synchronous=NORMAL")
-        self._db.execute("PRAGMA busy_timeout=5000")
-        self._db.executescript(SCHEMA)
-        self._db.commit()
+        with self._operation_lock:
+            self._db = sqlite3.connect(self._path, check_same_thread=False)
+            self._db.row_factory = sqlite3.Row
+            self._db.execute("PRAGMA journal_mode=WAL")
+            self._db.execute("PRAGMA synchronous=NORMAL")
+            self._db.execute("PRAGMA busy_timeout=5000")
+            self._db.executescript(SCHEMA)
+            self._db.commit()
 
     async def _run(self, fn: Callable[[], T]) -> T:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, fn)
+        return await loop.run_in_executor(
+            self._executor, run_sqlite_operation, self._db, self._operation_lock, fn
+        )
 
     async def add_clip(self, row: dict[str, Any]) -> None:
         def op() -> None:
@@ -195,9 +200,7 @@ class VoiceStore:
 
     async def clip(self, clip_id: str) -> dict[str, Any] | None:
         def op() -> dict[str, Any] | None:
-            row = self._db.execute(
-                "SELECT * FROM voice_clips WHERE id=?", (clip_id,)
-            ).fetchone()
+            row = self._db.execute("SELECT * FROM voice_clips WHERE id=?", (clip_id,)).fetchone()
             return dict(row) if row else None
 
         return await self._run(op)

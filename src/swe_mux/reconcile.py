@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .git_projects import ProjectIdentity, resolve_project
 from .history import HistoryIndex
-from .projects import ProjectIdentity, resolve_project
 
 CLAUDE_CONTEXT_WINDOWS = {
     "claude-opus-4-8": 1_000_000,
@@ -69,6 +70,8 @@ def inspect_claude(path: Path) -> ExternalTranscript | None:
     events = _first_events(path)
     if not events:
         return None
+    if path.parent.name == "subagents" or any(event.get("isSidechain") is True for event in events):
+        return None
     cwd = next((str(event["cwd"]) for event in events if event.get("cwd")), "")
     native_id = next(
         (str(event["sessionId"]) for event in events if event.get("sessionId")), path.stem
@@ -77,9 +80,7 @@ def inspect_claude(path: Path) -> ExternalTranscript | None:
         return None
     st = path.stat()
     created = _timestamp(events[0].get("timestamp"), st.st_mtime)
-    return ExternalTranscript(
-        "claude", native_id, cwd, created, path, st.st_mtime_ns, st.st_size
-    )
+    return ExternalTranscript("claude", native_id, cwd, created, path, st.st_mtime_ns, st.st_size)
 
 
 def inspect_codex(path: Path) -> ExternalTranscript | None:
@@ -88,6 +89,8 @@ def inspect_codex(path: Path) -> ExternalTranscript | None:
         if event.get("type") != "session_meta":
             continue
         payload = event.get("payload") or {}
+        if payload.get("parent_thread_id"):
+            return None
         native_id, cwd = payload.get("id"), payload.get("cwd")
         if native_id and cwd:
             st = path.stat()
@@ -99,10 +102,15 @@ def inspect_codex(path: Path) -> ExternalTranscript | None:
 
 
 def scan_external_transcripts(home: Path | None = None) -> list[ExternalTranscript]:
-    home = home or Path.home()
+    user_home = home or Path.home()
+    codex_home = (
+        home / ".codex"
+        if home is not None
+        else Path(os.environ.get("CODEX_HOME") or user_home / ".codex").expanduser()
+    )
     specs = (
-        (home / ".claude" / "projects", "*.jsonl", inspect_claude),
-        (home / ".codex" / "sessions", "rollout-*.jsonl", inspect_codex),
+        (user_home / ".claude" / "projects", "*.jsonl", inspect_claude),
+        (codex_home / "sessions", "rollout-*.jsonl", inspect_codex),
     )
     found: list[ExternalTranscript] = []
     for root, pattern, inspect in specs:
@@ -119,8 +127,12 @@ def scan_external_transcripts(home: Path | None = None) -> list[ExternalTranscri
 
 def summarize_transcript(path: Path, backend: str) -> dict[str, Any]:
     summary: dict[str, Any] = {
-        "context_window": None, "final_context_pct": None, "peak_context_pct": None,
-        "tokens_in": 0, "tokens_out": 0, "model": None,
+        "context_window": None,
+        "final_context_pct": None,
+        "peak_context_pct": None,
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "model": None,
         "measurement_source": None,
     }
     peak = 0.0
@@ -201,7 +213,7 @@ async def reconcile_external_history(history: HistoryIndex, home: Path | None = 
             cwd=item.cwd,
             spawned_at=item.created_at,
             transcript_path=str(item.path),
-            project_id=project.id,
+            repository_id=project.id,
             project_label=project.label,
             project_root=project.root,
             project_scope_id=project.id,

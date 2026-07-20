@@ -31,7 +31,12 @@ def test_cli_spawn_sends_profile_and_structured_raw_arguments(
         sys,
         "argv",
         [
-            "mux", "spawn", "--profile", "pwsh", "--cwd", "D:/work",
+            "mux",
+            "spawn",
+            "--project",
+            "project-id",
+            "--profile",
+            "pwsh",
             "--arg=-NoExit",
         ],
     )
@@ -46,5 +51,6 @@ def test_cli_spawn_sends_profile_and_structured_raw_arguments(
     assert captured[0][0:2] == ("POST", "/api/sessions")
     assert captured[0][2] is not None
     assert captured[0][2]["profile_id"] == "pwsh"
+    assert captured[0][2]["project_id"] == "project-id"
     assert captured[0][2]["argv"] == ["-NoExit"]
     assert json.loads(capsys.readouterr().out) == {"ok": True}

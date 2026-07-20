@@ -50,21 +50,33 @@ def detected_profiles() -> list[ShellProfile]:
     if executable := _available("powershell.exe"):
         profiles.append(
             ShellProfile(
-                "powershell", "Windows PowerShell", executable, ["-NoLogo"],
-                marker="ps", capabilities=["interactive", "agent-aware"],
+                "powershell",
+                "Windows PowerShell",
+                executable,
+                ["-NoLogo"],
+                marker="ps",
+                capabilities=["interactive", "agent-aware"],
             )
         )
     if executable := _available("pwsh.exe"):
         profiles.append(
             ShellProfile(
-                "pwsh", "PowerShell 7", executable, ["-NoLogo"], marker="ps7",
+                "pwsh",
+                "PowerShell 7",
+                executable,
+                ["-NoLogo"],
+                marker="ps7",
                 capabilities=["interactive", "agent-aware"],
             )
         )
     if executable := _available("cmd.exe"):
         profiles.append(
             ShellProfile(
-                "cmd", "Command Prompt", executable, ["/Q"], marker="cmd",
+                "cmd",
+                "Command Prompt",
+                executable,
+                ["/Q"],
+                marker="cmd",
                 capabilities=["interactive", "agent-aware"],
             )
         )
@@ -74,8 +86,12 @@ def detected_profiles() -> list[ShellProfile]:
             profile_id = "wsl-" + re.sub(r"[^a-z0-9]+", "-", distro.casefold()).strip("-")
             profiles.append(
                 ShellProfile(
-                    profile_id, f"WSL: {distro}", wsl,
-                    ["--distribution", distro], cwd_strategy="wsl", marker="wsl",
+                    profile_id,
+                    f"WSL: {distro}",
+                    wsl,
+                    ["--distribution", distro],
+                    cwd_strategy="wsl",
+                    marker="wsl",
                     capabilities=["interactive", "wsl", "agent-bridge-unavailable"],
                 )
             )
@@ -107,9 +123,7 @@ def _wsl_cwd(executable: str, args: list[str], cwd: Path) -> str:
         command.extend(["--distribution", distro])
     command.extend(["--", "wslpath", "-a", "-u", str(cwd)])
     try:
-        result = subprocess.run(
-            command, check=False, capture_output=True, text=True, timeout=3
-        )
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=3)
         translated = result.stdout.strip()
         if result.returncode == 0 and translated.startswith("/"):
             return translated
@@ -138,7 +152,10 @@ def resolve_profile(config: Config, profile_id: str, cwd: Path) -> ResolvedProfi
     capabilities = list(profile.capabilities)
     executable_name = Path(executable).name.casefold()
     if profile.cwd_integration and executable_name in {
-        "powershell", "powershell.exe", "pwsh", "pwsh.exe"
+        "powershell",
+        "powershell.exe",
+        "pwsh",
+        "pwsh.exe",
     }:
         if any(item.casefold() in {"-command", "-c", "-file", "-f"} for item in argv):
             raise ValueError(
@@ -148,9 +165,9 @@ def resolve_profile(config: Config, profile_id: str, cwd: Path) -> ResolvedProfi
             "$global:__swe_mux_prompt=$function:prompt;"
             "function global:prompt {"
             "try {$u=[System.Uri]::new((Get-Location).ProviderPath).AbsoluteUri;"
-            "[Console]::Write(\"$([char]27)]7;$u$([char]7)\")} catch {};"
+            '[Console]::Write("$([char]27)]7;$u$([char]7)")} catch {};'
             "if($global:__swe_mux_prompt){& $global:__swe_mux_prompt}"
-            "else {\"PS $($executionContext.SessionState.Path.CurrentLocation)> \"}}"
+            'else {"PS $($executionContext.SessionState.Path.CurrentLocation)> "}}'
         )
         if not any(item.casefold() == "-noexit" for item in argv):
             argv.append("-NoExit")

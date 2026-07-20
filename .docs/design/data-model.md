@@ -2,51 +2,54 @@
 
 ## Ownership
 
-- A PTY session is ephemeral process state. A durable agent run/history row owns observer
-  annotations and agent-run notes.
-- A project scope is one concrete worktree/filesystem root. It owns project config and
-  project/agent-run Markdown under `.swe-mux/`; a repository group is display-only.
-- A space is app-owned workflow state. It owns layout and its app-data Markdown note, never
-  a project scope.
-- Runtime OSC cwd is display/convenience telemetry only. Spawn/run scope remains the trusted
-  rule-matching and artifact-ownership input.
+- `ProjectRecord`: stable ID, name, canonical root, optional Group, position, layout,
+  layout revision, and default backend/profile. A deprecated resource-presentation field may
+  still be loaded from older records but has no browser behavior.
+- `ProjectGroupRecord`: stable ID, name, and position. It has no behavioral ownership.
+- `SessionRecord.project_id`: immutable canonical Project ownership. `cwd`/`spawn_cwd` begin
+  at the Project root; validated runtime cwd remains telemetry.
+- Git `repository_id`, project scope, root, and repository group fields are derived metadata,
+  separate from canonical Project ownership.
 
 ## Core SQLite records
 
-- `spaces`: stable space identity, defaults, layout, and optimistic layout revision. Layout
-  v4 stores the terminal/preview split-stack tree separately from a bounded per-space
-  `note_dock` containing ordered open note resource IDs, active ID, and desktop size.
-- `history`: one agent-run lifecycle with backend/native ID, immutable scope, transcript
-  pointer, model/context telemetry, generated-title policy, and exit state.
-- `events`: monotonically sequenced mux events. Automation first converts these to bounded
-  normalized envelopes; native payload schemas do not escape adapters.
-- `project_scopes`, `repo_groups`, `artifacts`: concrete project roots, display grouping,
-  and durable project-file relationships.
+- `projects` and `project_groups`: sidebar ownership and organization.
+- `history`: durable agent-run lifecycle, canonical `project_id`, native identity,
+  transcript pointer, derived Git metadata, context/model telemetry, explicit compaction
+  summary, and exit state.
+- `events`: monotonically sequenced mux events.
+- `process_evidence`: bounded PID+creation-time fingerprints, owner/lineage/Job Object
+  evidence, state/confidence, and exit evidence; command text is never stored.
+- `quota_samples` and `quota_sample_rollups`: durable raw observations and daily retention
+  summaries. `quota_reset_events` and `quota_attributions` retain reset/correlation evidence.
+- `context_compactions`, `tool_events`, and `transcript_telemetry_coverage`: deduplicated
+  explicit provider evidence plus versioned parser coverage.
+- `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
+  for diagnostics and future Git expansion, not session containment.
+- Automation, notification, lineage, experience, batch, and voice tables retain their
+  feature-specific contracts.
+- History, operational telemetry, automation, and voice use separate serialized connections to
+  one WAL database plus a process-wide per-database operation coordinator. Complete operations
+  cannot compete for SQLite's single writer slot; every failed worker operation rolls back, and
+  an operation may not return with an implicit transaction still open. Expected uniqueness
+  deduplication also rolls back before returning.
 
-## Automation SQLite records
+## Filesystem records
 
-- `automation_annotations`: durable agent-run output with tag/content, source event,
-  rule/revision, provider/model/generation, tokens, cost, confidence, and provenance.
-- `automation_firings` and `automation_action_results`: idempotent event/rule-revision
-  evaluation, complete condition trace, shadow/live status, and bounded errors/results.
-- `automation_observer_calls`: input hash/size—not prompt or transcript—plus provider/model,
-  generation, usage, latency, cost, status, and redacted error.
-- `automation_checkpoints`: debounce, threshold, rate, and fleet activity checkpoints.
-- `automation_budget_ledger`: UTC-day global/per-rule token and dollar accounting linked to
-  observer calls; missing provider cost is reconciled by generation ID.
-- `automation_notifications`: provider-neutral attention records with evidence/read state.
-- `automation_model_cache`: one explicit-refresh OpenRouter catalog snapshot and error state.
-- `session_lineage`: idempotent resume/handoff/continuation/review edges between atomic runs.
-- `experience_entries`: normalized error/resolution evidence and source-run provenance.
-- `observer_batches`: reviewed ended-run selection plus preview-only results and spend.
-- `voice_clips`: one read-aloud clip per generation — session/run identity, trigger,
-  content mode, engine/voice, spoken text, file pointer into `<data_dir>/voice/`, size,
-  status/error, and summary model/token/cost fields. Byte-cap pruned; snapshots omit paths.
+- `<project>/.swe-mux/config.toml`: versioned, typed portable Project profile, prompt-scope,
+  notification-permission, and additive ignore overrides. Legacy `resource_open_mode` input
+  remains parseable for compatibility but is omitted from current effective/public options.
+- `<project>/.swe-mux/notes/project.md`: the Project's one canonical note.
+- `<project>/.swe-mux/prompts/<uuid>.md`: Project prompt templates with TOML frontmatter and
+  inert Markdown-like text bodies. `<data_dir>/prompts/` holds global templates;
+  `<data_dir>/prompt-library-state.json` holds bounded device-independent favorites/recents.
+- `<data_dir>/provider-accounts.json` and provider snapshot directories: private account
+  metadata/auth, never project data or public API payloads.
 
 ## Retention and secrecy
 
-Firing, action, call, and notification diagnostics use configured retention. Annotations,
-lineage, and experience records are durable history substrate. Native transcripts remain in
-their vendor locations and are never copied into SQLite. The OpenRouter key lives only in an
-environment variable or the separate DPAPI-protected secrets file; all public records expose
-configured/source status only.
+Native transcripts remain in vendor locations. Provider auth and the OpenRouter key are
+never stored in SQLite or project files. Raw operational telemetry is time-bounded; old
+quota samples roll into daily summaries before deletion. Process and operational retention
+are independently configurable. Quota history contains account IDs and utilization, never
+credentials; process history contains command hashes, never command text.

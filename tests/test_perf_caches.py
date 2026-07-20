@@ -82,44 +82,6 @@ def test_transcript_cache_propagates_missing_file(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# server._note_card (note-shelf preview cache)
-# --------------------------------------------------------------------------- #
-def test_note_card_caches_and_invalidates(tmp_path: Path, monkeypatch) -> None:
-    server._NOTE_PREVIEW_CACHE.clear()
-    path = tmp_path / "note.md"
-    path.write_text("# Title\n\nBody text here.\n", encoding="utf-8")
-    calls = {"n": 0}
-    real = server._note_preview
-
-    def counting(p, *, app_owned=False):
-        calls["n"] += 1
-        return real(p, app_owned=app_owned)
-
-    monkeypatch.setattr(server, "_note_preview", counting)
-
-    t1, e1, m1 = server._note_card(path, False)
-    _, _, m2 = server._note_card(path, False)
-    assert calls["n"] == 1  # cache hit
-    assert t1 == "Title" and "Body text" in e1
-    assert m1 == m2 > 0
-
-    path.write_text("# New\n\nDifferent.\n", encoding="utf-8")
-    _bump_mtime(path)
-    t3, _, _ = server._note_card(path, False)
-    assert calls["n"] == 2  # re-read after change
-    assert t3 == "New"
-
-    # app_owned is part of the key: a different variant re-reads.
-    server._note_card(path, True)
-    assert calls["n"] == 3
-
-
-def test_note_card_missing_file_returns_fallback(tmp_path: Path) -> None:
-    server._NOTE_PREVIEW_CACHE.clear()
-    assert server._note_card(tmp_path / "gone.md", False) == (None, "", 0.0)
-
-
-# --------------------------------------------------------------------------- #
 # server._load_repo_rule_entry (repository rules mtime cache)
 # --------------------------------------------------------------------------- #
 def test_repo_rule_entry_caches_by_mtime(tmp_path: Path, monkeypatch) -> None:
@@ -192,9 +154,7 @@ def _write_claude(home: Path, native_id: str, cwd: str, *, assistant_lines: int 
     return path
 
 
-async def test_reconcile_watermark_skips_unchanged_transcripts(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_reconcile_watermark_skips_unchanged_transcripts(tmp_path: Path, monkeypatch) -> None:
     home = tmp_path / "home"
     cwd = str(tmp_path / "repo")
     claude = _write_claude(home, "claude-id", cwd)

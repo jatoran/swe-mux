@@ -19,9 +19,7 @@ def manager() -> Any:
 
 def test_hook_schema_rejects_unknown_templates_and_unbounded_retry() -> None:
     with pytest.raises(HookConfigError, match="unsupported template"):
-        parse_hook_rules(
-            '[[hook]]\n[hook.action]\nkind="write_pty"\ntext="{secret}"\n'
-        )
+        parse_hook_rules('[[hook]]\n[hook.action]\nkind="write_pty"\ntext="{secret}"\n')
     with pytest.raises(HookConfigError, match="retries is out of range"):
         parse_hook_rules(
             '[[hook]]\n[hook.action]\nkind="http"\nurl="https://example.test"\nretries=99\n'
@@ -34,8 +32,7 @@ async def test_invalid_reload_retains_last_known_good_and_emits_diagnostic(
 ) -> None:
     path = tmp_path / "hooks.toml"
     path.write_text(
-        '[[hook]]\n[hook.match]\ntype="approval_*"\n'
-        '[hook.action]\nkind="notify"\nchannel="ui"\n',
+        '[[hook]]\n[hook.match]\ntype="approval_*"\n[hook.action]\nkind="notify"\nchannel="ui"\n',
         encoding="utf-8",
     )
     events = EventBus()

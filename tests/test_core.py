@@ -13,7 +13,7 @@ from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
 from swe_mux.launchers import create_agent_shims, resolve_command
-from swe_mux.models import SessionRecord, SpaceRecord
+from swe_mux.models import ProjectRecord, SessionRecord
 from swe_mux.pty_host import merge_environment
 from swe_mux.reconcile import reconcile_external_history
 from swe_mux.server import (
@@ -32,18 +32,16 @@ def test_adapters_keep_executable_and_arguments_structured(tmp_path: Path) -> No
     assert spec.executable == "claude.exe"
     assert spec.argv == ("--session-id", "native-id", "--dangerously-skip-permissions")
 
-    shell_spec = ShellAdapter("powershell.exe").spawn_spec(
-        "ignored", SpawnOptions(tmp_path)
-    )
+    shell_spec = ShellAdapter("powershell.exe").spawn_spec("ignored", SpawnOptions(tmp_path))
     assert shell_spec.executable == "powershell.exe"
     assert shell_spec.argv == ()
 
 
 async def test_history_and_event_bus_persist_contract(tmp_path: Path) -> None:
     history = HistoryIndex(tmp_path / "mux.db")
-    space = SpaceRecord("default", "Main", 0)
-    await history.ensure_default_space(space)
-    assert [item.id for item in await history.list_spaces()] == ["default"]
+    project = ProjectRecord("default", "Main", str(tmp_path), 0)
+    await history.upsert_project(project)
+    assert [item.id for item in await history.list_projects()] == ["default"]
 
     session = SessionRecord(
         "mux-id",
@@ -151,9 +149,7 @@ def test_agent_launcher_runs_batch_commands_through_comspec(
     )
 
     assert agent_launcher._launch(r"C:\npm\codex.cmd", ["--version"]) == 0
-    assert calls[0][:4] == [
-        r"C:\Windows\System32\cmd.exe", "/d", "/s", "/c"
-    ]
+    assert calls[0][:4] == [r"C:\Windows\System32\cmd.exe", "/d", "/s", "/c"]
     assert "codex.cmd" in calls[0][4]
 
 

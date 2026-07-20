@@ -29,19 +29,23 @@ class HistoryStub:
         return self.row if identity == self.row["id"] else None
 
 
-class SpacesStub:
+class ProjectsStub:
     def __init__(self) -> None:
-        self.spaces = {
+        self.projects = {
             "default": SimpleNamespace(
-                id="default", layout={"version": 3, "root": None}, layout_revision=0
+                id="default",
+                name="Main",
+                root=".",
+                layout={"version": 3, "root": None},
+                layout_revision=0,
             )
         }
 
     async def update(self, identity: str, **changes: Any) -> Any:
-        space = self.spaces[identity]
-        space.layout = changes["layout"]
-        space.layout_revision += 1
-        return space
+        project = self.projects[identity]
+        project.layout = changes["layout"]
+        project.layout_revision += 1
+        return project
 
 
 async def test_delete_crashed_session_dismisses_it_without_stopping_pty(
@@ -81,7 +85,7 @@ async def test_review_requires_preview_then_explicit_confirm_and_records_lineage
         "backend": "claude",
         "name": "builder",
         "cwd": str(tmp_path),
-        "space_id": "default",
+        "project_id": "default",
     }
     store = AutomationStore(tmp_path / "mux.db")
     await store.create_annotation(
@@ -122,7 +126,7 @@ async def test_review_requires_preview_then_explicit_confirm_and_records_lineage
     app["history"] = HistoryStub(source)
     app["automation_store"] = store
     app["sessions"] = SimpleNamespace(sessions={}, stop=lambda _identity: None)
-    app["spaces"] = SpacesStub()
+    app["projects"] = ProjectsStub()
     app.router.add_post("/review/{sid}", second_opinion)
     app.router.add_get("/lineage", list_lineage)
 
@@ -145,7 +149,7 @@ async def test_review_requires_preview_then_explicit_confirm_and_records_lineage
             json={
                 "confirm": True,
                 "backend": "codex",
-                "space": "default",
+                "project_id": "default",
                 "instructions": "Focus on tests.",
             },
         )
@@ -157,7 +161,7 @@ async def test_review_requires_preview_then_explicit_confirm_and_records_lineage
             json={
                 "confirm": True,
                 "backend": "codex",
-                "space": "default",
+                "project_id": "default",
                 "instructions": "Focus on tests.",
                 "preview_token": preview["preview"]["preview_token"],
             },

@@ -27,8 +27,12 @@ def _urls(value: Any) -> list[str]:
 async def _status(executable: str, command: str) -> tuple[Any | None, str]:
     try:
         process = await asyncio.create_subprocess_exec(
-            executable, command, "status", "--json",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            executable,
+            command,
+            "status",
+            "--json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=4)
     except (OSError, TimeoutError) as exc:
@@ -58,8 +62,11 @@ async def tailscale_ipv4(executable: str | None = None) -> str | None:
         return None
     try:
         process = await asyncio.create_subprocess_exec(
-            executable, "ip", "-4",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            executable,
+            "ip",
+            "-4",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=4)
     except (OSError, TimeoutError):
@@ -135,9 +142,10 @@ async def _probe_tailscale_status(port: int, *, tailnet_enabled: bool = True) ->
         return result
     serialized = json.dumps(payload).casefold()
     urls = [url for url in _urls(payload) if ".ts.net" in url.casefold()]
-    target_ok = any(marker in serialized for marker in (
-        f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"
-    ))
+    target_ok = any(
+        marker in serialized
+        for marker in (f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}")
+    )
     result["serve_configured"] = bool(urls and target_ok)
     result["serve_url"] = urls[0] if urls else None
     result["diagnostic"] = (

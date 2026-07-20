@@ -25,9 +25,7 @@ def test_versioned_usage_fixtures_normalize_without_live_cli(
     filename: str, provider: str, model: str, total: int
 ) -> None:
     payload = json.loads((FIXTURES / filename).read_text(encoding="utf-8"))
-    normalized = normalize_usage(
-        payload, provider, {"adapter": "fixture", "package": filename}
-    )
+    normalized = normalize_usage(payload, provider, {"adapter": "fixture", "package": filename})
     assert normalized["provider"] == provider
     assert normalized["models"][0]["model"] == model
     assert normalized["totals"]["total_tokens"] == total

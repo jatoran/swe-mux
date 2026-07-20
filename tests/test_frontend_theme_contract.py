@@ -11,10 +11,26 @@ def test_every_builtin_theme_defines_readable_xterm_ansi_and_ui_states() -> None
     source = (root / "frontend" / "src" / "theme.ts").read_text(encoding="utf-8")
     css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
     required = {
-        "background", "foreground", "cursor", "selectionBackground", "black",
-        "brightBlack", "red", "brightRed", "green", "brightGreen", "yellow",
-        "brightYellow", "blue", "brightBlue", "magenta", "brightMagenta", "cyan",
-        "brightCyan", "white", "brightWhite",
+        "background",
+        "foreground",
+        "cursor",
+        "selectionBackground",
+        "black",
+        "brightBlack",
+        "red",
+        "brightRed",
+        "green",
+        "brightGreen",
+        "yellow",
+        "brightYellow",
+        "blue",
+        "brightBlue",
+        "magenta",
+        "brightMagenta",
+        "cyan",
+        "brightCyan",
+        "white",
+        "brightWhite",
     }
     for name in ("dark", "light", "solarized-dark", "tokyo-night"):
         pattern = rf"(?:^|\n)\s*['\"]?{re.escape(name)}['\"]?:\s*\{{([^}}]+)\}}"
@@ -28,7 +44,10 @@ def test_every_builtin_theme_defines_readable_xterm_ansi_and_ui_states() -> None
         assert contrast_ratio(background.group(1), foreground.group(1)) >= 4.5
 
     for selector in (
-        "button:focus-visible", ".state-dot.working", ".state-dot.awaiting",
-        ".state-dot.crashed", "selectionBackground",
+        "button:focus-visible",
+        ".state-dot.working",
+        ".state-dot.awaiting",
+        ".state-dot.crashed",
+        "selectionBackground",
     ):
         assert selector in css or selector in source

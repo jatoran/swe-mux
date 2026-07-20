@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "Sidechain completion cannot end the root turn; root completion becomes safe only after terminal evidence and debounce.",
+  "steps": [
+    {
+      "kind": "transcript",
+      "record": {"type": "user", "isSidechain": false, "message": {"content": "Inspect the fixture."}},
+      "expect_delivery": "blocked",
+      "oracle_safe": false
+    },
+    {
+      "kind": "transcript",
+      "record": {"type": "assistant", "isSidechain": true, "message": {"content": [{"type": "text", "text": "subagent done"}], "stop_reason": "end_turn"}},
+      "expect_delivery": "blocked",
+      "oracle_safe": false
+    },
+    {
+      "kind": "transcript",
+      "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Read"}], "stop_reason": "tool_use"}}
+    },
+    {
+      "kind": "transcript",
+      "record": {"type": "user", "isSidechain": false, "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "fixture", "is_error": false}]}}
+    },
+    {
+      "kind": "transcript",
+      "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "root done"}], "stop_reason": "end_turn"}},
+      "expect_delivery": "unknown",
+      "oracle_safe": false
+    },
+    {
+      "kind": "terminal",
+      "mode": "normal",
+      "expect_delivery": "unknown",
+      "oracle_safe": false
+    },
+    {
+      "kind": "timer",
+      "seconds": 2.1,
+      "expect_delivery": "safe",
+      "oracle_safe": true
+    }
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "subagent_activity", "source": "transcript", "scope": "subagent", "kind": "assistant"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "Read"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "Read", "success": true},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "parser": {"status": "ready", "recognized": 5, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "safe",
+    "delivery_reason": "all_required_evidence_positive"
+  }
+}

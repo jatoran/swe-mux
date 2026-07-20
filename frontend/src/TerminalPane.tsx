@@ -209,6 +209,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let redrawFrame = 0
     let invalidateAtlasOnRedraw = false
     let webgl: WebglAddon | null = null
+    const reportTerminalState = () => {
+      if (socket?.readyState !== WebSocket.OPEN) return
+      socket.send(JSON.stringify({ type: 'terminal_state', mode: term.buffer.active.type }))
+    }
+    const bufferChange = term.buffer.onBufferChange(reportTerminalState)
+    const terminalStateTimer = window.setInterval(reportTerminalState, 5000)
     const scheduleViewport = (invalidateAtlas: boolean) => {
       invalidateAtlasOnRedraw ||= invalidateAtlas
       window.cancelAnimationFrame(fitFrame)
@@ -318,6 +324,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if(!reconnecting)reportStartup('socket_open')
         scheduleFit()
         claimInput()
+        reportTerminalState()
         if(!reconnecting)term.focus()
       }
       next.onmessage=event=>{if(socket===next)handleMessage(event)}
@@ -330,9 +337,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       connect(true)
     }
     const input = term.onData(data => {
+      const protocolResponse = isTerminalProtocolResponse(data)
       const replayResponse = replaying && replayAllowsTerminalResponses && isTerminalProtocolResponse(data)
       if ((!replaying || replayResponse) && socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'input', data, broadcast: replayResponse ? false : broadcastRef.current }))
+        socket.send(JSON.stringify({ type: 'input', data, kind: protocolResponse ? 'terminal_response' : 'user', broadcast: protocolResponse ? false : broadcastRef.current }))
       }
     })
     let longPress: number | null = null
@@ -458,7 +466,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     window.addEventListener('online',onOnline)
     window.visualViewport?.addEventListener('resize',scheduleFit)
     connect(false)
-    return () => { disposed=true;if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);input.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('online',onOnline);window.removeEventListener('mux:theme',onTheme);host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointerup',pointerEnd);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('pointercancel',pointerEnd);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null }
+    return () => { disposed=true;if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();input.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('online',onOnline);window.removeEventListener('mux:theme',onTheme);host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointerup',pointerEnd);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('pointercancel',pointerEnd);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null }
   }, [session.id, keybindings, scrollback, mobileInput])
 
   const copy = () => {

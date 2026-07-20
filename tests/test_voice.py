@@ -128,7 +128,7 @@ def make_service(
     record = SessionRecord(
         id="s1",
         name="agent",
-        space_id="default",
+        project_id="default",
         backend=backend,
         native_session_id="native-1",
         cwd=str(tmp_path),

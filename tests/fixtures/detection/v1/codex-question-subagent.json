@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "backend": "codex",
+  "description": "A question blocks delivery, subagent activity does not complete the root, and task completion is debounced.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "session_meta", "payload": {"id": "root-thread", "cwd": "."}}},
+    {
+      "kind": "transcript",
+      "record": {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-1"}},
+      "expect_delivery": "blocked",
+      "oracle_safe": false
+    },
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "user_message", "message": "test"}}},
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "sub_agent_activity", "kind": "started", "agent_path": ["worker"], "agent_thread_id": "child"}}},
+    {
+      "kind": "transcript",
+      "record": {"type": "event_msg", "payload": {"type": "request_user_input"}},
+      "expect_delivery": "blocked",
+      "oracle_safe": false
+    },
+    {"kind": "terminal", "mode": "normal"},
+    {
+      "kind": "timer",
+      "seconds": 3.0,
+      "expect_delivery": "blocked",
+      "oracle_safe": false
+    },
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-1"}}},
+    {
+      "kind": "transcript",
+      "record": {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-1", "duration_ms": 50}},
+      "expect_delivery": "unknown",
+      "oracle_safe": false
+    },
+    {
+      "kind": "timer",
+      "seconds": 2.1,
+      "expect_delivery": "safe",
+      "oracle_safe": true
+    }
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "subagent_activity", "source": "transcript", "scope": "subagent", "kind": "started"},
+      {"type": "approval_needed", "source": "transcript", "scope": "root", "kind": "input"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "parser": {"status": "ready", "recognized": 7, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "safe",
+    "delivery_reason": "all_required_evidence_positive"
+  }
+}

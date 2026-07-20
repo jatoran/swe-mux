@@ -6,20 +6,25 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class SpawnRequest:
+    project_id: str
     backend: str | None = None
     profile_id: str | None = None
     executable: str | None = None
     argv: tuple[str, ...] = field(default_factory=tuple)
-    cwd: str | None = None
-    space_id: str = "default"
     name: str | None = None
-    worktree: dict[str, Any] | None = None
 
     @classmethod
     def parse(cls, body: dict[str, Any]) -> SpawnRequest:
         known = {
-            "backend", "profile_id", "executable", "exe", "argv", "exe_args",
-            "cwd", "space", "name", "worktree",
+            "backend",
+            "profile_id",
+            "executable",
+            "exe",
+            "argv",
+            "exe_args",
+            "project_id",
+            "project",
+            "name",
         }
         unknown = set(body) - known
         if unknown:
@@ -38,16 +43,14 @@ class SpawnRequest:
             raise ValueError({"executable": "cannot be combined with profile_id"})
         if executable is not None and not str(executable).strip():
             raise ValueError({"executable": "cannot be empty"})
-        worktree = body.get("worktree")
-        if worktree is not None and not isinstance(worktree, dict):
-            raise ValueError({"worktree": "must be an object"})
+        project_id = str(body.get("project_id") or body.get("project") or "").strip()
+        if not project_id:
+            raise ValueError({"project_id": "is required"})
         return cls(
+            project_id=project_id,
             backend=backend,
             profile_id=profile,
             executable=str(executable) if executable else None,
             argv=tuple(raw_argv),
-            cwd=str(body["cwd"]) if body.get("cwd") else None,
-            space_id=str(body.get("space") or "default"),
             name=str(body["name"]) if body.get("name") else None,
-            worktree=worktree,
         )

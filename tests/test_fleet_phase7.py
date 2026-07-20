@@ -163,12 +163,30 @@ async def test_same_branch_and_port_collision_interlocks_are_explainable(
     intelligence, bus, store, processes = fleet(tmp_path, {"a": first, "b": second})
     processes.owned = {
         (10, 1.0): OwnedProcess(
-            10, None, "a", "node", "vite", 1.0, None, 0, 1,
-            [{"host": "127.0.0.1", "port": 5173}], [],
+            10,
+            None,
+            "a",
+            "node",
+            "vite",
+            1.0,
+            None,
+            0,
+            1,
+            [{"host": "127.0.0.1", "port": 5173}],
+            [],
         ),
         (20, 2.0): OwnedProcess(
-            20, None, "b", "node", "vite", 2.0, None, 0, 1,
-            [{"host": "127.0.0.1", "port": 5173}], [],
+            20,
+            None,
+            "b",
+            "node",
+            "vite",
+            2.0,
+            None,
+            0,
+            1,
+            [{"host": "127.0.0.1", "port": 5173}],
+            [],
         ),
     }
     monitor = bus.subscribe()

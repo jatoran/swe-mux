@@ -41,3 +41,5 @@ out/
 *.iml
 
 _agents-orchestrator/
+.tmp-orca/
+.trash/

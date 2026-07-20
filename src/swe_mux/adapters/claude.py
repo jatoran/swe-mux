@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 import shlex
 import shutil
 import sys
@@ -11,7 +13,12 @@ from .base import SpawnOptions, SpawnSpec
 
 
 def encode_cwd(cwd: Path | str) -> str:
-    return str(Path(cwd).resolve()).replace(":", "-").replace("\\", "-").replace("/", "-")
+    return re.sub(r"[^A-Za-z0-9-]", "-", str(Path(cwd).resolve()))
+
+
+def claude_data_home() -> Path:
+    configured = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(configured).expanduser() if configured else Path.home() / ".claude"
 
 
 def _bash_executable_path(executable: str) -> str:
@@ -31,7 +38,9 @@ class ClaudeAdapter:
     name = "claude"
 
     def __init__(
-        self, default_exe: str = "claude.exe", data_dir: Path | None = None,
+        self,
+        default_exe: str = "claude.exe",
+        data_dir: Path | None = None,
         default_args: list[str] | None = None,
     ) -> None:
         self.default_exe = default_exe
@@ -91,13 +100,13 @@ class ClaudeAdapter:
         )
 
     def transcript_path(self, native_id: str, cwd: Path) -> Path:
-        return Path.home() / ".claude" / "projects" / encode_cwd(cwd) / f"{native_id}.jsonl"
+        return claude_data_home() / "projects" / encode_cwd(cwd) / f"{native_id}.jsonl"
 
     def graceful_exit_keys(self) -> str:
         return "/exit\r"
 
     def recent_transcripts(self, cwd: Path, created_at: float) -> list[tuple[float, Path, str]]:
-        root = Path.home() / ".claude" / "projects" / encode_cwd(cwd)
+        root = claude_data_home() / "projects" / encode_cwd(cwd)
         if not root.exists():
             return []
         return [

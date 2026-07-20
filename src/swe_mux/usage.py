@@ -22,9 +22,7 @@ class UsageAdapterError(ValueError):
     pass
 
 
-def prepare_usage_command(
-    command: list[str], *, windows: bool | None = None
-) -> list[str]:
+def prepare_usage_command(command: list[str], *, windows: bool | None = None) -> list[str]:
     if not command:
         raise UsageAdapterError("ccusage command is not configured")
     resolved = shutil.which(command[0])
@@ -124,8 +122,10 @@ def _daily_model_items(item: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         row = {**metrics, "modelName": str(name)}
         model_tokens = _number(metrics, "totalTokens", "total_tokens")
-        if day_cost and day_tokens and not _number(
-            metrics, "totalCost", "total_cost", "costUSD", "cost_usd", "cost"
+        if (
+            day_cost
+            and day_tokens
+            and not _number(metrics, "totalCost", "total_cost", "costUSD", "cost_usd", "cost")
         ):
             row["costUSD"] = day_cost * model_tokens / day_tokens
         result.append(row)
@@ -285,9 +285,7 @@ class UsageManager:
                     "package": (
                         CCUSAGE_PACKAGE
                         if Path(command[0]).stem.casefold() == "ccusage"
-                        else next(
-                            (part for part in command if "ccusage" in part), command[0]
-                        )
+                        else next((part for part in command if "ccusage" in part), command[0])
                     ),
                 },
             )

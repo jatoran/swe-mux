@@ -51,7 +51,7 @@ CONDITION_SHORTHANDS = {
     "backend",
     "project_scope_id",
     "session_name",
-    "space_id",
+    "project_id",
     "state",
     "attended",
     "context_pct",
@@ -106,6 +106,67 @@ ADAPTER_CAPABILITIES: dict[str, dict[str, Any]] = {
         "normalized_events": [],
     },
 }
+
+# Built-ins execute through the rule engine but are configured as product settings rather
+# than rules.toml entries. Keep their user-facing inventory explicit so the control plane
+# can show the complete effective setup, including disabled observers.
+BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
+    {
+        "id": "builtin.session-titler",
+        "name": "Session titler",
+        "setting_key": "observer_titler_enabled",
+        "setting_label": "Session titler",
+        "trigger": "turn_ended",
+        "input": "Last completed turn",
+        "model": "Cheap model",
+        "result": "Run note used as the generated session title",
+        "description": "Creates one compact task title for each agent run.",
+    },
+    {
+        "id": "builtin.turn-summarizer",
+        "name": "Turn summarizer",
+        "setting_key": "observer_summarizer_enabled",
+        "setting_label": "Turn summarizer",
+        "trigger": "turn_ended",
+        "input": "Last completed turn",
+        "model": "Cheap model",
+        "result": "Run note tagged turn-summary",
+        "description": "Records a one-line factual summary after each completed turn.",
+    },
+    {
+        "id": "builtin.stalled-triage",
+        "name": "Stalled run triage",
+        "setting_key": "phase7_observers_enabled",
+        "setting_label": "Attention observers",
+        "trigger": "stalled",
+        "input": "Recent summary chain",
+        "model": "Cheap model",
+        "result": "Attention inbox warning",
+        "description": "Explains whether a detected stall appears to need user attention.",
+    },
+    {
+        "id": "builtin.approval_needed-triage",
+        "name": "Approval request triage",
+        "setting_key": "phase7_observers_enabled",
+        "setting_label": "Attention observers",
+        "trigger": "approval_needed",
+        "input": "Last completed turn",
+        "model": "Cheap model",
+        "result": "Attention inbox warning",
+        "description": "Summarizes an approval request without approving or rejecting it.",
+    },
+    {
+        "id": "builtin.context-handoff",
+        "name": "Context handoff suggestion",
+        "setting_key": "phase7_observers_enabled",
+        "setting_label": "Attention observers",
+        "trigger": "context_pressure",
+        "input": "Last 18 transcript messages",
+        "model": "Standard model",
+        "result": "Run note tagged handoff-suggestion",
+        "description": "Drafts a concise handoff note when context usage is pressured.",
+    },
+)
 
 EVENT_PAYLOAD_FIELDS: dict[str, set[str]] = {
     "session_spawned": {"backend", "name", "project_scope_id", "repo_group_id"},
@@ -222,7 +283,7 @@ class NormalizedEvent:
     backend: str | None
     project_scope_id: str | None
     session_name: str | None
-    space_id: str | None
+    project_id: str | None
     state: str | None
     attended: bool
     context_pct: float
@@ -306,7 +367,7 @@ def normalize_event(
         backend=record.backend if record else None,
         project_scope_id=record.trusted_scope_id if record else None,
         session_name=record.name if record else None,
-        space_id=record.space_id if record else None,
+        project_id=record.project_id if record else None,
         state=record.state if record else None,
         attended=attended,
         context_pct=record.context_pct if record else 0,
@@ -496,9 +557,7 @@ def _validate_condition(rule_id: str, condition: dict[str, Any]) -> None:
         raise RuleValidationError(f"rule {rule_id} in condition requires a list")
 
 
-def _validate_action(
-    rule_id: str, action: dict[str, Any], *, result_mapping: bool = False
-) -> None:
+def _validate_action(rule_id: str, action: dict[str, Any], *, result_mapping: bool = False) -> None:
     kind = str(action.get("kind") or "")
     unknown = set(action) - ACTION_FIELDS.get(kind, set())
     if unknown:
@@ -942,7 +1001,7 @@ class AutomationEngine:
                         "backend",
                         "project_scope_id",
                         "session_name",
-                        "space_id",
+                        "project_id",
                         "state",
                         "attended",
                         "context_pct",
@@ -1572,6 +1631,15 @@ class AutomationEngine:
             "enabled": self.config.automation_enabled,
             "rules_path": str(self.path),
             "rules": [rule.snapshot() for rule in self.rules],
+            "built_in_rules": [
+                {
+                    **item,
+                    "enabled": bool(getattr(self.config, item["setting_key"])),
+                    "shadow": False,
+                    "source": "builtin",
+                }
+                for item in BUILTIN_OBSERVER_CATALOG
+            ],
             "diagnostic": self.diagnostic,
             "last_loaded_at": self.last_loaded_at,
             "queue": {

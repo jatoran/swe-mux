@@ -29,9 +29,7 @@ def test_default_bindings_reference_valid_commands() -> None:
         ("ctrl+hyper+x", "unknown modifier"),
     ],
 )
-def test_binding_validation_protects_terminal_and_browser_input(
-    chord: str, message: str
-) -> None:
+def test_binding_validation_protects_terminal_and_browser_input(chord: str, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         normalize_binding(chord, "palette.open")
 
@@ -54,6 +52,6 @@ def test_keybinding_editor_metadata_exposes_commands_and_reserved_lists() -> Non
 
     assert "projects.open" in commands
     assert "pane.stackNew" in commands
-    assert "space.activate(9)" in commands
+    assert "project.activate(9)" in commands
     assert "ctrl+w" in policy["browser_reserved"]
     assert "ctrl+c" in policy["terminal_reserved"]

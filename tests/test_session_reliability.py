@@ -7,6 +7,9 @@ from collections import deque
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
+from swe_mux.git_projects import ProjectIdentity
 from swe_mux.models import SessionRecord
 from swe_mux.runtime_cwd import Osc7Parser
 from swe_mux.server import session_startup_metrics
@@ -17,9 +20,7 @@ def _fake_session(max_bytes: int = 32) -> Any:
     fake = cast(Any, Session.__new__(Session))
     fake.scrollback = ScrollbackBuffer(max_bytes)
     fake.subscribers = set()
-    fake.record = cast(
-        Any, type("Record", (), {"snapshot": lambda self: {"state": "running"}})()
-    )
+    fake.record = cast(Any, type("Record", (), {"snapshot": lambda self: {"state": "running"}})())
     fake.revision = 0
     return fake
 
@@ -127,9 +128,7 @@ async def test_fanout_records_first_output_and_prompt_startup_milestones() -> No
     queue: asyncio.Queue[bytes] = asyncio.Queue()
     await queue.put(b"profile output\r\n\x1b]7;file:///D:/PROJECTS/swe-mux\x07")
     await queue.put(b"")
-    record = SessionRecord(
-        "mux", "shell", "default", "shell", "native", ".", "powershell.exe", []
-    )
+    record = SessionRecord("mux", "shell", "default", "shell", "native", ".", "powershell.exe", [])
     updates: list[dict[str, float]] = []
     output: list[bytes] = []
     session = SimpleNamespace(
@@ -170,9 +169,7 @@ async def test_fanout_records_first_output_and_prompt_startup_milestones() -> No
 
 
 async def test_browser_startup_metrics_are_validated_and_persisted_once() -> None:
-    record = SessionRecord(
-        "mux", "shell", "default", "shell", "native", ".", "powershell.exe", []
-    )
+    record = SessionRecord("mux", "shell", "default", "shell", "native", ".", "powershell.exe", [])
     updates: list[dict[str, float]] = []
     emitted: list[tuple[str, dict[str, Any]]] = []
     session = SimpleNamespace(
@@ -209,3 +206,79 @@ async def test_browser_startup_metrics_are_validated_and_persisted_once() -> Non
     assert len(updates) == 1
     assert len(emitted) == 1
     assert emitted[0][0] == "session_startup_client_measured"
+
+
+async def test_spawn_returns_live_session_before_durable_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registration_started = asyncio.Event()
+    release_registration = asyncio.Event()
+    persisted: list[str] = []
+
+    class BlockingHistory:
+        async def register_project_scope(self, _project: ProjectIdentity) -> None:
+            registration_started.set()
+            await release_registration.wait()
+            persisted.append("scope")
+
+        async def session_started(self, record: SessionRecord, _transcript: str | None) -> None:
+            persisted.append(record.id)
+
+    class FakePty:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            self.pid = 123
+            self.reaper_assignment = "fixture"
+            self.output_queue: asyncio.Queue[bytes] = asyncio.Queue()
+            self.first_output_at = None
+
+        def prepare(self) -> None:
+            return None
+
+        def spawn(self) -> None:
+            return None
+
+        def isalive(self) -> bool:
+            return True
+
+    adapter = SimpleNamespace(
+        name="shell",
+        spawn_spec=lambda _native, opts: SimpleNamespace(
+            executable=opts.exe or "pwsh.exe", argv=tuple(opts.args), env={}
+        ),
+        resume_spec=lambda _native, opts: SimpleNamespace(
+            executable=opts.exe or "pwsh.exe", argv=tuple(opts.args), env={}
+        ),
+        graceful_exit_keys=lambda: "exit\r",
+        session_env=lambda _sid: {},
+        transcript_path=lambda _native, _cwd: None,
+    )
+    monkeypatch.setattr("swe_mux.session.PtyHost", FakePty)
+    manager = SessionManager(
+        {"shell": cast(Any, adapter)},
+        cast(Any, SimpleNamespace()),
+        cast(Any, BlockingHistory()),
+        cast(Any, SimpleNamespace(emit=lambda *_args, **_kwargs: asyncio.sleep(0))),
+        1024,
+        "http://127.0.0.1:1",
+    )
+    project = ProjectIdentity("scope", "Project", ".", "cwd")
+
+    session = await asyncio.wait_for(
+        manager.spawn(backend="shell", name=None, cwd=".", project_id="project", project=project),
+        timeout=0.25,
+    )
+    assert manager.sessions[session.record.id] is session
+    assert session.record.pid == 123
+    assert "server_ready" in session.record.startup_timing_ms
+    await asyncio.wait_for(registration_started.wait(), timeout=0.25)
+    assert persisted == []
+
+    release_registration.set()
+    assert session.registration_task is not None
+    await asyncio.wait_for(session.registration_task, timeout=0.25)
+    assert persisted == ["scope", session.record.id]
+    assert "durable_registration" in session.record.startup_timing_ms
+
+    for task in tuple(session.tasks):
+        task.cancel()
+    await asyncio.gather(*session.tasks, return_exceptions=True)

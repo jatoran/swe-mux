@@ -54,7 +54,8 @@ def test_only_tailscale_address_ranges_are_accepted() -> None:
 
 def test_listener_uses_localhost_plus_only_the_detected_tailnet_address() -> None:
     assert listener_host_values("127.0.0.1", True, "100.101.102.103") == [
-        "127.0.0.1", "100.101.102.103"
+        "127.0.0.1",
+        "100.101.102.103",
     ]
     assert listener_host_values("127.0.0.1", False, "100.101.102.103") == ["127.0.0.1"]
     assert listener_host_values("127.0.0.1", True, None) == ["127.0.0.1"]
@@ -79,13 +80,9 @@ def test_preview_html_rewrites_root_resources_into_registration() -> None:
 
 
 def test_browser_origin_must_match_host_and_explicit_port() -> None:
-    assert browser_origin_matches_request(
-        "http://100.101.102.103:8765", "100.101.102.103:8765"
-    )
+    assert browser_origin_matches_request("http://100.101.102.103:8765", "100.101.102.103:8765")
     assert browser_origin_matches_request("https://mux.example.ts.net", "mux.example.ts.net")
-    assert not browser_origin_matches_request(
-        "http://100.101.102.103:9999", "100.101.102.103:8765"
-    )
+    assert not browser_origin_matches_request("http://100.101.102.103:9999", "100.101.102.103:8765")
     assert not browser_origin_matches_request("https://attacker.example", "mux.example.ts.net")
 
 
@@ -247,9 +244,7 @@ async def test_hook_ingress_rejects_expired_sessions_and_bounded_bursts() -> Non
     app = web.Application(middlewares=[error_middleware, security_middleware])
     app["sessions"] = SimpleNamespace(resolve=lambda _: session)
     app["events"] = Events()
-    app["hook_ingress_windows"] = {
-        "session-a": deque([time.monotonic()] * HOOK_RATE_LIMIT)
-    }
+    app["hook_ingress_windows"] = {"session-a": deque([time.monotonic()] * HOOK_RATE_LIMIT)}
     app.router.add_post("/api/hooks/{sid}", hook_ingress)
     async with TestClient(TestServer(app)) as client:
         limited = await client.post(

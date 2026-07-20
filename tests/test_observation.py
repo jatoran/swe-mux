@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -7,7 +8,13 @@ from typing import Any, cast
 from swe_mux.event_bus import EventBus
 from swe_mux.meta_hooks import HookRule, MetaHookEngine
 from swe_mux.models import SessionRecord
-from swe_mux.observation import _claude, _codex
+from swe_mux.observation import (
+    JsonlTailer,
+    _claude,
+    _codex,
+    _record_parser_observation,
+    classify_transcript_event,
+)
 
 
 def record(backend: str) -> SessionRecord:
@@ -79,6 +86,8 @@ async def test_claude_parser_tracks_tools_completion_and_current_context() -> No
         "success": False,
         "exit_code": None,
         "detail": "pytest failed",
+        "scope": "root",
+        "call_id": "tool-1",
     }
     assert "turn_ended" in emitted
 
@@ -174,6 +183,10 @@ async def test_codex_parser_correlates_tool_result_and_exit_code() -> None:
         "success": False,
         "exit_code": 2,
         "detail": "command failed",
+        "scope": "root",
+        "call_id": "call-1",
+        "duration_ms": None,
+        "parser_version": "2",
     }
 
 
@@ -194,3 +207,84 @@ async def test_semantic_events_are_deduplicated_across_hook_and_transcript() -> 
 
     assert duplicate is first
     assert queue.qsize() == 1
+
+
+async def test_claude_sidechain_end_turn_never_completes_root() -> None:
+    session = cast(Any, SimpleNamespace(record=record("claude")))
+    session.record.state = "working"
+    events = EventBus()
+    queue = events.subscribe()
+
+    await _claude(
+        session,
+        {
+            "type": "assistant",
+            "isSidechain": True,
+            "message": {
+                "content": [{"type": "text", "text": "child complete"}],
+                "stop_reason": "end_turn",
+            },
+        },
+        events,
+    )
+
+    emitted = [await queue.get() for _ in range(queue.qsize())]
+    assert session.record.state == "working"
+    assert [item.type for item in emitted] == ["subagent_activity"]
+    assert emitted[0].payload["scope"] == "subagent"
+
+
+async def test_codex_task_started_and_user_message_emit_one_root_start() -> None:
+    session = cast(Any, SimpleNamespace(record=record("codex")))
+    events = EventBus()
+    queue = events.subscribe()
+
+    await _codex(session, {"type": "event_msg", "payload": {"type": "task_started"}}, events)
+    await _codex(session, {"type": "event_msg", "payload": {"type": "user_message"}}, events)
+
+    emitted = [await queue.get() for _ in range(queue.qsize())]
+    assert [item.type for item in emitted].count("turn_started") == 1
+
+
+async def test_parser_drift_degrades_after_sustained_unknown_ratio() -> None:
+    session = cast(Any, SimpleNamespace(record=record("codex"), publish_update=lambda: None))
+    session.record.parser_status = "watching"
+    events = EventBus()
+    queue = events.subscribe()
+    unknown = {"type": "future_outer", "payload": {"type": "future_payload"}}
+
+    for _ in range(20):
+        recognized, signature = classify_transcript_event("codex", unknown)
+        await _record_parser_observation(session, events, recognized, signature)
+
+    assert session.record.parser_status == "degraded"
+    assert session.record.parser_unknown_events == 20
+    assert session.record.parser_unknown_signatures == {
+        "codex:future_outer:future_payload": 20
+    }
+    emitted = [await queue.get() for _ in range(queue.qsize())]
+    assert [item.type for item in emitted] == ["capability_degraded"]
+
+
+async def test_jsonl_tailer_waits_for_complete_lines_and_clears_partial_on_truncate(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "transcript.jsonl"
+    path.write_bytes(b'{"type":"user"')
+    stop = asyncio.Event()
+    collected: list[dict[str, Any]] = []
+
+    async def collect() -> None:
+        async for item in JsonlTailer(path).events(stop):
+            collected.append(item)
+            if len(collected) == 1:
+                stop.set()
+
+    task = asyncio.create_task(collect())
+    await asyncio.sleep(0.3)
+    assert collected == []
+    # Truncation must discard the old unterminated prefix instead of joining it to
+    # the replacement file's first record.
+    path.write_bytes(b'{"type":"system","subtype":"turn_duration"}\n')
+    await asyncio.wait_for(task, timeout=2)
+    assert collected == [{"type": "system", "subtype": "turn_duration"}]

@@ -28,8 +28,7 @@ def main() -> None:
     spawn = sub.add_parser("spawn")
     spawn.add_argument("--backend", choices=("shell", "claude", "codex"), default="shell")
     spawn.add_argument("--name")
-    spawn.add_argument("--cwd", default=os.getcwd())
-    spawn.add_argument("--space", default="default")
+    spawn.add_argument("--project", required=True)
     spawn.add_argument("--profile")
     spawn.add_argument("--exe")
     spawn.add_argument("--arg", action="append", default=[])
@@ -40,11 +39,12 @@ def main() -> None:
     kill = sub.add_parser("kill")
     kill.add_argument("session")
     sub.add_parser("history")
-    sub.add_parser("spaces")
+    sub.add_parser("projects")
     sub.add_parser("profiles")
     sub.add_parser("doctor")
     resume = sub.add_parser("resume")
     resume.add_argument("id")
+    resume.add_argument("--project", required=True)
     args = parser.parse_args()
     if args.command == "ls":
         result = request("GET", "/api/sessions")
@@ -55,8 +55,7 @@ def main() -> None:
             {
                 "backend": args.backend,
                 "name": args.name,
-                "cwd": args.cwd,
-                "space": args.space,
+                "project_id": args.project,
                 "profile_id": args.profile,
                 "executable": args.exe,
                 "argv": args.arg,
@@ -73,14 +72,14 @@ def main() -> None:
         result = request("DELETE", f"/api/sessions/{args.session}")
     elif args.command == "history":
         result = request("GET", "/api/history")
-    elif args.command == "spaces":
-        result = request("GET", "/api/spaces")
+    elif args.command == "projects":
+        result = request("GET", "/api/projects")
     elif args.command == "profiles":
         result = request("GET", "/api/profiles")
     elif args.command == "doctor":
         result = request("GET", "/api/remote/status")
     else:
-        result = request("POST", f"/api/history/{args.id}/resume", {})
+        result = request("POST", f"/api/history/{args.id}/resume", {"project_id": args.project})
     json.dump(result, sys.stdout, indent=2)
     print()
 

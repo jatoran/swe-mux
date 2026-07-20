@@ -2,17 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
 from .base import SpawnOptions, SpawnSpec
 
 
+def codex_data_home() -> Path:
+    configured = os.environ.get("CODEX_HOME")
+    return Path(configured).expanduser() if configured else Path.home() / ".codex"
+
+
 class CodexAdapter:
     name = "codex"
 
     def __init__(
-        self, default_exe: str = "codex.exe", notify: bool = False,
+        self,
+        default_exe: str = "codex.exe",
+        notify: bool = False,
         default_args: list[str] | None = None,
     ) -> None:
         self.default_exe = default_exe
@@ -47,6 +55,8 @@ class CodexAdapter:
         try:
             first = json.loads(path.open("r", encoding="utf-8", errors="replace").readline())
             payload = first.get("payload") or {}
+            if payload.get("parent_thread_id"):
+                return None
             if payload.get("id") and payload.get("cwd"):
                 return str(payload["id"]), str(Path(payload["cwd"]).resolve())
         except (OSError, json.JSONDecodeError):
@@ -54,7 +64,7 @@ class CodexAdapter:
         return None
 
     def recent_transcripts(self, cwd: Path, created_at: float) -> list[tuple[float, Path, str]]:
-        root = Path.home() / ".codex" / "sessions"
+        root = codex_data_home() / "sessions"
         if not root.exists():
             return []
         resolved = str(cwd.resolve()).casefold()

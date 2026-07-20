@@ -19,7 +19,7 @@ class GitState:
 class SessionRecord:
     id: str
     name: str
-    space_id: str
+    project_id: str
     backend: str
     native_session_id: str
     cwd: str
@@ -28,6 +28,7 @@ class SessionRecord:
     shell_profile_id: str | None = None
     auto_named: bool = True
     pid: int = -1
+    process_job_assignment: str = "unknown"
     created_at: float = field(default_factory=time.time)
     state: SessionState = "starting"
     state_detail: str | None = None
@@ -36,12 +37,19 @@ class SessionRecord:
     context_window: int = 0
     context_pct: float = 0.0
     context_peak_pct: float = 0.0
+    compaction_count: int = 0
+    last_compaction_at: float | None = None
+    compaction_capability: str | None = None
+    compaction_confidence: str | None = None
     model: str | None = None
     measurement_source: str | None = None
     parser_status: str = "not_applicable"
     parser_diagnostic: str | None = None
     parser_events_seen: int = 0
-    project_id: str | None = None
+    parser_unknown_events: int = 0
+    parser_unknown_signatures: dict[str, int] = field(default_factory=dict)
+    parser_schema_version: str | None = None
+    repository_id: str | None = None
     project_label: str | None = None
     project_root: str | None = None
     project_scope_id: str | None = None
@@ -98,27 +106,31 @@ class SessionRecord:
 
 
 @dataclass(slots=True)
-class SpaceRecord:
+class ProjectRecord:
     id: str
     name: str
+    root: str
     position: int
+    group_id: str | None = None
     layout: dict[str, Any] | None = None
-    default_cwd: str | None = None
     default_backend: str | None = None
     layout_revision: int = 0
     default_profile_id: str | None = None
-    anchor_mode: Literal["auto", "fixed", "none"] = "auto"
-    anchor_project_scope_id: str | None = None
-    anchor_revision: int = 0
-    notes_open_mode: Literal["dock", "popout"] | None = None
+    resource_open_mode: Literal["dock", "popout"] | None = None
+    sidebar_visible: bool = True
 
     def snapshot(self) -> dict[str, Any]:
-        result = asdict(self)
-        # Anchor columns remain in the database only so older Phase 5.5 data can
-        # be migrated safely. They are no longer part of the public space model.
-        for key in ("anchor_mode", "anchor_project_scope_id", "anchor_revision"):
-            result.pop(key, None)
-        return result
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class ProjectGroupRecord:
+    id: str
+    name: str
+    position: int
+
+    def snapshot(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(slots=True)

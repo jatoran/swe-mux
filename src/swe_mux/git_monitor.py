@@ -29,9 +29,7 @@ async def _git(
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=timeout_seconds
-            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
         except TimeoutError:
             process.kill()
             await process.communicate()

@@ -10,6 +10,7 @@ from typing import Any
 
 from .automation_store import AutomationStore
 from .config import Config
+from .delivery_readiness import DeliveryReadinessTracker
 from .event_bus import EventBus
 from .models import MuxEvent
 from .processes import OwnedProcess, PreviewRegistry, ProcessInspector
@@ -54,6 +55,7 @@ class FleetIntelligence:
         self._emit_keys_by_session: dict[str, set[str]] = defaultdict(set)
         self._last_user_activity = time.time()
         self._last_digest = time.time()
+        self.readiness = DeliveryReadinessTracker()
 
     def start(self) -> None:
         if self._task:
@@ -77,6 +79,12 @@ class FleetIntelligence:
         assert self._queue is not None
         while True:
             event = await self._queue.get()
+            session = (
+                self.sessions.sessions.get(event.session_id)
+                if event.session_id is not None
+                else None
+            )
+            self.readiness.observe(event, session)
             if event.type in {"terminal_attached", "terminal_input"}:
                 self._last_user_activity = event.ts
                 await self.store.set_checkpoint("fleet:last_user_activity", {"ts": event.ts})
@@ -534,36 +542,31 @@ class FleetIntelligence:
 
     def injection_safety(self) -> dict[str, Any]:
         """Research-only evidence for a future actuation gate; never grants authority."""
-        now = time.time()
-        sessions: list[dict[str, Any]] = []
+        sessions = [self.readiness.evaluate(session) for session in self.sessions.sessions.values()]
+        parsers = []
         for session in self.sessions.sessions.values():
             record = session.record
-            checks = {
-                "agent_idle": record.agent_run_id is not None and record.state == "idle",
-                "operator_not_typing": now - session.last_input_event_ts >= 2,
-                "input_owner_absent": session.input_owner is None,
-                "composer_empty": None,
-                "alternate_screen_state_known": None,
-                "adapter_injection_etiquette_defined": False,
-            }
-            sessions.append(
+            total = record.parser_events_seen + record.parser_unknown_events
+            parsers.append(
                 {
                     "session_id": record.id,
-                    "agent_run_id": record.agent_run_id,
                     "backend": record.backend,
-                    "state": record.state,
-                    "checks": checks,
-                    "candidate_safe": all(value is True for value in checks.values()),
-                    "authorized": False,
-                    "diagnostic": (
-                        "composer, terminal-mode, and adapter etiquette evidence is incomplete"
-                    ),
+                    "schema_version": record.parser_schema_version,
+                    "status": record.parser_status,
+                    "recognized": record.parser_events_seen,
+                    "unknown": record.parser_unknown_events,
+                    "unknown_rate": record.parser_unknown_events / total if total else None,
+                    "unknown_signatures": dict(record.parser_unknown_signatures),
+                    "diagnostic": record.parser_diagnostic,
                 }
             )
         return {
+            "version": 2,
             "research_only": True,
             "authorizes_actuation": False,
             "sessions": sessions,
+            "shadow_metrics": self.readiness.metrics(),
+            "parser_coverage": parsers,
         }
 
 

@@ -12,9 +12,7 @@ from swe_mux.server import _parse_worktrees
 
 @pytest.mark.asyncio
 async def test_detached_head_uses_short_sha(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_git(
-        cwd: str, *args: str, timeout_seconds: float = 4.0
-    ) -> tuple[int, str]:
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
         del cwd, timeout_seconds
         responses = {
             ("rev-parse", "--show-toplevel"): (0, "C:/repo"),

@@ -3,20 +3,20 @@ import test from 'node:test'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, resolveInitialFocus, viewUrl } from '../src/viewState.ts'
 
 const sessions = [
-  { id: 'first', space_id: 'default', state: 'running' },
-  { id: 'wanted', space_id: 'work', state: 'idle' },
-  { id: 'ended', space_id: 'work', state: 'exited' },
+  { id: 'first', project_id: 'default', state: 'running' },
+  { id: 'wanted', project_id: 'work', state: 'idle' },
+  { id: 'ended', project_id: 'work', state: 'exited' },
 ]
 
-test('URL session wins and carries its actual space', () => {
+test('URL session wins and carries its actual project', () => {
   const selected = resolveInitialFocus(
     sessions,
     ['default', 'work'],
     { default: ['first'], work: ['wanted'] },
-    parseViewPreference('?space=default&session=wanted'),
-    { lastSpace: 'default', bySpace: { default: 'first' } },
+    parseViewPreference('?project=default&session=wanted'),
+    { lastProject: 'default', byProject: { default: 'first' } },
   )
-  assert.deepEqual(selected, { spaceId: 'work', sessionId: 'wanted' })
+  assert.deepEqual(selected, { projectId: 'work', sessionId: 'wanted' })
 })
 
 test('per-device focus wins before the first visible session', () => {
@@ -24,18 +24,18 @@ test('per-device focus wins before the first visible session', () => {
     sessions,
     ['default', 'work'],
     { default: ['first'], work: ['wanted'] },
-    { spaceId: 'work', sessionId: null },
-    parseFocusMemory('{"lastSpace":"default","bySpace":{"work":"wanted"}}'),
+    { projectId: 'work', sessionId: null },
+    parseFocusMemory('{"lastProject":"default","byProject":{"work":"wanted"}}'),
   )
-  assert.deepEqual(selected, { spaceId: 'work', sessionId: 'wanted' })
-  assert.deepEqual(focusMemoryWith({ lastSpace: null, bySpace: {} }, 'work', 'wanted'), {
-    lastSpace: 'work', bySpace: { work: 'wanted' },
+  assert.deepEqual(selected, { projectId: 'work', sessionId: 'wanted' })
+  assert.deepEqual(focusMemoryWith({ lastProject: null, byProject: {} }, 'work', 'wanted'), {
+    lastProject: 'work', byProject: { work: 'wanted' },
   })
 })
 
 test('view URL preserves unrelated parameters and hash without navigation history noise', () => {
   assert.equal(
     viewUrl('http://localhost/?debug=1#notes', 'work', 'wanted'),
-    '/?debug=1&space=work&session=wanted#notes',
+    '/?debug=1&project=work&session=wanted#notes',
   )
 })

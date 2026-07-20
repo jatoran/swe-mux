@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "Partial JSONL writes, malformed records, truncation, and duplicate completion evidence remain deterministic.",
+  "steps": [
+    {"kind": "transcript_chunk", "data": "{\"type\":\"user\",\"isSidechain\":false,\"message\":{\"content\":\"fixture"},
+    {"kind": "transcript_chunk", "data": "\"}}\n", "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "transcript_chunk", "data": "not-json\n{\"type\":\"assistant\",\"isSidechain\":false,\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}],\"stop_reason\":\"end_turn\"}}\n", "expect_delivery": "unknown", "oracle_safe": false},
+    {"kind": "transcript_chunk", "truncate": true, "data": "{\"type\":\"system\",\"subtype\":\"turn_duration\",\"durationMs\":10}\n"},
+    {"kind": "terminal", "mode": "normal"},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "parser": {"status": "ready", "recognized": 3, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "safe",
+    "delivery_reason": "all_required_evidence_positive"
+  }
+}

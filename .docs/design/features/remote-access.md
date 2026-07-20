@@ -1,5 +1,10 @@
 # Remote access
 
+## What it is
+
+The same browser/API surface over localhost or a policy-controlled direct Tailscale
+listener, with optional Tailscale Serve for browser-recognized HTTPS.
+
 ## Supported topology
 
 - muxd binds localhost plus the IPv4 returned by `tailscale ip -4` when

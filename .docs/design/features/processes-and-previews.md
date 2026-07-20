@@ -9,24 +9,37 @@
 
 - Windows assigns every root PTY process to the daemon kill-on-close job and also attempts
   a nested per-session Job Object. PID plus process creation time prevents PID-reuse errors;
-  periodic `psutil` reconciliation records descendant appearance and exit.
+  periodic `psutil` reconciliation records descendant appearance and exit. The assignment
+  result, parent lineage, Project/run owner, first/last seen, exit evidence, command hash,
+  and confidence persist as bounded observations; command text does not.
 - Snapshots cap retained records and expose parent, executable label/command, start/exit,
   CPU, RSS, listeners, and measurable warning conditions. The inspector nests descendants
   by PID/parent PID; processes whose parent is outside the owned snapshot remain visible as
   roots. A no-output or high-resource label is diagnostic only; swe-mux never claims a
   server is hung or auto-kills it.
-- Interrupt, terminate-process, and terminate-tree re-check live ownership. A request for
-  a PID owned by another session is rejected.
+- Descendants leaving the current tree become `escaped`. After an ended root session's
+  configurable grace, a matching survivor becomes `suspected_orphan`; swe-mux never
+  auto-kills it. Startup revalidates persisted fingerprints and marks PID reuse or
+  unverifiable ownership stale.
+- Interrupt, terminate-process, and terminate-tree include the durable identity fingerprint
+  and re-check PID creation time plus live ownership immediately before acting. A request
+  for a PID owned by another session or a reused fingerprint is rejected.
 - If optional process inspection support is unavailable, the API returns a typed diagnostic
   and all terminal/session behavior continues.
 - The inspector opens from session/terminal right-click, pane-header `proc`, sidebar
   `: menu` Process fleet, or the command palette. Fleet mode uses the coherent all-session
   snapshot when available and falls back to aggregating session-scoped snapshots for an
   older running daemon; listener rows expose the preview action at the point of discovery.
+- The bottom-sidebar owned-resource summary reuses the cached fleet snapshot and reports
+  aggregate CPU/RSS. Its anchored viewport popover groups live attributed processes by
+  Project, shows a separate daemon/infrastructure bucket, and links to Process fleet.
+  Daemon accounting includes the daemon plus descendant infrastructure PIDs not already
+  attributed to a session, preventing double counting. The closed popover causes no
+  additional process enumeration.
 
 ## Preview contract
 
-- Registrations belong to one live session and space. The URL must use literal
+- Registrations belong to one live session and its canonical Project. The URL must use literal
   `127.0.0.1` or `::1`, contain no credentials/query/fragment, and either match the host
   and port of a listener owned by that session or carry explicit user approval.
 - A wildcard bind is reported at its loopback address: `0.0.0.0` becomes `127.0.0.1` and
@@ -77,6 +90,8 @@
 ## Key files
 
 - Ownership/registry: `src/swe_mux/processes.py`
+- Durable evidence: `src/swe_mux/operational_telemetry.py`
 - Job boundary: `src/swe_mux/win_jobobj.py`, `src/swe_mux/session.py`
 - Inspector: `frontend/src/ProcessPanel.tsx`
+- Resource summary: `frontend/src/ResourceUsage.tsx`, `frontend/src/resourceTotals.ts`
 - Preview leaf: `frontend/src/PreviewPane.tsx`

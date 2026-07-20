@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "backend": "codex",
+  "records": [
+    {"type": "session_meta", "payload": {"type": "task_started"}},
+    {"type": "response_item", "payload": {"type": "function_call", "call_id": "call-1", "name": "exec_command"}},
+    {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call-1", "exit_code": 2, "duration_ms": 125, "output": "<sanitized>"}},
+    {"type": "event_msg", "payload": {"type": "mcp_tool_call_end", "status": "complete", "duration_ms": 25}},
+    {"type": "compacted", "payload": {"type": "context_compacted"}},
+    {"type": "future", "payload": {"type": "future_provider_record", "redacted": true}}
+  ],
+  "expected": {"tools": 3, "skills": 0, "compactions": 1, "unknown": 1, "errors": 1}
+}

@@ -1,10 +1,14 @@
 import { Fragment } from 'preact'
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { displayChord } from './commands'
 import { keyChord } from './keys'
+import { AccountSettings } from './ProviderAccounts'
+import { NotificationSoundSettings } from './NotificationSoundSettings'
+import { comparableProjectDefaults, normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
-import type { ShellProfile, Space } from './types'
+import type { ShellProfile, Project } from './types'
+import { sttCapability } from './voice'
 
 type Config = {
   revision:number; host:string; port:number; data_dir:string; requires_auth:boolean; access_mode:string; tailnet_enabled:boolean
@@ -12,15 +16,18 @@ type Config = {
   codex_exe:string; scrollback_bytes:number; history_limit:number
   claude_args:string[]; codex_args:string[]
   git_poll_seconds:number; reconcile_external_history:boolean; theme:ThemeName
+  process_poll_seconds:number;process_orphan_grace_seconds:number;process_evidence_retention_days:number
+  operational_telemetry_retention_days:number;provider_quota_poll_minutes:number
+  provider_quota_turn_refresh_enabled:boolean;provider_quota_turn_refresh_min_minutes:number
   middle_click_paste:boolean; broadcast_default:boolean
   mobile_vertical_drag:'smart'|'terminal'|'application'|'disabled'
   mobile_scroll_direction:'natural'|'wheel';mobile_scroll_sensitivity:number
   mobile_long_press:'context_menu'|'disabled'
-  notes_default_open:'dock'|'popout'
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
   ccusage_claude_command:string[]; ccusage_codex_command:string[]
   custom_theme:CustomTheme
   default_shell_profile:string; shell_profiles:ShellProfile[]
+  project_ignore_patterns:string[]
   automation_enabled:boolean;automation_retention_days:number;automation_concurrency:number
   automation_queue_size:number;automation_max_input_tokens:number;automation_max_output_tokens:number
   automation_daily_token_budget:number;automation_daily_budget_usd:number;automation_rule_daily_token_budget:number
@@ -56,7 +63,7 @@ type UsageStatus = {
 
 type ProjectConfig = {
   project:{id:string;label:string;root:string};path:string;status:string;revision:string;error?:string
-  values:{project_label?:string;default_cwd?:string;default_shell_profile?:string;notes_enabled?:boolean}
+  values:{default_shell_profile?:string;preferred_backend?:'shell'|'claude'|'codex';prompt_library_scope?:'off'|'global'|'project'|'both';notification_sounds_enabled?:boolean;ignore_patterns?:string[]}
 }
 type RemoteStatus = {
   mode:string;listen_url:string;available:boolean;serve_configured:boolean
@@ -69,29 +76,32 @@ type KeybindingsResponse = {
   bindings:Record<string,string>;defaults:Record<string,string>;commands:KeybindingCommand[]
   policy:KeybindingPolicy;rejected:Record<string,string>
 }
+type CloseIntent = 'close'|'usage'|'automation'
 
 const settingsTabs = [
   {id:'general',label:'General'},
   {id:'terminals',label:'Terminals'},
-  {id:'workspace',label:'Spaces + project'},
+  {id:'workspace',label:'Projects'},
   {id:'notes',label:'Notes'},
   {id:'agents',label:'Agents'},
+  {id:'accounts',label:'Accounts'},
   {id:'input',label:'Input'},
   {id:'usage',label:'Usage'},
   {id:'automation',label:'Automation'},
+  {id:'notifications',label:'Notifications'},
   {id:'voice',label:'Voice'},
   {id:'remote',label:'Remote'},
   {id:'appearance',label:'Appearance'},
 ] as const
 type SettingsTab = typeof settingsTabs[number]['id']
 const tabForSection = (section:string):SettingsTab => ({
-  Terminals:'terminals','Space defaults':'workspace','Current project':'workspace',
-  Agents:'agents',Input:'input','Git and history':'workspace','Usage analytics':'usage',
+  Terminals:'terminals','Project defaults':'workspace','Current project':'workspace',
+  Agents:'agents',Accounts:'accounts',Input:'input','Git and history':'workspace','Usage analytics':'usage',
   Notes:'notes',
-  Automation:'automation','Hooks and notifications':'automation',Voice:'voice','Remote and security':'remote',Appearance:'appearance',
+  Automation:'automation','Hooks and notifications':'notifications',Notifications:'notifications',Voice:'voice','Remote and security':'remote',Appearance:'appearance',
 }[section] as SettingsTab|undefined)||'general'
 
-export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialSection='General' }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void; cwd?:string; initialSection?:string }) {
+export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, cwd, initialSection='General' }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void; cwd?:string; initialSection?:string }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
   const [rules, setRules] = useState('version = 1\n')
@@ -108,19 +118,24 @@ export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialS
   const [claudeArgs, setClaudeArgs] = useState('[]')
   const [codexArgs, setCodexArgs] = useState('[]')
   const [detectedProfiles, setDetectedProfiles] = useState<ShellProfile[]>([])
-  const [spaceDefaults, setSpaceDefaults] = useState<Space[]>([])
-  const [spaceBaseline,setSpaceBaseline]=useState<Space[]>([])
+  const [projectDefaults, setProjectDefaults] = useState<Project[]>([])
+  const [savedProjectDefaults, setSavedProjectDefaults] = useState<Project[]>([])
   const [usage, setUsage] = useState<UsageStatus | null>(null)
   const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
   const [usageRefreshMessage, setUsageRefreshMessage] = useState('')
   const [remote, setRemote] = useState<RemoteStatus | null>(null)
   const [projectConfig, setProjectConfig] = useState<ProjectConfig | null>(null)
   const [projectValues, setProjectValues] = useState<ProjectConfig['values']>({})
+  const [savedProjectValues, setSavedProjectValues] = useState<ProjectConfig['values']>({})
+  const [savedRules, setSavedRules] = useState('version = 1\n')
+  const [savedBindings, setSavedBindings] = useState<Record<string,string>>({})
   const [status, setStatus] = useState('loading…')
   const [errors, setErrors] = useState<Record<string,string>>({})
   const [activeTab,setActiveTab] = useState<SettingsTab>(()=>tabForSection(initialSection))
   const [selectedProfileId,setSelectedProfileId] = useState<string|null>(null)
+  const [closeIntent,setCloseIntent] = useState<CloseIntent|null>(null)
   const panel = useRef<HTMLElement>(null)
+  const confirmPanel = useRef<HTMLElement>(null)
   const themeFile = useRef<HTMLInputElement>(null)
   const restoreFocus = useRef<HTMLElement | null>(document.activeElement as HTMLElement | null)
 
@@ -132,29 +147,62 @@ export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialS
       api<{text:string}>('GET','/api/automation/rules'),
       api<KeybindingsResponse>('GET','/api/keybindings'),
       api<{detected:ShellProfile[]}>('GET','/api/profiles'),
-      api<Space[]>('GET','/api/spaces'),
+      api<Project[]>('GET','/api/projects'),
       api<AutomationStatus>('GET','/api/automation'),
       api<ProviderStatus>('GET','/api/automation/provider'),
       api<UsageStatus>('GET','/api/usage'),
       cwd ? api<ProjectConfig>('GET',`/api/project/config?cwd=${encodeURIComponent(cwd)}`) : Promise.resolve(null),
-    ]).then(([next, rulesData, keyData, profileData, spaces, automationStatus,providerStatus, usageStatus, project]) => {
-      setConfig(next); setDraft(next); setRules(rulesData.text)
+    ]).then(([next, rulesData, keyData, profileData, projects, automationStatus,providerStatus, usageStatus, project]) => {
+      setConfig(next); setDraft(next); setRules(rulesData.text);setSavedRules(rulesData.text)
       setClaudeArgs(JSON.stringify(next.claude_args)); setCodexArgs(JSON.stringify(next.codex_args))
-      setBindings(keyData.bindings);setBindingDefaults(keyData.defaults||{})
+      setBindings(keyData.bindings);setSavedBindings(keyData.bindings);setBindingDefaults(keyData.defaults||{})
       setBindingCommands(keyData.commands||[]);setBindingPolicy(keyData.policy||{browser_reserved:[],terminal_reserved:[],rules:[]})
       if(Object.keys(keyData.rejected||{}).length)setBindingError(`Ignored saved shortcuts · ${Object.entries(keyData.rejected).map(([chord,message])=>`${displayChord(chord)}: ${message}`).join(' · ')}`)
       setStatus('ready')
-      setDetectedProfiles(profileData.detected); setSpaceDefaults(spaces);setSpaceBaseline(spaces)
+      setDetectedProfiles(profileData.detected); setProjectDefaults(projects);setSavedProjectDefaults(projects)
       setAutomation(automationStatus);setProvider(providerStatus); setUsage(usageStatus)
-      setProjectConfig(project);setProjectValues(project?.values||{})
+      setProjectConfig(project);setProjectValues(project?.values||{});setSavedProjectValues(project?.values||{})
       configureCustomTheme(next.custom_theme); applyTheme(next.theme)
     }).catch(error => setStatus(error.message))
   }, [cwd])
 
   useEffect(() => {
-    if (!draft) return
     setActiveTab(tabForSection(initialSection))
-  },[draft,initialSection])
+  },[initialSection])
+
+  const dirty = useMemo(() => Boolean(config&&draft&&(
+    !sameDraftValue(config,draft)
+    ||claudeArgs!==JSON.stringify(config.claude_args)
+    ||codexArgs!==JSON.stringify(config.codex_args)
+    ||rules!==savedRules
+    ||!sameDraftValue(bindings,savedBindings)
+    ||!sameDraftValue(comparableProjectDefaults(projectDefaults),comparableProjectDefaults(savedProjectDefaults))
+    ||!sameDraftValue(projectValues,savedProjectValues)
+  )),[
+    config,draft,claudeArgs,codexArgs,rules,savedRules,bindings,savedBindings,
+    projectDefaults,savedProjectDefaults,projectValues,savedProjectValues,
+  ])
+
+  const leaveSettings = useCallback((intent:CloseIntent) => {
+    setCloseIntent(null)
+    if(intent==='usage'&&openUsage){openUsage();return}
+    if(intent==='automation'&&openAutomation){openAutomation();return}
+    onClose()
+  },[onClose,openUsage,openAutomation])
+
+  const requestClose = useCallback((intent:CloseIntent='close') => {
+    if(dirty){setCloseIntent(intent);return}
+    leaveSettings(intent)
+  },[dirty,leaveSettings])
+  const onOpenUsage=useCallback(()=>requestClose('usage'),[requestClose])
+  const onOpenAutomation=useCallback(()=>requestClose('automation'),[requestClose])
+
+  useEffect(() => {
+    if(!closeIntent)return
+    confirmPanel.current?.querySelector<HTMLElement>('button')?.focus()
+  },[closeIntent])
+
+  useEffect(() => () => restoreFocus.current?.focus(),[])
 
   useEffect(() => {
     if (!capturingCommand) return
@@ -170,9 +218,15 @@ export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialS
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key === 'Escape'&&!capturingCommand) { if (config) applyTheme(config.theme); onClose() }
-      if (event.key === 'Tab' && panel.current) {
-        const focusable = [...panel.current.querySelectorAll<HTMLElement>('button,input,select,textarea')].filter(item => !item.hasAttribute('disabled'))
+      if (event.key === 'Escape'&&!capturingCommand) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        if(closeIntent){setCloseIntent(null);return}
+        requestClose()
+      }
+      const focusRoot=closeIntent?confirmPanel.current:panel.current
+      if (event.key === 'Tab' && focusRoot) {
+        const focusable = [...focusRoot.querySelectorAll<HTMLElement>('button,input,select,textarea')].filter(item => !item.hasAttribute('disabled'))
         if (!focusable.length) return
         const first = focusable[0], last = focusable[focusable.length - 1]
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
@@ -180,8 +234,8 @@ export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialS
       }
     }
     window.addEventListener('keydown', close, true)
-    return () => { window.removeEventListener('keydown', close, true); restoreFocus.current?.focus() }
-  }, [config, onClose, capturingCommand])
+    return () => window.removeEventListener('keydown', close, true)
+  }, [requestClose,closeIntent,capturingCommand])
 
   async function captureBinding(event:KeyboardEvent,commandId:string) {
     const chord=keyChord(event)
@@ -210,21 +264,32 @@ export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialS
   }
 
   const change = <K extends keyof Config>(key: K, value: Config[K]) => setDraft(current => current ? {...current,[key]:value} : current)
-  const save = async () => {
-    if (!draft || !config) return
+  const save = async ():Promise<boolean> => {
+    if (!draft || !config) return false
     let savingDraft: Config
     try {
-      savingDraft = {...draft,claude_args:JSON.parse(claudeArgs),codex_args:JSON.parse(codexArgs)}
-    } catch { setErrors({agent_args:'agent args must be JSON arrays of strings'}); return }
+      savingDraft = {
+        ...draft,
+        claude_args:JSON.parse(claudeArgs),
+        codex_args:JSON.parse(codexArgs),
+        project_ignore_patterns:normalizeIgnorePatterns(draft.project_ignore_patterns),
+      }
+    } catch { setErrors({agent_args:'agent args must be JSON arrays of strings'}); return false }
+    setStatus('saving…')
     const body: Record<string,unknown> = {_revision:config.revision}
     for (const key of Object.keys(savingDraft) as (keyof Config)[]) {
       if (!['revision','host','port','data_dir','requires_auth'].includes(key) && savingDraft[key] !== config[key]) body[key] = savingDraft[key]
     }
     try {
-      const spacePatch=(space:Space)=>{
-        const original=spaceBaseline.find(item=>item.id===space.id)
-        const values:Record<string,unknown>={default_profile_id:space.default_profile_id||null,default_cwd:space.default_cwd||null,notes_open_mode:space.notes_open_mode||null}
-        return values
+      const projectPatch=(project:Project):Record<string,unknown>=>({
+        default_backend:project.default_backend||null,
+        default_profile_id:project.default_profile_id||null,
+      })
+      const savingProjectValues:ProjectConfig['values']={
+        ...projectValues,
+        ...(projectValues.ignore_patterns
+          ? {ignore_patterns:normalizeIgnorePatterns(projectValues.ignore_patterns)}
+          : {}),
       }
       await Promise.all([
         api('PUT','/api/automation/rules?validate=1',{text:rules}),
@@ -234,17 +299,20 @@ export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialS
         api<Config & {hot_applied:string[];restart_required:string[]}>('PATCH','/api/config',body),
         api('PUT','/api/automation/rules',{text:rules}),
         api('PUT','/api/keybindings',{bindings}),
-        ...spaceDefaults.map(space=>api('PATCH',`/api/spaces/${space.id}`,spacePatch(space))),
-        ...(projectConfig&&cwd?[api<ProjectConfig>('PUT','/api/project/config',{cwd,values:projectValues,revision:projectConfig.revision}).then(result=>{setProjectConfig(result);setProjectValues(result.values)})]:[]),
+        ...projectDefaults.map(project=>api('PATCH',`/api/projects/${project.id}`,projectPatch(project))),
+        ...(projectConfig&&cwd?[api<ProjectConfig>('PUT','/api/project/config',{cwd,values:savingProjectValues,revision:projectConfig.revision}).then(result=>{setProjectConfig(result);setProjectValues(result.values)})]:[]),
       ])
-      setConfig(next); setDraft(next); setErrors({})
-      const refreshedSpaces=await api<Space[]>('GET','/api/spaces')
-      setSpaceDefaults(refreshedSpaces);setSpaceBaseline(refreshedSpaces)
+      setConfig(next); setDraft(next);setClaudeArgs(JSON.stringify(next.claude_args));setCodexArgs(JSON.stringify(next.codex_args));setErrors({})
+      setSavedRules(rules);setSavedBindings(bindings);setSavedProjectValues(savingProjectValues)
+      const refreshedProjects=await api<Project[]>('GET','/api/projects')
+      setProjectDefaults(refreshedProjects);setSavedProjectDefaults(refreshedProjects)
       setStatus(next.restart_required.length ? `saved · restart required: ${next.restart_required.join(', ')}` : 'saved · hot applied')
       configureCustomTheme(next.custom_theme); applyTheme(next.theme)
+      return true
     } catch (error) {
       const typed = error as Error & {fields?:Record<string,string>}
       setErrors(typed.fields || {settings:typed.message}); setStatus('invalid · nothing was changed')
+      return false
     }
   }
   const reset = async () => {
@@ -308,12 +376,23 @@ export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialS
     setProviderMessage('Refreshing OpenRouter model catalog…')
     try{const models=await api<ProviderStatus['models']>('POST','/api/automation/provider/models/refresh',{});setProvider(current=>current?{...current,models}:current);setProviderMessage(`Model catalog ready · ${models.models.length} structured-output text models.`)}catch(error){setProviderMessage(`Model refresh failed · ${(error as Error).message}`)}
   }
+  const discardAndLeave=()=>{
+    if(!closeIntent)return
+    if(config){configureCustomTheme(config.custom_theme);applyTheme(config.theme)}
+    leaveSettings(closeIntent)
+  }
+  const saveAndLeave=async()=>{
+    if(!closeIntent)return
+    const intent=closeIntent
+    if(await save())leaveSettings(intent)
+    else setCloseIntent(null)
+  }
   const selectedProfileIndex=draft?.shell_profiles.findIndex(profile=>profile.id===selectedProfileId)??-1
   const selectedProfile=selectedProfileIndex>=0?draft?.shell_profiles[selectedProfileIndex]:undefined
-  if (!draft) return <div class="settings-layer"><section class="settings-panel">{status}</section></div>
+  if (!draft) return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel">{status}</section></div>
   const modelOptions=(selected:string)=>{const items=[...(provider?.models.models||[])];if(selected&&!items.some(item=>item.id===selected))items.unshift({id:selected,name:'Configured model (catalog unavailable)'});return items}
-  return <div class="settings-layer"><section class="settings-panel" ref={panel} role="dialog" aria-modal="true" aria-label="Settings">
-    <header><div><span>CONFIG::V6</span><h2>Settings</h2></div><button onClick={() => { if(config) applyTheme(config.theme); onClose() }}>×</button></header>
+  return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent} aria-hidden={Boolean(closeIntent)} aria-label="Settings">
+    <header><div><span>CONFIG::V6</span><h2>Settings</h2></div><button aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
     <main class="settings-body">
       <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
         {settingsTabs.map(tab=><button role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>setActiveTab(tab.id)}>{tab.label}</button>)}
@@ -354,14 +433,16 @@ export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialS
         </section>}
 
         {activeTab==='workspace'&&<Fragment>
-          <section><h3>Space defaults</h3><p>A space is a workflow container, not a project. New terminals use its configured directory.</p>{spaceDefaults.map((space,index)=><article class="space-default"><strong>{space.name}</strong><label>Profile<select value={space.default_profile_id||''} onChange={e=>setSpaceDefaults(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,default_profile_id:e.currentTarget.value||undefined}:item))}><option value="">Use global default</option>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label><label>New-terminal directory<input value={space.default_cwd||''} placeholder="Use global startup directory" onInput={e=>setSpaceDefaults(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,default_cwd:e.currentTarget.value||undefined}:item))}/></label><label>Notes opening<select value={space.notes_open_mode||''} onChange={e=>setSpaceDefaults(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,notes_open_mode:(e.currentTarget.value||undefined) as Space['notes_open_mode']}:item))}><option value="">Inherit global default</option><option value="dock">Dock</option><option value="popout">Pop-out</option></select></label></article>)}</section>
-          <section><h3>Git and history</h3><label>Git poll seconds<input type="number" step=".25" value={draft.git_poll_seconds} onInput={e=>change('git_poll_seconds',Number(e.currentTarget.value))} /></label></section>
-          {projectConfig&&<section><h3>Current project</h3><p>{projectConfig.project.root}</p><p aria-live="polite">.swe-mux/config.toml: {projectConfig.status}{projectConfig.error?` · ${projectConfig.error}`:''}</p><label>Friendly project label<input value={projectValues.project_label||''} onInput={e=>setProjectValues(values=>({...values,project_label:e.currentTarget.value||undefined}))} /></label><label>Project default directory<input value={projectValues.default_cwd||''} placeholder="relative to project root" onInput={e=>setProjectValues(values=>({...values,default_cwd:e.currentTarget.value||undefined}))} /></label><label>Project default shell profile<select value={projectValues.default_shell_profile||''} onChange={e=>setProjectValues(values=>({...values,default_shell_profile:e.currentTarget.value||undefined}))}><option value="">Use space/global default</option>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label><label class="check"><span>Enable project notes</span><input type="checkbox" checked={projectValues.notes_enabled!==false} onChange={e=>setProjectValues(values=>({...values,notes_enabled:e.currentTarget.checked}))} /></label><p>Opening a project never creates this folder. The first explicit Save writes it atomically.</p></section>}
+          <section><h3>Project defaults</h3><p>Database overrides take precedence over portable Project options, then global defaults. Choosing inherit removes the override.</p>{projectDefaults.map((project,index)=><article class="project-default"><strong>{project.name}</strong><small>{project.root}</small><label>Backend<select value={project.default_backend||''} onChange={e=>setProjectDefaults(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,default_backend:(e.currentTarget.value||undefined) as Project['default_backend']}:item))}><option value="">Inherit ({project.effective_options?.backend||draft.default_backend})</option><option value="shell">Shell</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label><label>Profile<select value={project.default_profile_id||''} onChange={e=>setProjectDefaults(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,default_profile_id:e.currentTarget.value||undefined}:item))}><option value="">Inherit ({project.effective_options?.profile_id||draft.default_shell_profile})</option>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label></article>)}</section>
+          <section><h3>Git, history, and process evidence</h3><label>Git poll seconds<input type="number" step=".25" value={draft.git_poll_seconds} onInput={e=>change('git_poll_seconds',Number(e.currentTarget.value))} /></label><label>Process inspector poll seconds<input type="number" min=".5" max="60" step=".5" value={draft.process_poll_seconds} onInput={e=>change('process_poll_seconds',Number(e.currentTarget.value))}/></label><label>Suspected-orphan grace seconds<input type="number" min="1" max="3600" value={draft.process_orphan_grace_seconds} onInput={e=>change('process_orphan_grace_seconds',Number(e.currentTarget.value))}/></label><label>Process evidence retention days<input type="number" min="1" max="3650" value={draft.process_evidence_retention_days} onInput={e=>change('process_evidence_retention_days',Number(e.currentTarget.value))}/></label><p>Process evidence uses PID plus creation time and command fingerprint. Surviving descendants are flagged after the grace period and are never killed automatically.</p><label>Global project ignores<textarea value={draft.project_ignore_patterns.join('\n')} onInput={e=>change('project_ignore_patterns',parseIgnorePatternDraft(e.currentTarget.value))}/></label><p>One glob per line. A name such as <code>node_modules</code> matches that folder at any depth. These rules affect the file tree and resource watchers, not Git.</p></section>
+          {projectConfig&&<section><h3>Portable current-Project options</h3><p>{projectConfig.project.root}</p><p aria-live="polite">.swe-mux/config.toml: {projectConfig.status}{projectConfig.error?` · ${projectConfig.error}`:''}</p><p>Only typed presentation preferences live here—never commands, hooks, credentials, network authority, or automatic actions. Blank values inherit database/global defaults.</p><label>Preferred backend<select value={projectValues.preferred_backend||''} onChange={e=>setProjectValues(values=>({...values,preferred_backend:(e.currentTarget.value||undefined) as ProjectConfig['values']['preferred_backend']}))}><option value="">Inherit</option><option value="shell">Shell</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label><label>Shell profile<select value={projectValues.default_shell_profile||''} onChange={e=>setProjectValues(values=>({...values,default_shell_profile:e.currentTarget.value||undefined}))}><option value="">Inherit</option>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label><label>Prompt library scope<select value={projectValues.prompt_library_scope||''} onChange={e=>setProjectValues(values=>({...values,prompt_library_scope:(e.currentTarget.value||undefined) as ProjectConfig['values']['prompt_library_scope']}))}><option value="">Inherit (global + Project)</option><option value="off">Off</option><option value="global">Global only</option><option value="project">Project only</option><option value="both">Global + Project</option></select></label><label class="check"><span>Allow device notification sounds for this Project</span><input type="checkbox" checked={projectValues.notification_sounds_enabled!==false} onChange={e=>setProjectValues(values=>({...values,notification_sounds_enabled:e.currentTarget.checked}))}/></label><button onClick={()=>setProjectValues({})}>Reset all portable options to inherited</button><label>Additional project ignores<textarea value={(projectValues.ignore_patterns||[]).join('\n')} onInput={e=>setProjectValues(values=>({...values,ignore_patterns:parseIgnorePatternDraft(e.currentTarget.value)}))}/></label><p>Project rules extend the global list. The folder is initialized when the project is created.</p></section>}
         </Fragment>}
 
-        {activeTab==='notes'&&<section><h3>Notes</h3><p>Notes have durable semantic owners. Docking controls presentation only and never moves a note between a space, project, or agent run.</p><label>Global default<select value={draft.notes_default_open} onChange={event=>change('notes_default_open',event.currentTarget.value as Config['notes_default_open'])}><option value="dock">Dock in current space</option><option value="popout">Open tabbed pop-out</option></select></label><p>Each space can inherit this value or override it under General → Space defaults. Explicit Dock and Pop-out actions move the whole tabbed Notes workspace without changing the preference.</p></section>}
+        {activeTab==='notes'&&<section><h3>Project resources</h3><p>Project notes, Files, file editors, terminals, and previews all open as tabs in the focused pane. Drag any tab between panes or onto a pane edge to create a split.</p></section>}
 
         {activeTab==='agents'&&<section><h3>Agents</h3><label>Claude executable<input value={draft.claude_exe} onInput={e=>change('claude_exe',e.currentTarget.value)} /></label><label>Claude default args<input value={claudeArgs} onInput={e=>setClaudeArgs(e.currentTarget.value)} /></label><label>Codex executable<input value={draft.codex_exe} onInput={e=>change('codex_exe',e.currentTarget.value)} /></label><label>Codex default args<input value={codexArgs} onInput={e=>setCodexArgs(e.currentTarget.value)} /></label><label class="check"><span>Reconcile native history</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label></section>}
+
+        {activeTab==='accounts'&&<AccountSettings/>}
 
         {activeTab==='input'&&<section class="input-settings"><h3>Input</h3>
           <label class="check"><span>Middle-click paste</span><input type="checkbox" checked={draft.middle_click_paste} onChange={e=>change('middle_click_paste',e.currentTarget.checked)} /></label>
@@ -380,15 +461,15 @@ export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialS
           <details class="keybinding-policy"><summary>Reserved shortcut policy</summary><ul>{bindingPolicy.rules.map(rule=><li>{rule}</li>)}</ul><div><strong>BROWSER</strong>{bindingPolicy.browser_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>TERMINAL</strong>{bindingPolicy.terminal_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div></details>
         </section>}
 
-        {activeTab==='usage'&&<section><h3>Usage analytics</h3><p>Daily Claude and Codex data is cached locally. The dashboard derives timelines and aggregate breakdowns from that cache.</p><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open usage dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh now'}</button><button onClick={()=>void clearUsage()}>Clear cache</button></div><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? Object.entries(usage.states).map(([provider,state])=>`${provider}: ${state.status}${state.error?` (${state.error})`:''}`).join(' · ') : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><p>The `latest` tag is resolved when you install or update. Refreshes use the installed unified executable and never download code in the background.</p><details class="settings-advanced"><summary>Advanced command overrides</summary><label>Claude command<textarea value={draft.ccusage_claude_command.join('\n')} onInput={e=>change('ccusage_claude_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label><label>Codex command<textarea value={draft.ccusage_codex_command.join('\n')} onInput={e=>change('ccusage_codex_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label></details></section>}
+        {activeTab==='usage'&&<section><h3>Usage and operational telemetry</h3><p>The dashboard combines optional ccusage history with durable provider quota samples, reset evidence, probabilistic mux correlation, tools, explicit skills, and compactions.</p><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/></label><p>Turn-triggered refresh is globally rate limited, selected-account only, and never assumes provider data updates immediately. Unexpected-reset sounds are optional per device in the account switcher.</p><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? Object.entries(usage.states).map(([provider,state])=>`${provider}: ${state.status}${state.error?` (${state.error})`:''}`).join(' · ') : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><p>The `latest` tag is resolved when you install or update. Refreshes use the installed unified executable and never download code in the background.</p><details class="settings-advanced"><summary>Advanced command overrides</summary><label>Claude command<textarea value={draft.ccusage_claude_command.join('\n')} onInput={e=>change('ccusage_claude_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label><label>Codex command<textarea value={draft.ccusage_codex_command.join('\n')} onInput={e=>change('ccusage_codex_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label></details></section>}
 
         {activeTab==='automation'&&<section><h3>Automation</h3>
-          <p>Universal hooks observe Claude and Codex out of band. Rules and observers can annotate or notify; they never type, approve, spawn, or modify a project.</p>
+          <p>Observers watch Claude and Codex out of band. The Automation dashboard shows every system observer and custom rule together; these settings are global shortcuts for the same system observers.</p>
           <div class="theme-actions"><button class="primary" onClick={onOpenAutomation}>Open Automation dashboard</button></div>
           <label class="check"><span>Automation enabled</span><input type="checkbox" checked={draft.automation_enabled} onChange={e=>change('automation_enabled',e.currentTarget.checked)} /></label>
           <label class="check"><span>Session titler</span><input type="checkbox" checked={draft.observer_titler_enabled} onChange={e=>change('observer_titler_enabled',e.currentTarget.checked)} /></label>
           <label class="check"><span>Turn summarizer</span><input type="checkbox" checked={draft.observer_summarizer_enabled} onChange={e=>change('observer_summarizer_enabled',e.currentTarget.checked)} /></label>
-          <label class="check"><span>Phase 7 attention observers</span><input type="checkbox" checked={draft.phase7_observers_enabled} onChange={e=>change('phase7_observers_enabled',e.currentTarget.checked)} /></label>
+          <label class="check"><span>Attention observers (stalls, approvals, context)</span><input type="checkbox" checked={draft.phase7_observers_enabled} onChange={e=>change('phase7_observers_enabled',e.currentTarget.checked)} /></label>
           <p class="settings-warning">Privacy boundary: each enabled observer sends only its selected bounded transcript slice to OpenRouter and the routed model provider. swe-mux does not crawl project files.</p>
           <h3>OpenRouter</h3>
           <p><span class={`state-dot ${provider?.secret.configured?'idle':'running'}`}/> key::{provider?.secret.configured?'configured':'not configured'} · source::{provider?.secret.source||'none'} · endpoint::{provider?.origin||'fixed OpenRouter API'}</p>
@@ -412,6 +493,8 @@ export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialS
           <details class="settings-advanced"><summary>Advanced rules.toml editor</summary><p>Canonical machine-owned rules only. Repository .swe-mux/rules.toml files remain diagnostic and inert.</p><label>rules.toml<textarea value={rules} onInput={event=>setRules(event.currentTarget.value)} /></label></details>
           <p aria-live="polite">engine::{automation?.diagnostic?'error':'ready'} · rules::{automation?.rules.length||0} · queue::{automation?.queue.size||0}/{automation?.queue.capacity||0} · dropped::{automation?.queue.dropped||0}{automation?.legacy.active?' · legacy hooks compatibility active':''}</p>
         </section>}
+
+        {activeTab==='notifications'&&<NotificationSoundSettings/>}
 
         {activeTab==='voice'&&<section><h3>Read aloud (TTS)</h3>
           <p>Mark a Claude or Codex session with its pane <code>tts:</code> chip or context menu. On demand adds a speak button; auto generates audio when each reply completes. Playback and per-device autoplay live in the pane's player strip.</p>
@@ -440,7 +523,7 @@ export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialS
           <h3>Storage and dictation</h3>
           <label>Audio cache limit (MB)<input type="number" min="10" max="5000" value={draft.tts_cache_mb} onInput={e=>change('tts_cache_mb',Number(e.currentTarget.value))} /></label>
           <label class="check"><span>Microphone dictation button on agent panes</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
-          <p>Dictation uses the browser's speech recognition and needs a secure context: it works on localhost and behind optional Tailscale Serve HTTPS, but not over plain tailnet HTTP. Phone keyboards already dictate on mobile. Transcribed text is inserted without submitting; press Enter to send.</p>
+          <p>Capability::{sttCapability().available?'available':'unavailable'} · backend::browser Web Speech · {sttCapability().reason}</p><p>Support and recognition providers vary by browser. swe-mux records capability/availability only; it does not retain audio or transcript content for analytics. Phone keyboard dictation remains the mobile fallback. Transcribed text is inserted without submitting. Local Whisper or Windows-native recognition remains a separate opt-in decision if browser reliability proves limiting.</p>
         </section>}
 
         {activeTab==='remote'&&<section><h3>Remote and security</h3><label class="check"><span>Listen on Tailscale IPv4</span><input type="checkbox" checked={draft.tailnet_enabled} onChange={event=>change('tailnet_enabled',event.currentTarget.checked)} /></label><p>Changing the listener requires a daemon restart. swe-mux binds localhost plus the specific Tailscale address—never every LAN interface.</p><dl><dt>Local URL</dt><dd>{remote?.listen_url||`http://${draft.host}:${draft.port}`}</dd><dt>Direct tailnet</dt><dd>{remote?.direct_available?'active':draft.tailnet_enabled?'Tailscale address unavailable':'disabled'}</dd>{remote?.tailnet_urls.map(url=><Fragment key={url}><dt>Tailnet URL</dt><dd><a href={url} target="_blank" rel="noreferrer">{url}</a></dd></Fragment>)}</dl><p>Direct tailnet HTTP is encrypted in transit by Tailscale, but browsers may restrict secure-context clipboard APIs. Normal terminal input remains available.</p><strong>Optional HTTPS with Tailscale Serve</strong><p>{remote?.diagnostic||'Checking Tailscale Serve…'}</p>{remote?.serve_url&&<p><a href={remote.serve_url} target="_blank" rel="noreferrer">{remote.serve_url}</a></p>}{remote?.funnel_detected&&<p class="settings-inline-error">Tailscale Funnel appears enabled. Public ingress is unsupported; use direct tailnet access or tailnet-only Serve.</p>}<label>Optional Serve command<input readonly value={remote?.setup_command||`tailscale serve --bg http://127.0.0.1:${draft.port}`} onFocus={event=>event.currentTarget.select()} /></label><div class="theme-actions"><button onClick={()=>void navigator.clipboard.writeText(remote?.setup_command||`tailscale serve --bg http://127.0.0.1:${draft.port}`)}>Copy Serve command</button><button onClick={()=>void api<RemoteStatus>('GET','/api/remote/status').then(setRemote)}>Recheck</button></div><p>No swe-mux login is used. Tailscale access policy controls which tailnet devices can connect.</p></section>}
@@ -448,6 +531,14 @@ export function Settings({ onClose, onOpenUsage, onOpenAutomation, cwd, initialS
         {activeTab==='appearance'&&<section><h3>Appearance</h3><label>Theme<select value={draft.theme} onChange={e=>{const value=e.currentTarget.value as ThemeName;change('theme',value);applyTheme(value)}}><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option><option value="solarized-dark">Solarized Dark</option><option value="tokyo-night">Tokyo Night</option><option value="custom">Custom</option></select></label>{draft.theme==='custom' && <div class="theme-tokens">{Object.entries(draft.custom_theme).map(([key,value])=><label>{key}<input value={value} onInput={e=>{const custom={...draft.custom_theme,[key]:e.currentTarget.value};change('custom_theme',custom);configureCustomTheme(custom);applyTheme('custom')}} /></label>)}</div>}<input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} /><div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div><p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p></section>}
       </div>
     </main>
-    <footer><span aria-live="polite">{status}</span><button onClick={()=>void api('POST','/api/reveal',{path:draft.data_dir})}>Reveal config directory</button><button onClick={exportConfig}>Export sanitized</button><button onClick={()=>void reset()}>Restore defaults</button><button onClick={()=>{if(config)applyTheme(config.theme);onClose()}}>Cancel</button><button class="primary" onClick={()=>void save()}>Save</button></footer>
-  </section></div>
+    <footer><span aria-live="polite">{status==='saving…'?status:dirty?'unsaved changes':status}</span><button onClick={()=>void api('POST','/api/reveal',{path:draft.data_dir})}>Reveal config directory</button><button onClick={exportConfig}>Export sanitized</button><button onClick={()=>void reset()}>Restore defaults</button><button onClick={()=>requestClose()}>Cancel</button><button class={`primary${dirty?' unsaved':''}`} disabled={!dirty||status==='saving…'} onClick={()=>void save()}>{status==='saving…'?'Saving…':dirty?'Save changes':'Saved'}</button></footer>
+  </section>
+  {closeIntent&&<div class="modal-layer settings-confirm-layer" onMouseDown={event=>event.target===event.currentTarget&&setCloseIntent(null)}>
+    <section class="modal settings-confirm" ref={confirmPanel} role="alertdialog" aria-modal="true" aria-label="Unsaved settings" onMouseDown={event=>event.stopPropagation()}>
+      <div class="modal-heading"><div><span>SETTINGS::UNSAVED</span><h2>Save your changes?</h2></div><button aria-label="Keep editing" onClick={()=>setCloseIntent(null)}>×</button></div>
+      <div class="settings-confirm-body"><p>You have changes that have not been saved. Save them before leaving Settings, or discard them and restore the last saved configuration.</p></div>
+      <div class="modal-footer"><span>Settings stay open if saving fails.</span><button onClick={()=>setCloseIntent(null)}>Keep editing</button><button class="danger" onClick={discardAndLeave}>Discard</button><button class="primary" disabled={status==='saving…'} onClick={()=>void saveAndLeave()}>Save changes</button></div>
+    </section>
+  </div>}
+  </div>
 }

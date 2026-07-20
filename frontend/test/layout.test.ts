@@ -1,163 +1,123 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  attachLeaf, emptyLayout, leaves, noteResourceId, parseLayout, parseNoteResourceId,
-  activateContainingStack, activateNoteWorkspace, groupTerminalsInStack, hideNoteWorkspace, removeLeaf, replaceTerminal, resourceLeaf, setNoteWorkspaceMode, setNoteWorkspaceSize, setSplitRatio, showNoteWorkspace, splitTerminal,
-  reconcilePreviews, resolveLayout, swapTerminals, terminalIds, visibleTerminalIds,
+  activateContainingStack, emptyLayout, groupTerminalsInStack, leaves, moveLeafToSplit,
+  moveLeafToStack, noteResourceId, openTab, paneNeighborIds, paneStacks, parseLayout, parseNoteResourceId,
+  reconcilePreviews, removeLeaf, reorderStack, resourceLeaf, setSplitRatio, splitTerminal,
+  splitView, swapPanes, swapTerminals, terminalIds, terminalLeaf, visibleTerminalIds,
 } from '../src/layout.ts'
 
-test('arbitrary split trees round-trip and preserve terminal membership', () => {
-  let layout = splitTerminal(emptyLayout(), null, 'one', 'horizontal')
-  layout = splitTerminal(layout, 'one', 'two', 'horizontal')
-  layout = splitTerminal(layout, 'two', 'three', 'vertical')
-  assert.deepEqual(terminalIds(parseLayout(JSON.parse(JSON.stringify(layout)))), ['one', 'two', 'three'])
-  assert.equal(layout.root?.type, 'split')
-})
-
-test('ratio, swap, detach, and replacement do not lose displaced live identities', () => {
-  let layout = splitTerminal(parseLayout({ version: 3, root: { type: 'leaf', kind: 'terminal', id: 'one' } }), 'one', 'two', 'horizontal')
-  layout = setSplitRatio(layout, '', .72)
-  assert.equal(layout.root?.type === 'split' ? layout.root.ratio : 0, .72)
-  assert.deepEqual(terminalIds(swapTerminals(layout, 'one', 'two')), ['two', 'one'])
-  assert.deepEqual(terminalIds(removeLeaf(layout, 'terminal', 'one')), ['two'])
-  assert.deepEqual(terminalIds(replaceTerminal(layout, 'one', 'three')), ['three', 'two'])
-})
-
-test('legacy membership migrates to the recursive v5 contract', () => {
-  const migrated = parseLayout({ version: 1, panes: ['one', 'two', 'three'] })
-  assert.equal(migrated.version, 5)
-  assert.deepEqual(terminalIds(migrated), ['one', 'two', 'three'])
-})
-
-test('an empty reconciled layout overrides a stale persisted tree', () => {
-  const persisted = { version: 3, root: { type: 'leaf', kind: 'terminal', id: 'ended' } }
-  const resolved = resolveLayout(emptyLayout(), persisted)
-  assert.equal(resolved.root, null)
-  assert.deepEqual(terminalIds(resolved), [])
-})
-
-test('opening a terminal preserves a resource-only layout and makes the terminal visible', () => {
-  const noteOnly = parseLayout({version:3,root:{type:'leaf',kind:'note',id:'projects:scope'}})
-  const next = replaceTerminal(noteOnly, null, 'shell-a')
-  assert.deepEqual(terminalIds(next), ['shell-a'])
-  assert.equal(leaves(next, 'note')[0]?.id, 'projects:scope')
-})
-
-test('notes attach to the space workspace without changing the terminal tree', () => {
-  const base = parseLayout({ version: 3, root: { type: 'leaf', kind: 'terminal', id: 'term-a' } })
-  const resourceId = noteResourceId('sessions', 'session/a')
-  const docked = attachLeaf(base, 'term-a', resourceLeaf('note', resourceId), 'horizontal', .62)
-  assert.deepEqual(terminalIds(docked), ['term-a'])
-  assert.deepEqual(leaves(docked, 'note').map(leaf => leaf.id), [resourceId])
-  assert.deepEqual(parseNoteResourceId(resourceId), { kind: 'sessions', id: 'session/a' })
-  assert.equal(docked.root?.type, 'leaf')
-  assert.equal(docked.note_workspace.active_id, resourceId)
-  assert.equal(setNoteWorkspaceSize(docked, .55).note_workspace.size, .55)
-  assert.deepEqual(leaves(removeLeaf(docked, 'note', resourceId), 'note'), [])
-})
-
-test('embedded v3 notes migrate out of terminal splits into the v5 workspace', () => {
-  const migrated=parseLayout({version:3,root:{type:'split',direction:'horizontal',ratio:.62,first:{type:'leaf',kind:'terminal',id:'term-a'},second:{type:'leaf',kind:'note',id:'projects:scope'}}})
-  assert.deepEqual(terminalIds(migrated),['term-a'])
-  assert.equal(migrated.root?.type,'leaf')
-  assert.deepEqual(migrated.note_workspace.open_ids,['projects:scope'])
-  assert.equal(activateNoteWorkspace(migrated,'projects:scope').note_workspace.active_id,'projects:scope')
-})
-
-test('v4 note docks migrate and the whole workspace changes presentation',()=>{
-  const migrated=parseLayout({version:4,root:null,note_dock:{open_ids:['spaces:main','projects:scope'],active_id:'spaces:main',size:.44}})
-  assert.deepEqual(migrated.note_workspace,{open_ids:['spaces:main','projects:scope'],active_id:'spaces:main',size:.44,visible:true,mode:'dock'})
-  const popped=setNoteWorkspaceMode(migrated,'popout')
-  assert.equal(popped.note_workspace.mode,'popout')
-  assert.deepEqual(popped.note_workspace.open_ids,migrated.note_workspace.open_ids)
-  assert.equal(hideNoteWorkspace(popped).note_workspace.visible,false)
-  assert.deepEqual(showNoteWorkspace(hideNoteWorkspace(popped),'projects:scope','dock').note_workspace,{open_ids:['spaces:main','projects:scope'],active_id:'projects:scope',size:.44,visible:true,mode:'dock'})
-})
-
-test('stacks keep sessions atomic while switching the visible child',()=>{
-  let layout=splitTerminal(emptyLayout(),null,'one','horizontal')
+test('v6 keeps every region as a tab pane inside an arbitrary split tree',()=>{
+  let layout=openTab(emptyLayout(),null,terminalLeaf('one'))
   layout=splitTerminal(layout,'one','two','horizontal')
-  layout=groupTerminalsInStack(layout,'one','two')
-  assert.deepEqual(terminalIds(layout),['one','two'])
-  assert.equal(layout.root?.type,'stack')
-  layout=activateContainingStack(layout,'one')
-  assert.equal(layout.root?.type==='stack'?layout.root.active_child_id:'','one')
-  assert.deepEqual(visibleTerminalIds(layout),['one'])
+  layout=splitTerminal(layout,'two','three','vertical')
+  const roundTrip=parseLayout(JSON.parse(JSON.stringify(layout)))
+  assert.equal(roundTrip.version,6)
+  assert.deepEqual(terminalIds(roundTrip),['one','two','three'])
+  assert.equal(roundTrip.root?.type,'split')
+  assert.equal(paneStacks(roundTrip).every(pane=>pane.children.length>0),true)
+})
+
+test('ratio, swap, detach, and activation preserve view identities',()=>{
+  let layout=splitTerminal(parseLayout({version:3,root:{type:'leaf',kind:'terminal',id:'one'}}),'one','two','horizontal')
+  layout=setSplitRatio(layout,'',.72)
+  assert.equal(layout.root?.type==='split'?layout.root.ratio:0,.72)
+  assert.deepEqual(terminalIds(swapTerminals(layout,'one','two')),['two','one'])
+  const [firstPane,secondPane]=paneStacks(layout)
+  assert.deepEqual(terminalIds(swapPanes(layout,firstPane.id,secondPane.id)),['two','one'])
   assert.deepEqual(terminalIds(removeLeaf(layout,'terminal','one')),['two'])
-  assert.deepEqual(visibleTerminalIds(removeLeaf(layout,'terminal','one')),['two'])
+  assert.deepEqual(visibleTerminalIds(activateContainingStack(layout,'two')),['one','two'])
 })
 
-test('a stack keeps a preview tab beside its session',()=>{
-  const layout=parseLayout({
-    version:5,
-    root:{
-      type:'stack',id:'tabs-a',active_child_id:'preview-1',
-      children:[
-        {type:'leaf',kind:'terminal',id:'a'},
-        {type:'leaf',kind:'preview',id:'preview-1'},
-      ],
-    },
-  })
-  // The whole layout would be discarded if preview tabs failed validation.
-  assert.equal(layout.root?.type,'stack')
-  assert.deepEqual(terminalIds(layout),['a'])
-  assert.deepEqual(leaves(layout,'preview').map(leaf=>leaf.id),['preview-1'])
+test('legacy membership migrates to v6 panes',()=>{
+  const migrated=parseLayout({version:1,panes:['one','two','three']})
+  assert.equal(migrated.version,6)
+  assert.deepEqual(terminalIds(migrated),['one','two','three'])
+  assert.equal(paneStacks(migrated).length,3)
 })
 
-test('notes are still rejected from tab regions',()=>{
-  const layout=parseLayout({
+test('visible v5 resources migrate into a real adjacent pane',()=>{
+  const migrated=parseLayout({
     version:5,
-    root:{
-      type:'stack',id:'bad',active_child_id:'n',
-      children:[{type:'leaf',kind:'note',id:'n'}],
-    },
+    root:{type:'stack',id:'term-pane',active_child_id:'term-a',children:[{type:'leaf',kind:'terminal',id:'term-a'},{type:'leaf',kind:'preview',id:'preview-a'}]},
+    note_workspace:{open_ids:['note:main','files:main'],active_id:'files:main',size:.44,visible:true,mode:'popout'},
   })
-  assert.equal(layout.root,null)
+  assert.equal(migrated.version,6)
+  assert.equal(migrated.root?.type,'split')
+  assert.deepEqual(leaves(migrated,'note').map(leaf=>leaf.id),['note:main','files:main'])
+  assert.equal(paneStacks(migrated).at(-1)?.active_child_id,'files:main')
+  assert.equal(migrated.root?.type==='split'?migrated.root.ratio:0,.56)
 })
 
-test('removing a session from a stack leaves its preview tab intact',()=>{
-  const layout=parseLayout({
-    version:5,
-    root:{
-      type:'stack',id:'tabs-a',active_child_id:'a',
-      children:[
-        {type:'leaf',kind:'terminal',id:'a'},
-        {type:'leaf',kind:'preview',id:'preview-1'},
-      ],
-    },
-  })
-  const without=removeLeaf(layout,'terminal','a')
-  assert.deepEqual(without.root,{type:'leaf',kind:'preview',id:'preview-1'})
+test('hidden v5 resource workspace migrates as closed views',()=>{
+  const migrated=parseLayout({version:5,root:null,note_workspace:{open_ids:['note:main'],active_id:'note:main',size:.4,visible:false,mode:'dock'}})
+  assert.equal(migrated.root,null)
+  assert.deepEqual(leaves(migrated,'note'),[])
 })
 
-test('a preview the daemon still lists keeps its tab',()=>{
-  const layout=parseLayout({
-    version:5,
-    root:{
-      type:'stack',id:'tabs-a',active_child_id:'preview-1',
-      children:[
-        {type:'leaf',kind:'terminal',id:'a'},
-        {type:'leaf',kind:'preview',id:'preview-1'},
-      ],
-    },
-  })
-  const kept=reconcilePreviews(layout,new Set(['preview-1']))
-  assert.equal(kept.root?.type,'stack')
-  assert.deepEqual(leaves(kept,'preview').map(leaf=>leaf.id),['preview-1'])
+test('terminals, previews, notes, Files, and file editors share one pane',()=>{
+  const note=noteResourceId('note','project-a'),files=noteResourceId('files','project-a'),file=noteResourceId('file','src/app.ts')
+  let layout=openTab(emptyLayout(),null,terminalLeaf('term-a'))
+  layout=openTab(layout,'term-a',resourceLeaf('preview','preview-a'))
+  layout=openTab(layout,'preview-a',resourceLeaf('note',note))
+  layout=openTab(layout,note,resourceLeaf('note',files))
+  layout=openTab(layout,files,resourceLeaf('note',file))
+  assert.equal(paneStacks(layout).length,1)
+  assert.deepEqual(leaves(layout).map(leaf=>leaf.kind),['terminal','preview','note','note','note'])
+  assert.deepEqual(parseNoteResourceId(file),{kind:'file',id:'src/app.ts'})
 })
 
-test('a preview whose server stopped loses its tab and collapses the region',()=>{
-  const layout=parseLayout({
-    version:5,
-    root:{
-      type:'stack',id:'tabs-a',active_child_id:'preview-1',
-      children:[
-        {type:'leaf',kind:'terminal',id:'a'},
-        {type:'leaf',kind:'preview',id:'preview-1'},
-      ],
-    },
-  })
+test('view ids remain globally unique across mixed leaf kinds',()=>{
+  const layout=parseLayout({version:6,root:{type:'stack',id:'pane',active_child_id:'same',children:[
+    {type:'leaf',kind:'terminal',id:'same'},
+    {type:'leaf',kind:'preview',id:'same'},
+  ]}})
+  assert.deepEqual(leaves(layout),[{type:'leaf',kind:'terminal',id:'same'}])
+})
+
+test('mixed views move between panes, reorder, and create edge splits',()=>{
+  const resource=resourceLeaf('note',noteResourceId('files','project-a'))
+  let layout=splitTerminal(openTab(emptyLayout(),null,terminalLeaf('one')),'one','two','horizontal')
+  const [left,right]=paneStacks(layout)
+  layout=openTab(layout,'one',resource)
+  layout=moveLeafToStack(layout,'note',resource.id,right.id)
+  assert.deepEqual(paneStacks(layout).find(pane=>pane.id===right.id)?.children.map(child=>child.id),['two',resource.id])
+  layout=reorderStack(layout,right.id,[resource.id,'two'])
+  assert.deepEqual(paneStacks(layout).find(pane=>pane.id===right.id)?.children.map(child=>child.id),[resource.id,'two'])
+  layout=moveLeafToSplit(layout,'note',resource.id,left.id,'vertical','before')
+  assert.equal(paneStacks(layout).length,3)
+  assert.deepEqual(leaves(layout,'note').map(leaf=>leaf.id),[resource.id])
+})
+
+test('pane neighbors expose only directions supported by the split tree',()=>{
+  let layout=splitTerminal(openTab(emptyLayout(),null,terminalLeaf('left')),'left','right','horizontal')
+  layout=splitTerminal(layout,'right','bottom','vertical')
+  assert.deepEqual(Object.keys(paneNeighborIds(layout,'left')).sort(),['right'])
+  assert.deepEqual(Object.keys(paneNeighborIds(layout,'right')).sort(),['down','left'])
+  assert.deepEqual(Object.keys(paneNeighborIds(layout,'bottom')).sort(),['left','up'])
+})
+
+test('grouping sessions creates one pane and removing one leaves the other tab',()=>{
+  let layout=splitTerminal(openTab(emptyLayout(),null,terminalLeaf('one')),'one','two','horizontal')
+  layout=groupTerminalsInStack(layout,'one','two')
+  assert.equal(paneStacks(layout).length,1)
+  assert.deepEqual(terminalIds(layout),['one','two'])
+  assert.deepEqual(terminalIds(removeLeaf(layout,'terminal','one')),['two'])
+})
+
+test('preview reconciliation removes only unavailable preview views',()=>{
+  let layout=openTab(emptyLayout(),null,terminalLeaf('a'))
+  layout=openTab(layout,'a',resourceLeaf('preview','preview-1'))
+  assert.deepEqual(leaves(reconcilePreviews(layout,new Set(['preview-1'])),'preview').map(leaf=>leaf.id),['preview-1'])
   const dropped=reconcilePreviews(layout,new Set())
-  assert.deepEqual(dropped.root,{type:'leaf',kind:'terminal',id:'a'})
   assert.deepEqual(leaves(dropped,'preview'),[])
+  assert.deepEqual(terminalIds(dropped),['a'])
+})
+
+test('splitView moves an existing view instead of duplicating it',()=>{
+  let layout=openTab(emptyLayout(),null,terminalLeaf('a'))
+  layout=openTab(layout,'a',terminalLeaf('b'))
+  layout=splitView(layout,'a',terminalLeaf('b'),'horizontal')
+  assert.deepEqual(terminalIds(layout),['a','b'])
+  assert.equal(paneStacks(layout).length,2)
 })

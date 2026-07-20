@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "Approval, elicitation, stalls, terminal mode, input, focus, process evidence, reconnect, replacement, and demotion use conservative readiness.",
+  "steps": [
+    {"kind": "hook", "event": "UserPromptSubmit", "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "hook", "event": "PermissionRequest", "payload": {"tool_name": "Read"}, "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "hook", "event": "UserPromptSubmit"},
+    {"kind": "hook", "event": "Notification", "payload": {"notification_type": "elicitation_dialog"}, "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "hook", "event": "UserPromptSubmit"},
+    {"kind": "event", "event": "stalled", "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "hook", "event": "Stop", "expect_delivery": "unknown", "oracle_safe": false},
+    {"kind": "terminal", "mode": "normal"},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true},
+    {"kind": "terminal", "mode": "alternate", "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "terminal", "mode": "normal"},
+    {"kind": "terminal_response", "bytes": 6, "expect_delivery": "safe", "oracle_safe": true},
+    {"kind": "focus", "focused": false, "expect_delivery": "safe", "oracle_safe": true},
+    {"kind": "input", "bytes": 3, "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "hook", "event": "UserPromptSubmit"},
+    {"kind": "hook", "event": "Stop"},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true},
+    {"kind": "session", "connected": false, "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "session", "connected": true, "terminal_mode": "normal", "expect_delivery": "safe", "oracle_safe": true},
+    {"kind": "process", "alive": true, "descendants": 2, "expect_delivery": "safe", "oracle_safe": true},
+    {"kind": "timer", "seconds": 301, "expect_delivery": "unknown", "oracle_safe": false},
+    {"kind": "session", "record": {"agent_run_id": "run-2"}, "expect_delivery": "unknown", "oracle_safe": false},
+    {"kind": "session", "record": {"backend": "shell", "agent_run_id": null, "state": "running"}},
+    {"kind": "event", "event": "backend_demoted", "source": "daemon", "expect_delivery": "blocked", "oracle_safe": false}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "approval_needed", "source": "hook", "scope": "root", "kind": "approval"},
+      {"type": "approval_needed", "source": "hook", "scope": "root", "kind": "input"},
+      {"type": "stalled", "source": "fixture"},
+      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"},
+      {"type": "terminal_protocol_response", "source": "browser"},
+      {"type": "terminal_focus_changed", "source": "browser"},
+      {"type": "terminal_input", "source": "daemon"},
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"},
+      {"type": "process_observed", "source": "process"},
+      {"type": "backend_demoted", "source": "daemon"}
+    ],
+    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "blocked",
+    "delivery_reason": "not_live_agent_run"
+  }
+}

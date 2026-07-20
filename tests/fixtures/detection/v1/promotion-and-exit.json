@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "backend": "codex",
+  "description": "A promoted run can become ready, but process exit immediately and permanently blocks readiness.",
+  "steps": [
+    {"kind": "event", "event": "backend_detected", "source": "daemon"},
+    {"kind": "transcript", "record": {"type": "session_meta", "payload": {"id": "root", "cwd": "."}}},
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_started"}}},
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_complete"}}},
+    {"kind": "terminal", "mode": "normal"},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true},
+    {"kind": "session", "record": {"state": "exited"}},
+    {"kind": "event", "event": "session_exited", "source": "pty", "expect_delivery": "blocked", "oracle_safe": false}
+  ],
+  "expected": {
+    "events": [
+      {"type": "backend_detected", "source": "daemon"},
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"},
+      {"type": "session_exited", "source": "pty"}
+    ],
+    "parser": {"status": "ready", "recognized": 3, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "blocked",
+    "delivery_reason": "session_ended"
+  }
+}

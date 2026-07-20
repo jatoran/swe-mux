@@ -12,7 +12,11 @@
     "jsxImportSource": "preact",
     "strict": true,
     "skipLibCheck": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "paths": {
+      "react": ["./node_modules/preact/compat"],
+      "react-dom": ["./node_modules/preact/compat"]
+    }
   },
   "include": ["src"]
 }

@@ -20,9 +20,7 @@ log = logging.getLogger(__name__)
 _MAX_COALESCE_BYTES = 256 * 1024
 
 
-def merge_environment(
-    base: Mapping[str, str], extra: Mapping[str, str]
-) -> dict[str, str]:
+def merge_environment(base: Mapping[str, str], extra: Mapping[str, str]) -> dict[str, str]:
     """Merge a Windows environment without duplicate case-insensitive keys.
 
     Windows treats ``Path`` and ``PATH`` as the same variable, but a raw ConPTY
@@ -50,6 +48,7 @@ class PtyHost:
     _loop: asyncio.AbstractEventLoop | None = field(default=None, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _first_output_at: float | None = field(default=None, init=False)
+    reaper_assignment: str = field(default="not_attempted", init=False)
 
     @property
     def pid(self) -> int:
@@ -65,10 +64,15 @@ class PtyHost:
     def first_output_at(self) -> float | None:
         return self._first_output_at
 
-    def spawn(self) -> None:
+    def prepare(self) -> None:
+        """Bind async handoff state to the caller's event loop before blocking spawn work."""
         self._loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue(maxsize=1024)
         self._first_output_at = None
+
+    def spawn(self) -> None:
+        if self._loop is None or self._queue is None:
+            self.prepare()
         self._pty = winpty.PTY(cols=self.cols, rows=self.rows)
         env = None
         if self.env_extra:
@@ -81,8 +85,12 @@ class PtyHost:
         if self.reaper:
             try:
                 self.reaper.assign(self.pid)
+                self.reaper_assignment = "daemon_job_assigned"
             except OSError as exc:
+                self.reaper_assignment = f"daemon_job_failed:{exc}"
                 log.warning("could not assign pid %s to reaper: %s", self.pid, exc)
+        else:
+            self.reaper_assignment = "no_daemon_job"
         threading.Thread(target=self._read, name=f"mux-pty-{self.pid}", daemon=True).start()
 
     def _read(self) -> None:

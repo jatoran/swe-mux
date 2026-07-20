@@ -9,31 +9,37 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, TypeVar
 
-from .models import MuxEvent, SessionRecord, SpaceRecord
-from .projects import ProjectIdentity, project_scope_id
+from .git_projects import ProjectIdentity
+from .models import MuxEvent, ProjectGroupRecord, ProjectRecord, SessionRecord
+from .sqlite_store import database_operation_lock, run_sqlite_operation
 
 T = TypeVar("T")
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
-CREATE TABLE IF NOT EXISTS spaces (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL,
-  layout_json TEXT, default_cwd TEXT, default_backend TEXT,
-  layout_revision INTEGER NOT NULL DEFAULT 0,
-  anchor_mode TEXT NOT NULL DEFAULT 'auto', anchor_project_scope_id TEXT,
-  anchor_revision INTEGER NOT NULL DEFAULT 0, notes_open_mode TEXT
+CREATE TABLE IF NOT EXISTS project_groups (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, root TEXT NOT NULL UNIQUE,
+  position INTEGER NOT NULL, group_id TEXT, layout_json TEXT,
+  default_backend TEXT, layout_revision INTEGER NOT NULL DEFAULT 0,
+  default_profile_id TEXT, resource_open_mode TEXT,
+  sidebar_visible INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS history (
   id TEXT PRIMARY KEY, native_id TEXT NOT NULL, backend TEXT NOT NULL,
-  name TEXT NOT NULL, cwd TEXT NOT NULL, space_id TEXT,
+  name TEXT NOT NULL, cwd TEXT NOT NULL, project_id TEXT,
   spawned_at REAL NOT NULL, exited_at REAL, exit_reason TEXT,
   tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
   transcript_path TEXT, external INTEGER NOT NULL DEFAULT 0,
   executable TEXT, argv_json TEXT, pinned_attention INTEGER NOT NULL DEFAULT 0,
   shell_profile_id TEXT, agent_visible INTEGER NOT NULL DEFAULT 0,
-  project_id TEXT, project_label TEXT, project_root TEXT,
+  repository_id TEXT, project_label TEXT, project_root TEXT,
   final_state TEXT, context_window INTEGER, final_context_pct REAL,
   peak_context_pct REAL, model TEXT, measurement_source TEXT,
+  compaction_count INTEGER NOT NULL DEFAULT 0, last_compaction_at REAL,
+  compaction_capability TEXT, compaction_confidence TEXT,
   project_scope_id TEXT, repo_group_id TEXT,
   auto_named INTEGER NOT NULL DEFAULT 1,
   transcript_mtime_ns INTEGER, transcript_size INTEGER
@@ -95,6 +101,7 @@ class HistoryIndex:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
+        self._operation_lock = database_operation_lock(path)
         self._closed = False
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-history-db")
         # Create and initialise the connection on the worker thread so the
@@ -106,16 +113,19 @@ class HistoryIndex:
         # executor), so there is never concurrent access. check_same_thread=False
         # additionally tolerates benign cross-thread introspection (tests reading
         # ``_db`` directly, a fallback close) without weakening that guarantee.
-        self._db = sqlite3.connect(self._path, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        _tune_connection(self._db)
-        self._db.executescript(SCHEMA)
-        self._migrate_schema()
-        self._db.commit()
+        with self._operation_lock:
+            self._db = sqlite3.connect(self._path, check_same_thread=False)
+            self._db.row_factory = sqlite3.Row
+            _tune_connection(self._db)
+            self._db.executescript(SCHEMA)
+            self._migrate_schema()
+            self._db.commit()
 
     async def _run(self, fn: Callable[[], T]) -> T:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, fn)
+        return await loop.run_in_executor(
+            self._executor, run_sqlite_operation, self._db, self._operation_lock, fn
+        )
 
     def _migrate_schema(self) -> None:
         """Apply additive migrations to databases created by earlier releases."""
@@ -131,6 +141,7 @@ class HistoryIndex:
                 "ALTER TABLE history ADD COLUMN agent_visible INTEGER NOT NULL DEFAULT 0"
             ),
             "project_id": "ALTER TABLE history ADD COLUMN project_id TEXT",
+            "repository_id": "ALTER TABLE history ADD COLUMN repository_id TEXT",
             "project_label": "ALTER TABLE history ADD COLUMN project_label TEXT",
             "project_root": "ALTER TABLE history ADD COLUMN project_root TEXT",
             "final_state": "ALTER TABLE history ADD COLUMN final_state TEXT",
@@ -139,6 +150,12 @@ class HistoryIndex:
             "peak_context_pct": "ALTER TABLE history ADD COLUMN peak_context_pct REAL",
             "model": "ALTER TABLE history ADD COLUMN model TEXT",
             "measurement_source": "ALTER TABLE history ADD COLUMN measurement_source TEXT",
+            "compaction_count": (
+                "ALTER TABLE history ADD COLUMN compaction_count INTEGER NOT NULL DEFAULT 0"
+            ),
+            "last_compaction_at": "ALTER TABLE history ADD COLUMN last_compaction_at REAL",
+            "compaction_capability": ("ALTER TABLE history ADD COLUMN compaction_capability TEXT"),
+            "compaction_confidence": ("ALTER TABLE history ADD COLUMN compaction_confidence TEXT"),
             "project_scope_id": "ALTER TABLE history ADD COLUMN project_scope_id TEXT",
             "repo_group_id": "ALTER TABLE history ADD COLUMN repo_group_id TEXT",
             "auto_named": ("ALTER TABLE history ADD COLUMN auto_named INTEGER NOT NULL DEFAULT 1"),
@@ -153,27 +170,6 @@ class HistoryIndex:
             "DELETE FROM history WHERE backend='shell' AND agent_visible=0 AND "
             "(transcript_path IS NULL OR transcript_path='')"
         )
-        space_columns = {
-            row["name"] for row in self._db.execute("PRAGMA table_info(spaces)").fetchall()
-        }
-        if "layout_revision" not in space_columns:
-            self._db.execute(
-                "ALTER TABLE spaces ADD COLUMN layout_revision INTEGER NOT NULL DEFAULT 0"
-            )
-        if "default_profile_id" not in space_columns:
-            self._db.execute("ALTER TABLE spaces ADD COLUMN default_profile_id TEXT")
-        if "anchor_mode" not in space_columns:
-            self._db.execute(
-                "ALTER TABLE spaces ADD COLUMN anchor_mode TEXT NOT NULL DEFAULT 'auto'"
-            )
-        if "anchor_project_scope_id" not in space_columns:
-            self._db.execute("ALTER TABLE spaces ADD COLUMN anchor_project_scope_id TEXT")
-        if "anchor_revision" not in space_columns:
-            self._db.execute(
-                "ALTER TABLE spaces ADD COLUMN anchor_revision INTEGER NOT NULL DEFAULT 0"
-            )
-        if "notes_open_mode" not in space_columns:
-            self._db.execute("ALTER TABLE spaces ADD COLUMN notes_open_mode TEXT")
         artifact_columns = {
             row["name"] for row in self._db.execute("PRAGMA table_info(artifacts)").fetchall()
         }
@@ -183,13 +179,20 @@ class HistoryIndex:
             )
         if "owner_label" not in artifact_columns:
             self._db.execute("ALTER TABLE artifacts ADD COLUMN owner_label TEXT")
+        project_columns = {
+            row["name"] for row in self._db.execute("PRAGMA table_info(projects)").fetchall()
+        }
+        if "sidebar_visible" not in project_columns:
+            self._db.execute(
+                "ALTER TABLE projects ADD COLUMN sidebar_visible INTEGER NOT NULL DEFAULT 1"
+            )
         self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_history_agent_project "
             "ON history(agent_visible,project_id,spawned_at DESC)"
         )
         self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_history_agent_filters "
-            "ON history(agent_visible,backend,space_id,external,spawned_at DESC)"
+            "ON history(agent_visible,backend,project_id,external,spawned_at DESC)"
         )
         # Project-scope filters/joins (history list, projects sidebar, scope counts)
         # otherwise fall back to full-table scans.
@@ -200,117 +203,125 @@ class HistoryIndex:
         self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_artifacts_scope ON artifacts(project_scope_id)"
         )
-        # Earlier releases used repository identity as project_id. Preserve it as
-        # the repo grouping while creating concrete scope identities from roots.
-        legacy = self._db.execute(
-            "SELECT DISTINCT project_id,project_label,project_root FROM history "
-            "WHERE project_root IS NOT NULL AND project_root<>''"
-        ).fetchall()
-        now = time.time()
-        for row in legacy:
-            scope_id = project_scope_id(row["project_root"])
-            is_git_scope = (Path(row["project_root"]) / ".git").exists()
-            repo_group_id = (
-                row["project_id"] if is_git_scope and row["project_id"] != scope_id else None
-            )
-            if repo_group_id:
-                self._db.execute(
-                    "INSERT OR IGNORE INTO repo_groups(id,label,source,created_at,last_activity) "
-                    "VALUES(?,?,?,?,?)",
-                    (repo_group_id, row["project_label"] or "Repository", "legacy", now, now),
-                )
-            self._db.execute(
-                "INSERT OR IGNORE INTO project_scopes"
-                "(id,root,label,source,repo_group_id,created_at,last_activity) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (
-                    scope_id,
-                    row["project_root"],
-                    row["project_label"] or Path(row["project_root"]).name,
-                    "migration",
-                    repo_group_id,
-                    now,
-                    now,
-                ),
-            )
-            self._db.execute(
-                "UPDATE history SET project_scope_id=?,repo_group_id=? WHERE project_root=?",
-                (scope_id, repo_group_id, row["project_root"]),
-            )
 
-    async def ensure_default_space(self, space: SpaceRecord) -> None:
-        def op() -> None:
-            self._db.execute(
-                "INSERT OR IGNORE INTO spaces(id,name,position,layout_json,layout_revision) "
-                "VALUES(?,?,?,?,?)",
-                (space.id, space.name, space.position, json.dumps(space.layout), 0),
-            )
-            self._db.commit()
-
-        await self._run(op)
-
-    async def list_spaces(self) -> list[SpaceRecord]:
-        def op() -> list[SpaceRecord]:
-            rows = self._db.execute("SELECT * FROM spaces ORDER BY position,name").fetchall()
+    async def list_projects(self) -> list[ProjectRecord]:
+        def op() -> list[ProjectRecord]:
+            rows = self._db.execute("SELECT * FROM projects ORDER BY position,name").fetchall()
             return [
-                SpaceRecord(
-                    r["id"],
-                    r["name"],
-                    r["position"],
-                    json.loads(r["layout_json"]) if r["layout_json"] else None,
-                    r["default_cwd"],
-                    r["default_backend"],
-                    r["layout_revision"],
-                    r["default_profile_id"],
-                    r["anchor_mode"],
-                    r["anchor_project_scope_id"],
-                    r["anchor_revision"],
-                    r["notes_open_mode"],
+                ProjectRecord(
+                    id=row["id"],
+                    name=row["name"],
+                    root=row["root"],
+                    position=row["position"],
+                    group_id=row["group_id"],
+                    layout=json.loads(row["layout_json"]) if row["layout_json"] else None,
+                    default_backend=row["default_backend"],
+                    layout_revision=row["layout_revision"],
+                    default_profile_id=row["default_profile_id"],
+                    resource_open_mode=row["resource_open_mode"],
+                    sidebar_visible=bool(row["sidebar_visible"]),
                 )
-                for r in rows
+                for row in rows
             ]
 
         return await self._run(op)
 
-    async def upsert_space(self, space: SpaceRecord) -> None:
+    async def upsert_project(self, project: ProjectRecord) -> None:
         def op() -> None:
             self._db.execute(
-                "INSERT INTO spaces(id,name,position,layout_json,default_cwd,default_backend,"
-                "layout_revision,default_profile_id,anchor_mode,anchor_project_scope_id,"
-                "anchor_revision,notes_open_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(id) DO UPDATE SET name=excluded.name, "
-                "position=excluded.position, layout_json=excluded.layout_json, "
-                "default_cwd=excluded.default_cwd, "
-                "default_backend=excluded.default_backend, "
-                "layout_revision=excluded.layout_revision, "
-                "default_profile_id=excluded.default_profile_id, "
-                "anchor_mode=excluded.anchor_mode, "
-                "anchor_project_scope_id=excluded.anchor_project_scope_id, "
-                "anchor_revision=excluded.anchor_revision, "
-                "notes_open_mode=excluded.notes_open_mode",
+                "INSERT INTO projects(id,name,root,position,group_id,layout_json,default_backend,"
+                "layout_revision,default_profile_id,resource_open_mode,sidebar_visible) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET name=excluded.name,root=excluded.root,"
+                "position=excluded.position,group_id=excluded.group_id,"
+                "layout_json=excluded.layout_json,default_backend=excluded.default_backend,"
+                "layout_revision=excluded.layout_revision,"
+                "default_profile_id=excluded.default_profile_id,"
+                "resource_open_mode=excluded.resource_open_mode,"
+                "sidebar_visible=excluded.sidebar_visible",
                 (
-                    space.id,
-                    space.name,
-                    space.position,
-                    json.dumps(space.layout),
-                    space.default_cwd,
-                    space.default_backend,
-                    space.layout_revision,
-                    space.default_profile_id,
-                    space.anchor_mode,
-                    space.anchor_project_scope_id,
-                    space.anchor_revision,
-                    space.notes_open_mode,
+                    project.id,
+                    project.name,
+                    project.root,
+                    project.position,
+                    project.group_id,
+                    json.dumps(project.layout),
+                    project.default_backend,
+                    project.layout_revision,
+                    project.default_profile_id,
+                    project.resource_open_mode,
+                    int(project.sidebar_visible),
                 ),
             )
             self._db.commit()
 
         await self._run(op)
 
-    async def delete_space(self, space_id: str) -> None:
+    async def reorder_projects(self, ordered_ids: list[str]) -> None:
+        """Replace every Project position in one transaction.
+
+        The manager validates optimistic ordering before this write. Keeping the
+        replacement atomic prevents readers from observing duplicate or partial
+        positions while multiple rows move.
+        """
+
         def op() -> None:
-            self._db.execute("UPDATE history SET space_id='default' WHERE space_id=?", (space_id,))
-            self._db.execute("DELETE FROM spaces WHERE id=?", (space_id,))
+            rows = self._db.execute("SELECT id FROM projects").fetchall()
+            current_ids = {str(row["id"]) for row in rows}
+            if len(ordered_ids) != len(current_ids) or set(ordered_ids) != current_ids:
+                raise ValueError("project order must contain every registered project once")
+            with self._db:
+                self._db.executemany(
+                    "UPDATE projects SET position=? WHERE id=?",
+                    [(position, project_id) for position, project_id in enumerate(ordered_ids)],
+                )
+
+        await self._run(op)
+
+    async def delete_project(self, project_id: str) -> None:
+        def op() -> None:
+            self._db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+            self._db.commit()
+
+        await self._run(op)
+
+    async def project_session_ids(self, project_id: str) -> list[str]:
+        def op() -> list[str]:
+            return [
+                row["id"]
+                for row in self._db.execute(
+                    "SELECT id FROM history WHERE project_id=?", (project_id,)
+                ).fetchall()
+            ]
+
+        return await self._run(op)
+
+    async def list_project_groups(self) -> list[ProjectGroupRecord]:
+        def op() -> list[ProjectGroupRecord]:
+            return [
+                ProjectGroupRecord(row["id"], row["name"], row["position"])
+                for row in self._db.execute(
+                    "SELECT * FROM project_groups ORDER BY position,name"
+                ).fetchall()
+            ]
+
+        return await self._run(op)
+
+    async def upsert_project_group(self, group: ProjectGroupRecord) -> None:
+        def op() -> None:
+            self._db.execute(
+                "INSERT INTO project_groups(id,name,position) VALUES(?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET name=excluded.name,position=excluded.position",
+                (group.id, group.name, group.position),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def delete_project_group(self, group_id: str) -> None:
+        def op() -> None:
+            self._db.execute("UPDATE projects SET group_id=NULL WHERE group_id=?", (group_id,))
+            self._db.execute("DELETE FROM project_groups WHERE id=?", (group_id,))
             self._db.commit()
 
         await self._run(op)
@@ -319,9 +330,9 @@ class HistoryIndex:
         def op() -> None:
             self._db.execute(
                 "INSERT OR REPLACE INTO history"
-                "(id,native_id,backend,name,cwd,space_id,spawned_at,"
+                "(id,native_id,backend,name,cwd,project_id,spawned_at,"
                 "tokens_in,tokens_out,transcript_path,executable,argv_json,"
-                "pinned_attention,shell_profile_id,agent_visible,project_id,project_label,"
+                "pinned_attention,shell_profile_id,agent_visible,repository_id,project_label,"
                 "project_root,context_window,final_context_pct,peak_context_pct,model,"
                 "measurement_source,project_scope_id,repo_group_id,auto_named) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -331,7 +342,7 @@ class HistoryIndex:
                     session.backend,
                     session.name,
                     session.cwd,
-                    session.space_id,
+                    session.project_id,
                     session.created_at,
                     session.tokens_in,
                     session.tokens_out,
@@ -341,7 +352,7 @@ class HistoryIndex:
                     int(session.pinned_attention),
                     session.shell_profile_id,
                     int(session.backend in {"claude", "codex"}),
-                    session.project_id,
+                    session.repository_id,
                     session.project_label,
                     session.project_root,
                     session.context_window or None,
@@ -349,7 +360,7 @@ class HistoryIndex:
                     session.context_peak_pct if session.context_window else None,
                     session.model,
                     session.measurement_source,
-                    session.project_scope_id or session.project_id,
+                    session.project_scope_id or session.repository_id,
                     session.repo_group_id,
                     int(session.auto_named),
                 ),
@@ -363,12 +374,12 @@ class HistoryIndex:
 
         def op() -> None:
             self._db.execute(
-                "UPDATE history SET name=?,cwd=?,space_id=?,executable=?,argv_json=?,"
+                "UPDATE history SET name=?,cwd=?,project_id=?,executable=?,argv_json=?,"
                 "pinned_attention=?,shell_profile_id=?,auto_named=? WHERE id=?",
                 (
                     session.name,
                     session.cwd,
-                    session.space_id,
+                    session.project_id,
                     session.exe,
                     json.dumps(session.args),
                     int(session.pinned_attention),
@@ -392,7 +403,7 @@ class HistoryIndex:
                 return
             self._db.execute(
                 "UPDATE history SET exited_at=?,exit_reason=?,tokens_in=?,tokens_out=?,"
-                "name=?,cwd=?,space_id=?,executable=?,argv_json=?,pinned_attention=?,"
+                "name=?,cwd=?,project_id=?,executable=?,argv_json=?,pinned_attention=?,"
                 "shell_profile_id=?,final_state=?,context_window=COALESCE(?,context_window),"
                 "final_context_pct=COALESCE(?,final_context_pct),"
                 "peak_context_pct=COALESCE(?,peak_context_pct),model=COALESCE(?,model),"
@@ -404,7 +415,7 @@ class HistoryIndex:
                     session.tokens_out,
                     session.name,
                     session.cwd,
-                    session.space_id,
+                    session.project_id,
                     session.exe,
                     json.dumps(session.args),
                     int(session.pinned_attention),
@@ -456,16 +467,16 @@ class HistoryIndex:
             run_id = session.agent_run_id or session.id
             self._db.execute(
                 "INSERT INTO history"
-                "(id,native_id,backend,name,cwd,space_id,spawned_at,tokens_in,tokens_out,"
+                "(id,native_id,backend,name,cwd,project_id,spawned_at,tokens_in,tokens_out,"
                 "transcript_path,executable,argv_json,pinned_attention,shell_profile_id,"
-                "agent_visible,project_id,project_label,project_root,context_window,"
+                "agent_visible,repository_id,project_label,project_root,context_window,"
                 "final_context_pct,peak_context_pct,model,measurement_source,"
                 "project_scope_id,repo_group_id,auto_named) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET native_id=excluded.native_id,"
                 "backend=excluded.backend,name=excluded.name,cwd=excluded.cwd,"
-                "space_id=excluded.space_id,transcript_path=excluded.transcript_path,"
-                "agent_visible=1,project_id=excluded.project_id,"
+                "project_id=excluded.project_id,transcript_path=excluded.transcript_path,"
+                "agent_visible=1,repository_id=excluded.repository_id,"
                 "project_label=excluded.project_label,project_root=excluded.project_root,"
                 "project_scope_id=excluded.project_scope_id,repo_group_id=excluded.repo_group_id,"
                 "auto_named=excluded.auto_named",
@@ -475,7 +486,7 @@ class HistoryIndex:
                     session.backend,
                     session.name,
                     session.run_cwd or session.cwd,
-                    session.space_id,
+                    session.project_id,
                     session.agent_run_started_at or session.created_at,
                     session.tokens_in,
                     session.tokens_out,
@@ -485,7 +496,7 @@ class HistoryIndex:
                     int(session.pinned_attention),
                     session.shell_profile_id,
                     1,
-                    session.project_id,
+                    session.repository_id,
                     session.project_label,
                     session.project_root,
                     session.context_window or None,
@@ -542,7 +553,7 @@ class HistoryIndex:
         cwd: str,
         spawned_at: float,
         transcript_path: str,
-        project_id: str | None = None,
+        repository_id: str | None = None,
         project_label: str | None = None,
         project_root: str | None = None,
         project_scope_id: str | None = None,
@@ -568,14 +579,14 @@ class HistoryIndex:
                 self._db.execute(
                     "INSERT INTO history"
                     "(id,native_id,backend,name,cwd,spawned_at,transcript_path,external,"
-                    "agent_visible,project_id,project_label,project_root,context_window,"
+                    "agent_visible,repository_id,project_label,project_root,context_window,"
                     "final_context_pct,peak_context_pct,tokens_in,tokens_out,model,"
                     "measurement_source,project_scope_id,repo_group_id,"
                     "transcript_mtime_ns,transcript_size) "
                     "VALUES(?,?,?,?,?,?,?,1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET "
                     "name=excluded.name,cwd=excluded.cwd,spawned_at=excluded.spawned_at,"
-                    "transcript_path=excluded.transcript_path,project_id=excluded.project_id,"
+                    "transcript_path=excluded.transcript_path,repository_id=excluded.repository_id,"
                     "project_label=excluded.project_label,project_root=excluded.project_root,"
                     "context_window=excluded.context_window,"
                     "final_context_pct=excluded.final_context_pct,"
@@ -593,7 +604,7 @@ class HistoryIndex:
                         cwd,
                         spawned_at,
                         transcript_path,
-                        project_id,
+                        repository_id,
                         project_label,
                         project_root,
                         context_window,
@@ -603,7 +614,7 @@ class HistoryIndex:
                         tokens_out,
                         model,
                         measurement_source,
-                        project_scope_id or project_id,
+                        project_scope_id or repository_id,
                         repo_group_id,
                         mtime_ns,
                         size,
@@ -629,8 +640,7 @@ class HistoryIndex:
                 "AND transcript_mtime_ns IS NOT NULL"
             ).fetchall()
             return {
-                r["transcript_path"]: (r["transcript_mtime_ns"], r["transcript_size"])
-                for r in rows
+                r["transcript_path"]: (r["transcript_mtime_ns"], r["transcript_size"]) for r in rows
             }
 
         return await self._run(op)
@@ -690,9 +700,8 @@ class HistoryIndex:
         *,
         query: str = "",
         backend: str | None = None,
-        project: str | None = None,
         state: str | None = None,
-        space: str | None = None,
+        project_id: str | None = None,
         external: bool | None = None,
         date_from: float | None = None,
         date_to: float | None = None,
@@ -705,20 +714,16 @@ class HistoryIndex:
         if query:
             sql += " AND (name LIKE ? OR cwd LIKE ? OR COALESCE(project_label,'') LIKE ?)"
             args += [f"%{query}%", f"%{query}%", f"%{query}%"]
-        filters = {
-            "backend": backend,
-            "final_state": state,
-            "space_id": space,
-        }
+        filters = {"backend": backend, "final_state": state}
         for column, value in filters.items():
             if value:
                 sql += f" AND {column}=?"
                 args.append(value)
-        if project == "__ungrouped__":
-            sql += " AND project_scope_id IS NULL"
-        elif project:
-            sql += " AND project_scope_id=?"
-            args.append(project)
+        if project_id == "__ungrouped__":
+            sql += " AND project_id IS NULL"
+        elif project_id:
+            sql += " AND project_id=?"
+            args.append(project_id)
         if external is not None:
             sql += " AND external=?"
             args.append(int(external))
@@ -750,11 +755,11 @@ class HistoryIndex:
     async def history_projects(self) -> list[dict[str, Any]]:
         def op() -> list[dict[str, Any]]:
             rows = self._db.execute(
-                "SELECT project_scope_id AS project_id,"
-                "COALESCE(MAX(project_label),'Ungrouped') AS label,"
-                "MAX(project_root) AS root,COUNT(*) AS sessions,MAX(spawned_at) AS last_activity "
-                "FROM history WHERE agent_visible=1 AND backend IN ('claude','codex') "
-                "GROUP BY project_scope_id ORDER BY last_activity DESC"
+                "SELECT h.project_id,COALESCE(MAX(p.name),'Unassigned') AS label,"
+                "MAX(p.root) AS root,COUNT(*) AS sessions,MAX(h.spawned_at) AS last_activity "
+                "FROM history h LEFT JOIN projects p ON p.id=h.project_id "
+                "WHERE h.agent_visible=1 AND h.backend IN ('claude','codex') "
+                "GROUP BY h.project_id ORDER BY last_activity DESC"
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -829,6 +834,58 @@ class HistoryIndex:
         def op() -> dict[str, Any] | None:
             row = self._db.execute("SELECT * FROM history WHERE id=?", (session_id,)).fetchone()
             return dict(row) if row else None
+
+        return await self._run(op)
+
+    async def record_context_compaction(
+        self,
+        session_id: str,
+        observed_at: float,
+        capability: str,
+        confidence: str,
+    ) -> None:
+        """Persist only explicit provider-native compaction evidence."""
+
+        def op() -> None:
+            self._db.execute(
+                "UPDATE history SET compaction_count=compaction_count+1,last_compaction_at=?,"
+                "compaction_capability=?,compaction_confidence=? WHERE id=?",
+                (observed_at, capability, confidence, session_id),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def set_context_compaction_summary(
+        self,
+        session_id: str,
+        count: int,
+        last_observed_at: float | None,
+        capability: str | None,
+        confidence: str | None,
+    ) -> None:
+        def op() -> None:
+            self._db.execute(
+                "UPDATE history SET compaction_count=?,last_compaction_at=?,"
+                "compaction_capability=?,compaction_confidence=? WHERE id=?",
+                (count, last_observed_at, capability, confidence, session_id),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def telemetry_history_rows(self, limit: int = 2000) -> list[dict[str, Any]]:
+        """Bounded transcript inventory used by provider-versioned telemetry reconciliation."""
+
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT id,backend,project_id,model,transcript_path,transcript_mtime_ns,"
+                "transcript_size FROM history WHERE agent_visible=1 "
+                "AND transcript_path IS NOT NULL "
+                "AND transcript_path!='' ORDER BY spawned_at DESC LIMIT ?",
+                (max(1, min(limit, 10000)),),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
         return await self._run(op)
 

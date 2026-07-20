@@ -1,5 +1,10 @@
 # Universal hooks and OpenRouter observers
 
+## What it is
+
+Asynchronous, provider-neutral rules over persisted mux events. Deterministic actions and
+bounded read-only observers annotate or notify without entering an agent's execution path.
+
 ## Contract
 
 Canonical machine-owned `~/.mux/rules.toml` uses versioned `[[rule]]` entries with stable
@@ -45,10 +50,26 @@ and the declared minimum observation capability.
 - The Automation dashboard exposes rules/shadow state, firings, traces, action/call results,
   annotations, provenance, cost, queue/degradation state, inbox, and no-side-effect dry-run.
 
+## Control-plane presentation
+
+- `Automations` is the complete effective inventory: built-in system observers plus canonical
+  `rules.toml` rules. Disabled built-ins remain visible.
+- Each built-in row exposes trigger, bounded input slice, model tier, result destination, and
+  owning config setting. Titler and summarizer toggle independently; stall, approval, and
+  context observers share the `phase7_observers_enabled` attention setting.
+- `Run notes` is the user-facing label for persisted annotations. `Attention` contains
+  notification records that may require user action.
+- Provider traces, event dry-run, queue state, and research-only injection evidence live under
+  Diagnostics rather than the primary workflows.
+- Injection diagnostics use the provider-neutral `safe|blocked|unknown` delivery-readiness
+  contract, expose bounded reasons/parser coverage, and are permanently unauthorized in this
+  phase. They never write the PTY; see `delivery-readiness.md`.
+
 ## Built-ins and safety
 
-The first built-ins are an explicit-name-preserving session titler and one-line turn
-summarizer. Duplicate hook/transcript completion evidence is coalesced before either call.
+Built-ins are an explicit-name-preserving session titler, one-line turn summarizer, stalled-run
+triage, approval-request triage, and context-handoff suggestion. Duplicate hook/transcript
+completion evidence is coalesced before completion-triggered calls.
 The titler additionally reserves its run before provider I/O and checks durable annotations,
 guaranteeing at most one paid title call per agent run even with concurrent workers. Generated
 titles are compact task labels for tabs/sidebar, without backend or “terminal session” prefixes.

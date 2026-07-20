@@ -27,9 +27,9 @@ def test_browser_access_has_no_mux_bearer_path_and_previews_use_proxy() -> None:
 
 
 def test_settings_exposes_direct_tailnet_listener_and_optional_serve() -> None:
-    settings = (
-        Path(__file__).parents[1] / "frontend" / "src" / "Settings.tsx"
-    ).read_text(encoding="utf-8")
+    settings = (Path(__file__).parents[1] / "frontend" / "src" / "Settings.tsx").read_text(
+        encoding="utf-8"
+    )
     assert "tailnet_enabled" in settings
     assert "Listen on Tailscale IPv4" in settings
     assert "Optional HTTPS with Tailscale Serve" in settings
