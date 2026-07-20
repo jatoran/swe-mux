@@ -101,6 +101,22 @@ def test_prompt_library_round_trip_conflicts_usage_and_revision_safety(tmp_path:
     assert len(library.list(project)["items"]) == 1
 
 
+def test_prompt_body_has_no_trailing_newline_after_round_trip(tmp_path: Path) -> None:
+    library = PromptLibrary(tmp_path / "data")
+    created = library.create("global", {"title": "Insert me", "body": "just text"})
+    assert created["body"] == "just text"
+    reloaded = parse_template(library.global_dir.joinpath(f"{created['id']}.md").read_bytes())
+    # No trailing newline: inserting the prompt must not submit it.
+    assert reloaded["body"] == "just text"
+    # A body typed with a trailing newline is normalized away, not preserved.
+    trailing = library.create("global", {"title": "Trailing", "body": "line one\n"})
+    assert trailing["body"] == "line one"
+    reloaded_trailing = parse_template(
+        library.global_dir.joinpath(f"{trailing['id']}.md").read_bytes()
+    )
+    assert reloaded_trailing["body"] == "line one"
+
+
 def test_prompt_library_rejects_terminal_controls_and_disabled_project_scope(
     tmp_path: Path,
 ) -> None:

@@ -6,7 +6,7 @@ from typing import Any, cast
 import pytest
 
 from swe_mux.event_bus import EventBus
-from swe_mux.layouts import attach_leaf, layout_terminal_ids
+from swe_mux.layouts import attach_leaf, layout_terminal_ids, stack_leaf
 from swe_mux.processes import (
     OwnedProcess,
     PreviewRegistry,
@@ -44,6 +44,47 @@ def fake_sessions() -> Any:
     )
 
 
+class ProjectInspector:
+    def __init__(self) -> None:
+        self.snapshots = {
+            "frontend": {
+                "available": True,
+                "session_id": "frontend",
+                "project_id": "project-a",
+                "processes": [
+                    {"pid": 11, "listeners": [listener_record("127.0.0.1", 37656)]}
+                ],
+            },
+            "backend": {
+                "available": True,
+                "session_id": "backend",
+                "project_id": "project-a",
+                "processes": [
+                    {"pid": 12, "listeners": [listener_record("127.0.0.1", 37655)]}
+                ],
+            },
+        }
+
+    async def snapshot(self, session_id: str, *, force: bool = False) -> dict[str, Any]:
+        return self.snapshots[session_id]
+
+    async def snapshot_all(self) -> dict[str, Any]:
+        return {
+            "available": True,
+            "sessions": [self.snapshots["frontend"], self.snapshots["backend"]],
+        }
+
+
+def project_sessions() -> Any:
+    sessions = {
+        identity: SimpleNamespace(
+            record=SimpleNamespace(id=identity, project_id="project-a", pid=pid)
+        )
+        for identity, pid in (("frontend", 11), ("backend", 12))
+    }
+    return SimpleNamespace(sessions=sessions, resolve=lambda identity: sessions[identity])
+
+
 @pytest.mark.asyncio
 async def test_preview_registration_requires_loopback_and_session_listener() -> None:
     registry = PreviewRegistry(cast(Any, FakeInspector()), cast(Any, fake_sessions()))
@@ -63,6 +104,49 @@ async def test_preview_registration_requires_loopback_and_session_listener() -> 
         await registry.register("session-a", "http://127.0.0.1:9999/")
     approved = await registry.register("session-a", "http://127.0.0.1:9999/", approved=True)
     assert approved.source == "user-approved"
+
+
+@pytest.mark.asyncio
+async def test_preview_registration_reuses_the_same_session_listener() -> None:
+    registry = PreviewRegistry(cast(Any, FakeInspector()), cast(Any, fake_sessions()))
+    first = await registry.register("session-a", "http://127.0.0.1:4321/")
+    second = await registry.register("session-a", "http://127.0.0.1:4321/other", approved=True)
+
+    assert second is first
+    assert len(registry.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_preview_registration_attributes_a_printed_url_to_its_actual_project_owner() -> None:
+    registry = PreviewRegistry(cast(Any, ProjectInspector()), cast(Any, project_sessions()))
+
+    # The frontend terminal printed its backend address. Endpoint ownership comes
+    # from the live listener, not the terminal where the link happened to appear.
+    opened = await registry.register(
+        "frontend", "http://127.0.0.1:37655/", approved=True
+    )
+    reopened = await registry.register("backend", "http://127.0.0.1:37655/")
+
+    assert opened is reopened
+    assert opened.session_id == "backend"
+    assert opened.source == "detected"
+    assert len(registry.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_live_project_services_get_routing_registrations_without_opening_tabs() -> None:
+    registry = PreviewRegistry(cast(Any, ProjectInspector()), cast(Any, project_sessions()))
+
+    await registry.ensure_detected("project-a")
+
+    assert {(item.session_id, item.port) for item in registry.items.values()} == {
+        ("frontend", 37656),
+        ("backend", 37655),
+    }
+    assert set(registry.routes_for_project("project-a")) == {
+        "http://127.0.0.1:37656",
+        "http://127.0.0.1:37655",
+    }
 
 
 def test_wildcard_binds_are_reported_at_the_address_a_client_can_reach() -> None:
@@ -227,6 +311,20 @@ def test_preview_leaf_attaches_without_losing_terminal() -> None:
     ]
 
 
+def test_reopening_an_existing_preview_activates_its_stack_tab() -> None:
+    layout = attach_leaf(None, "terminal", "terminal-a")
+    layout = stack_leaf(layout, "preview", "preview-a", target_id="terminal-a")
+    assert layout is not None
+    layout = stack_leaf(layout, "terminal", "terminal-a", target_id="terminal-a")
+    assert layout is not None
+    assert layout["root"]["active_child_id"] == "terminal-a"  # type: ignore[index]
+
+    reopened = stack_leaf(layout, "preview", "preview-a", target_id="terminal-a")
+
+    assert reopened is not None
+    assert reopened["root"]["active_child_id"] == "preview-a"  # type: ignore[index]
+
+
 def test_process_reconciliation_records_descendant_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -326,7 +424,9 @@ def test_daemon_resource_sample_excludes_session_attributed_descendants(
             return None
 
     class FakeProcess:
-        def __init__(self, pid: int, created: float, memory: int, children: list[Any] | None = None):
+        def __init__(
+            self, pid: int, created: float, memory: int, children: list[Any] | None = None
+        ):
             self.pid = pid
             self.created = created
             self.memory = memory

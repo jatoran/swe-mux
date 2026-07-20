@@ -16,6 +16,9 @@ responsive controls.
 - The sidebar shows only Projects marked for active navigation. Each Project row exposes its
   fixed Project note and Files view, then layout/session rows. An initialized or open session
   note appears beneath its terminal.
+- The active-Project header and each Project row expose **Run**. Its compact menu contains new
+  Claude/Codex/shell/custom-terminal launchers followed by trusted Project Actions; it is a
+  launch surface, not persistent sidebar grouping.
 - `projects` opens the viewport-level Projects manager, which lists configured visible and
   hidden Projects. A Project must exist before terminal actions are enabled.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
@@ -58,6 +61,7 @@ responsive controls.
   target, then remembered focus, then a visible fallback.
 - Mobile's top row contains navigation at left, active Project name centered, and provider
   accounts at right. It has no separate session dropdown.
+- Mobile's contextual toolbar includes the same Project-level Run menu as desktop.
 - Mobile uses one horizontally scrolling tab rail and one selected view. This is a projection
   of the durable desktop pane tree; see `workspace-layout.md` for placement and restoration
   rules.
@@ -94,6 +98,7 @@ Detailed UI behavior belongs with the owning feature:
 - CPU/RSS and Process fleet: `processes-and-previews.md`
 - Quota/context/tool evidence: `operational-telemetry.md`
 - Automation navigation and diagnostics: `automation.md`
+- Project task discovery and trust: `project-actions.md`
 
 ## Key files
 
@@ -103,4 +108,5 @@ Detailed UI behavior belongs with the owning feature:
 - `frontend/src/ProviderAccounts.tsx`
 - `frontend/src/ResourceUsage.tsx`
 - `frontend/src/TerminalPane.tsx`
+- `frontend/src/ProjectRunMenu.tsx`
 - `frontend/src/style.css`

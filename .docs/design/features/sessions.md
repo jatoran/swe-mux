@@ -18,6 +18,9 @@ and reattachable browser viewports.
 ## Operations
 
 - Direct shell creation uses the requested/profile/Project/global profile precedence.
+- Project Actions create ordinary shell-backed sessions. Every step is attributed to the
+  selected Project, appears as a normal terminal, and starts through a small runner that applies
+  the validated in-Project cwd/env before launching the imported command.
 - The browser inserts a client-only `starting terminal…` row/tab before the spawn request
   resolves. Temporary IDs never reach Project persistence or PTY routes; success atomically
   replaces the placeholder with the daemon session, while failure removes it and restores a
@@ -52,9 +55,11 @@ and reattachable browser viewports.
 - `src/swe_mux/adapters/`
 - `frontend/src/App.tsx`
 - `frontend/src/TerminalPane.tsx`
+- `src/swe_mux/action_runner.py`
 
 ## Relates to
 
 - `projects.md`: canonical ownership and Project registration.
 - `project-resources.md`: terminal-owned session notes.
 - `history.md`: durable agent-run lifecycle.
+- `project-actions.md`: trusted multi-session task launch.

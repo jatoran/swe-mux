@@ -22,6 +22,17 @@ Project creation requires an existing folder, rejects duplicate canonical roots,
 initializes `.swe-mux/`. Project deletion rejects any live or historical session reference.
 Deleting a Group ungroups its Projects.
 
+```text
+GET  /projects/{project_id}/actions
+POST /projects/{project_id}/actions/trust   {fingerprint}
+POST /projects/{project_id}/actions/run     {action_id}
+```
+
+Action discovery is inert. The catalog returns `fingerprint`, `trusted`, contributing `sources`,
+normalized actions/steps, and import diagnostics. Trust succeeds only for the current exact
+fingerprint. Run returns the spawned ordinary session snapshots plus per-step errors and returns
+`409 project_actions_trust_required` when files are untrusted or changed.
+
 ```ts
 interface Project {
   id: string
@@ -186,7 +197,8 @@ POST   /git/worktrees
 DELETE /git/worktrees
 GET    /processes
 POST   /processes/action             {session_id, pid, identity_id, action}
-GET|POST /previews
+GET    /previews[?session=]
+POST   /previews                     {session_id, url, approved?, attach?, target_session_id?, direction?}
 DELETE /previews/{id}
 ```
 
@@ -196,6 +208,13 @@ not first-class frontend navigation.
 Process snapshots expose bounded observational states `active | exited | escaped |
 suspected_orphan | stale | inaccessible`. Actions revalidate PID, creation-time identity,
 and ownership immediately before signaling; no state triggers automatic termination.
+
+Preview URLs are HTTP(S), literal loopback, and credential/query/fragment-free. Registration
+deduplicates by canonical Project endpoint and records the session that owns the live listener,
+even when another terminal printed the clicked URL. `attach=true` opens or activates the stable
+Preview leaf beside that owner; closing the leaf leaves registration intact. Listing discovers
+live Project listeners without opening tabs. Sandboxed Preview fetch/XHR/WebSocket traffic to
+another registered Project service is rewritten through that service's `/preview/{id}/…` route.
 
 ## Provider accounts and usage
 

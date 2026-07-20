@@ -60,6 +60,7 @@ from .openrouter import OpenRouterClient, OpenRouterError
 from .operational_telemetry import OperationalTelemetryStore
 from .processes import PreviewRegistry, ProcessInspector
 from .profiles import profile_payload, resolve_profile
+from .project_actions import ProjectActionService, runner_spawn_body
 from .project_files import (
     effective_project_ignores,
     initialize_note,
@@ -286,6 +287,9 @@ def create_app(config: Config, *, frontend_dir: Path | None = None) -> web.Appli
             web.put("/api/projects/order", reorder_projects),
             web.patch("/api/projects/{project_id}", patch_project),
             web.delete("/api/projects/{project_id}", delete_project),
+            web.get("/api/projects/{project_id}/actions", list_project_actions),
+            web.post("/api/projects/{project_id}/actions/trust", trust_project_actions),
+            web.post("/api/projects/{project_id}/actions/run", run_project_action),
             web.get("/api/projects/{project_id}/note", get_project_note),
             web.put("/api/projects/{project_id}/note", put_project_note),
             web.get("/api/projects/{project_id}/session-notes/{note_id}", get_session_note),
@@ -455,6 +459,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     voice_store = VoiceStore(config.database_path)
     voice = VoiceService(config, events, sessions, voice_store, automation_store, openrouter)
     prompt_library = PromptLibrary(config.data_dir)
+    project_actions = ProjectActionService(config.data_dir)
     project_watcher = ProjectFileWatcher(projects, events, config)
     telemetry.start(events, sessions=sessions, history=history)
     git_monitor.start()
@@ -499,6 +504,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         voice=voice,
         voice_store=voice_store,
         prompt_library=prompt_library,
+        project_actions=project_actions,
         project_watcher=project_watcher,
         automation_tasks=set(),
     )
@@ -2518,6 +2524,106 @@ async def delete_project(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
+def _action_project(request: web.Request):  # type: ignore[no-untyped-def]
+    project_id = request.match_info["project_id"]
+    project = request.app["projects"].projects.get(project_id)
+    if project is None:
+        raise ValueError(f"unknown project: {project_id}")
+    return project
+
+
+async def list_project_actions(request: web.Request) -> web.Response:
+    project = _action_project(request)
+    service: ProjectActionService = request.app["project_actions"]
+    return json_response(service.catalog(project.root).snapshot())
+
+
+async def trust_project_actions(request: web.Request) -> web.Response:
+    project = _action_project(request)
+    body = await request.json()
+    fingerprint = str(body.get("fingerprint") or "")
+    if not fingerprint:
+        raise ValueError({"fingerprint": "is required"})
+    service: ProjectActionService = request.app["project_actions"]
+    catalog = service.trust(project.root, fingerprint)
+    await request.app["events"].emit(
+        "project_actions_trusted",
+        source="user",
+        project_id=project.id,
+        fingerprint=catalog.fingerprint,
+        files=list(catalog.sources),
+    )
+    return json_response(catalog.snapshot())
+
+
+async def run_project_action(request: web.Request) -> web.Response:
+    project = _action_project(request)
+    body = await request.json()
+    action_id = str(body.get("action_id") or "")
+    if not action_id:
+        raise ValueError({"action_id": "is required"})
+    service: ProjectActionService = request.app["project_actions"]
+    try:
+        catalog, action = service.action(project.root, action_id)
+    except PermissionError as exc:
+        return json_response(
+            {
+                "error": str(exc),
+                "code": "project_actions_trust_required",
+                "catalog": service.catalog(project.root).snapshot(),
+            },
+            409,
+        )
+    except KeyError as exc:
+        raise ValueError(f"unknown Project Action: {action_id}") from exc
+    portable = await read_project_config(
+        project.root, project=ProjectIdentity(project.id, project.name, project.root, "registered")
+    )
+    values = portable["values"] if portable["status"] in {"ready", "read-only"} else {}
+    profile_id = (
+        project.default_profile_id
+        or values.get("default_shell_profile")
+        or request.app["config"].default_shell_profile
+    )
+    sessions: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for batch in action.batches:
+        results = await asyncio.gather(
+            *(
+                _spawn_from_body(
+                    request.app,
+                    runner_spawn_body(
+                        step,
+                        project_id=project.id,
+                        config=request.app["config"],
+                        profile_id=str(profile_id),
+                    ),
+                )
+                for step in batch
+            ),
+            return_exceptions=True,
+        )
+        for step, result in zip(batch, results, strict=True):
+            if isinstance(result, BaseException):
+                errors.append({"step": step.name, "error": str(result)})
+            else:
+                sessions.append(result.record.snapshot())
+    await request.app["events"].emit(
+        "project_action_started",
+        source="user",
+        project_id=project.id,
+        action_id=action.id,
+        action_label=action.label,
+        fingerprint=catalog.fingerprint,
+        session_ids=[item["id"] for item in sessions],
+        failures=len(errors),
+    )
+    return json_response(
+        {"action": action.snapshot(), "sessions": sessions, "errors": errors},
+        201 if not errors else 207,
+    )
+
+
 async def list_project_groups(request: web.Request) -> web.Response:
     manager: ProjectManager = request.app["projects"]
     return json_response([item.snapshot() for item in manager.groups.values()])
@@ -3119,14 +3225,32 @@ _PROXY_HOP_HEADERS = {
 }
 
 
-def _preview_runtime_bridge(prefix: str) -> str:
+def _preview_runtime_bridge(prefix: str, project_routes: dict[str, str] | None = None) -> str:
     encoded = json.dumps(prefix)
+    encoded_routes = json.dumps(project_routes or {}, separators=(",", ":"))
     return f"""<script>(function(){{
 const prefix={encoded};
+const projectRoutes={encoded_routes};
+const canonicalOrigin=function(url){{
+  let protocol=url.protocol;
+  if(protocol==="ws:")protocol="http:";
+  if(protocol==="wss:")protocol="https:";
+  let hostname=url.hostname.toLowerCase();
+  if(hostname==="localhost"||hostname==="0.0.0.0")hostname="127.0.0.1";
+  if(hostname==="[::]"||hostname==="::")hostname="[::1]";
+  if(hostname.includes(":" )&&!hostname.startsWith("["))hostname="["+hostname+"]";
+  const defaultPort=(protocol==="http:"&&url.port==="80")||(protocol==="https:"&&url.port==="443");
+  return protocol+"//"+hostname+(url.port&&!defaultPort?":"+url.port:"");
+}};
 const route=function(value){{
   try {{
     const url=new URL(String(value),location.href);
-    if(url.host===location.host&&!url.pathname.startsWith(prefix)){{
+    const projectPrefix=projectRoutes[canonicalOrigin(url)];
+    if(projectPrefix){{
+      url.protocol=location.protocol==="https:"?(url.protocol.startsWith("ws")?"wss:":"https:"):(url.protocol.startsWith("ws")?"ws:":"http:");
+      url.host=location.host;
+      url.pathname=projectPrefix+url.pathname.replace(/^\\/+/,"");
+    }} else if(url.host===location.host&&!url.pathname.startsWith("/preview/")){{
       url.pathname=prefix+url.pathname.replace(/^\\/+/,"");
     }}
     return url.toString();
@@ -3150,7 +3274,9 @@ XMLHttpRequest.prototype.open=function(method,url){{
 }})();</script>"""
 
 
-def rewrite_preview_html(data: bytes, prefix: str) -> bytes:
+def rewrite_preview_html(
+    data: bytes, prefix: str, project_routes: dict[str, str] | None = None
+) -> bytes:
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
@@ -3161,7 +3287,7 @@ def rewrite_preview_html(data: bytes, prefix: str) -> bytes:
         text,
         flags=re.IGNORECASE,
     )
-    bridge = _preview_runtime_bridge(prefix)
+    bridge = _preview_runtime_bridge(prefix, project_routes)
     head = re.search(r"<head(?:\s[^>]*)?>", text, flags=re.IGNORECASE)
     if head:
         text = text[: head.end()] + bridge + text[head.end() :]
@@ -3321,6 +3447,12 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
     if item.session_id not in request.app["sessions"].sessions:
         raise web.HTTPGone(text="preview session is no longer live")
     tail = request.match_info.get("tail", "")
+    previews = request.app["previews"]
+    ensure_detected = getattr(previews, "ensure_detected", None)
+    if ensure_detected is not None:
+        await ensure_detected(item.project_id)
+    routes_for_project = getattr(previews, "routes_for_project", None)
+    project_routes = routes_for_project(item.project_id) if routes_for_project else {}
     target, origin = preview_target(item, tail, request.query_string)
     if request.headers.get("Upgrade", "").casefold() == "websocket":
         return await _proxy_websocket(request, target, origin)
@@ -3414,7 +3546,7 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
                         chunks.append(chunk)
                     data = b"".join(chunks)
                     if "text/html" in casefolded:
-                        data = rewrite_preview_html(data, prefix)
+                        data = rewrite_preview_html(data, prefix, project_routes)
                     elif "text/css" in casefolded:
                         data = rewrite_preview_css(data, prefix)
                     else:

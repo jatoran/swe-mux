@@ -300,7 +300,15 @@ def stack_leaf(
         raise ValueError(f"layout panes cannot hold {kind} leaves")
     normalized = normalize_layout(layout)
     if any(leaf["id"] == resource_id for leaf in _layout_leaves(normalized)):
-        return normalized
+        containing = _pane_containing(normalized["root"], resource_id)
+        if containing is None:
+            return normalized
+        root = _replace_pane(
+            normalized["root"],
+            containing["id"],
+            lambda pane: {**pane, "active_child_id": resource_id},
+        )
+        return normalize_layout({**normalized, "root": root})
     target = _pane_containing(normalized["root"], target_id)
     if target is None or target_id not in [child["id"] for child in target["children"]]:
         return None

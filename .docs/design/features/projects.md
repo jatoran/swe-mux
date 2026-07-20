@@ -39,8 +39,11 @@ Project-owned `.swe-mux/config.toml` is versioned and permits only typed portabl
 `notification_sounds_enabled`, and additive `ignore_patterns`. Effective precedence is explicit
 request where supported, database Project override, portable Project value, then global default.
 
-Repository-owned Project configuration cannot authorize commands, executables, hooks, network
-bindings, automatic actions, credentials, or secrets.
+Repository-owned `.swe-mux/config.toml` cannot authorize commands, executables, hooks, network
+bindings, automatic actions, credentials, or secrets. Separately, `.vscode/tasks.json`, root
+`package.json` scripts, and `.swe-mux/actions.toml` may execute only after the user selects a
+Project Action and locally approves the exact current task-file fingerprint. They never execute
+on discovery, Project open, or daemon startup.
 
 ## API shape
 
@@ -62,9 +65,11 @@ complete permutation of every registered Project ID and normalized transactional
 - `src/swe_mux/project_files.py`
 - `frontend/src/ProjectsManager.tsx`
 - `frontend/src/App.tsx`
+- `src/swe_mux/project_actions.py`
 
 ## Relates to
 
 - `project-resources.md`: Project-owned notes, files, ignores, and watches.
 - `workspace-layout.md`: Project-owned pane/tab placement.
 - `sessions.md`: immutable Project ownership and spawning.
+- `project-actions.md`: explicit trusted repository task execution.

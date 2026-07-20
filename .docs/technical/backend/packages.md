@@ -15,13 +15,15 @@ It should call domain packages rather than acquire their storage or process resp
 | `projects.py` | Project/Group validation and lifecycle | Git-derived identity, file content |
 | `project_files.py` | safe Project config, notes, tree, file reads/writes | layout placement, browser drafts |
 | `project_watcher.py` | leased non-recursive directory watches | recursive Project crawl |
+| `project_actions.py` | inert task import, normalization, exact fingerprint trust | automatic execution, UI placement |
+| `action_runner.py` | apply validated cwd/env and launch one normalized task step | discovery, trust, session ownership |
 | `history.py` | shared schema, Project/layout persistence, run history, search index | live PTY lifecycle |
 | `history_backfill.py` | bounded cancellable complete-history jobs | durable job scheduling, native file mutation |
 | `transcript_view.py` | bounded Claude/Codex conversation parsing | process state, transcript writes |
 | `layouts.py` | layout-v6 validation and migrations | UI focus or drag state |
 | `operational_telemetry.py` | process/quota/reset/context/tool evidence | credentials, automatic process killing |
 | `provider_accounts.py` | saved auth snapshots, explicit switching, safe quota reads | concurrent provider homes |
-| `processes.py` | descendant inspection/actions and loopback preview discovery | authoritative ownership from PID alone |
+| `processes.py` | descendant inspection/actions; Project-wide loopback registration, discovery, listener attribution, and route maps | proxy transport, authoritative ownership from PID alone |
 | `adapters/` | provider command/resume/transcript/state normalization | public HTTP shapes |
 
 Feature stores sharing `mux.db` use their own single-worker executor/connection and the common
@@ -56,6 +58,9 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
 - PTY attach/input paths never wait for observational event persistence.
 - Every poller/scan has an explicit bound, cancellation/stop path, freshness contract, and
   unavailable result. Optional integrations cannot make terminal operations fail.
+- Preview registration identity is Project endpoint, not clicked terminal. Resolve listener
+  ownership across live sessions before attachment; do not weaken the iframe sandbox or let a
+  browser dial raw loopback for cross-service traffic.
 - Once a route has resolved an explicit Project, Project-resource helpers must receive/use that
   canonical identity. Re-running Git discovery on `project.root` can silently retarget a nested
   registered Project to its enclosing worktree; this remains a known note-path defect until the
@@ -67,3 +72,4 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
 - `../../design/interfaces.md`
 - `../../design/features/sessions.md`
 - `../../design/features/history.md`
+- `../../design/features/project-actions.md`

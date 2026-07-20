@@ -33,6 +33,10 @@ Useful controls:
 - New terminals replace the focused pane by default; splits occur only through explicit context actions.
 - Sidebar/header `×` uses inline two-click confirmation; context-menu Kill is immediate.
 - Right-click a project for terminals, its project note, files, settings, and grouping.
+- Use **Run** in the active-project header, Project row, or mobile toolbar to start Claude,
+  Codex, a shell/custom terminal, or an imported Project task. VS Code tasks, root package
+  scripts, and `.swe-mux/actions.toml` are inert until their exact current files are reviewed
+  and trusted; any edit requires approval again.
 - Create optional named Groups to organize projects in the sidebar; Groups do not control panes.
 - Each project exposes terminals, previews, its project note, Files, and file editors in one
   unified tab/pane workspace; any tab can share a pane or split into another.
@@ -83,7 +87,8 @@ forwarding, and public ingress are unsupported.
 
 The tailnet UI exposes the same terminals, project resources, process controls, and development
 previews as localhost. Keep Vite and other development servers on `127.0.0.1`; open them
-from a session's Processes and previews panel. swe-mux bridges registered HTTP and
+from a session's Processes and previews panel or click their loopback URL in terminal output.
+swe-mux bridges registered HTTP and
 WebSocket/HMR traffic through its own URL, so the phone never needs a raw dev-server port.
 
 At daemon startup, native Claude and Codex transcript directories are reconciled into

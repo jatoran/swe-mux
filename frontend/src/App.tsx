@@ -16,6 +16,7 @@ import { UsageDashboard } from './UsageDashboard'
 import { HistoryBrowser } from './HistoryBrowser'
 import { AccountSwitcher } from './ProviderAccounts'
 import { PromptLibrary } from './PromptLibrary'
+import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
 import { MicButton, VoicePlayer } from './VoicePlayer'
 import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, unlockPlayback } from './voice'
@@ -107,6 +108,7 @@ type PendingSpawnPlacement = {
   position:'before'|'after'
   resolvedId?:string
 }
+type RunMenuState={project:Project;x:number;y:number}
 
 function placePendingTerminal(layout:PaneLayout,id:string,placement:PendingSpawnPlacement):PaneLayout {
   if(!placement.split)return openTab(layout,placement.targetId,terminalLeaf(id))
@@ -114,10 +116,10 @@ function placePendingTerminal(layout:PaneLayout,id:string,placement:PendingSpawn
   return splitTerminal(layout,placement.targetId,id,placement.split as SplitDirection,placement.position)
 }
 
-function pendingTerminal(id:string,project:Project):Session {
+function pendingTerminal(id:string,project:Project,backend:'shell'|'claude'|'codex'='shell'):Session {
   const now=Date.now()/1000
   return {
-    id,name:'starting terminal…',project_id:project.id,backend:'shell',native_session_id:id,
+    id,name:`starting ${backend==='shell'?'terminal':backend}…`,project_id:project.id,backend,native_session_id:id,
     cwd:project.root,exe:'',args:[],pid:-1,created_at:now,state:'starting',tokens_in:0,
     process_job_assignment:'pending',tokens_out:0,context_window:0,context_pct:0,last_activity_ts:now,
     git:{dirty:0,ahead:0,behind:0},pinned_attention:false,broadcast:false,context_peak_pct:0,
@@ -172,6 +174,7 @@ export function App() {
   const layoutValues=useRef<Record<string,PaneLayout>>({})
   const [broadcast, setBroadcast] = useState(false)
   const [launcherOpen, setLauncherOpen] = useState(false)
+  const [runMenu,setRunMenu]=useState<RunMenuState|null>(null)
   const [launcherProject, setLauncherProject] = useState('')
   const [launcherSplit, setLauncherSplit] = useState<false | SplitDirection>(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -475,6 +478,22 @@ export function App() {
     document.addEventListener('visibilitychange', onVisible)
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) }
   }, [])
+
+  useEffect(()=>{
+    const openFromTerminal=(event:Event)=>{
+      const detail=(event as CustomEvent<{sessionId:string;url:string}>).detail
+      const session=sessionsRef.current.find(item=>item.id===detail?.sessionId)
+      if(!session||!detail?.url)return
+      void api<{preview:Preview;project:Project}>('POST','/api/previews',{session_id:session.id,url:detail.url,approved:true,attach:true}).then(result=>{
+        setPreviews(current=>({...current,[result.preview.id]:result.preview}))
+        setProjects(items=>items.map(item=>item.id===result.project.id?result.project:item))
+        setLayoutMap(current=>({...current,[result.project.id]:parseLayout(result.project.layout)}))
+        setProjectId(session.project_id);setFocusedViewId(result.preview.id);setSidebarOpen(false)
+      }).catch(cause=>setError(cause instanceof Error?cause.message:String(cause)))
+    }
+    window.addEventListener('mux:open-terminal-preview',openFromTerminal)
+    return()=>window.removeEventListener('mux:open-terminal-preview',openFromTerminal)
+  },[])
 
   useEffect(() => {
     const media = matchMedia('(prefers-color-scheme: light)')
@@ -798,7 +817,7 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [confirmKillId])
 
-  const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after') => {
+  const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after', backend:'shell'|'claude'|'codex'='shell') => {
     if (spawning.current) return
     const target=projectsRef.current.find(item=>item.id===targetProject)
     if(!target){setError('Project is not available yet.');return}
@@ -811,7 +830,7 @@ export function App() {
     pendingSpawns.current[pendingId]=placement
     const optimisticLayout=placePendingTerminal(currentLayout,pendingId,placement)
     layoutValues.current[targetProject]=optimisticLayout
-    setSessions(items=>[...items,pendingTerminal(pendingId,target)])
+    setSessions(items=>[...items,pendingTerminal(pendingId,target,backend)])
     setLayoutMap(current=>({...current,[targetProject]:optimisticLayout}))
     setProjectId(targetProject)
     setActiveId(pendingId)
@@ -819,8 +838,8 @@ export function App() {
     setLauncherOpen(false)
     try {
       const next = await api<Session>('POST', '/api/sessions', {
-        backend: 'shell', project_id: targetProject,
-        profile_id: profileId || undefined,
+        backend, project_id: targetProject,
+        profile_id: backend==='shell' ? profileId || undefined : undefined,
       })
       startupOrigins.current[next.id]=startupOrigin
       const browserTiming={api_response:performance.now()-startupOrigin}
@@ -857,6 +876,26 @@ export function App() {
     setLauncherSplit(split)
     setLauncherProfile(localStorage.getItem('mux.lastProfile') || projects.find(item=>item.id===targetProject)?.effective_options?.profile_id || defaultProfile)
     setLauncherOpen(true)
+  }
+
+  const openRunMenu=(project:Project,element:HTMLElement)=>{
+    const rect=element.getBoundingClientRect()
+    setRunMenu({project,x:Math.max(6,Math.min(rect.left,window.innerWidth-306)),y:Math.min(rect.bottom+4,window.innerHeight-50)})
+    setProjectMenu(null);setMainMenuOpen(false)
+  }
+
+  const attachActionSessions=async(targetProject:string,nextSessions:Session[])=>{
+    if(!nextSessions.length)return
+    const target=projectsRef.current.find(item=>item.id===targetProject)
+    if(!target)return
+    let nextLayout=layoutValues.current[targetProject]||layoutMap[targetProject]||parseLayout(target.layout)
+    let targetId=targetProject===projectId?(focusedViewId||activeId):leaves(nextLayout)[0]?.id||null
+    for(const session of nextSessions){nextLayout=openTab(nextLayout,targetId,terminalLeaf(session.id));targetId=session.id}
+    layoutValues.current[targetProject]=nextLayout
+    setSessions(items=>[...items.filter(item=>!nextSessions.some(next=>next.id===item.id)),...nextSessions])
+    setLayoutMap(current=>({...current,[targetProject]:nextLayout}))
+    setProjectId(targetProject);setActiveId(nextSessions.at(-1)!.id);setFocusedViewId(nextSessions.at(-1)!.id);setSidebarOpen(false)
+    await updateLayout(targetProject,nextLayout)
   }
 
   const createProject = async () => {
@@ -1230,7 +1269,7 @@ export function App() {
   const commandProject = projectMenu?.project || activeProject
   const commands: Command[] = [
     { id: 'palette.open', label: 'Open command palette', category: 'view', available: true, run: () => setPaletteOpen(true) },
-    { id:'prompts.open',label:'Open prompt library',category:'input',available:!!active,disabledReason:'Focus a terminal before inserting a prompt',run:()=>{setPromptLibraryOpen(true);setMainMenuOpen(false)} },
+    { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id: 'session.spawnShell', label: 'New terminal in current project', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => void spawnTerminal() },
     { id: 'session.quickLaunch', label: 'New terminal custom…', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => openLauncher() },
     { id: 'project.create', label: 'Manage projects', category: 'project', available: true, run: openProjectsManager },
@@ -1569,15 +1608,15 @@ export function App() {
   // activated as a tab in the same region, so it is always one click away.
   const sidebarPreviewRow=(preview:Preview,session:Session)=>{
     const layout=layoutMap[session.project_id]||parseLayout(projects.find(item=>item.id===session.project_id)?.layout)
-    const owner=stackForView(layout,session.id)
-    const selected=owner?.active_child_id===preview.id
-    return <button key={preview.id} class={`sidebar-note-row preview-row ${selected?'active':''}`} title={`${preview.url} · ${preview.source} preview spawned by this session`} onClick={event=>{event.stopPropagation();setProjectId(session.project_id);setFocusedViewId(preview.id);if(owner)void updateLayout(session.project_id,activateStackChild(layout,owner.id,preview.id));setSidebarOpen(false)}}>
+    const previewStack=stackForView(layout,preview.id)
+    const selected=previewStack?.active_child_id===preview.id
+    return <button key={preview.id} class={`sidebar-note-row preview-row ${selected?'active':''}`} title={`${preview.url} · ${preview.source} preview spawned by this session`} onClick={event=>{event.stopPropagation();if(previewStack){setProjectId(session.project_id);setFocusedViewId(preview.id);void updateLayout(session.project_id,activateStackChild(layout,previewStack.id,preview.id))}else void openDetectedServer(preview,session);setSidebarOpen(false)}}>
       <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>server :{preview.port}</strong></span>
     </button>
   }
   // A detected server has no preview yet. Opening one registers it and, because the
   // daemon groups previews, it lands as a tab beside this session.
-  const openDetectedServer=async(server:DetectedServer,session:Session)=>{
+  const openDetectedServer=async(server:Pick<DetectedServer,'url'>,session:Session)=>{
     try{
       const result=await api<{preview:Preview;project:Project}>('POST','/api/previews',{session_id:session.id,url:server.url,attach:true})
       setPreviews(current=>({...current,[result.preview.id]:result.preview}))
@@ -1693,6 +1732,7 @@ export function App() {
     <div class="mobile-toolbar">
       <button class="nav-toggle mobile-nav-toggle" onClick={() => setSidebarOpen(value => !value)}>:nav</button>
       <strong class="mobile-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>
+      <button class="mobile-run-trigger" disabled={!activeProject} onClick={event=>activeProject&&openRunMenu(activeProject,event.currentTarget)}>▶ Run</button>
       <AccountSwitcher compact onManage={()=>openSettings('Accounts')}/>
     </div>
 
@@ -1701,7 +1741,7 @@ export function App() {
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''}`} style={{'--sidebar-width':`${sidebarWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
-        <div class="app-identity"><strong>swe_mux</strong><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span></div>
+        <div class="app-identity"><strong>swe_mux</strong><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span>{activeProject&&<button class="project-run-header" title={`Run in ${activeProject.name}`} onClick={event=>openRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         <div class="project-tree">
@@ -1716,7 +1756,7 @@ export function App() {
             const dropClass=dragProject?.overId===project.id&&dragProject.side?`project-drop-target drop-${dragProject.side}`:''
             return <section key={project.id} data-reorder-id={project.id} style={{order:projectPreviewIds.indexOf(project.id)}} class={`project-group ${project.id === projectId ? 'active' : ''} ${dropClass}`}>
               <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title="Drag to reorder Project" onPointerDown={event=>{beginLongPress(event,(x,y)=>setProjectMenu({project,x,y}));beginProjectPointerDrag(event,project,peerIds)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setProjectMenu({ project, x: event.clientX, y: event.clientY }) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}setProjectId(project.id)}}>
-                <span class="project-chevron" aria-hidden="true">{project.id === projectId ? '◆' : '◇'}</span><strong>{project.name}</strong>
+                <span class="project-chevron" aria-hidden="true">{project.id === projectId ? '◆' : '◇'}</span><strong>{project.name}</strong><button class="project-row-run" title={`Run in ${project.name}`} aria-label={`Run in ${project.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
               </div>
               <div class="project-note-list">{sidebarNoteRow(noteResourceId('note',project.id),project.id)}{sidebarNoteRow(noteResourceId('files',project.id),project.id)}</div>
               <div class="session-list">
@@ -1754,6 +1794,8 @@ export function App() {
         <button class="primary" type="submit">Open {profiles.find(item=>item.id===launcherProfile)?.label || 'terminal'}</button>
       </form>
     </div>}
+
+    {runMenu&&<ProjectRunMenu project={runMenu.project} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>setRunMenu(null)} onLaunch={backend=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,undefined,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={items=>void attachActionSessions(runMenu.project.id,items)} onError={setError}/>}
 
     {paletteOpen && <div class="palette-layer" onMouseDown={event => event.target === event.currentTarget && setPaletteOpen(false)}>
       <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette"><input ref={paletteInput} role="combobox" aria-controls="command-results" aria-expanded="true" aria-activedescendant={shownCommands[paletteIndex]?`command-${shownCommands[paletteIndex].id.replaceAll(/[^a-zA-Z0-9_-]/g,'-')}`:undefined} value={paletteQuery} onInput={event => setPaletteQuery(event.currentTarget.value)} onKeyDown={event => {
@@ -1862,9 +1904,7 @@ export function App() {
       <button onClick={() => { setMainMenuOpen(false); runNamedCommand('history.open') }}>Session history</button>
       <button onClick={() => runNamedCommand('project.create')}>Projects…</button>
       <button onClick={() => runNamedCommand('processes.all')}>Process fleet…</button>
-      <button disabled={!activeProject} onClick={() => runNamedCommand('notes.open')}>Project note</button>
-      <button disabled={!activeProject} onClick={() => runNamedCommand('project.files')}>Project files</button>
-      <button disabled={!active} onClick={()=>runNamedCommand('prompts.open')}>Prompt library…</button>
+      <button onClick={()=>runNamedCommand('prompts.open')}>Prompt library…</button>
       <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
       <button onClick={() => { setMainMenuOpen(false); runNamedCommand('broadcast.toggle') }}>{broadcast ? 'Stop broadcast input' : 'Start broadcast input'}</button>
       <div class="context-subtitle">CONFIGURATION</div>

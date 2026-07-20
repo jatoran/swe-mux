@@ -17,6 +17,8 @@ rendering and local interaction; pure helpers own transformations that need dete
 | Project resources | `ProjectResource.tsx`, `ProjectNoteEditor.tsx`, `noteSaveQueue.ts` | file tree/editors and note-specific save isolation |
 | History | `HistoryBrowser.tsx` | filters, transcript review, backfill progress/actions |
 | Projects | `ProjectsManager.tsx` | configured catalog UI, not workspace placement |
+| Project actions | `ProjectRunMenu.tsx` | Run catalog, trust, and launch interaction |
+| Preview links/views | `previewLinks.ts`, `PreviewPane.tsx`, `TerminalPane.tsx` | loopback normalization, link dispatch, sandboxed registered viewport |
 | Accounts/resources | `ProviderAccounts.tsx`, `ResourceUsage.tsx` | anchored viewport popovers and summaries |
 | Settings | `Settings.tsx`, `settingsDraft.ts` | explicit draft/save/discard lifecycle |
 | Automation/usage/processes | feature-named panels | feature-local navigation and presentation |
@@ -57,4 +59,4 @@ if (mobile) updateLayout(projectId, flattenIntoOneStack(layout))
 - `../../design/features/ui.md`
 - `../../design/features/workspace-layout.md`
 - `../../design/features/project-resources.md`
-
+- `../../design/features/project-actions.md`

@@ -10,11 +10,11 @@ def test_default_and_custom_terminal_creation_keep_split_semantics_explicit() ->
 
     assert "void spawnTerminal()" in source
     assert "New terminal custom…" in source
-    assert "profile_id: profileId || undefined" in source
+    assert "profile_id: backend==='shell' ? profileId || undefined : undefined" in source
     assert "New terminal custom in split…" in source
     assert "openLauncher(commandSession.project_id, 'horizontal')" in source
     assert "spawnTerminal(launcherProject, launcherSplit, launcherProfile)" in source
-    assert "backend: 'shell', project_id: targetProject" in source
+    assert "backend, project_id: targetProject" in source
     assert "setLayoutMap" in source and "await updateLayout" in source
 
 
@@ -24,7 +24,7 @@ def test_terminal_creation_is_visible_optimistically_before_the_api_returns() ->
     )
     before_request = source.split("const next = await api<Session>('POST', '/api/sessions'", 1)[0]
 
-    assert "pendingTerminal(pendingId,target)" in before_request
+    assert "pendingTerminal(pendingId,target,backend)" in before_request
     assert "placePendingTerminal(currentLayout,pendingId,placement)" in before_request
     assert "setActiveId(pendingId)" in before_request
     assert "pending-terminal-body" in source

@@ -39,7 +39,12 @@ PaneLeaf = terminal | note | preview | history
 - Client-only pending terminal leaves make a launch visible before daemon spawn completes.
   Their IDs never persist or attach to PTY routes; success replaces the leaf atomically and
   failure removes it.
+- Project Action steps join the pane containing the currently focused view as ordinary terminal
+  tabs. A compound action does not create layout groups or import VS Code presentation/split
+  hints; every returned session uses the same placement rule.
 - Closing notes, Files, editors, History, or previews is one click and closes only the view.
+  Closing a Preview leaf preserves its daemon registration/sidebar service row; reopening
+  reattaches the same stable leaf beside the actual listener owner.
   Closing a terminal is an inline two-click confirmation: fixed-width `×` becomes `✓` without
   shifting the tab, then kills/removes the session.
 
@@ -96,3 +101,4 @@ PaneLeaf = terminal | note | preview | history
 - `ui.md`: browser chrome, settings, focus, and overlays.
 - `projects.md`: Project ownership and sidebar catalog.
 - `project-resources.md`: note/file resource lifetime.
+- `project-actions.md`: trusted task sessions and focused-pane placement.

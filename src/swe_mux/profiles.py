@@ -135,7 +135,9 @@ def _wsl_cwd(executable: str, args: list[str], cwd: Path) -> str:
     raise ValueError(f"cannot translate cwd for WSL: {cwd}")
 
 
-def resolve_profile(config: Config, profile_id: str, cwd: Path) -> ResolvedProfile:
+def resolve_profile(
+    config: Config, profile_id: str, cwd: Path, *, interactive: bool = True
+) -> ResolvedProfile:
     profile = next((item for item in config.shell_profiles if item.id == profile_id), None)
     if not profile:
         profile = next((item for item in detected_profiles() if item.id == profile_id), None)
@@ -151,7 +153,7 @@ def resolve_profile(config: Config, profile_id: str, cwd: Path) -> ResolvedProfi
     argv = list(profile.args)
     capabilities = list(profile.capabilities)
     executable_name = Path(executable).name.casefold()
-    if profile.cwd_integration and executable_name in {
+    if interactive and profile.cwd_integration and executable_name in {
         "powershell",
         "powershell.exe",
         "pwsh",

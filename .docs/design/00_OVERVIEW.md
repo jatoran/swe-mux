@@ -36,6 +36,7 @@
 - Sessions: `features/sessions.md`
 - Project registry and Groups: `features/projects.md`
 - Project/session notes, files, ignores, and watches: `features/project-resources.md`
+- Trusted task discovery and the Project Run menu: `features/project-actions.md`
 - Mixed-view panes, tabs, drag/drop, and mobile projection: `features/workspace-layout.md`
 - History: `features/history.md`
 - Legacy hook compatibility: `features/meta-hooks.md`
@@ -82,6 +83,11 @@
   require confirmed fresh evidence, and quota correlation never proves personal identity.
 - Prompt templates are inert text: selection may insert into a focused terminal but never
   submits or executes it. Device sounds consume normalized events and exclude child-agent stops.
+- Repository task files remain inert until an explicit Run selection and exact-content local
+  approval; any supported task-file change revokes that approval.
+- Preview registrations identify Project-wide loopback endpoints and follow the session that
+  actually owns each listener. Preview tabs are layout state; closing one never unregisters a
+  still-live service.
 
 ## Key trade-offs
 

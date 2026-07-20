@@ -444,6 +444,75 @@ async def test_codex_backend_quota_mapping(tmp_path: Path) -> None:
     assert updated is None
 
 
+async def test_codex_weekly_only_window_maps_to_weekly_not_session(tmp_path: Path) -> None:
+    """Codex temporarily returns just a 7-day window in the primary slot; it must
+    be classified as weekly (not shown in the 5h/session slot) by its duration."""
+    manager = ProviderAccountManager(tmp_path, EventBus(), home=tmp_path / "home")
+
+    async def request(
+        self: ProviderAccountManager,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        data: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        return 200, {
+            "plan_type": "prolite",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 14,
+                    "limit_window_seconds": 604_800,
+                    "reset_at": 1_785_126_884,
+                },
+                "secondary_window": None,
+            },
+        }
+
+    manager._json_request = MethodType(request, manager)  # type: ignore[method-assign]
+    quota, _ = await manager._fetch_codex(
+        {"tokens": {"access_token": "secret", "account_id": "account-1"}}, "id"
+    )
+
+    assert quota["session"] is None
+    assert quota["weekly"]["used_percent"] == 14
+    assert quota["weekly"]["window_minutes"] == 10080
+    assert quota["weekly"]["resets_at"] == 1_785_126_884
+
+
+async def test_codex_reinstated_split_self_heals_by_duration(tmp_path: Path) -> None:
+    """When Codex reinstates a 5h + weekly split — even with the windows swapped
+    between the primary/secondary slots — each is routed by its real duration."""
+    manager = ProviderAccountManager(tmp_path, EventBus(), home=tmp_path / "home")
+
+    async def request(
+        self: ProviderAccountManager,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        data: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        return 200, {
+            "plan_type": "pro",
+            "rate_limit": {
+                # Weekly in the primary slot, 5h in the secondary slot — position swapped.
+                "primary_window": {"used_percent": 60, "limit_window_seconds": 604_800},
+                "secondary_window": {"used_percent": 25, "limit_window_seconds": 18_000},
+            },
+        }
+
+    manager._json_request = MethodType(request, manager)  # type: ignore[method-assign]
+    quota, _ = await manager._fetch_codex(
+        {"tokens": {"access_token": "secret", "account_id": "account-1"}}, "id"
+    )
+
+    assert quota["session"]["used_percent"] == 25
+    assert quota["session"]["window_minutes"] == 300
+    assert quota["weekly"]["used_percent"] == 60
+    assert quota["weekly"]["window_minutes"] == 10080
+
+
 async def test_claude_quota_maps_fable_scoped_weekly(tmp_path: Path) -> None:
     manager = ProviderAccountManager(tmp_path, EventBus(), home=tmp_path / "home")
 

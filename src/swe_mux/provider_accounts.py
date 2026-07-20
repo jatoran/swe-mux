@@ -144,6 +144,32 @@ def _window(raw: object, minutes: int, *, backend: bool = False) -> dict[str, An
     }
 
 
+# Codex reports quota windows positionally (primary/secondary), but the split it
+# uses changes over time — e.g. the 5-hour window was temporarily removed, leaving
+# only a weekly window in the primary slot. Classifying each window by its real
+# duration keeps the session/weekly mapping accurate and self-heals automatically
+# if the provider reinstates a different split. Windows up to a day are the rolling
+# "session" bucket; anything longer is the "weekly" bucket.
+SESSION_WINDOW_MAX_MINUTES = 24 * 60
+
+
+def _classify_windows(
+    *windows: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    session: dict[str, Any] | None = None
+    weekly: dict[str, Any] | None = None
+    for window in windows:
+        if not window:
+            continue
+        minutes = window.get("window_minutes") or 0
+        if 0 < minutes <= SESSION_WINDOW_MAX_MINUTES:
+            if session is None or minutes < (session.get("window_minutes") or 0):
+                session = window
+        elif weekly is None or minutes > (weekly.get("window_minutes") or 0):
+            weekly = window
+    return session, weekly
+
+
 class ProviderAccountManager:
     """Owns provider credential snapshots, global selection, and quota polling.
 
@@ -953,9 +979,13 @@ class ProviderAccountManager:
         if status < 200 or status >= 300 or not _string(payload.get("plan_type")):
             raise ProviderAccountError(f"Codex quota request failed (HTTP {status})")
         limits = _record(payload.get("rate_limit"))
+        session, weekly = _classify_windows(
+            _window(limits.get("primary_window"), 300, backend=True),
+            _window(limits.get("secondary_window"), 10080, backend=True),
+        )
         return {
-            "session": _window(limits.get("primary_window"), 300, backend=True),
-            "weekly": _window(limits.get("secondary_window"), 10080, backend=True),
+            "session": session,
+            "weekly": weekly,
             "plan": _string(payload.get("plan_type")),
             "source": "backend",
         }, updated
@@ -1039,9 +1069,13 @@ class ProviderAccountManager:
                 return None, None
             wrapper = _record(message.get("result"))
             limits = _record(wrapper.get("rateLimits"))
+            session, weekly = _classify_windows(
+                self._rpc_window(limits.get("primary"), 300),
+                self._rpc_window(limits.get("secondary"), 10080),
+            )
             result = {
-                "session": self._rpc_window(limits.get("primary"), 300),
-                "weekly": self._rpc_window(limits.get("secondary"), 10080),
+                "session": session,
+                "weekly": weekly,
                 "source": "app-server",
             }
             refreshed_path = codex_home / "auth.json"
@@ -1057,8 +1091,15 @@ class ProviderAccountManager:
         percent = _number(item.get("usedPercent"))
         if percent is None:
             return None
+        # Prefer the window's real duration when the app-server reports it, so
+        # duration-based classification stays accurate; fall back to the
+        # positional default otherwise.
+        duration = _number(item.get("windowMinutes")) or _number(item.get("windowSizeMinutes"))
+        seconds = _number(item.get("windowSizeSeconds")) or _number(item.get("limitWindowSeconds"))
+        if seconds and seconds > 0:
+            duration = seconds / 60
         return {
             "used_percent": min(100.0, max(0.0, percent)),
-            "window_minutes": minutes,
+            "window_minutes": math.ceil(duration) if duration and duration > 0 else minutes,
             "resets_at": _reset_timestamp(item.get("resetsAt")),
         }

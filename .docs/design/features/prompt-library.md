@@ -1,5 +1,10 @@
 # Universal prompt library
 
+## What it is
+
+Global and Project-scoped reusable text templates that can fill a focused terminal without
+submitting, executing, or becoming automation.
+
 ## Contract
 
 Reusable prompts are inert text templates, not automation. Global templates live under

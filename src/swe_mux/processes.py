@@ -786,6 +786,123 @@ class PreviewRegistry:
                 removed.append(item)
         return removed
 
+    @staticmethod
+    def _endpoint_key(url: str) -> tuple[str, str, int]:
+        parsed = urlsplit(url)
+        return (
+            parsed.scheme,
+            parsed.hostname or "",
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+        )
+
+    def _existing_endpoint(
+        self, project_id: str, scheme: str, host: str, port: int
+    ) -> PreviewRegistration | None:
+        return next(
+            (
+                item
+                for item in self.items.values()
+                if item.project_id == project_id
+                and self._endpoint_key(item.url) == (scheme, host, port)
+            ),
+            None,
+        )
+
+    def _record_detected(
+        self, session: Any, url: str, *, host: str, port: int
+    ) -> PreviewRegistration:
+        parsed = urlsplit(url)
+        existing = self._existing_endpoint(
+            session.record.project_id, parsed.scheme, host, port
+        )
+        if existing is not None:
+            # Endpoint identity is project-wide. If it was first opened from a
+            # terminal that merely printed another service's URL, retain its stable
+            # Preview id but move ownership to the session that actually listens.
+            existing.session_id = session.record.id
+            existing.project_id = session.record.project_id
+            existing.source = "detected"
+            existing.project_scope_id = getattr(
+                session.record,
+                "trusted_scope_id",
+                getattr(session.record, "project_scope_id", None),
+            )
+            existing.repo_group_id = getattr(session.record, "repo_group_id", None)
+            self._listener_seen[existing.id] = time.time()
+            return existing
+        item = PreviewRegistration(
+            str(uuid.uuid4()),
+            session.record.id,
+            session.record.project_id,
+            url,
+            host,
+            port,
+            "detected",
+            time.time(),
+            getattr(
+                session.record,
+                "trusted_scope_id",
+                getattr(session.record, "project_scope_id", None),
+            ),
+            getattr(session.record, "repo_group_id", None),
+        )
+        self.items[item.id] = item
+        self._listener_seen[item.id] = time.time()
+        return item
+
+    async def ensure_detected(self, project_id: str | None = None) -> None:
+        """Register live project listeners without opening workspace tabs.
+
+        Registrations are routing identities, not layout state. Keeping every live
+        project service registered lets one sandboxed Preview safely reach another
+        through mux while the user still chooses which service tabs to open.
+        """
+        snapshot_all = getattr(self.inspector, "snapshot_all", None)
+        if snapshot_all is None:
+            return
+        snapshot = await snapshot_all()
+        for group in snapshot.get("sessions", []):
+            if project_id is not None and group.get("project_id") != project_id:
+                continue
+            session = self.sessions.sessions.get(str(group.get("session_id") or ""))
+            if session is None:
+                continue
+            endpoints: dict[tuple[str, int], tuple[str, str]] = {}
+            for process in group.get("processes", []):
+                for listener in process.get("listeners", []):
+                    if listener.get("loopback") is not True:
+                        continue
+                    host = str(listener.get("host") or "")
+                    port = int(listener.get("port") or 0)
+                    url = str(listener.get("url") or "")
+                    if host not in PREVIEW_LOOPBACK_HOSTS or not 1 <= port <= 65535 or not url:
+                        continue
+                    scheme = urlsplit(url).scheme
+                    key = (scheme, port)
+                    current = endpoints.get(key)
+                    if current is None or (host == "127.0.0.1" and current[0] != host):
+                        endpoints[key] = (host, url)
+            for (_, port), (host, url) in endpoints.items():
+                self._record_detected(session, url, host=host, port=port)
+
+    def routes_for_project(self, project_id: str) -> dict[str, str]:
+        routes: dict[str, str] = {}
+        for item in self.items.values():
+            if item.project_id != project_id:
+                continue
+            parsed = urlsplit(item.url)
+            host = parsed.hostname or ""
+            displayed_host = f"[{host}]" if ":" in host else host
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            default_port = (parsed.scheme == "http" and port == 80) or (
+                parsed.scheme == "https" and port == 443
+            )
+            origin = f"{parsed.scheme}://{displayed_host}"
+            if not default_port:
+                origin += f":{port}"
+            routes[origin] = f"/preview/{item.id}/"
+        return routes
+
     async def register(
         self, session_id: str, url: str, *, approved: bool = False
     ) -> PreviewRegistration:
@@ -810,18 +927,38 @@ class PreviewRegistry:
             raise ValueError("preview URL has an invalid port")
         netloc = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
         normalized_url = urlunsplit((parsed.scheme, netloc, parsed.path.rstrip("/") + "/", "", ""))
-        # Force a live sample: a listener launched moments ago must be detectable for
-        # ownership auto-approval rather than waiting on the cached sampling interval.
-        snapshot = await self.inspector.snapshot(session.record.id, force=True)
-        detected = any(
-            listener["port"] == port
-            and listener.get("host") == host
-            and listener.get("loopback") is True
-            for process in snapshot["processes"]
-            for listener in process["listeners"]
-        )
-        if not detected and not approved:
+        # Force one coherent process sample, then attribute this endpoint across the
+        # whole Project. A frontend terminal often prints its backend URL; the URL
+        # still belongs to the backend session, not whichever terminal was clicked.
+        owner = None
+        project_sessions = [
+            candidate
+            for candidate in self.sessions.sessions.values()
+            if candidate.record.project_id == session.record.project_id
+        ]
+        project_sessions.sort(key=lambda candidate: candidate.record.id != session.record.id)
+        for index, candidate in enumerate(project_sessions):
+            snapshot = await self.inspector.snapshot(candidate.record.id, force=index == 0)
+            if any(
+                listener["port"] == port
+                and listener.get("host") == host
+                and listener.get("loopback") is True
+                for process in snapshot["processes"]
+                for listener in process["listeners"]
+            ):
+                owner = candidate
+                break
+        if owner is None and not approved:
             raise ValueError("preview listener is not owned by this session; approval is required")
+        if owner is not None:
+            return self._record_detected(
+                owner, normalized_url, host=host, port=port
+            )
+        existing = self._existing_endpoint(
+            session.record.project_id, parsed.scheme, host, port
+        )
+        if existing:
+            return existing
         item = PreviewRegistration(
             str(uuid.uuid4()),
             session.record.id,
@@ -829,7 +966,7 @@ class PreviewRegistry:
             normalized_url,
             host,
             port,
-            "detected" if detected else "user-approved",
+            "user-approved",
             time.time(),
             getattr(
                 session.record,
@@ -849,6 +986,7 @@ class PreviewRegistry:
         self._listener_seen.pop(preview_id, None)
 
     async def list(self, session_id: str | None = None) -> dict[str, Any]:
+        await self.ensure_detected()
         candidates: list[dict[str, Any]] = []
         if session_id:
             snapshot = await self.inspector.snapshot(session_id)

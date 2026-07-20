@@ -33,6 +33,8 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
 - `project_files.py`: safe project config, note, directory, and file access.
 - `project_watcher.py`: leased, non-recursive watches for directories visible in open
   resource tabs.
+- `project_actions.py`: trusted discovery and normalization of VS Code, package, and native
+  Project Actions; `action_runner.py` executes one normalized step beneath a session root.
 - `session.py`: live registry, spawn/stop, scrollback, PTY fanout.
 - `history.py`: SQLite schema, agent history/search index, Project layout persistence, and
   serialized durable access.
@@ -73,14 +75,18 @@ Browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ──> shell
 7. Group updates only change sidebar organization.
 8. Worktree endpoints remain for Git tooling, but the primary UI does not create or display
    worktrees as Projects, tabs, or sidebar rows.
-9. Preview proxying accepts only bounded loopback destinations attributable to a session or
-   explicitly approved by the user.
+9. Preview proxying accepts only bounded literal-loopback destinations attributable to a live
+   session in the requesting Project or explicitly approved by the user. Endpoint identity is
+   Project-wide; ownership follows the actual listener, and sandboxed cross-service requests
+   stay inside registered `/preview/{id}/…` routes.
 10. Provider system auth is authoritative. Startup derives saved selection from it and never
     restores registry memory into it; explicit switching atomically replaces only that auth file.
 11. Durable process actions use PID plus creation-time fingerprint and revalidate immediately
     before acting; suspected orphans are never terminated automatically.
 12. Quota attribution remains probabilistic with an explicit external remainder; only a
     twice-observed fresh unexpected reset may alert.
+13. Repository tasks execute only after explicit user selection and local trust in the exact
+    current bytes of all supported task files. A changed fingerprint returns to untrusted.
 
 ## Failure modes
 

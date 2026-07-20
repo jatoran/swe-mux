@@ -258,8 +258,81 @@ def test_legacy_quota_reset_schema_adds_review_columns(phase2_path: Path) -> Non
     store = OperationalTelemetryStore(phase2_path)
     columns = {row["name"] for row in store._db.execute("PRAGMA table_info(quota_reset_events)")}
     assert {"review_status", "reviewed_at"} <= columns
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 3
     store.close()
+
+
+def test_legacy_quota_samples_schema_adds_fable_columns(phase2_path: Path) -> None:
+    connection = sqlite3.connect(phase2_path)
+    connection.execute(
+        "CREATE TABLE quota_samples ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,provider TEXT NOT NULL,account_id TEXT NOT NULL,"
+        "sampled_at REAL NOT NULL,status TEXT NOT NULL,session_used REAL,weekly_used REAL,"
+        "session_reset_at REAL,weekly_reset_at REAL,source TEXT,freshness TEXT NOT NULL,"
+        "raw_precision INTEGER NOT NULL DEFAULT 0,error TEXT,account_active INTEGER NOT NULL,"
+        "auth_state TEXT NOT NULL,UNIQUE(provider,account_id,sampled_at))"
+    )
+    connection.execute("PRAGMA user_version=2")
+    connection.commit()
+    connection.close()
+
+    store = OperationalTelemetryStore(phase2_path)
+    columns = {row["name"] for row in store._db.execute("PRAGMA table_info(quota_samples)")}
+    assert {"fable_used", "fable_reset_at"} <= columns
+    store.close()
+
+
+async def test_quota_sample_persists_fable_weekly_window(phase2_path: Path) -> None:
+    store = OperationalTelemetryStore(phase2_path)
+    at = 1_800_000_000.0
+    await store.record_quota_sample(
+        provider="claude",
+        account_id="account-fable",
+        quota={
+            "session": {"used_percent": 29, "resets_at": at + 7200},
+            "weekly": {"used_percent": 90, "resets_at": at + 7 * 86400},
+            "fable": {"used_percent": 80, "resets_at": at + 7 * 86400, "window_minutes": 10080},
+            "source": "oauth",
+            "status": "ready",
+        },
+        sampled_at=at,
+        account_active=True,
+        auth_state="saved",
+    )
+    store.close()
+
+    reopened = OperationalTelemetryStore(phase2_path)
+    latest = await reopened.latest_quota_by_account()
+    fable = latest["account-fable"]["fable"]
+    assert fable is not None
+    assert fable["used_percent"] == 80
+    assert fable["window_minutes"] == 10080
+    assert fable["resets_at"] == at + 7 * 86400
+    reopened.close()
+
+
+async def test_quota_sample_without_fable_reports_none(phase2_path: Path) -> None:
+    store = OperationalTelemetryStore(phase2_path)
+    at = 1_800_000_000.0
+    await store.record_quota_sample(
+        provider="codex",
+        account_id="account-nofable",
+        quota={
+            "session": {"used_percent": 12, "resets_at": at + 3600},
+            "weekly": {"used_percent": 34, "resets_at": at + 7 * 86400},
+            "source": "backend",
+            "status": "ready",
+        },
+        sampled_at=at,
+        account_active=True,
+        auth_state="saved",
+    )
+    store.close()
+
+    reopened = OperationalTelemetryStore(phase2_path)
+    latest = await reopened.latest_quota_by_account()
+    assert latest["account-nofable"]["fable"] is None
+    reopened.close()
 
 
 async def test_scheduled_reset_observed_after_polling_gap_is_not_unexpected(

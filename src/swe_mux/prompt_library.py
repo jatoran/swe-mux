@@ -45,7 +45,10 @@ def _template_values(
     values: dict[str, Any], *, existing: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     title = str(values.get("title") or "").strip()
-    body = str(values.get("body") or "").replace("\r\n", "\n").replace("\r", "\n")
+    # Normalize newlines and strip trailing whitespace so a round-trip through
+    # serialize_template (which appends a single newline) never grows the body.
+    # A stray trailing newline would submit the prompt on insertion.
+    body = str(values.get("body") or "").replace("\r\n", "\n").replace("\r", "\n").rstrip()
     if not title or len(title) > 120:
         raise ValueError("prompt title must be 1–120 characters")
     if not body.strip() or len(body.encode("utf-8")) > PROMPT_BODY_LIMIT:

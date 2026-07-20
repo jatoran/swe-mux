@@ -15,7 +15,9 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   CGNAT `100.64.0.0/10`; arbitrary non-loopback config remains invalid.
 - Both listener sites expose the same UI/API: terminals, notes, history, process actions,
   and registered HTTP/WebSocket/HMR previews. Development servers remain on workstation
-  loopback; remote browsers reach them only through `/preview/{registration}/…`.
+  loopback; remote browsers reach them only through `/preview/{registration}/…`. Absolute
+  loopback fetch/XHR/WebSocket calls between services in one Project are remapped to the
+  destination service's registered route, never to the remote device's loopback.
 - `0.0.0.0`, LAN interfaces, port forwarding, and Tailscale Funnel are unsupported.
 - Tailscale Serve is optional HTTPS termination for browser secure-context APIs:
   `tailscale serve --bg http://127.0.0.1:8765`. swe-mux never changes tailnet policy,

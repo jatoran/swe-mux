@@ -28,6 +28,7 @@ import {
 import { isMobileTerminalInput, mobileImeDelta } from './mobileTerminalIme'
 import { clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, ResilientClipboardProvider } from './terminalClipboard'
 import { redrawVisibleTerminal, refitVisibleTerminal } from './terminalViewport'
+import { localPreviewUrl } from './previewLinks'
 
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 
@@ -196,7 +197,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const search = new SearchAddon()
     term.loadAddon(fit)
     term.loadAddon(search)
-    term.loadAddon(new WebLinksAddon())
+    term.loadAddon(new WebLinksAddon((event,uri)=>{
+      const previewUrl=localPreviewUrl(uri)
+      if(previewUrl){
+        event.preventDefault()
+        window.dispatchEvent(new CustomEvent('mux:open-terminal-preview',{detail:{sessionId:session.id,url:previewUrl}}))
+        return
+      }
+      window.open(uri,'_blank','noopener,noreferrer')
+    }))
     term.loadAddon(new ClipboardAddon(undefined,new ResilientClipboardProvider(
       prepareClipboardFallback,
       reportError,

@@ -1,5 +1,10 @@
 # Session and reset notifications
 
+## What it is
+
+Optional device-local sounds for normalized root-session attention/completion and confirmed
+unexpected provider-quota resets. Sounds supplement, but never replace, the durable inbox.
+
 ## Contract
 
 Optional browser-device sounds consume the same normalized event stream as the notification

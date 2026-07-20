@@ -14,6 +14,9 @@
 | pointer drag target/ghost | refs and direct DOM attributes | one gesture |
 | note/file draft | resource component/save queue | resource-local |
 | terminal touch selection | xterm buffer selection + component-local action state | one selection |
+| Project Action catalog/trust prompt | `ProjectRunMenu` fetched snapshot | one open menu |
+| Preview registration and actual listener owner | daemon `PreviewRegistry` | daemon lifetime |
+| open/active Preview tabs | Project layout v6 | durable, multi-client |
 
 ## Optimistic layout writes
 
@@ -39,6 +42,17 @@ void updateLayout(projectId, moveLeafToStack(activeLayout, kind, id, targetStack
 
 Never persist pending client terminal IDs. Insert them into optimistic state for launch feedback,
 then replace/remove them when the spawn request resolves.
+
+Project Action sessions are already daemon identities when returned. Insert each with `openTab`
+against the latest `layoutValues` state, advance the target to the inserted terminal, and persist
+one resulting layout. Do not synthesize a task-group node or interpret imported presentation
+hints.
+
+Preview registration and Preview layout are deliberately separate. Closing a Preview leaf
+removes only the layout leaf; its live service remains nested in the sidebar. Reopening posts
+the existing endpoint to `/api/previews`, which reuses its project-wide registration and stacks
+the leaf beside the session that actually owns the listener. If the leaf already exists,
+`stack_leaf` activates it rather than producing a no-op layout response.
 
 ## Mobile input boundaries
 
@@ -77,5 +91,6 @@ emulation, or resizing through 760 px must never erase desktop splits.
 - `frontend/test/layout.test.ts`: migrations and all stack/split transforms.
 - `frontend/test/mobileWorkspace.test.ts`: complete flattening, selection priority, close fallback.
 - `frontend/test/randomId.test.ts`: secure and non-secure browser identity fallbacks.
+- `frontend/test/previewLinks.test.ts`: loopback-only terminal link normalization.
 - Pointer behavior tests/inspection must cover threshold, exact insertion, split edges, cross-pane
   movement, Escape, lost capture, and cleanup after responsive changes.

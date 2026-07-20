@@ -19,7 +19,7 @@ from .sqlite_store import database_operation_lock, run_sqlite_operation
 
 T = TypeVar("T")
 
-TELEMETRY_SCHEMA_VERSION = 2
+TELEMETRY_SCHEMA_VERSION = 3
 TOOL_PARSER_VERSION = "phase2-v1"
 TOOL_PARSER_VERSIONS = {
     "claude": f"claude-{TOOL_PARSER_VERSION}",
@@ -110,6 +110,8 @@ CREATE TABLE IF NOT EXISTS quota_samples (
   weekly_used REAL,
   session_reset_at REAL,
   weekly_reset_at REAL,
+  fable_used REAL,
+  fable_reset_at REAL,
   source TEXT,
   freshness TEXT NOT NULL,
   raw_precision INTEGER NOT NULL DEFAULT 0,
@@ -372,6 +374,14 @@ class OperationalTelemetryStore:
             self._db.execute("ALTER TABLE quota_reset_events ADD COLUMN review_status TEXT")
         if "reviewed_at" not in reset_columns:
             self._db.execute("ALTER TABLE quota_reset_events ADD COLUMN reviewed_at REAL")
+        sample_columns = {
+            str(row["name"])
+            for row in self._db.execute("PRAGMA table_info(quota_samples)").fetchall()
+        }
+        if "fable_used" not in sample_columns:
+            self._db.execute("ALTER TABLE quota_samples ADD COLUMN fable_used REAL")
+        if "fable_reset_at" not in sample_columns:
+            self._db.execute("ALTER TABLE quota_samples ADD COLUMN fable_reset_at REAL")
 
     def _repair_legacy_reset_classifications(self) -> None:
         """Re-evaluate old unexpected rows under the hardened high-precision policy."""
@@ -915,10 +925,13 @@ class OperationalTelemetryStore:
     ) -> dict[str, Any]:
         session_value = quota.get("session")
         weekly_value = quota.get("weekly")
+        fable_value = quota.get("fable")
         session: dict[str, Any] = session_value if isinstance(session_value, dict) else {}
         weekly: dict[str, Any] = weekly_value if isinstance(weekly_value, dict) else {}
+        fable: dict[str, Any] = fable_value if isinstance(fable_value, dict) else {}
         session_used = _finite(session.get("used_percent"))
         weekly_used = _finite(weekly.get("used_percent"))
+        fable_used = _finite(fable.get("used_percent"))
         status = str(quota.get("status") or "error")
         freshness = "fresh" if status == "ready" else status
 
@@ -926,8 +939,9 @@ class OperationalTelemetryStore:
             cursor = self._db.execute(
                 "INSERT OR IGNORE INTO quota_samples"
                 "(provider,account_id,sampled_at,status,session_used,weekly_used,session_reset_at,"
-                "weekly_reset_at,source,freshness,raw_precision,error,account_active,auth_state) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "weekly_reset_at,fable_used,fable_reset_at,source,freshness,raw_precision,error,"
+                "account_active,auth_state) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     provider,
                     account_id,
@@ -937,6 +951,8 @@ class OperationalTelemetryStore:
                     weekly_used,
                     _finite(session.get("resets_at")),
                     _finite(weekly.get("resets_at")),
+                    fable_used,
+                    _finite(fable.get("resets_at")),
                     quota.get("source"),
                     freshness,
                     _precision(session_used, weekly_used),
@@ -1676,6 +1692,15 @@ def _quota_public(row: dict[str, Any]) -> dict[str, Any]:
                 "window_minutes": 10080,
             }
             if row.get("weekly_used") is not None
+            else None
+        ),
+        "fable": (
+            {
+                "used_percent": row.get("fable_used"),
+                "resets_at": row.get("fable_reset_at"),
+                "window_minutes": 10080,
+            }
+            if row.get("fable_used") is not None
             else None
         ),
         "source": row.get("source"),

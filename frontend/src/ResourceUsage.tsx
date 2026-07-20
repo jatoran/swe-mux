@@ -46,6 +46,6 @@ export function ResourceUsageSummary({snapshot,sessions,projects,onRefresh,onOpe
     <footer><button onClick={onRefresh}>refresh</button><button onClick={()=>{setOpen(false);onOpenFleet()}}>open process fleet…</button></footer>
   </div>
   return <div ref={root} class="resource-usage-control"><button class="resource-usage-summary" onClick={toggle} aria-expanded={open} aria-label={`Swe-mux owned process resources: ${totalLabel(snapshot)}`} title="Swe-mux daemon and owned process resources">
-    <span>owned resources</span><strong>{totalLabel(snapshot)}</strong><small>{snapshot?.available?`${combined.processes} processes`:'open details'}</small>
+    <div class="resource-usage-head"><span>resources</span><small>{snapshot?.available?`· ${combined.processes} proc`:'· open details'}</small></div><strong>{totalLabel(snapshot)}</strong>
   </button>{popup&&createPortal(popup,document.body)}</div>
 }

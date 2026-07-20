@@ -79,6 +79,18 @@ def test_preview_html_rewrites_root_resources_into_registration() -> None:
     assert b'import("/preview/preview-id/src/lazy.ts")' in rewritten_javascript
 
 
+def test_preview_html_routes_other_project_loopback_services_through_mux() -> None:
+    rewritten = rewrite_preview_html(
+        b"<html><head></head></html>",
+        "/preview/frontend-preview/",
+        {"http://127.0.0.1:37655": "/preview/backend-preview/"},
+    )
+
+    assert b'"http://127.0.0.1:37655":"/preview/backend-preview/"' in rewritten
+    assert b"const projectPrefix=projectRoutes[canonicalOrigin(url)]" in rewritten
+    assert b'!url.pathname.startsWith("/preview/")' in rewritten
+
+
 def test_browser_origin_must_match_host_and_explicit_port() -> None:
     assert browser_origin_matches_request("http://100.101.102.103:8765", "100.101.102.103:8765")
     assert browser_origin_matches_request("https://mux.example.ts.net", "mux.example.ts.net")

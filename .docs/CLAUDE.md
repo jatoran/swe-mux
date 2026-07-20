@@ -7,6 +7,9 @@
   `design/features/projects.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing Project/session notes, files, ignores, or watches:
   `design/features/project-resources.md`, `design/data-model.md`, `design/interfaces.md`
+- Changing trusted task imports, the Project Run menu, or task launch:
+  `design/features/project-actions.md`, `design/features/projects.md`, `design/interfaces.md`,
+  `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing panes, tabs, splits, drag/drop, or the mobile workspace projection:
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
@@ -23,7 +26,9 @@
 - Changing automation, observers, attention, or legacy hooks:
   `design/features/automation.md`, `design/features/fleet-intelligence.md`,
   `design/features/meta-hooks.md`, `design/features/delivery-readiness.md`
-- Changing processes, listeners, or previews: `design/features/processes-and-previews.md`
+- Changing processes, listeners, Preview ownership/proxying, or Preview tab lifetime:
+  `design/features/processes-and-previews.md`, `design/features/remote-access.md`,
+  `technical/backend/packages.md`, `technical/frontend/workspace-state.md`
 - Changing durable process/quota/reset/compaction/tool evidence or retention:
   `design/features/operational-telemetry.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing shell/profile creation: `design/features/shell-profiles.md`

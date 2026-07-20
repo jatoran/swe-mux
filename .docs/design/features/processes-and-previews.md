@@ -39,9 +39,12 @@
 
 ## Preview contract
 
-- Registrations belong to one live session and its canonical Project. The URL must use literal
+- Registrations identify one endpoint within a canonical Project and record the live session
+  that actually owns its listener. The URL must use literal
   `127.0.0.1` or `::1`, contain no credentials/query/fragment, and either match the host
-  and port of a listener owned by that session or carry explicit user approval.
+  and port of a listener owned by some session in that Project or carry explicit user approval.
+  Clicking a URL printed by another session therefore attributes the Preview to the listener
+  owner, and the same Project/scheme/host/port can never create a second registration.
 - A wildcard bind is reported at its loopback address: `0.0.0.0` becomes `127.0.0.1` and
   `::` becomes `::1`, so a server that binds every interface — the default for most dev
   servers — is detected, listed, and previewable. This states a fact rather than widening
@@ -52,12 +55,18 @@
 - A preview is a real recursive-layout leaf; opening it does not replace or terminate its
   source terminal. The leaf supports refresh, mobile/tablet/fit viewport presets, copy,
   external open, mobile full-screen, and ownership/source status.
+- Clicking a loopback HTTP(S) URL rendered in a terminal registers/activates it as an integrated
+  Preview with explicit user approval. `localhost`, `0.0.0.0`, and wildcard IPv6 links normalize
+  to literal loopback; non-loopback links retain ordinary external-browser behavior. Reopening
+  the same Project endpoint reuses its registration. Closing its workspace tab leaves the
+  sidebar registration intact; selecting the row or URL again reattaches and activates that
+  same Preview leaf.
 - A server belongs beside whatever spawned it. Attaching a preview groups it as a tab in the
   region that already holds its owning session, so an agent and the services it started share
   one tab strip; it only falls back to a split when that session has no terminal in the
-  layout. The same registration is nested under its session's sidebar row and activates that
-  tab when selected. A detected loopback listener with no registration yet gets the same row
-  and opens as a preview when selected.
+  layout. Every detected loopback service receives a routing registration, nested under its
+  actual owning session, without opening a workspace tab. Selecting its row opens or activates
+  that registered service.
 - Sidebar rows are servers only. A live loopback listener is the sole test, since the rest of
   a session's tree is bookkeeping that no age or liveness filter distinguishes from signal;
   exited records and non-loopback listeners are excluded, and a port bound on both 127.0.0.1
@@ -66,14 +75,18 @@
   The sidebar read reuses the inspector's existing cached sample, so it adds no process
   enumeration.
 - Preview leaves use `/preview/{registration}/…`; phones and desktop browsers never need
-  the development server's raw port. The registered origin is immutable per request and
+  the development server's raw port. The runtime bridge maps absolute loopback fetch, XHR,
+  and WebSocket destinations to other registered services in the same Project, so a frontend
+  Preview can reach its backend without treating `127.0.0.1` as the phone. The registered
+  origin is immutable per request and
   redirects to another origin are rejected, so the route cannot become a network proxy.
 - HTTP methods, bodies, queries, root-relative HTML/CSS/module paths, runtime fetch/XHR,
   WebSocket messages, and negotiated HMR subprotocols traverse the bridge.
   Browser Origin is replaced with the registered loopback origin for common dev servers.
-- HTTP requests/responses are capped at 10/20 MiB with a 15-second total timeout and 32
-  concurrent requests. WebSocket messages are capped at 4 MiB with 16 concurrent bridges,
-  30-minute idle timeout, and 12-hour lifetime; clients may reconnect normally.
+- HTTP requests/responses are capped at 10/20 MiB with a 10-second connect timeout,
+  30-second per-read timeout, no wall-clock total, and 32 concurrent requests. WebSocket
+  connects time out after 10 seconds; messages are capped at 4 MiB with 16 concurrent bridges,
+  30-minute idle timeout, and 12-hour lifetime. Clients may reconnect normally.
 - The iframe intentionally omits `allow-same-origin`, preventing preview code from reading
   the parent swe-mux application/API. Sandboxed `Origin: null` requests receive narrowly
   scoped CORS handling only on their registered preview route.
@@ -90,8 +103,10 @@
 ## Key files
 
 - Ownership/registry: `src/swe_mux/processes.py`
+- Proxy and runtime bridge: `src/swe_mux/server.py`
 - Durable evidence: `src/swe_mux/operational_telemetry.py`
 - Job boundary: `src/swe_mux/win_jobobj.py`, `src/swe_mux/session.py`
 - Inspector: `frontend/src/ProcessPanel.tsx`
 - Resource summary: `frontend/src/ResourceUsage.tsx`, `frontend/src/resourceTotals.ts`
 - Preview leaf: `frontend/src/PreviewPane.tsx`
+- Terminal-link routing: `frontend/src/TerminalPane.tsx`, `frontend/src/previewLinks.ts`

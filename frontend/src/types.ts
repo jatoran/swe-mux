@@ -63,6 +63,14 @@ export interface Project {
 
 export interface ProjectGroup { id:string;name:string;position:number }
 
+export type ProjectActionSource='vscode'|'package'|'native'
+export interface ProjectActionStep { name:string;kind:'shell'|'process';command:string }
+export interface ProjectAction { id:string;label:string;source:ProjectActionSource;steps:ProjectActionStep[] }
+export interface ProjectActionCatalog {
+  project_root:string;fingerprint:string;trusted:boolean;sources:string[]
+  actions:ProjectAction[];diagnostics:string[]
+}
+
 export interface ProjectScope {
   id:string;root:string;label:string;source:string;repo_group_id?:string;repo_group_label?:string
   hidden:number;created_at:number;last_activity:number;root_exists:boolean;live_count:number

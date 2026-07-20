@@ -53,6 +53,12 @@
 - `<project>/.swe-mux/prompts/<uuid>.md`: Project prompt templates with TOML frontmatter and
   inert Markdown-like text bodies. `<data_dir>/prompts/` holds global templates;
   `<data_dir>/prompt-library-state.json` holds bounded device-independent favorites/recents.
+- `<project>/.vscode/tasks.json`, root `package.json`, and
+  `<project>/.swe-mux/actions.toml`: optional repository task sources. Their contents remain
+  inert until an explicit Run and local exact-content approval.
+- `<data_dir>/project-action-trust.json`: canonical Project-root to SHA-256 task-file fingerprint
+  mapping. It stores no commands or credentials and is invalidated by any supported file's
+  presence/content change.
 - `<data_dir>/provider-accounts.json` and provider snapshot directories: private account
   metadata/auth, never project data or public API payloads.
 

@@ -35,7 +35,7 @@ def test_sidebar_account_status_uses_separate_terminal_icon_rows_at_the_bottom()
     assert "providerGlyph" in accounts
     assert "provider==='claude'?'✳':openaiMark" in accounts
     assert 'class="provider-mark"' in accounts
-    assert "<em>{state}</em>" in accounts
+    assert "{state!=='ready'&&<em>{state}</em>}" in accounts
     assert app.rfind("<AccountSwitcher onManage") > app.rfind('class="project-tree"')
     assert ".account-summary{grid-template-columns:1fr}" in css
     assert 'class="sidebar-status"' in app
