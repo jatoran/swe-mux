@@ -11,6 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from .git_projects import ProjectIdentity, resolve_project
 
 PROJECT_CONFIG_VERSION = 1
@@ -21,6 +22,7 @@ PROJECT_CONFIG_FIELDS = {
     "prompt_library_scope",
     "notification_sounds_enabled",
     "ignore_patterns",
+    "automations",
 }
 FORBIDDEN_PROJECT_FIELDS = {
     "token",
@@ -188,6 +190,20 @@ def ignored_project_path(relative_path: str | Path, patterns: Sequence[str]) -> 
         elif any(fnmatch.fnmatchcase(part, pattern) for part in parts):
             return True
     return False
+
+
+def project_automations(root: str | Path) -> dict[str, bool]:
+    """Read a project's explicit automation opt-ins, or an empty map."""
+    path = Path(root) / ".swe-mux" / "config.toml"
+    try:
+        if path.is_file():
+            values = parse_project_config(path.read_bytes())
+            automations = values.get("automations")
+            if isinstance(automations, dict):
+                return {str(key): bool(value) for key, value in automations.items()}
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
+        pass
+    return {}
 
 
 def effective_project_ignores(root: str | Path, global_patterns: list[str]) -> list[str]:
@@ -423,6 +439,15 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         or any(not item.strip() or len(item) > 200 for item in parsed["ignore_patterns"])
     ):
         raise ValueError("ignore_patterns must be an array of at most 256 non-empty strings")
+    if "automations" in parsed:
+        automations = parsed["automations"]
+        if not isinstance(automations, dict) or not all(
+            isinstance(value, bool) for value in automations.values()
+        ):
+            raise ValueError("automations must be a table of boolean opt-ins")
+        unknown_automations = sorted(set(automations) - set(AUTOMATION_REGISTRY))
+        if unknown_automations:
+            raise ValueError(f"unknown automations: {', '.join(unknown_automations)}")
     return parsed
 
 
@@ -448,6 +473,12 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
     if patterns := values.get("ignore_patterns"):
         encoded = ", ".join(json.dumps(str(pattern)) for pattern in patterns)
         lines.append(f"ignore_patterns = [{encoded}]")
+    if automations := values.get("automations"):
+        pairs = ", ".join(
+            f"{key} = {'true' if bool(value) else 'false'}"
+            for key, value in sorted(automations.items())
+        )
+        lines.append(f"automations = {{ {pairs} }}")
     data = ("\n".join(lines) + "\n").encode("utf-8")
     parse_project_config(data)
     return data

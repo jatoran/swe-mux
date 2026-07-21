@@ -18,12 +18,17 @@ as a detection error. Reviewed evidence remains in telemetry history but leaves 
 summary; review cannot retract a sound already emitted for the original confirmed event.
 
 Preferences live only in browser localStorage: master enable, volume, quiet hours (including
-overnight ranges), per-event mute, a selected bundled preset, or an audio file no larger than
-512 KiB stored as a data URL. Seven curated 0.5-second presets are copied from the MIT-licensed
-Orca reference and retain its license beside the assets. Selecting any preset previews it;
-Two Tone is the default. Previewing unlocks/validates browser playback. No arbitrary script or
-shell hook runs, and existing inbox/toast delivery remains independent. A portable Project may
-disable sounds for its own events, but cannot enable a device whose master setting is off.
+overnight ranges), per-event mute, and a sound selection for each event. The shared sound library
+contains seven bundled presets plus one optional audio file no larger than 512 KiB stored as a
+data URL. Uploading a custom sound adds `Custom` to the same preview and event-selection surfaces;
+it does not reassign events. Removing it resets only events assigned to `Custom` back to Two Tone.
+Legacy device preferences with one global selection migrate that choice to every event. The seven
+curated 0.5-second presets are copied from the MIT-licensed Orca reference and retain its license
+beside the assets. Library clicks and event-row Preview actions play without changing other event
+assignments; selecting from an event dropdown assigns and previews that event's choice. Two Tone
+is the default. Previewing unlocks/validates browser playback. No arbitrary script or shell hook
+runs, and existing inbox/toast delivery remains independent. A portable Project may disable
+sounds for its own events, but cannot enable a device whose master setting is off.
 The daemon exposes the packaged files at `/notification-sounds`; this route must remain separate
 from the SPA fallback so preview clicks receive audio rather than `index.html`.
 

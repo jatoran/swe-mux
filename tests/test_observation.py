@@ -17,6 +17,7 @@ from swe_mux.observation import (
     apply_hook_observation,
     classify_transcript_event,
     observe_transcript,
+    transcript_tail_turn_state,
 )
 from swe_mux.session import Session
 from tests.support.detection_replay import ReplaySession
@@ -361,6 +362,58 @@ async def test_claude_interrupt_record_aborts_turn_even_after_hook_authority() -
     assert "turn_aborted" in emitted
 
 
+async def test_idle_prompt_notification_reads_as_ready_not_awaiting() -> None:
+    session = cast(Any, ReplaySession("claude"))
+    events = EventBus()
+    queue = events.subscribe()
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    assert session.record.state == "working"
+    # "Claude is waiting for your input" fires when the agent has finished.
+    await apply_hook_observation(
+        session,
+        "Notification",
+        {"notification_type": "idle_prompt", "message": "Claude is waiting for your input"},
+        events,
+    )
+    assert session.record.state == "idle"
+    assert "approval_needed" not in [item.type for item in drain(queue)]
+
+
+async def test_permission_prompt_notification_still_awaits_approval() -> None:
+    session = cast(Any, ReplaySession("claude"))
+    events = EventBus()
+    queue = events.subscribe()
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    await apply_hook_observation(
+        session,
+        "Notification",
+        {"notification_type": "permission_prompt", "message": "Claude needs permission"},
+        events,
+    )
+    assert session.record.state == "awaiting"
+    assert "approval_needed" in [item.type for item in drain(queue)]
+
+
+async def test_idle_prompt_never_clobbers_a_pending_approval() -> None:
+    session = cast(Any, ReplaySession("claude"))
+    events = EventBus()
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    await apply_hook_observation(
+        session,
+        "Notification",
+        {"notification_type": "permission_prompt", "message": "approve?"},
+        events,
+    )
+    assert session.record.state == "awaiting"
+    await apply_hook_observation(
+        session,
+        "Notification",
+        {"notification_type": "idle_prompt", "message": "waiting"},
+        events,
+    )
+    assert session.record.state == "awaiting"
+
+
 async def test_claude_tool_use_interrupt_variant_also_aborts() -> None:
     session = cast(Any, SimpleNamespace(record=record("claude")))
     session.record.state = "working"
@@ -579,3 +632,97 @@ async def test_codex_rollback_finishes_the_active_turn() -> None:
 
     assert session.record.state == "idle"
     assert session.record.state_detail == "rolled_back"
+
+
+def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    path.write_text("".join(json.dumps(item) + "\n" for item in records), encoding="utf-8")
+
+
+def test_transcript_tail_terminal_signals(tmp_path: Path) -> None:
+    path = tmp_path / "t.jsonl"
+    # end_turn text followed by the trailing metadata records the provider appends.
+    _write_jsonl(
+        path,
+        [
+            {
+                "type": "assistant",
+                "message": {
+                    "stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": "done"}],
+                },
+            },
+            {"type": "last-prompt"},
+            {"type": "ai-title"},
+            {"type": "permission-mode"},
+        ],
+    )
+    assert transcript_tail_turn_state("claude", path) == "ended"
+    _write_jsonl(path, [{"type": "system", "subtype": "turn_duration", "durationMs": 5}])
+    assert transcript_tail_turn_state("claude", path) == "ended"
+    _write_jsonl(path, [{"type": "user", "message": {"content": "[Request interrupted by user]"}}])
+    assert transcript_tail_turn_state("claude", path) == "ended"
+
+
+def test_transcript_tail_leaves_in_flight_turns_open(tmp_path: Path) -> None:
+    path = tmp_path / "t.jsonl"
+    # A long-running tool: last record is the assistant tool_use, no result yet.
+    _write_jsonl(
+        path,
+        [
+            {
+                "type": "assistant",
+                "message": {
+                    "stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": "prev"}],
+                },
+            },
+            {"type": "user", "message": {"content": "next"}},
+            {
+                "type": "assistant",
+                "message": {
+                    "stop_reason": "tool_use",
+                    "content": [{"type": "tool_use", "name": "Bash"}],
+                },
+            },
+        ],
+    )
+    assert transcript_tail_turn_state("claude", path) == "open"
+    # A tool result the model still owes a response to is also open.
+    _write_jsonl(
+        path,
+        [
+            {
+                "type": "user",
+                "message": {
+                    "content": [{"type": "tool_result", "tool_use_id": "x", "content": "ok"}]
+                },
+            }
+        ],
+    )
+    assert transcript_tail_turn_state("claude", path) == "open"
+
+
+def test_transcript_tail_reads_only_the_tail_of_a_large_file(tmp_path: Path) -> None:
+    path = tmp_path / "big.jsonl"
+    filler = [
+        {
+            "type": "assistant",
+            "message": {
+                "stop_reason": "tool_use",
+                "content": [{"type": "tool_use", "name": "Read"}],
+            },
+        }
+        for _ in range(5000)
+    ]
+    _write_jsonl(path, [*filler, {"type": "system", "subtype": "turn_duration"}])
+    assert path.stat().st_size > 131_072
+    assert transcript_tail_turn_state("claude", path) == "ended"
+
+
+def test_transcript_tail_codex_states(tmp_path: Path) -> None:
+    path = tmp_path / "c.jsonl"
+    _write_jsonl(path, [{"type": "event_msg", "payload": {"type": "task_complete"}}])
+    assert transcript_tail_turn_state("codex", path) == "ended"
+    _write_jsonl(path, [{"type": "event_msg", "payload": {"type": "function_call", "name": "x"}}])
+    assert transcript_tail_turn_state("codex", path) == "open"
+    assert transcript_tail_turn_state("codex", tmp_path / "missing.jsonl") == "unknown"

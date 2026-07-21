@@ -225,6 +225,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     term.loadAddon(new ClipboardAddon(undefined,new ResilientClipboardProvider(
       prepareClipboardFallback,
       reportError,
+      undefined,
+      // Drop OSC 52 clipboard writes that arrive from replayed scrollback (every
+      // re-attach on a tab/project switch replays the buffer through term.write)
+      // or while the browser tab is hidden. Only a live, visible copy should reach
+      // the system clipboard. `replaying` is declared below but is only read when a
+      // sequence actually arrives, long after connect() runs.
+      () => replaying || document.hidden,
     )))
     term.loadAddon(new Unicode11Addon())
     term.unicode.activeVersion = '11'

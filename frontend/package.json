@@ -10,7 +10,7 @@
     "test": "node --experimental-strip-types test/all.ts"
   },
   "dependencies": {
-    "@continuity-editor/editor": "file:vendor/continuity-editor-0.2.5.tgz",
+    "@continuity-editor/editor": "file:vendor/continuity-editor-0.2.7.tgz",
     "@xterm/addon-clipboard": "^0.2.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-search": "^0.16.0",

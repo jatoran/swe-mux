@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Session } from '../src/types.ts'
 import {
-  canHideProject, describeOpenWork, loadCollapsedProjects, projectOpenWork,
+  canHideProject, describeOpenWork, loadCollapsedProjects, projectInitials, projectOpenWork,
   serializeCollapsedProjects, toggleCollapsed,
 } from '../src/sidebarProjects.ts'
 
@@ -27,6 +27,14 @@ test('toggleCollapsed adds then removes without mutating the input', () => {
   assert.deepEqual([...start], [])
   assert.deepEqual([...added], ['p1'])
   assert.deepEqual([...toggleCollapsed(added, 'p1')], [])
+})
+
+test('collapsed-rail initials favor the first hyphen boundary or first two letters', () => {
+  assert.equal(projectInitials('swe-mux'), 'SM')
+  assert.equal(projectInitials('frontend'), 'FR')
+  assert.equal(projectInitials('  Alpha-beta-tools  '), 'AB')
+  assert.equal(projectInitials('7 wonders'), '7W')
+  assert.equal(projectInitials(''), '?')
 })
 
 test('open work counts only live sessions of the project; previews supplied by caller', () => {

@@ -15,7 +15,13 @@ from urllib.parse import urlsplit
 
 from .subprocess_flags import background_creation_flags
 
-MOBILE_VOICE_HTTPS_PORT = 8765
+# Tailscale Serve terminates HTTPS on 443 and proxies to the swe-mux loopback
+# port. 443 (not the swe-mux port) is required: swe-mux binds its port directly
+# on the Tailscale IPv4 address for plain-HTTP fallback, so a Serve listener on
+# that same port would collide with that host socket. Using 443 lets the secure
+# HTTPS origin and the direct 100.x HTTP fallback coexist, and yields a clean
+# port-less authority (https://<host>.ts.net/).
+MOBILE_VOICE_HTTPS_PORT = 443
 _WEB_URL_RE = re.compile(r"https://[^\s<>\"']+")
 
 
@@ -83,6 +89,28 @@ def _web_target_matches(value: Any, https_port: int, target_port: int) -> bool:
             continue
         candidate = authority if authority.startswith("https://") else f"https://{authority}"
         if _url_on_port(candidate, https_port) and _targets_local_port(config, target_port):
+            return True
+    return False
+
+
+def _web_target_is_loopback(value: Any, https_port: int) -> bool:
+    """True if the Serve route on ``https_port`` proxies to any loopback address.
+
+    A loopback target is a swe-mux-style private route (for example a previous
+    mobile-voice setup that a different daemon left pointing at another loopback
+    port). swe-mux may retarget its own such route to the running daemon's port;
+    only a non-loopback route is treated as foreign and left untouched.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get("Web"), dict):
+        return False
+    for authority, config in value["Web"].items():
+        if not isinstance(authority, str):
+            continue
+        candidate = authority if authority.startswith("https://") else f"https://{authority}"
+        if not _url_on_port(candidate, https_port):
+            continue
+        serialized = json.dumps(config).casefold()
+        if any(marker in serialized for marker in ("127.0.0.1:", "localhost:", "[::1]:")):
             return True
     return False
 
@@ -367,7 +395,16 @@ async def enable_mobile_voice_serve(
         }
     existing, existing_error = await _status(executable, "serve")
     existing_url = mobile_voice_url(_serve_urls(existing), https_port)
-    if existing_url and not _web_target_matches(existing, https_port, port):
+    # Take over an existing route only when it already targets this daemon's port
+    # or is a swe-mux-style loopback route (e.g. another daemon on a different port
+    # left it pointing at 127.0.0.1:<other>). A non-loopback route is foreign and
+    # left untouched. This lets the desktop app (8765) and a terminal daemon
+    # (e.g. 18765) each reclaim the single HTTPS route when they start.
+    if (
+        existing_url
+        and not _web_target_matches(existing, https_port, port)
+        and not _web_target_is_loopback(existing, https_port)
+    ):
         return {
             "status": "error",
             "url": None,

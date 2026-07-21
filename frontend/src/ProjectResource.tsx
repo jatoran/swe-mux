@@ -65,6 +65,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
   const [treeMenu,setTreeMenu]=useState<TreeMenu|null>(null)
   const [query,setQuery]=useState('')
   const [searchMode,setSearchMode]=useState<SearchMode>('names')
+  const [filtersOpen,setFiltersOpen]=useState(false)
   const [results,setResults]=useState<SearchHit[]|null>(null)
   const [searching,setSearching]=useState(false)
   const [searchTruncated,setSearchTruncated]=useState(false)
@@ -304,9 +305,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
     const directory=directories[folder]
     if(!directory)return expanded.has(folder)?<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>loading…</p>:null
     return <>{directory.items.map(item=>item.kind==='directory'?<div class="file-tree-branch" key={item.path}>
-      <button class="file-tree-row directory" style={{paddingLeft:`${9+depth*15}px`}} onClick={()=>toggleDirectory(item.path)} onContextMenu={event=>openTreeMenu(item,event)} aria-expanded={expanded.has(item.path)}><span>{expanded.has(item.path)?'▾':'▸'}</span><strong>{item.name}</strong><small>folder</small></button>
+      <button class="file-tree-row directory" style={{paddingLeft:`${9+depth*15}px`}} onClick={()=>toggleDirectory(item.path)} onContextMenu={event=>openTreeMenu(item,event)} aria-expanded={expanded.has(item.path)}><span>{expanded.has(item.path)?'▾':'▸'}</span><strong>{item.name}/</strong></button>
       {expanded.has(item.path)&&tree(item.path,depth+1)}
-    </div>:<button class="file-tree-row file" key={item.path} style={{paddingLeft:`${9+depth*15}px`}} onPointerDown={event=>onFileDragStart?.(item.path,event)} onClick={()=>onOpenFile(item.path)} onContextMenu={event=>openTreeMenu(item,event)}><span>·</span><strong>{item.name}</strong><small>{item.size!==null?`${item.size.toLocaleString()} B`:''}</small></button>)}{directory.truncated&&<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>Showing the first 2,000 entries.</p>}</>
+    </div>:<button class="file-tree-row file" key={item.path} style={{paddingLeft:`${9+depth*15}px`}} onPointerDown={event=>onFileDragStart?.(item.path,event)} onClick={()=>onOpenFile(item.path)} onContextMenu={event=>openTreeMenu(item,event)}><span>·</span><strong>{item.name}</strong></button>)}{directory.truncated&&<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>Showing the first 2,000 entries.</p>}</>
   }
 
   const searchModes:SearchMode[]=['names','contents','both']
@@ -316,12 +317,17 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
     <div class="file-browser-body">
       <div class="file-search">
         <div class="file-search-field">
-          <input class="file-search-input" value={query} onInput={event=>setQuery(event.currentTarget.value)} placeholder="Search files…" aria-label="Search files" spellcheck={false} autoCapitalize="off" autoCorrect="off"/>
-          {query&&<button class="file-search-clear" aria-label="Clear search" title="Clear search" onClick={()=>setQuery('')}>×</button>}
+          <div class="file-search-inputwrap">
+            <input class="file-search-input" value={query} onInput={event=>setQuery(event.currentTarget.value)} placeholder="Search files…" aria-label="Search files" spellcheck={false} autoCapitalize="off" autoCorrect="off"/>
+            {query&&<button class="file-search-clear" aria-label="Clear search" title="Clear search" onClick={()=>setQuery('')}>×</button>}
+          </div>
+          <button class={`file-search-filter${filtersOpen?' active':''}`} aria-label="Search scope" aria-expanded={filtersOpen} title={`Search scope: ${searchModeLabel[searchMode]}`} onClick={()=>setFiltersOpen(open=>!open)}>
+            <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>
+          </button>
         </div>
-        <div class="file-search-modes" role="group" aria-label="Search scope">
+        {filtersOpen&&<div class="file-search-modes" role="group" aria-label="Search scope">
           {searchModes.map(mode=><button key={mode} class={searchMode===mode?'active':''} aria-pressed={searchMode===mode} title={`Match file ${searchModeLabel[mode].toLowerCase()}`} onClick={()=>setSearchMode(mode)}>{searchModeLabel[mode]}</button>)}
-        </div>
+        </div>}
       </div>
       {error&&<p class="resource-error">{error}</p>}
       {results!==null

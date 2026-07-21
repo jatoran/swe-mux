@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { useModalFocus } from './modalFocus'
 import type { Project } from './types'
 
 export type HistoryMatch={ordinal:number;role:'user'|'assistant';ts?:string;excerpt:string}
@@ -30,6 +31,7 @@ type BackfillJob={
 type Props={
   projects:Project[]
   initialProjectId:string
+  onClose:()=>void
   onResume:(entry:HistoryEntry)=>void|Promise<void>
   onSessionNote:(entry:HistoryEntry)=>void
   onSecondOpinion:(entry:HistoryEntry)=>void|Promise<void>
@@ -48,7 +50,7 @@ const timestampLabel=(value?:string|number|null)=>timestampDate(value)?.toLocale
 const timestampIso=(value?:string|number|null)=>timestampDate(value)?.toISOString()
 const historyStart=(entry:HistoryEntry)=>entry.native_started_at??(entry.external?null:entry.spawned_at)
 
-export function HistoryBrowser({projects,initialProjectId,onResume,onSessionNote,onSecondOpinion,onHandoff}:Props){
+export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSessionNote,onSecondOpinion,onHandoff}:Props){
   const [items,setItems]=useState<HistoryEntry[]>([])
   const [historyProjects,setHistoryProjects]=useState<HistoryProject[]>([])
   const [nextCursor,setNextCursor]=useState<string|null>(null)
@@ -70,6 +72,8 @@ export function HistoryBrowser({projects,initialProjectId,onResume,onSessionNote
   const [job,setJob]=useState<BackfillJob|null>(null)
   const requestSequence=useRef(0)
   const transcriptBody=useRef<HTMLDivElement>(null)
+  const panel=useRef<HTMLElement>(null)
+  useModalFocus(panel,onClose)
 
   const parameters=(cursor?:string)=>{
     const value=new URLSearchParams({limit:'50',scope})
@@ -165,7 +169,11 @@ export function HistoryBrowser({projects,initialProjectId,onResume,onSessionNote
   const moveMatch=(offset:number)=>{if(!transcript?.matches.length)return;setActiveMatch(current=>(current+offset+transcript.matches.length)%transcript.matches.length)}
   const activeOrdinal=transcript?.matches[activeMatch]?.ordinal
 
-  return <section class="history-workspace" aria-label="Agent session history">
+  const scopeProject=projects.find(item=>item.id===project)
+  return <div class="modal-layer history-layer" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
+    <section ref={panel} class="modal history-modal" role="dialog" aria-modal="true" aria-label="Agent session history">
+    <div class="modal-heading"><div><span>SESSION HISTORY</span><h2>{scopeProject?scopeProject.name:'All projects'}</h2></div><button type="button" aria-label="Close session history" onClick={onClose}>×</button></div>
+    <section class="history-workspace" aria-label="Agent session history">
     <div class="history-body">
       <aside>
         <div class="history-search">
@@ -190,5 +198,7 @@ export function HistoryBrowser({projects,initialProjectId,onResume,onSessionNote
         {lineage.length>0&&<section class="transcript-lineage"><h4>Work lineage</h4>{lineage.map(edge=><article><strong>{edge.relation}</strong><span>{edge.parent_run_id} → {edge.child_run_id}</span><small>{new Date(edge.created_at*1000).toLocaleString()}</small></article>)}</section>}{transcript.annotations.length>0&&<section class="transcript-annotations"><h4>Run notes</h4>{transcript.annotations.map(item=><details><summary>{item.tag} · {item.content}</summary><small>{new Date(item.created_at*1000).toLocaleString()} · {item.provenance} · model::{item.resolved_model||'deterministic'} · confidence::{item.confidence??'—'} · cost::{money.format(item.cost_usd||0)}</small></details>)}</section>}
         <div class="messages" ref={transcriptBody}>{transcript.messages.length?transcript.messages.map((message,ordinal)=><article data-message-ordinal={ordinal} class={`${message.role} ${transcript.matches.some(match=>match.ordinal===ordinal)?'search-match-message':''} ${activeOrdinal===ordinal?'active-search-match':''}`}><header><span>{message.role}</span><time dateTime={timestampIso(message.ts)}>{timestampLabel(message.ts)}</time></header>{message.content.map(block=>block.type==='text'?<p>{block.text}</p>:<pre>{block.type==='tool_use'?`${block.name}\n${JSON.stringify(block.input,null,2)}`:block.type}</pre>)}</article>):<div class="no-transcript">No native transcript is available for this session.</div>}</div></>:<div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Search prompts and replies, then inspect the native transcript.</p></div>}</main>
     </div>
-  </section>
+    </section>
+    </section>
+  </div>
 }

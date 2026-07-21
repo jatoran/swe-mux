@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import json
 import logging
 import secrets
 import sqlite3
@@ -43,13 +44,47 @@ AGENT_EXIT_CHECK_INTERVAL_SECONDS = 1.0
 # the last-resort signal that its interactive prompt has settled.
 AGENT_STARTUP_QUIET_SECONDS = 1.0
 
+# The transcript observer only ever returns by raising; if it does, observation
+# stops and state freezes.  It is supervised and restarted with capped backoff so
+# a single malformed record can never permanently strand a session as "working".
+OBSERVER_RESTART_BACKOFF_MIN_SECONDS = 0.5
+OBSERVER_RESTART_BACKOFF_MAX_SECONDS = 30.0
+
+# The quiescence watchdog is the safety net behind every end-of-turn signal
+# (Stop hook, turn_duration, end_turn).  When an agent has been "working"/
+# "awaiting" with no state change and a quiet transcript, it re-derives the true
+# state from the transcript tail and, only when that tail proves the turn is over,
+# forces the session idle.  A tool in flight never reads as over, so a genuinely
+# long tool call is never cut short.
+STATE_WATCHDOG_POLL_SECONDS = 5.0
+STATE_WATCHDOG_STUCK_SECONDS = 20.0
+STATE_WATCHDOG_TRANSCRIPT_QUIET_SECONDS = 3.0
+# The PTY backstop is a last resort for when even the transcript carries no
+# terminal record (schema drift): only after a longer stall and only when the
+# tail is ambiguous rather than clearly mid-tool.
+STATE_WATCHDOG_PTY_STUCK_SECONDS = 60.0
+# Per-session ring buffer of recent state transitions and faults, surfaced by the
+# state-log debug endpoint so a frozen session is diagnosable after the fact.
+STATE_TRANSITION_LOG_LIMIT = 64
+
+
+# Exit codes that signal a clean or intentionally-interrupted shutdown rather
+# than a crash. 0 is a normal exit; 130 is the POSIX 128+SIGINT convention;
+# STATUS_CONTROL_C_EXIT (0xC000013A) is what Windows reports for a console app
+# terminated by Ctrl+C. Quitting an interactive agent (double Ctrl+C, /exit)
+# lands on one of these, so it must not be surfaced as "crashed".
+CLEAN_EXIT_CODES = frozenset({0, 130, 0xC000013A, -1073741510})
+
 
 def terminal_exit_outcome(
     completion_mode: str, *, stopping: bool, exit_code: int | None, reason: str
 ) -> tuple[SessionState, str, str | None]:
     """Map a PTY root exit to the user-visible terminal lifecycle."""
     completed = completion_mode == "one_shot" and exit_code == 0
-    state: SessionState = "exited" if stopping or completed else "crashed"
+    # An unreadable exit code (None) is not treated as a crash: we only flag a
+    # crash when the process reports a code that is neither clean nor an interrupt.
+    clean = stopping or completed or exit_code is None or exit_code in CLEAN_EXIT_CODES
+    state: SessionState = "exited" if clean else "crashed"
     final_reason = "completed" if completed else reason
     detail = (
         f"exit code {exit_code}"
@@ -146,6 +181,16 @@ class Session:
         self.input_owner: str | None = None
         self.revision = 0
         self.state_source_priority = -1
+        # Diagnostics for end-detection health: when the state last changed, when a
+        # native hook last arrived, a bounded transition/fault log, and observer
+        # supervision counters.  These feed the state-log debug endpoint and the
+        # quiescence watchdog; none are serialized into the frequent record snapshot.
+        self.last_state_change_ts = time.time()
+        self.last_hook_ts = 0.0
+        self.state_transitions: deque[dict[str, Any]] = deque(maxlen=STATE_TRANSITION_LOG_LIMIT)
+        self.observer_restart_count = 0
+        self.observer_last_fault: dict[str, Any] | None = None
+        self.watchdog_recoveries = 0
         self.agent_stop_event = asyncio.Event()
         self.observer_task: asyncio.Task[Any] | None = None
         self.transcript_path: Path | None = None
@@ -267,13 +312,56 @@ class Session:
         if priority < self.state_source_priority:
             return False
         changed = self.record.state != state or self.record.state_detail != detail
+        previous = self.record.state
         self.state_source_priority = priority
         if not changed:
             return False
+        if previous != state:
+            self.last_state_change_ts = time.time()
+        # Guarded so transition() stays callable as a pure priority-arbitration
+        # contract by lightweight stubs that carry no diagnostics buffer.
+        log_buffer = getattr(self, "state_transitions", None)
+        if log_buffer is not None:
+            log_buffer.append(
+                {
+                    "ts": time.time(),
+                    "kind": "transition",
+                    "previous": previous,
+                    "state": state,
+                    "detail": detail,
+                    "source": source,
+                    "priority": priority,
+                }
+            )
         self.record.state = state
         self.record.state_detail = detail
         self.publish_update()
         return True
+
+    def note_observer_fault(self, error: str, path: Path | None) -> None:
+        """Record that the transcript observer crashed and is being restarted."""
+        self.observer_restart_count += 1
+        fault = {
+            "ts": time.time(),
+            "kind": "observer_fault",
+            "error": error[:500],
+            "path": str(path) if path else None,
+            "restart_count": self.observer_restart_count,
+        }
+        self.observer_last_fault = fault
+        self.state_transitions.append(fault)
+
+    def note_watchdog_recovery(self, action: str, detail: str | None = None) -> None:
+        """Record that the quiescence watchdog resolved a stuck state."""
+        self.watchdog_recoveries += 1
+        self.state_transitions.append(
+            {
+                "ts": time.time(),
+                "kind": "watchdog_recovery",
+                "action": action,
+                "detail": detail,
+            }
+        )
 
     def take_resync(
         self, subscriber: PtySubscriber
@@ -305,11 +393,15 @@ class SessionManager:
         max_scrollback: int,
         ingress_url: str,
         child_env: dict[str, str] | None = None,
+        hook_spool_dir: Path | None = None,
     ) -> None:
         self.adapters, self.reaper, self.history, self.events = adapters, reaper, history, events
         self.max_scrollback = max_scrollback
         self.ingress_url = ingress_url.rstrip("/")
         self.child_env = child_env or {}
+        self.hook_spool_dir = hook_spool_dir
+        if hook_spool_dir is not None:
+            hook_spool_dir.mkdir(parents=True, exist_ok=True)
         self.sessions: dict[str, Session] = {}
 
     async def spawn(
@@ -409,6 +501,11 @@ class SessionManager:
                 "MUX_PROMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/promote",
                 "MUX_DEMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/demote",
                 "MUX_HOOK_SECRET": hook_secret,
+                **(
+                    {"MUX_HOOK_SPOOL": str(self.hook_spool_dir / f"{sid}.jsonl")}
+                    if self.hook_spool_dir is not None
+                    else {}
+                ),
             },
         )
         pty_started_at = time.perf_counter()
@@ -756,6 +853,7 @@ class SessionManager:
                 session.record.created_at,
                 stop_event,
             )
+        backoff = OBSERVER_RESTART_BACKOFF_MIN_SECONDS
         while path and not stop_event.is_set():
             session.transcript_path = path
             native_id = adapter.transcript_native_id(path)
@@ -768,11 +866,39 @@ class SessionManager:
                 name=f"observe-tail-{session.record.id}",
             )
             try:
-                path = await self._watch_transcript_switch(session, path, stop_event, observe_task)
+                switch = await self._watch_transcript_switch(
+                    session, path, stop_event, observe_task
+                )
             finally:
                 if not observe_task.done():
                     observe_task.cancel()
                 await asyncio.gather(observe_task, return_exceptions=True)
+            if switch is not None:
+                path = switch
+                backoff = OBSERVER_RESTART_BACKOFF_MIN_SECONDS
+                continue
+            if stop_event.is_set():
+                break
+            # _watch_transcript_switch returned without a new file and the tail task
+            # is finished. observe_transcript only ends by raising (its loop runs
+            # until stop_event); a bare return means nothing is left to follow. A
+            # raised exception must not silently end observation — that is exactly
+            # what freezes a session as "working". Log it, record the fault, back
+            # off, and re-tail the same file so a later terminal record is still seen.
+            fault = None if observe_task.cancelled() else observe_task.exception()
+            if fault is None:
+                break
+            log.exception(
+                "transcript observer for session %s crashed; restarting",
+                session.record.id,
+                exc_info=fault,
+            )
+            session.note_observer_fault(repr(fault), path)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=backoff)
+            except TimeoutError:
+                pass
+            backoff = min(backoff * 2, OBSERVER_RESTART_BACKOFF_MAX_SECONDS)
 
     async def _watch_transcript_switch(
         self,
@@ -810,6 +936,31 @@ class SessionManager:
                 return candidate
         return None
 
+    @staticmethod
+    def _resolved_cwd(record: SessionRecord) -> Path:
+        cwd = Path(record.run_cwd or record.cwd)
+        try:
+            return cwd.resolve()
+        except OSError:
+            return cwd
+
+    def _has_transcript_sibling(self, session: Session, cwd: Path) -> bool:
+        """True when another live agent session writes transcripts into this cwd."""
+        try:
+            key = cwd.resolve()
+        except OSError:
+            key = cwd
+        for other in self.sessions.values():
+            if other is session:
+                continue
+            if other.record.backend != session.record.backend:
+                continue
+            if other.record.state in {"exited", "crashed"}:
+                continue
+            if self._resolved_cwd(other.record) == key:
+                return True
+        return False
+
     def _transcript_switch_candidate(self, session: Session, current: Path) -> Path | None:
         record = session.record
         now = time.time()
@@ -821,6 +972,15 @@ class SessionManager:
             return None
         started = record.agent_run_started_at or record.created_at
         cwd = Path(record.run_cwd or record.cwd)
+        # Following a freshly-written transcript is only safe when this is the sole
+        # agent writing into that directory. With sibling sessions in the same cwd,
+        # a fresh sibling transcript is indistinguishable from this CLI resuming
+        # into a new conversation; switching would attach this observer to the
+        # sibling's file and bleed its status/tokens/context into this record (the
+        # native-id swap seen with multiple sessions in one project). The
+        # single-session in-CLI resume case still works — it has no sibling.
+        if self._has_transcript_sibling(session, cwd):
+            return None
         other_native_ids = {
             other.record.native_session_id
             for other in self.sessions.values()
@@ -848,6 +1008,147 @@ class SessionManager:
             if best is None or modified > best[0]:
                 best = (modified, path)
         return best[1] if best else None
+
+    async def state_watchdog_loop(self) -> None:
+        """Safety net for a session left "working"/"awaiting" after its turn ended.
+
+        Runs independently of the observer and hooks. When an agent has been busy
+        with no state change and a quiet transcript for the stuck window, it drains
+        any spooled hook fallback, then re-derives the true state from the
+        transcript tail. It only forces idle when that tail proves the turn is
+        over, so a legitimately long tool call (whose tail reads as mid-tool) is
+        never cut short.
+        """
+        from .observation import _finish_root_turn, transcript_tail_turn_state
+
+        while True:
+            try:
+                await asyncio.sleep(STATE_WATCHDOG_POLL_SECONDS)
+                now = time.time()
+                for session in tuple(self.sessions.values()):
+                    record = session.record
+                    if record.backend not in {"claude", "codex"}:
+                        continue
+                    await self._drain_hook_spool(session)
+                    if record.state not in {"working", "awaiting"}:
+                        continue
+                    if session.observation_replay:
+                        continue
+                    stalled = now - session.last_state_change_ts
+                    if stalled < STATE_WATCHDOG_STUCK_SECONDS:
+                        continue
+                    path = session.transcript_path
+                    if path is None:
+                        continue
+                    try:
+                        mtime = path.stat().st_mtime
+                    except OSError:
+                        continue
+                    if now - mtime < STATE_WATCHDOG_TRANSCRIPT_QUIET_SECONDS:
+                        # The transcript is still moving; the live observer owns it.
+                        continue
+                    verdict = await asyncio.to_thread(
+                        transcript_tail_turn_state, record.backend, path
+                    )
+                    pty_backstop = (
+                        verdict == "unknown"
+                        and stalled >= STATE_WATCHDOG_PTY_STUCK_SECONDS
+                        and self._pty_appears_idle(session)
+                    )
+                    if verdict != "ended" and not pty_backstop:
+                        continue
+                    # A completion recorded but never applied leaves the bookkeeping
+                    # "completion seen, turn inactive", which would make
+                    # _finish_root_turn a no-op. Re-open the turn so the forced close
+                    # always lands and re-emits the boundary.
+                    session.observation_state["root_turn_active"] = True
+                    session.observation_state["root_completion_seen"] = False
+                    if verdict == "ended":
+                        session.note_watchdog_recovery("transcript_tail_terminal")
+                        await _finish_root_turn(session, self.events, source="watchdog", force=True)
+                    else:
+                        # No terminal record exists (likely transcript schema drift),
+                        # but the PTY shows the idle prompt and no in-flight tool. This
+                        # is the last-resort backstop; mark it inferred for honesty.
+                        session.note_watchdog_recovery("pty_idle_prompt")
+                        await _finish_root_turn(
+                            session,
+                            self.events,
+                            source="watchdog-pty",
+                            force=True,
+                            inferred=True,
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # never let the safety net die silently
+                log.exception("state watchdog iteration failed")
+
+    async def _drain_hook_spool(self, session: Session) -> None:
+        """Replay hook events the shim spooled to disk after a failed POST.
+
+        Stop/SessionEnd delivered over a lost HTTP request would otherwise vanish;
+        the shim appends them here as a durable fallback that the daemon consumes.
+        """
+        if self.hook_spool_dir is None:
+            return
+        from .observation import apply_hook_observation
+
+        path = self.hook_spool_dir / f"{session.record.id}.jsonl"
+        try:
+            stat = path.stat()
+        except OSError:
+            return
+        if not stat.st_size:
+            return
+        # Only consume when the shim is not mid-append, so a partial line is never
+        # parsed and a concurrent write is not truncated away.
+        if time.time() - stat.st_mtime < 1.0:
+            return
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return
+        consumed = data.rfind(b"\n") + 1
+        if not consumed:
+            return
+        remainder = data[consumed:]
+        try:
+            path.write_bytes(remainder)
+        except OSError:
+            return
+        for line in data[:consumed].split(b"\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line.decode("utf-8", "replace"))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(item, dict):
+                continue
+            event_type = str(item.get("event") or item.get("type") or "")
+            payload = item.get("payload")
+            if not event_type or not isinstance(payload, dict):
+                continue
+            session.last_hook_ts = time.time()
+            session.state_transitions.append(
+                {"ts": time.time(), "kind": "hook_spool_replay", "event": event_type}
+            )
+            try:
+                await apply_hook_observation(session, event_type, payload, self.events)
+            except Exception:
+                log.exception("failed to replay spooled hook %s", event_type)
+
+    def _pty_appears_idle(self, session: Session) -> bool:
+        """Heuristic: the CLI is showing its input prompt, not a working spinner.
+
+        Deliberately conservative and fail-safe — an unrecognized TUI simply reads
+        as not-idle, leaving the (current) stuck behavior rather than a false idle.
+        """
+        tail = session.scrollback.bytes()[-8192:].decode("utf-8", "replace").lower()
+        if "esc to interrupt" in tail:
+            return False
+        return "? for shortcuts" in tail
 
     async def _fanout(self, session: Session) -> None:
         while True:
@@ -904,11 +1205,7 @@ class SessionManager:
         task.add_done_callback(session.tasks.discard)
 
     async def _confirm_agent_ready(self, session: Session) -> None:
-        while (
-            not session.stopping
-            and session.record.state == "starting"
-            and session.pty.isalive()
-        ):
+        while not session.stopping and session.record.state == "starting" and session.pty.isalive():
             quiet_for = time.time() - session.record.last_activity_ts
             remaining = AGENT_STARTUP_QUIET_SECONDS - quiet_for
             if remaining > 0:
@@ -1130,6 +1427,8 @@ class SessionManager:
             await self.history.agent_run_ended(session.record, final_reason)
         for adapter in self.adapters.values():
             adapter.cleanup(session.record.id)
+        if self.hook_spool_dir is not None:
+            (self.hook_spool_dir / f"{session.record.id}.jsonl").unlink(missing_ok=True)
         if session.ownership_job:
             session.ownership_job.close()
             session.ownership_job = None

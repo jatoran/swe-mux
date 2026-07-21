@@ -43,3 +43,31 @@
   `development/CONTROL_PLANE_IDEAS.md`
 - Changing backend package ownership or shared SQLite behavior:
   `technical/backend/packages.md`, `technical/backend/sqlite.md`
+
+# Audio (voice) system — quick reference
+
+Full detail: `design/features/voice.md`. Two independent halves in one `VoiceService`
+(`src/swe_mux/voice.py`):
+
+- **Read aloud (TTS):** `turn_ended` (auto, 1s debounce) or manual → last-turn slice →
+  `summary` (OpenRouter cheap model, budgeted under `builtin:voice-summary`) or `verbatim`
+  (`speechify`, no LLM) → edge-tts MP3 / Windows SAPI WAV clips in `<data_dir>/voice/` +
+  `voice_clips` SQLite. Browser plays one singleton audio element; autoplay/barge-in are
+  per-device. Failures are typed `VoiceError` and never touch the PTY/history/transcripts.
+- **Conversation (STT):** browser VAD capture (`conversation.ts`) → mono 16 kHz WAV →
+  `voice/transcribe` → faster-whisper (`turbo`, CUDA→CPU fallback; audio discarded after) →
+  wake-word + command-phrase **suffix** → idempotent `voice/submit` writes `{text}\r` to the
+  PTY. Wake words and the phrase→action map are user-configurable (`voice_wake_words` /
+  `voice_commands` in config, editable in Settings → Voice; `buildVoiceMatcher` compiles them).
+  Fixed action set: `send`/`cancel`/`undo`/`mute`/`read`/`summary`/`verbatim`/`interrupt`/
+  `help`/`standby`/`resume`/`stop`. `standby` keeps the mic on but ignores everything except a
+  `resume`/`stop` command; `stop` releases the mic.
+
+**Mobile mic needs HTTPS (secure context).** swe-mux runs **Tailscale Serve on 443**
+(`https://<device>.ts.net/`) proxying to the daemon's loopback port — auto-started at boot
+(`_auto_enable_mobile_voice`), idempotent. Serve is on 443 **not** the swe-mux port because the
+daemon binds its port on the tailnet IP directly for the plain-HTTP fallback (same-port Serve
+would collide). The phone must resolve the `.ts.net` name over MagicDNS ("Use Tailscale DNS" on;
+Android Private DNS off/automatic); the cert is hostname-bound so the raw 100.x IP can't do
+HTTPS. If mobile voice breaks, first confirm a daemon is listening on the real config port and
+`tailscale serve status` proxies to it. Tailscale/Serve code: `tailscale.py`, `__main__.py`.

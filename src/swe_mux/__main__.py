@@ -11,7 +11,7 @@ from aiohttp import web
 
 from .config import LOOPBACK_HOSTS, Config, load_config
 from .server import create_app
-from .tailscale import listener_hosts
+from .tailscale import enable_mobile_voice_serve, listener_hosts
 
 
 def parser() -> argparse.ArgumentParser:
@@ -74,9 +74,38 @@ async def serve(config: Config, *, desktop_control_token: str | None = None) -> 
             sites.append(site)
             rendered_host = f"[{host}]" if ":" in host else host
             print(f"======== Running on http://{rendered_host}:{config.port} ========", flush=True)
+        if config.tailnet_enabled:
+            asyncio.create_task(_auto_enable_mobile_voice(config.port))
         await shutdown_event.wait()
     finally:
         await runner.cleanup()
+
+
+async def _auto_enable_mobile_voice(port: int) -> None:
+    """Bring up the private HTTPS mobile-voice proxy in the background.
+
+    Tailscale Serve on 443 gives phones a secure-context origin for microphone
+    capture while the direct 100.x HTTP listener stays as a fallback. This is
+    best-effort: the daemon still runs if Tailscale is absent or HTTPS is not
+    yet approved for the tailnet, and Settings exposes the same one-tap setup.
+    """
+    log = logging.getLogger(__name__)
+    try:
+        result = await enable_mobile_voice_serve(port)
+    except Exception:  # noqa: BLE001 - startup helper must never crash the daemon
+        log.exception("mobile-voice HTTPS auto-setup raised")
+        return
+    status = result.get("status")
+    if status == "ready":
+        log.info("mobile-voice HTTPS ready at %s", result.get("url"))
+    elif status == "authorization_required":
+        log.warning(
+            "mobile-voice HTTPS needs a one-time Tailscale approval; enable it from "
+            "Settings > Voice. %s",
+            result.get("authorization_url") or "",
+        )
+    else:
+        log.info("mobile-voice HTTPS not configured: %s", result.get("diagnostic"))
 
 
 def main(argv: Sequence[str] | None = None) -> None:

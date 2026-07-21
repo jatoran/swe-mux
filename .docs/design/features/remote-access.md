@@ -19,10 +19,16 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   loopback fetch/XHR/WebSocket calls between services in one Project are remapped to the
   destination service's registered route, never to the remote device's loopback.
 - `0.0.0.0`, LAN interfaces, port forwarding, and Tailscale Funnel are unsupported.
-- Direct tailnet HTTP remains the supported remote transport. Browser microphone capture requires
-  a secure context; when no verified HTTPS endpoint is available, the mobile-voice setup route
-  returns a diagnostic and leaves ordinary mobile access unchanged. swe-mux never enables Funnel
-  or changes tailnet policy, ACLs, shields, or device authorization.
+- Direct tailnet HTTP remains the supported remote transport and fallback. Browser microphone
+  capture requires a secure context, so swe-mux provisions a private Tailscale Serve listener on
+  HTTPS 443 (`https://<device>.ts.net/`) that proxies to the loopback port. 443 is required, not
+  the swe-mux port: the daemon binds its port directly on the Tailscale IPv4 address for the
+  HTTP fallback, so a Serve listener on that same port would collide with that host socket. Serve
+  is brought up automatically at daemon startup (best-effort) and is idempotent; the mobile-voice
+  setup route re-runs the same bounded command for one-time Tailscale HTTPS approval or repair.
+  When Serve cannot be configured, the route returns a diagnostic and leaves ordinary mobile
+  access unchanged. swe-mux never enables Funnel or changes tailnet policy, ACLs, shields, or
+  device authorization.
 
 ## Boundaries and diagnostics
 

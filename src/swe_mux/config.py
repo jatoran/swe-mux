@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {"light", "dark", "system", "solarized-dark", "tokyo-night", "custom"}
 CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "accent", "error"}
@@ -57,6 +57,58 @@ DEFAULT_PROJECT_IGNORE_PATTERNS = [
     "pnpm-lock.yaml",
     "yarn.lock",
 ]
+
+
+# Conversation-mode command actions the client knows how to execute. Wake words
+# and the spoken phrases mapped to each action are user-configurable; the action
+# set itself is fixed because each action is wired to code.
+VOICE_COMMAND_ACTIONS = (
+    "send",
+    "cancel",
+    "undo",
+    "mute",
+    "read",
+    "summary",
+    "verbatim",
+    "interrupt",
+    "help",
+    "standby",
+    "resume",
+    "stop",
+)
+DEFAULT_VOICE_WAKE_WORDS = ["mux", "mucks", "max"]
+
+
+def default_voice_commands() -> list[dict[str, Any]]:
+    return [
+        {"action": action, "phrases": list(phrases)}
+        for action, phrases in (
+            (
+                "send",
+                ["send", "send it", "send that", "send message",
+                 "submit", "submit it", "submit that", "submit message"],
+            ),
+            ("cancel", ["cancel", "cancel that", "clear", "clear that"]),
+            (
+                "undo",
+                ["undo", "undo that", "undo last", "undo last phrase",
+                 "delete last", "delete last phrase"],
+            ),
+            ("mute", ["mute", "stop speaking", "stop playback", "stop audio"]),
+            (
+                "read",
+                ["read", "read reply", "read the reply", "read reply again",
+                 "read the reply again", "read response", "speak reply", "speak the reply"],
+            ),
+            ("summary", ["summary", "summary mode", "use summaries"]),
+            ("verbatim", ["verbatim", "verbatim mode", "read verbatim"]),
+            ("interrupt", ["interrupt", "interrupt agent", "interrupt the agent"]),
+            ("help", ["help", "list commands", "what can i say"]),
+            ("standby", ["sleep", "go to sleep", "stand by", "standby", "pause listening"]),
+            ("resume", ["wake", "wake up", "resume", "start listening"]),
+            ("stop", ["stop listening", "turn off", "shut down"]),
+        )
+    ]
 
 
 def default_ccusage_command(provider: str) -> list[str]:
@@ -193,6 +245,10 @@ class Config:
     stt_engine: str = "whisper"
     stt_language: str = "en-US"
     stt_whisper_model: str = "turbo"
+    voice_wake_words: list[str] = field(
+        default_factory=lambda: list(DEFAULT_VOICE_WAKE_WORDS)
+    )
+    voice_commands: list[dict[str, Any]] = field(default_factory=default_voice_commands)
     data_dir: Path = Path.home() / ".mux"
     config_path: Path | None = field(default=None, repr=False)
 
@@ -331,6 +387,47 @@ def _validate(config: Config) -> None:
         errors["stt_language"] = "must be a language tag such as en-US"
     if not config.stt_whisper_model.strip() or len(config.stt_whisper_model) > 120:
         errors["stt_whisper_model"] = "must name a Whisper model in 120 characters or fewer"
+    if (
+        not isinstance(config.voice_wake_words, list)
+        or not 1 <= len(config.voice_wake_words) <= 64
+        or any(
+            not isinstance(word, str) or not word.strip() or len(word) > 40
+            for word in config.voice_wake_words
+        )
+    ):
+        errors["voice_wake_words"] = (
+            "must be 1–64 non-empty wake words of 40 characters or fewer"
+        )
+    if not isinstance(config.voice_commands, list) or len(config.voice_commands) > 64:
+        errors["voice_commands"] = "must be an array of at most 64 command definitions"
+    else:
+        seen_actions: set[str] = set()
+        for index, command in enumerate(config.voice_commands):
+            prefix = f"voice_commands.{index}"
+            if not isinstance(command, dict):
+                errors[prefix] = "must be an object with action and phrases"
+                continue
+            action = command.get("action")
+            phrases = command.get("phrases")
+            if action not in VOICE_COMMAND_ACTIONS:
+                errors[f"{prefix}.action"] = (
+                    f"must be one of {', '.join(VOICE_COMMAND_ACTIONS)}"
+                )
+            elif action in seen_actions:
+                errors[f"{prefix}.action"] = f"duplicate action {action}"
+            else:
+                seen_actions.add(str(action))
+            if (
+                not isinstance(phrases, list)
+                or len(phrases) > 64
+                or any(
+                    not isinstance(phrase, str) or not phrase.strip() or len(phrase) > 80
+                    for phrase in (phrases or [])
+                )
+            ):
+                errors[f"{prefix}.phrases"] = (
+                    "must be up to 64 non-empty phrases of 80 characters or fewer"
+                )
     if config.theme not in THEMES:
         errors["theme"] = f"must be one of {', '.join(sorted(THEMES))}"
     if set(config.custom_theme) != CUSTOM_THEME_KEYS or any(

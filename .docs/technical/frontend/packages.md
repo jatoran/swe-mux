@@ -24,7 +24,7 @@ rendering and local interaction; pure helpers own transformations that need dete
 | Guided onboarding | `GuidedTutorial.tsx`, `tutorial.ts` | action gates, coach-mark geometry, product-event matching, and device-local completion |
 | Voice conversation | `ConversationControl.tsx`, `conversation.ts`, `VoicePlayer.tsx`, `voice.ts`, `mobileVoice.ts` | one-device capture ownership, VAD/WAV encoding, wake commands, playback queue/barge-in, direct private-HTTPS redirect |
 | Automation/usage/processes | feature-named panels | feature-local navigation and presentation |
-| Shared interaction | `dragReorder.ts`, `menuPosition.ts`, `modalFocus.ts`, `keys.ts` | pure or narrowly stateful reusable behavior |
+| Shared interaction | `dragReorder.ts`, `menuPosition.ts`, `modalFocus.ts`, `keys.ts`, `sidebarProjects.ts`, `sessionAttention.ts` | pure or narrowly stateful reusable behavior, including collapsed-Project labels and live/read aggregation |
 
 ## Extraction rule
 

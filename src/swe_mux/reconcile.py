@@ -4,11 +4,13 @@ import asyncio
 import hashlib
 import json
 import os
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .adapters.claude import encode_cwd
 from .git_projects import ProjectIdentity, resolve_project
 from .history import HistoryIndex
 from .transcript_view import TRANSCRIPT_PARSER_VERSION
@@ -103,28 +105,65 @@ def inspect_codex(path: Path) -> ExternalTranscript | None:
 
 
 def scan_external_transcripts(
-    home: Path | None = None, *, limit: int | None = 2000
+    home: Path | None = None,
+    *,
+    limit: int | None = 2000,
+    roots: Iterable[str | Path] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    on_progress: Callable[[int], None] | None = None,
 ) -> list[ExternalTranscript]:
+    """Discover native Claude/Codex transcripts.
+
+    ``roots`` restricts the Claude scan to project directories whose encoded
+    name matches one of the supplied working-copy roots. Because Claude stores
+    each session under ``projects/<encoded-cwd>/`` and ``encode_cwd`` is
+    prefix-preserving, a project-scoped backfill reads a handful of directories
+    instead of every transcript on the machine (a real user can have tens of
+    thousands). Over-matched siblings are still filtered downstream by the
+    actual cwd, so this only trades reads, never correctness. Codex stores
+    sessions flat by date with no cwd in the path, so it is always scanned in
+    full. ``should_cancel`` is polled per file so a long scan aborts promptly,
+    and ``on_progress`` receives the running count of files examined.
+    """
     user_home = home or Path.home()
     codex_home = (
         home / ".codex"
         if home is not None
         else Path(os.environ.get("CODEX_HOME") or user_home / ".codex").expanduser()
     )
+    encoded_roots = (
+        [encode_cwd(root).lower() for root in roots] if roots is not None else None
+    )
     specs = (
-        (user_home / ".claude" / "projects", "*.jsonl", inspect_claude),
-        (codex_home / "sessions", "rollout-*.jsonl", inspect_codex),
+        (user_home / ".claude" / "projects", "*.jsonl", inspect_claude, True),
+        (codex_home / "sessions", "rollout-*.jsonl", inspect_codex, False),
     )
     found: list[ExternalTranscript] = []
-    for root, pattern, inspect in specs:
+    scanned = 0
+    for root, pattern, inspect, scoped in specs:
         if not root.exists():
             continue
-        paths = sorted(
-            root.glob(f"**/{pattern}"), key=lambda item: item.stat().st_mtime, reverse=True
-        )
-        for path in paths if limit is None else paths[:limit]:
+        if scoped and encoded_roots is not None:
+            search_dirs = [
+                child
+                for child in root.iterdir()
+                if child.is_dir()
+                and any(child.name.lower().startswith(prefix) for prefix in encoded_roots)
+            ]
+        else:
+            search_dirs = [root]
+        discovered: list[Path] = []
+        for directory in search_dirs:
+            discovered.extend(directory.glob(f"**/{pattern}"))
+        discovered.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+        for path in discovered if limit is None else discovered[:limit]:
+            if should_cancel is not None and should_cancel():
+                return found
             if transcript := inspect(path):
                 found.append(transcript)
+            scanned += 1
+            if on_progress is not None:
+                on_progress(scanned)
     return found
 
 

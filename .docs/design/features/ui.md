@@ -24,11 +24,13 @@ responsive controls.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
   Account/resource popovers render through the viewport overlay layer, so a narrow or collapsed
   sidebar cannot clip them.
-- Collapsing the desktop sidebar leaves a rail rather than a dead strip. Bottom-up it carries
-  Projects, menu, one quota chip per provider, and owned RAM, mirroring the expanded sidebar
-  where menu and Projects are the last rows and status sits above them. The rail keeps those
-  controls reachable without an expand round-trip, and every indicator opens the same popover as
-  its expanded counterpart.
+- Collapsing the desktop sidebar leaves a rail rather than a dead strip. Every visible Project
+  retains a scrollable chip: hyphenated names use the first character plus the first character
+  after the first hyphen; other names use their first two alphanumeric characters. The chip edge
+  shows the strongest live state (approval, working, ready, or ordinary running), while a separate
+  dot preserves unread-agent output even during another activity state. The active Project keeps
+  an explicit selection border. Status, menu, and Projects controls remain pinned beneath the
+  chip list; every status indicator opens the same popover as its expanded counterpart.
 - Each quota chip stacks the provider's own mark above its weekly percentage. Weekly is the
   window worth a permanent glance: the 5-hour session window churns constantly, and `fable` is a
   sub-window of one provider's plan rather than a measure comparable across providers. The mark
@@ -82,8 +84,9 @@ responsive controls.
 - Multiline ignore inputs preserve Enter/newlines in draft state. Save trims entries and removes
   blank lines before sending normalized patterns.
 - Notification sounds preview immediately after browser audio unlock. Bundled choices are
-  intentionally restrained; volume, per-event enablement, quiet hours, and test playback are
-  device preferences.
+  intentionally restrained; volume, per-event enablement and sound selection, quiet hours, and
+  test playback are device preferences. A custom upload joins the same previewable library and
+  does not replace existing event assignments.
 - General exposes **Reset & run tutorial**. Starting it shares the ordinary Settings
   Save/Discard guard, so replay never silently loses a dirty draft.
 

@@ -1,7 +1,5 @@
-import { useRef, useState } from 'preact/hooks'
 import type {
   ContinuityChangeDetail,
-  ContinuityEditorElement,
   ContinuityRequestDetail,
 } from '@continuity-editor/editor'
 import { ContinuityEditor } from '@continuity-editor/editor/react'
@@ -48,14 +46,20 @@ function routeRequest(detail: ContinuityRequestDetail): void {
  * Shared Continuity WebAssembly markdown surface for every editable `.md` view: project
  * and session notes and markdown files opened from the Files browser, on desktop and mobile.
  *
- * It owns only Continuity's in-memory revision (starting at 0 for a freshly loaded
- * document); the daemon's optimistic storage revision never reaches here. How a committed
- * snapshot is persisted is the caller's concern, passed as `onCommit`: notes push to the
- * autosave queue, while file editors only mark their draft dirty for an explicit Save. A
- * host replacement is an echo of text we pushed in and is never committed back.
+ * The engine is seeded once (text `initialText`, revision 0) and then left uncontrolled: we
+ * never push the engine's own `onChange` output back in as `value`/`revision`. Feeding it
+ * back drove the React adapter to issue an async `replaceValue()` after every commit, and on
+ * mobile that programmatic textarea rewrite lands mid-IME-composition (space commits a word),
+ * desyncing the keyboard and re-injecting the document into itself — text multiplied on every
+ * space. Nothing here needs the controlled loop: an out-of-band edit (daemon/agent rewrite)
+ * never streams into a live editor; it arrives by remount with fresh `initialText`.
+ *
+ * How a committed snapshot is persisted is the caller's concern, passed as `onCommit`: notes
+ * push to the autosave queue, while file editors only mark their draft dirty for an explicit
+ * Save.
  *
  * Remount this (via a caller-supplied key) whenever a different document loads, so a fresh
- * engine cannot leak text or revisions between documents.
+ * engine cannot leak text or revisions between documents, and so external edits land.
  */
 export function ContinuityMarkdownEditor({
   initialText,
@@ -68,15 +72,8 @@ export function ContinuityMarkdownEditor({
   spellcheck?: boolean
   onCommit: (text: string) => void
 }) {
-  const editorRef = useRef<ContinuityEditorElement>(null)
-  const [engine, setEngine] = useState<{ text: string; revision: number }>({
-    text: initialText,
-    revision: 0,
-  })
-
   return (
     <ContinuityEditor
-      ref={editorRef}
       aria-label={label}
       class="note-editor"
       style={{
@@ -87,20 +84,17 @@ export function ContinuityMarkdownEditor({
         minWidth: 0,
         minHeight: 0,
       }}
-      value={engine.text}
-      revision={engine.revision}
+      // Seed only. These props are intentionally constant so the adapter never re-issues a
+      // `replaceValue()` for our own edits — see the block comment above.
+      value={initialText}
+      revision={0}
       spellcheck={spellcheck}
       shortcutPolicy="browser-safe"
       shortcutBindings={NOTE_SHORTCUTS}
       onChange={(detail: ContinuityChangeDetail) => {
-        setEngine({ text: detail.snapshot.text, revision: detail.snapshot.revision })
-        // A host replacement is an echo of text we pushed in; never commit it back.
+        // Uncontrolled: persist the committed snapshot, but never echo it back into `value`.
+        // (`hostReplacement` cannot occur here since we issue no host replacements.)
         if (detail.source !== 'hostReplacement') onCommit(detail.snapshot.text)
-      }}
-      onRevisionConflict={() => {
-        // Local typing won a race against a host replacement: keep local state.
-        const current = editorRef.current?.snapshot()
-        if (current) setEngine({ text: current.text, revision: current.revision })
       }}
       onRequest={routeRequest}
     />

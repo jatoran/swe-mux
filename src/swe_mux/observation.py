@@ -377,6 +377,126 @@ def classify_transcript_event(backend: str, event: dict[str, Any]) -> tuple[bool
     return False, f"{backend}:{outer}"
 
 
+# Trailing records the provider appends after a turn (naming, mode markers,
+# prompt echoes) are not turn activity and must be skipped when judging the tail.
+_CLAUDE_TAIL_IGNORED = {
+    "ai-title",
+    "attachment",
+    "file-history-delta",
+    "file-history-snapshot",
+    "last-prompt",
+    "mode",
+    "permission-mode",
+    "queue-operation",
+}
+# Tail bytes read to judge turn state without loading a multi-megabyte transcript.
+TRANSCRIPT_TAIL_BYTES = 131_072
+
+
+def transcript_tail_turn_state(backend: str, path: Path) -> str:
+    """Classify the transcript tail as ``ended``, ``open`` or ``unknown``.
+
+    Used by the quiescence watchdog to decide whether a stuck "working" session
+    has actually finished. ``open`` means a tool or turn is still in flight, so a
+    long-running tool call is never mistaken for a hang. Only ``ended`` is proof
+    the turn is over; ``unknown`` means the tail carries no decisive signal.
+    """
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            if size > TRANSCRIPT_TAIL_BYTES:
+                handle.seek(size - TRANSCRIPT_TAIL_BYTES)
+                handle.readline()  # discard the partial line at the seek point
+            raw = handle.read()
+    except OSError:
+        return "unknown"
+    records: list[dict[str, Any]] = []
+    for line in raw.split(b"\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line.decode("utf-8", "replace"))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            records.append(item)
+    if backend == "claude":
+        return _claude_tail_state(records)
+    if backend == "codex":
+        return _codex_tail_state(records)
+    return "unknown"
+
+
+def _claude_tail_state(records: list[dict[str, Any]]) -> str:
+    for event in reversed(records):
+        event_type = event.get("type")
+        if event_type == "system":
+            subtype = str(event.get("subtype") or "")
+            if subtype in {"turn_duration", "stop_hook_summary"}:
+                return "ended"
+            continue
+        if event_type == "assistant":
+            message = event.get("message") or {}
+            content = message.get("content")
+            blocks = content if isinstance(content, list) else []
+            has_tool_use = any(
+                isinstance(block, dict) and block.get("type") == "tool_use" for block in blocks
+            )
+            has_text = (
+                isinstance(content, str)
+                and bool(content)
+                or any(isinstance(block, dict) and block.get("type") == "text" for block in blocks)
+            )
+            if message.get("stop_reason") == "end_turn":
+                return "ended"
+            if has_tool_use:
+                return "open"
+            if message.get("stop_reason") == "tool_use":
+                return "open"
+            return "ended" if has_text else "unknown"
+        if event_type == "user":
+            content = event.get("message", {}).get("content") if event.get("message") else None
+            text = _claude_user_text(content)
+            if event.get("isMeta") is True or _is_local_command_text(text):
+                continue
+            if _is_interrupt_text(text):
+                return "ended"
+            # A plain prompt or a tool result both mean the model still owes a
+            # response — the turn is open.
+            return "open"
+        # Metadata / bookkeeping records carry no turn signal; keep scanning.
+        if event_type in _CLAUDE_TAIL_IGNORED:
+            continue
+    return "unknown"
+
+
+def _codex_tail_state(records: list[dict[str, Any]]) -> str:
+    for event in reversed(records):
+        payload = event.get("payload") or {}
+        payload_type = payload.get("type") if isinstance(payload, dict) else None
+        if payload_type in {"task_complete", "turn_aborted", "thread_rolled_back"}:
+            return "ended"
+        if payload_type in {
+            "task_started",
+            "user_message",
+            "function_call",
+            "custom_tool_call",
+            "exec_command_begin",
+            "function_call_output",
+            "custom_tool_call_output",
+            "exec_command_end",
+            "patch_apply_end",
+            "mcp_tool_call_end",
+            "web_search_end",
+            "exec_approval_request",
+            "apply_patch_approval_request",
+            "request_user_input",
+        }:
+            return "open"
+    return "unknown"
+
+
 async def _record_parser_observation(
     session: Session,
     events: EventBus,
@@ -575,7 +695,15 @@ async def apply_hook_observation(
         )
     elif event_type == "Notification":
         notification = str(payload.get("notification_type") or "")
-        if notification in {"permission_prompt", "elicitation_dialog", "idle_prompt"}:
+        if notification == "idle_prompt":
+            # "Claude is waiting for your input" fires once the turn is over and the
+            # agent is back at the prompt. That is "ready", not a blocking approval:
+            # bucketing it as awaiting shows a phantom approval on a finished agent.
+            # Treat it as a turn boundary (also recovers a missed Stop), but never
+            # clobber a genuine approval the user has not yet acted on.
+            if session.record.state != "awaiting":
+                await _finish_root_turn(session, events, source="hook")
+        elif notification in {"permission_prompt", "elicitation_dialog"}:
             kind = "approval" if notification == "permission_prompt" else "input"
             detail = str(payload.get("message") or notification)
             await _transition(session, events, "awaiting", detail, source="hook")

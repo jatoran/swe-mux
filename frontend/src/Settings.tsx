@@ -43,6 +43,7 @@ type Config = {
   tts_summary_model:string;tts_summary_max_tokens:number;tts_verbatim_max_chars:number
   tts_daily_budget_usd:number;tts_cache_mb:number;stt_enabled:boolean
   stt_engine:'sapi'|'whisper';stt_language:string;stt_whisper_model:string
+  voice_wake_words:string[];voice_commands:{action:string;phrases:string[]}[]
 }
 type VoiceStatusInfo = {
   enabled:boolean;engine:string;engine_available:boolean;diagnostic?:string|null;voice:string
@@ -105,6 +106,25 @@ const tabForSection = (section:string):SettingsTab => ({
   Notes:'notes',
   Automation:'automation','Hooks and notifications':'notifications',Notifications:'notifications',Voice:'voice','Remote and security':'remote',Appearance:'appearance',
 }[section] as SettingsTab|undefined)||'general'
+
+// Canonical order + labels for the configurable conversation commands. The action
+// set is fixed (each is wired to code in ConversationControl); only the wake words
+// and phrases are editable. Mirrors VOICE_COMMAND_ACTIONS in config.py.
+const VOICE_ACTION_ORDER=['send','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','stop'] as const
+const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
+  send:{label:'Send / submit',hint:'submit the buffered message'},
+  cancel:{label:'Cancel / clear',hint:'clear the whole draft'},
+  undo:{label:'Undo',hint:'remove the last transcribed phrase'},
+  mute:{label:'Mute',hint:'stop playback, keep listening'},
+  read:{label:'Read reply',hint:'speak the latest reply'},
+  summary:{label:'Summary mode',hint:'switch spoken replies to summaries'},
+  verbatim:{label:'Verbatim mode',hint:'switch spoken replies to verbatim'},
+  interrupt:{label:'Interrupt',hint:'stop playback and send Ctrl-C to the agent'},
+  help:{label:'Help',hint:'list the commands'},
+  standby:{label:'Standby',hint:'keep listening but ignore speech until resumed'},
+  resume:{label:'Resume',hint:'leave standby and act on speech again'},
+  stop:{label:'Stop listening',hint:'turn conversation mode off (releases the mic)'},
+}
 
 export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, cwd, initialSection='General' }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; cwd?:string; initialSection?:string }) {
   const [config, setConfig] = useState<Config | null>(null)
@@ -212,7 +232,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
       const result=await enableMobileVoice()
       if(!result.url){setMobileVoiceMessage('Complete the one-time Tailscale approval, then tap Enable secure mobile voice again.');return}
       setMobileVoiceMessage(result.diagnostic)
-      setRemote(current=>current&&{...current,mobile_voice_configured:true,mobile_voice_url:result.url,mobile_voice_https_port:result.https_port||config?.port||8765,serve_configured:false,serve_url:null,diagnostic:result.diagnostic})
+      setRemote(current=>current&&{...current,mobile_voice_configured:true,mobile_voice_url:result.url,mobile_voice_https_port:result.https_port||443,serve_configured:false,serve_url:null,diagnostic:result.diagnostic})
     }catch(cause){setMobileVoiceMessage(cause instanceof Error?cause.message:String(cause))}
     finally{setMobileVoiceBusy(false)}
   }
@@ -549,9 +569,24 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <label>Recognition language<input value={draft.stt_language} placeholder="en-US" onInput={e=>change('stt_language',e.currentTarget.value)} /></label>
           {draft.stt_engine==='whisper'&&<label>Whisper model<input value={draft.stt_whisper_model} placeholder="turbo" onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /></label>}
           <p>STT::{voiceInfo?.stt_available?'available':'unavailable'} · engine::{voiceInfo?.stt_engine||draft.stt_engine}{voiceInfo?.stt_diagnostic?` · ${voiceInfo.stt_diagnostic}`:''}</p>
-          <p>Conversation mode captures microphone audio in swe-mux, sends bounded speech-only WAV utterances to muxd, and keeps listening across pauses. Use the <code>Mux</code> wake word: <code>Mux, send</code>, <code>cancel</code>, <code>undo</code>, <code>mute</code>, <code>read reply</code>, <code>summary</code>, <code>verbatim</code>, <code>interrupt</code>, <code>help</code>, or <code>stop listening</code>. Raw audio is deleted after transcription.</p>
+          <p>Conversation mode captures microphone audio in swe-mux, sends bounded speech-only WAV utterances to muxd, and keeps listening across pauses. It acts only when an utterance ends with a wake word followed by a command phrase; everything before that is buffered as your message. Raw audio is deleted after transcription.</p>
+          <h3>Wake words and commands</h3>
+          <p>Add every spelling your recognizer actually produces (comma separated) — the matcher does not invent variants. <code>Standby</code> keeps the mic on but ignores speech until you say a <code>resume</code> command; <code>stop</code> turns Conversation mode off and releases the mic. Leave a command blank to disable its voice trigger.</p>
+          <label>Wake words<input value={(draft.voice_wake_words||[]).join(', ')} placeholder="mux, mucks, max" onInput={e=>change('voice_wake_words',e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean))} /></label>
+          <div class="voice-commands">
+            {VOICE_ACTION_ORDER.map(action=>{
+              const meta=VOICE_ACTION_META[action]
+              const phrases=(draft.voice_commands||[]).find(command=>command.action===action)?.phrases||[]
+              return <label key={action} title={meta.hint}><span>{meta.label} <em>· {meta.hint}</em></span><input value={phrases.join(', ')} placeholder="(no voice trigger)" onInput={e=>{
+                const updated=e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean)
+                const byAction=new Map(VOICE_ACTION_ORDER.map(name=>[name as string,(draft.voice_commands||[]).find(command=>command.action===name)?.phrases||[]]))
+                byAction.set(action,updated)
+                change('voice_commands',VOICE_ACTION_ORDER.map(name=>({action:name,phrases:byAction.get(name)||[]})))
+              }} /></label>
+            })}
+          </div>
           <h3>Mobile voice</h3>
-          <p>Regular mobile access works over the direct 100.x Tailscale address. Browser microphone capture additionally requires HTTPS; automatic secure mobile voice is unavailable on this device.</p>
+          <p>Regular mobile access works over the direct 100.x Tailscale address. Browser microphone capture additionally requires HTTPS. swe-mux configures a private Tailscale Serve address (<code>https://&lt;device&gt;.ts.net/</code>) automatically at startup; use the button below if it needs a one-time Tailscale approval or repair.</p>
           <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile voice':'Enable secure mobile voice'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure mobile voice</a>}</div>
           {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
         </section>}
@@ -562,7 +597,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <p>Changing the listener requires a daemon restart. swe-mux binds localhost plus the specific Tailscale address—never every LAN interface.</p>
           <dl><dt>Local URL</dt><dd>{remote?.listen_url||`http://${draft.host}:${draft.port}`}</dd><dt>Direct tailnet</dt><dd>{remote?.direct_available?'active':draft.tailnet_enabled?'Tailscale address unavailable':'disabled'}</dd>{remote?.tailnet_urls.map(url=><Fragment key={url}><dt>Tailnet URL</dt><dd><a href={url} target="_blank" rel="noreferrer">{url}</a></dd></Fragment>)}</dl>
           <p>Direct tailnet HTTP is encrypted in transit by Tailscale. Mobile microphone access additionally requires the private HTTPS address below.</p>
-          <strong>Secure mobile access</strong>
+          <strong>Optional HTTPS with Tailscale Serve</strong>
           <p>{remote?.diagnostic||'Checking the private HTTPS address…'}</p>
           {remote?.funnel_detected&&<p class="settings-inline-error">Tailscale Funnel appears enabled. Public ingress is unsupported; swe-mux only configures private tailnet access.</p>}
           <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile access':'Enable secure mobile access'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure address</a>}<button onClick={()=>void api<RemoteStatus>('GET','/api/remote/status').then(setRemote)}>Recheck</button></div>

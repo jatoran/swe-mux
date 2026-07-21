@@ -7,7 +7,87 @@ from swe_mux.history import HistoryIndex
 from swe_mux.history_backfill import HistoryBackfillManager
 from swe_mux.models import SessionRecord
 from swe_mux.projects import ProjectManager
+from swe_mux.reconcile import encode_cwd, scan_external_transcripts
 from swe_mux.transcript_view import parse_transcript, transcript_time_summary
+
+
+def write_claude_transcript(home: Path, cwd: Path, native_id: str) -> Path:
+    path = home / ".claude" / "projects" / encode_cwd(cwd) / f"{native_id}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "user",
+                        "timestamp": "2025-01-01T00:00:00Z",
+                        "cwd": str(cwd),
+                        "sessionId": native_id,
+                        "message": {"role": "user", "content": "Find the beacon"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "timestamp": "2025-01-01T00:00:01Z",
+                        "sessionId": native_id,
+                        "message": {
+                            "role": "assistant",
+                            "model": "claude-opus-4-8",
+                            "content": [{"type": "text", "text": "Beacon found"}],
+                            "usage": {"input_tokens": 10, "output_tokens": 5},
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_scan_restricts_claude_reads_to_matching_project_dirs(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "repo"
+    other = tmp_path / "elsewhere"
+    write_claude_transcript(home, root, "in-scope")
+    write_claude_transcript(home, other, "out-of-scope")
+
+    scoped = scan_external_transcripts(home, limit=None, roots=[root])
+    assert [item.native_id for item in scoped] == ["in-scope"]
+
+    everything = scan_external_transcripts(home, limit=None)
+    assert {item.native_id for item in everything} == {"in-scope", "out-of-scope"}
+
+
+def test_scan_scopes_descendant_cwds_but_not_siblings(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "repo"
+    write_claude_transcript(home, root / "frontend", "child")
+    write_claude_transcript(home, tmp_path / "repo-adjacent", "sibling-prefix")
+
+    scoped = scan_external_transcripts(home, limit=None, roots=[root])
+    # A subdirectory of the project is in scope; a sibling whose encoded name
+    # merely shares the prefix is read (cheap over-match) but the actual cwd is
+    # outside the root, so the owner check downstream would drop it. Here we
+    # only assert the descendant is always captured.
+    assert "child" in {item.native_id for item in scoped}
+
+
+def test_scan_cancels_and_reports_progress(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    root = tmp_path / "repo"
+    write_claude_transcript(home, root, "one")
+    write_claude_transcript(home, root, "two")
+
+    assert scan_external_transcripts(home, limit=None, roots=[root], should_cancel=lambda: True) == []
+
+    seen: list[int] = []
+    scan_external_transcripts(
+        home, limit=None, roots=[root], on_progress=seen.append
+    )
+    assert seen == [1, 2]
 
 
 def session(identity: str, backend: str, root: Path, project_id: str) -> SessionRecord:

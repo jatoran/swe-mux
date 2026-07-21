@@ -83,10 +83,13 @@ def test_tailscale_status_url_discovery_is_bounded_to_values() -> None:
 
 
 def test_mobile_voice_selects_only_the_dedicated_https_port() -> None:
+    # The dedicated port is 443, so a port-less HTTPS authority matches while a
+    # non-default HTTPS port and any plain-HTTP authority do not.
     assert mobile_voice_url(
-        ["https://mux.tail.ts.net", "https://mux.tail.ts.net:8765/"]
-    ) == "https://mux.tail.ts.net:8765"
-    assert mobile_voice_url(["http://mux.tail.ts.net:8443"]) is None
+        ["https://mux.tail.ts.net:8443", "https://mux.tail.ts.net/"]
+    ) == "https://mux.tail.ts.net"
+    assert mobile_voice_url(["https://mux.tail.ts.net:8443"]) is None
+    assert mobile_voice_url(["http://mux.tail.ts.net"]) is None
 
 
 @pytest.mark.asyncio
@@ -99,7 +102,7 @@ async def test_mobile_voice_setup_uses_fixed_private_serve_route(
         returncode = 0
 
         async def communicate(self) -> tuple[bytes, bytes]:
-            return b"Available within your tailnet: https://mux.tail.ts.net:8765/", b""
+            return b"Available within your tailnet: https://mux.tail.ts.net/", b""
 
     async def create_process(*args: object, **_: object) -> Process:
         calls.append(args)
@@ -110,7 +113,7 @@ async def test_mobile_voice_setup_uses_fixed_private_serve_route(
             return None, ""
         return {
             "Web": {
-                "mux.tail.ts.net:8765": {
+                "mux.tail.ts.net:443": {
                     "Handlers": {"/": {"Proxy": "http://127.0.0.1:8765"}}
                 }
             }
@@ -125,11 +128,83 @@ async def test_mobile_voice_setup_uses_fixed_private_serve_route(
         "tailscale",
         "serve",
         "--bg",
-        "--https=8765",
+        "--https=443",
         "http://127.0.0.1:8765",
     )
     assert result["status"] == "ready"
-    assert result["url"] == "https://mux.tail.ts.net:8765/"
+    assert result["url"] == "https://mux.tail.ts.net/"
+
+
+@pytest.mark.asyncio
+async def test_mobile_voice_setup_takes_over_a_stale_loopback_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The desktop app (8765) must reclaim the single HTTPS route even when a
+    # terminal daemon left it pointing at a different loopback port (18765).
+    calls: list[tuple[object, ...]] = []
+    state = {"target": 18765}
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"Available within your tailnet: https://mux.tail.ts.net/", b""
+
+    async def create_process(*args: object, **_: object) -> Process:
+        calls.append(args)
+        state["target"] = 8765  # the serve command retargets the route
+        return Process()
+
+    async def status(_: str, command: str) -> tuple[object | None, str]:
+        if command == "funnel":
+            return None, ""
+        return {
+            "Web": {
+                "mux.tail.ts.net:443": {
+                    "Handlers": {"/": {"Proxy": f"http://127.0.0.1:{state['target']}"}}
+                }
+            }
+        }, ""
+
+    monkeypatch.setattr("swe_mux.tailscale.shutil.which", lambda _: "tailscale")
+    monkeypatch.setattr("swe_mux.tailscale.asyncio.create_subprocess_exec", create_process)
+    monkeypatch.setattr("swe_mux.tailscale._status", status)
+    result = await enable_mobile_voice_serve(8765)
+
+    assert result["status"] == "ready"
+    assert calls, "the serve command must run instead of refusing"
+    assert calls[-1][:5] == (
+        "tailscale",
+        "serve",
+        "--bg",
+        "--https=443",
+        "http://127.0.0.1:8765",
+    )
+
+
+@pytest.mark.asyncio
+async def test_mobile_voice_setup_refuses_a_foreign_non_loopback_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def create_process(*_: object, **__: object) -> object:
+        raise AssertionError("must not replace a non-loopback Serve route")
+
+    async def status(_: str, command: str) -> tuple[object | None, str]:
+        if command == "funnel":
+            return None, ""
+        return {
+            "Web": {
+                "mux.tail.ts.net:443": {"Handlers": {"/": {"Proxy": "http://192.168.1.5:9000"}}}
+            }
+        }, ""
+
+    monkeypatch.setattr("swe_mux.tailscale.shutil.which", lambda _: "tailscale")
+    monkeypatch.setattr("swe_mux.tailscale.asyncio.create_subprocess_exec", create_process)
+    monkeypatch.setattr("swe_mux.tailscale._status", status)
+    result = await enable_mobile_voice_serve(8765)
+
+    assert result["status"] == "error"
+    assert "another private" in str(result["diagnostic"])
 
 
 def test_preview_html_rewrites_root_resources_into_registration() -> None:

@@ -37,6 +37,7 @@ from .automation import (
     serialize_rules,
     validate_observer_result,
 )
+from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
 from .config import Config, load_config, update_config
 from .event_bus import EventBus
@@ -68,6 +69,7 @@ from .project_files import (
     list_project_directory,
     note_exists,
     note_has_content,
+    project_automations,
     project_path,
     read_note,
     read_project_config,
@@ -89,7 +91,12 @@ from .reconcile import reconcile_external_history
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import Session, SessionManager
 from .spawn_contract import SpawnRequest
-from .tailscale import is_tailscale_ip, tailscale_status
+from .tailscale import (
+    enable_mobile_voice_serve,
+    is_tailscale_ip,
+    tailscale_status,
+)
+from .tier0_store import Tier0Store
 from .transcript_view import parse_transcript_cached
 from .usage import UsageManager
 from .voice import VoiceError, VoiceService, VoiceStore, clip_snapshot, last_reply_text
@@ -346,6 +353,7 @@ def create_app(
             web.get("/api/sessions", list_sessions),
             web.post("/api/sessions", spawn_session),
             web.get("/api/sessions/{sid}", get_session),
+            web.get("/api/sessions/{sid}/state-log", get_session_state_log),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
             web.patch("/api/sessions/{sid}", patch_session),
             web.delete("/api/sessions/{sid}", delete_session),
@@ -428,6 +436,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         process_retention_days=config.process_evidence_retention_days,
     )
     await telemetry.prune(process_retention_days=config.process_evidence_retention_days)
+    tier0 = Tier0Store(
+        config.database_path, retention_days=config.process_evidence_retention_days
+    )
+    await tier0.prune()
     projects = ProjectManager(history)
     await projects.start()
     history_backfills = HistoryBackfillManager(history, projects)
@@ -451,6 +463,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         config.scrollback_bytes,
         f"http://127.0.0.1:{config.port}",
         child_env,
+        hook_spool_dir=config.data_dir / "hook-spool",
     )
     git_monitor = GitMonitor(sessions, events, config.git_poll_seconds)
     hooks = MetaHookEngine(config.data_dir / "hooks.toml", events, sessions)
@@ -497,6 +510,33 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     project_actions = ProjectActionService(config.data_dir)
     project_watcher = ProjectFileWatcher(projects, events, config)
     telemetry.start(events, sessions=sessions, history=history)
+
+    tier0_enabled_cache: dict[str, tuple[float, bool]] = {}
+
+    async def tier0_enabled(session_id: str) -> bool:
+        # The per-project enablement gate: Tier 0 only captures for a session
+        # whose owning project opted it in. Resolved off-loop with a short TTL
+        # cache so the event path never blocks on a config read.
+        session = sessions.sessions.get(session_id)
+        if session is None:
+            return False
+        record = session.record
+        root = record.project_root or record.spawn_project_root
+        if not root and record.project_id:
+            project = projects.projects.get(record.project_id)
+            root = project.root if project else None
+        if not root:
+            return False
+        now = time.monotonic()
+        cached = tier0_enabled_cache.get(root)
+        if cached and now - cached[0] < 5.0:
+            return cached[1]
+        project_map = await asyncio.to_thread(project_automations, root)
+        enabled = resolve_automation_config(project_map).is_enabled("tier0")
+        tier0_enabled_cache[root] = (now, enabled)
+        return enabled
+
+    tier0.start(events, resolve_enabled=tier0_enabled)
     git_monitor.start()
     hooks.start()
     automation.start()
@@ -511,6 +551,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     config_watch = asyncio.create_task(_watch_config(app), name="config-watch")
     media_cleanup_task = asyncio.create_task(
         _media_cleanup_loop(config.data_dir), name="media-cleanup"
+    )
+    state_watchdog_task = asyncio.create_task(
+        sessions.state_watchdog_loop(), name="state-watchdog"
     )
     reconcile_task: asyncio.Task[int] | None = None
     if config.reconcile_external_history:
@@ -532,6 +575,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         openrouter=openrouter,
         usage=usage,
         telemetry=telemetry,
+        tier0=tier0,
         provider_accounts=provider_accounts,
         process_inspector=process_inspector,
         previews=previews,
@@ -556,6 +600,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await asyncio.gather(config_watch, return_exceptions=True)
     media_cleanup_task.cancel()
     await asyncio.gather(media_cleanup_task, return_exceptions=True)
+    state_watchdog_task.cancel()
+    await asyncio.gather(state_watchdog_task, return_exceptions=True)
     await hooks.stop()
     await automation.stop()
     await voice.stop()
@@ -567,10 +613,12 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await git_monitor.stop()
     await sessions.shutdown()
     await telemetry.stop()
+    await tier0.stop()
     history.close()
     automation_store.close()
     voice_store.close()
     telemetry.close()
+    tier0.close()
     reaper.close()
 
 
@@ -703,18 +751,8 @@ async def enable_mobile_voice(request: web.Request) -> web.Response:
         return json_response(
             {"error": "Enable the Tailscale listener in Settings before mobile voice."}, 409
         )
-    return json_response(
-        {
-            "status": "error",
-            "url": None,
-            "authorization_url": None,
-            "diagnostic": (
-                "Secure mobile voice is unavailable on this device. "
-                "Regular tailnet access remains available over the 100.x address."
-            ),
-        },
-        409,
-    )
+    result = await enable_mobile_voice_serve(config.port)
+    return json_response(result, 200 if result.get("status") == "ready" else 409)
 
 
 async def get_config(request: web.Request) -> web.Response:
@@ -2268,6 +2306,39 @@ async def spawn_session(request: web.Request) -> web.Response:
 async def get_session(request: web.Request) -> web.Response:
     return json_response(
         request.app["sessions"].resolve(request.match_info["sid"]).record.snapshot()
+    )
+
+
+async def get_session_state_log(request: web.Request) -> web.Response:
+    """End-detection diagnostics: recent transitions, faults, and watchdog activity."""
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    now = time.time()
+    transcript = session.transcript_path
+    transcript_mtime: float | None = None
+    if transcript is not None:
+        try:
+            transcript_mtime = transcript.stat().st_mtime
+        except OSError:
+            transcript_mtime = None
+    return json_response(
+        {
+            "id": session.record.id,
+            "backend": session.record.backend,
+            "state": session.record.state,
+            "state_detail": session.record.state_detail,
+            "state_source_priority": session.state_source_priority,
+            "now": now,
+            "last_state_change_ts": session.last_state_change_ts,
+            "seconds_in_state": round(now - session.last_state_change_ts, 3),
+            "last_hook_ts": session.last_hook_ts or None,
+            "transcript_path": str(transcript) if transcript else None,
+            "transcript_mtime": transcript_mtime,
+            "observer_restart_count": session.observer_restart_count,
+            "observer_last_fault": session.observer_last_fault,
+            "watchdog_recoveries": session.watchdog_recoveries,
+            "observation_replay": session.observation_replay,
+            "transitions": list(session.state_transitions),
+        }
     )
 
 
@@ -3881,6 +3952,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
         raise ValueError("hook payload must be a JSON object")
     event_payload = hook_event_payload(payload)
     scope = hook_event_scope(event_type, payload)
+    session.last_hook_ts = time.time()
     request.app["automation"].note_native_hook(session.record.id)
     if event_type not in _NORMALIZED_HOOK_EVENT_TYPES:
         await request.app["events"].emit(

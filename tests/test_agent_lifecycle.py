@@ -168,3 +168,35 @@ def test_transcript_switch_requires_actively_written_candidate(tmp_path: Path) -
     stale = time.time() - 30
     os.utime(fresh, (stale, stale))
     assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+
+
+def test_transcript_switch_blocked_by_any_sibling_in_same_cwd(tmp_path: Path) -> None:
+    # A sibling agent in the same directory makes a fresh transcript ambiguous even
+    # when the sibling does not own the candidate file: switching could still be
+    # grabbing the sibling's just-created conversation. Never switch here.
+    manager, session, current, _fresh = _switch_fixture(tmp_path)
+    sibling = SimpleNamespace(
+        record=agent_record("claude", str(tmp_path)),
+        transcript_path=tmp_path / "unrelated.jsonl",
+    )
+    manager.sessions["sibling"] = sibling
+    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+
+
+def test_transcript_switch_allowed_when_sibling_is_in_a_different_cwd(tmp_path: Path) -> None:
+    manager, session, current, fresh = _switch_fixture(tmp_path)
+    other_dir = tmp_path / "other"
+    elsewhere = SimpleNamespace(
+        record=agent_record("claude", str(other_dir)),
+        transcript_path=other_dir / "e.jsonl",
+    )
+    manager.sessions["elsewhere"] = elsewhere
+    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+
+
+def test_transcript_switch_ignores_ended_sibling_in_same_cwd(tmp_path: Path) -> None:
+    manager, session, current, fresh = _switch_fixture(tmp_path)
+    dead = agent_record("claude", str(tmp_path))
+    dead.state = "exited"
+    manager.sessions["dead"] = SimpleNamespace(record=dead, transcript_path=None)
+    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh

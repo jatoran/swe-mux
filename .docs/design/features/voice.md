@@ -2,8 +2,14 @@
 
 ## What it is
 
-Optional per-session reply synthesis plus a browser-captured, daemon-transcribed Conversation
-mode, isolated from terminal, history, Project, and transcript correctness.
+Optional per-session reply synthesis (TTS, "read aloud") plus a browser-captured,
+daemon-transcribed Conversation mode (STT, "hands-free"), isolated from terminal, history,
+Project, and transcript correctness. Two independent halves share one `VoiceService`,
+one `voice_clips` store, and one browser playback element:
+
+- **Read aloud (TTS):** agent replies → spoken audio clips the browser plays.
+- **Conversation (STT):** microphone speech → transcribed text → the agent's PTY, driven by
+  spoken `Mux` wake-word commands.
 
 ## Contract
 
@@ -12,88 +18,189 @@ not an automation observer: observers stay annotate/notify-only behind the fixed
 origin, while voice uses a separate synthesis-engine boundary and interactive per-session
 state. The optional spoken-summary LLM call is the only OpenRouter traffic and records its
 call and spend in the shared automation ledger under `builtin:voice-summary`, bounded by an
-independent daily voice budget. Voice failures are typed diagnostics; they never affect the
-PTY, session state, transcripts, history, or projects.
+independent daily voice budget. Voice failures are typed `VoiceError` diagnostics; they never
+affect the PTY, session state, transcripts, history, or projects.
 
-## Generation model
+## Read aloud (TTS)
+
+### Generation model
 
 - Per-session generation mode is volatile live-session state: `off`, `on_demand`, or `auto`.
-  `null` inherits the configured global default while the global TTS toggle is on. The mode
-  is set through ordinary `PATCH /sessions/{id}` and dies with the session.
-- `auto` subscribes to `turn_ended`, debounces one second per session, and extracts the
-  completed `last_turn` transcript slice. The summary/verbatim text is split at sentence/word
-  boundaries into short ordered clips; every clip emits readiness immediately, allowing the
-  browser to start playback before later clips finish encoding. Manual generation remains one
-  clip through `POST /sessions/{id}/voice/generate`.
-- Content is `summary` (spoken-word summary via OpenRouter, strict JSON schema) or
-  `verbatim` (assistant text with markdown, code fences, links, and tables reduced to
-  listenable prose, bounded by a character cap). The global setting is the default; each
-  session can override it volatilely (`voice_content` via `PATCH /sessions/{id}`, toggled
-  from the player strip), and verbatim never touches an LLM.
+  `null` inherits the configured global default (`tts_default_mode`) while the global TTS
+  toggle (`tts_enabled`) is on. The mode is set through ordinary `PATCH /sessions/{id}` and
+  dies with the session.
+- `auto` subscribes to `turn_ended`, debounces one second per session (`DEBOUNCE_SECONDS`),
+  and extracts the completed `last_turn` transcript slice. `last_reply_text` walks backward
+  across turn boundaries so a synthetic provider acknowledgement never becomes the "latest
+  reply". The summary/verbatim text is split at sentence/word boundaries into short ordered
+  clips (`streaming_segments`, ≤420 chars); every clip emits readiness immediately, allowing
+  the browser to start playback before later clips finish encoding. Manual generation remains
+  one clip through `POST /sessions/{id}/voice/generate`. A per-session lock drops overlapping
+  `auto` requests; two engine slots run concurrently (`_engine_semaphore`).
+- Content is `summary` (spoken-word summary via OpenRouter, strict `{speech}` JSON schema,
+  three-to-eight plain-English sentences) or `verbatim` (assistant text with markdown, code
+  fences, links, and tables reduced to listenable prose by `speechify`, bounded by
+  `tts_verbatim_max_chars`). The global `tts_content` is the default; each session can
+  override it volatilely (`voice_content` via `PATCH /sessions/{id}`, toggled from the player
+  strip), and verbatim never touches an LLM. Summary calls check the daily budget
+  (`tts_daily_budget_usd`) before spending and need a model (`tts_summary_model` or the
+  automation cheap model).
 - Engines: `edge` (edge-tts neural voices, e.g. `en-AU-NatashaNeural`, with rate/pitch and
-  optional soften-stops preprocessing that converts sentence-final periods to commas) and
-  `sapi` (offline Windows System.Speech through PowerShell). Engine problems surface as
-  typed unavailable/error status; terminals are unaffected.
+  optional `soften_stops` preprocessing that converts sentence-final periods to commas; MP3
+  output, three cold-call retries) and `sapi` (offline Windows `System.Speech` through a
+  generated PowerShell script; WAV output). Engine problems surface as typed unavailable/error
+  status; terminals are unaffected.
 
-## Storage and playback
+### Storage and playback
 
 - Clips are app-owned files under `<data_dir>/voice/` plus one `voice_clips` SQLite row
-  (spoken text, engine/voice, trigger, tokens/cost for summaries, status, error). Public
-  snapshots never expose daemon file paths. A byte-cap prune deletes oldest ready clips;
-  stale failed rows expire after a day.
-- `GET /voice/clips/{id}/audio` serves the file with range support; the browser player is
-  an HTML5 audio element, so seeking is native. `voice_clip_ready` / `voice_clip_failed`
-  events drive the UI and autoplay. Autoplay fires only for live events: the event stream
-  replays recent persisted events on every (re)connect for state reconstruction, and those
-  catch-up events are flagged `replay` so the client refreshes the clip list without
-  re-playing old audio. Without the flag, reopening the app would replay the last `auto`
-  clip.
-- Playback policy is per browser, not per session: one unlocked singleton audio element is
-  reused so mobile browsers allow programmatic playback after any voice-UI gesture, and a
+  (spoken text, engine/voice, trigger, tokens/cost for summaries, status, error). The store
+  confines every `sqlite3` call to one dedicated worker thread (WAL, `synchronous=NORMAL`),
+  mirroring `HistoryIndex`, so nothing blocks the event loop. Public snapshots
+  (`clip_snapshot`) never expose daemon file paths. A byte-cap prune (`tts_cache_mb`) deletes
+  oldest ready clips; stale failed rows expire after a day.
+- `GET /voice/clips/{id}/audio` serves the file (range support via `FileResponse`); the
+  browser player is one HTML5 audio element, so seeking is native. `voice_clip_ready` /
+  `voice_clip_failed` events drive the UI and autoplay. Autoplay fires only for live events:
+  the event stream replays recent persisted events on every (re)connect for state
+  reconstruction, and those catch-up events are flagged `replay` so the client refreshes the
+  clip list without re-playing old audio.
+- Playback policy is per browser, not per session (`frontend/src/voice.ts`): one unlocked
+  singleton audio element is reused so mobile browsers allow programmatic playback after any
+  voice-UI gesture (`unlockPlayback` plays a silent WAV inside the gesture), and a
   localStorage device-autoplay toggle decides whether `auto` clips play on that client.
-- Auto clips share a stream ID. Barge-in pauses playback, clears its queue, and suppresses
-  later clips from the same reply while leaving manual replay available.
+- Auto clips share a stream ID. Barge-in (`bargeInPlayback`) pauses playback, clears its
+  queue, and suppresses later clips from the same reply while leaving manual replay available.
+
+## Conversation mode (STT)
+
+### Capture pipeline (browser, `frontend/src/conversation.ts`)
+
+- `PersistentVoiceCapture` opens `getUserMedia` (mono, echo cancellation, noise suppression,
+  auto gain) and a `ScriptProcessorNode`, and stays armed across silence. Exactly one pane
+  owns capture per browser; a `mux:conversation-claim` event stops any other pane. Enabling it
+  selects `auto` TTS and device autoplay.
+- Voice activity detection is energy-based on an adaptive noise floor (EMA). Speech starts
+  when RMS exceeds `max(0.012, noiseFloor*3.2, playbackActive ? 0.035 : 0)` — the raised floor
+  during playback keeps the agent's own TTS from self-triggering. A ~320 ms pre-roll is
+  retained so the leading phoneme is not clipped. An utterance ends after ≥900 ms of trailing
+  silence following ≥220 ms of speech, or a hard 30 s cap.
+- Each finished utterance is averaged-downsampled to 16 kHz mono and encoded as 16-bit PCM
+  WAV, then POSTed to `voice/transcribe`. Utterances are transcribed through a serialized
+  promise chain so independent utterances never interleave.
+
+### Transcription (daemon, `src/swe_mux/voice.py`)
+
+- `transcribe_wav` validates the upload first: mono 16-bit PCM, 8–48 kHz, ≤35 s, ≤2 MiB.
+  Audio is written to `<data_dir>/voice/stt/`, transcribed, then the audio and text files are
+  **always deleted** — no audio or recognized draft is retained as telemetry.
+- Default engine is local **faster-whisper** (`turbo`), auto-preferring CUDA/float16 and
+  falling back to CPU/int8 both at model load and at transcription time (CTranslate2 can see a
+  GPU whose CUDA/cuDNN runtime DLLs are missing). Decoding uses beam size 5, temperature 0,
+  `condition_on_previous_text=False`, and software-development hotwords (product name, agent
+  names, and the command verbs) to bias recognition. The model downloads once from Hugging
+  Face on first use, then runs from the local cache; download, load, GPU-runtime, and
+  CPU-fallback failures surface through the STT diagnostic without submitting the utterance.
+- Legacy offline Windows `System.Speech` (`sapi`) remains available via a generated PowerShell
+  dictation script.
+
+### Command grammar and submission
+
+- Commands are recognized only as an utterance **suffix**: a **wake word** followed by a
+  known **command phrase** at the very end. Everything before it is buffered draft text, and
+  commands accumulate across pauses. Both the wake words and the phrase→action mapping are
+  **user-configurable** (daemon config `voice_wake_words` / `voice_commands`, edited in
+  Settings → Voice, surfaced to the client via `/api/voice`). `buildVoiceMatcher`
+  (`conversation.ts`) compiles them into one regex: wake-word alternation + phrase alternation
+  matched longest-first, so `read the reply again` wins over `read`, and a bare wake word or an
+  unmatched tail leaves the text as draft. `parseMuxVoice` is the default matcher (built from
+  the `DEFAULT_WAKE_WORDS` / `DEFAULT_COMMANDS` fallbacks that mirror `config.py`).
+- The **action set is fixed** (each is wired to code); only its trigger phrases change:
+  `send`, `cancel`, `undo`, `mute`, `read`, `summary`, `verbatim`, `interrupt`, `help`,
+  `standby`, `resume`, `stop`. Defaults ship `mux`/`mucks`/`max` as wake words with phrases
+  matching the historical grammar.
+- **Three run states.** Active (default) buffers speech and runs every command. `standby`
+  keeps the mic and transcription running but **discards every utterance except a `resume` (or
+  `stop`) command** — so it stays listening yet does nothing until woken. `stop` fully tears
+  capture down and releases the mic (only a Talk-button gesture can re-open it, since browsers
+  forbid silent re-acquire). The draft buffer survives standby.
+- `POST voice/submit` is reconnect-safe: an idempotent `utterance_id` (`claim_submission`, a
+  512-entry dedup ring) prevents double-sends, control characters are rejected, and text plus
+  one Enter (`{text}\r`) is written atomically while advancing the human-input boundary
+  (`voice_prompt_submitted`). `POST voice/interrupt` writes a lone `\x03`. Both require a live
+  Claude/Codex session.
+- Speech detected during playback triggers barge-in **before** transcription, so the user can
+  talk over the agent; the `interrupt` command additionally sends the Ctrl-C.
+
+## Mobile secure context (why HTTPS is required)
+
+Browser microphone capture (`getUserMedia`) needs a **secure context**. `conversationCapability`
+checks `window.isSecureContext`; on plain tailnet HTTP it refuses and the Talk button routes
+into mobile-voice setup instead.
+
+- swe-mux provisions a private **Tailscale Serve** listener on **HTTPS 443**
+  (`https://<device>.ts.net/`) that terminates TLS with a Tailscale-issued (Let's Encrypt)
+  cert and proxies to the daemon's loopback port. See `remote-access.md` for the boundary
+  detail. 443 is required, **not** the swe-mux port: the daemon binds its port directly on the
+  Tailscale IPv4 address for the HTTP fallback, so a Serve listener on that same port would
+  collide with the host socket. Serve is brought up automatically at daemon startup
+  (`_auto_enable_mobile_voice`, best-effort, idempotent) and via the Settings → Voice button
+  for one-time Tailscale HTTPS approval or repair (`enable_mobile_voice_serve`).
+- Direct `http://<100.x>:<port>/` stays as a fallback for everything except the microphone.
+- The phone must resolve the `.ts.net` hostname over **MagicDNS** ("Use Tailscale DNS" ON in
+  the Tailscale app; Android **Private DNS** must be Automatic/Off, not a fixed provider). The
+  cert is hostname-bound, so the raw `100.x` IP cannot serve valid HTTPS — there is no
+  server-side-only workaround.
 
 ## Browser surface
 
 - Agent panes lead the terminal's bottom rail with the `tts:` chip (off / tap / auto) and
-  `talk:` Conversation toggle before terminal keys, Copy reply, and Paste. When TTS is
-  active, a one-row player strip (play/pause, seek bar, clip navigation, on-demand generate,
-  device autoplay toggle) sits directly above that rail, inside the pane below the terminal,
-  so enabling read aloud shortens the terminal rather than overlaying it. The session context
-  menu and command palette expose the same playback operations; Settings → Voice owns engines,
-  voice, language/model, content, budget, and cache configuration.
-- On mobile agent panes, the horizontally scrollable bottom rail also exposes `speak`,
+  `talk:` Conversation toggle before terminal keys, Copy reply, and Paste. When TTS is active,
+  a one-row player strip (play/pause, seek bar, clip navigation, on-demand generate,
+  verbatim/summary switch, device autoplay toggle) sits directly above that rail, inside the
+  pane below the terminal, so enabling read aloud shortens the terminal rather than overlaying
+  it. The session context menu and command palette expose the same playback operations;
+  Settings → Voice owns engines, voice, language/model, content, budget, and cache config.
+- On mobile agent panes the horizontally scrollable bottom rail also exposes `speak`,
   summary/verbatim selection, per-device autoplay, and `audio…` Settings. `tts:setup` and
-  `talk:setup` remain visible when their global feature is disabled, preventing an unavailable
-  feature from becoming undiscoverable on devices without a desktop context menu.
-- Conversation mode uses `getUserMedia` plus Web Audio voice activity detection. It remains
-  armed across silence, sends only bounded mono PCM WAV utterances, accumulates transcriptions
-  across pauses, and recognizes commands only as an utterance suffix beginning with the `Mux`
-  wake word. Commands: `send`/`submit`; `cancel`/`clear`; `undo` the latest transcribed phrase;
-  `mute` current playback; `read reply`; select `summary` or `verbatim`; show `help`; `interrupt`
-  the agent; or `stop listening`/`sleep`. Close phonetic `Mux` transcriptions remain accepted
-  internally. Exactly one pane owns capture per browser. Enabling it selects `auto` TTS and
-  device autoplay.
-- muxd transcribes speech with local faster-whisper (`turbo`, default), automatically preferring
-  CUDA/float16 and falling back to CPU/int8. Decoding uses software-development hotwords and
-  keeps independent utterances from contaminating one another. Legacy offline Windows
-  System.Speech remains available as `sapi`. Audio is deleted after each transcription;
-  no audio or recognized draft is retained as telemetry. A submitted prompt uses an idempotent
-  utterance ID, writes text plus one Enter atomically, and advances the human-input boundary.
-- The selected Whisper model downloads once from Hugging Face on first use, then runs from the
-  local cache. Download, model-load, GPU-runtime, and CPU-fallback failures surface through the
-  STT diagnostic without retaining or submitting the affected utterance.
-- Speech detection during playback triggers barge-in before transcription. `Mux, interrupt`
-  additionally sends one Ctrl-C; ordinary speech only stops playback and buffers the follow-up.
-- Capture requires a secure context (localhost or Tailscale Serve HTTPS). Plain tailnet HTTP
-  cannot request the microphone. Browser/PWA background survival is not guaranteed.
+  `talk:setup` remain visible when their global feature is disabled, so an unavailable feature
+  is not undiscoverable on devices without a desktop context menu.
+- Browser/PWA background survival is not guaranteed; capture stops if the tab is suspended.
+
+## Session sounds (unrelated audio path)
+
+`frontend/src/sessionSounds.ts` plays short local notification tones for root-agent lifecycle
+events (turn complete, waiting, attention/approval, failure, quota reset). It is entirely
+client-side (bundled MP3s or a user-uploaded ≤512 KiB clip), per-device via localStorage, with
+quiet hours and a 10 s per-event debounce. It shares nothing with the TTS/STT pipeline above
+and never touches the daemon or an LLM.
+
+## HTTP surface
+
+- `GET  /api/voice` — engine/STT availability, content/mode defaults, spend, cache stats.
+- `POST /api/sessions/{sid}/voice/transcribe` — WAV utterance → recognized text (audio discarded).
+- `POST /api/sessions/{sid}/voice/submit` — idempotent voice prompt commit to the PTY.
+- `POST /api/sessions/{sid}/voice/interrupt` — send Ctrl-C to the agent.
+- `POST /api/sessions/{sid}/voice/generate` — synthesize one clip of the last reply on demand.
+- `GET  /api/sessions/{sid}/last-reply` — normalized assistant text (no terminal OSC 52).
+- `GET  /api/voice/clips`, `GET /api/voice/clips/{id}/audio`, `DELETE /api/voice/clips/{id}`.
+- `POST /api/remote/mobile-voice/enable` — configure/repair the Tailscale Serve HTTPS address.
+
+## Config knobs (`config.py`)
+
+`tts_enabled`, `tts_default_mode`, `tts_content`, `tts_engine`, `tts_edge_voice`/`_rate`/
+`_pitch`, `tts_soften_stops`, `tts_sapi_voice`/`_rate`, `tts_summary_model`,
+`tts_summary_max_tokens`, `tts_verbatim_max_chars`, `tts_daily_budget_usd`, `tts_cache_mb`;
+`stt_enabled`, `stt_engine`, `stt_language`, `stt_whisper_model`; `voice_wake_words`,
+`voice_commands` (configurable wake words and per-action trigger phrases).
 
 ## Key files
 
-- `src/swe_mux/voice.py`
-- `frontend/src/VoicePlayer.tsx`
-- `frontend/src/voice.ts`
-- `frontend/src/ConversationControl.tsx`
-- `frontend/src/conversation.ts`
-- `frontend/src/Settings.tsx`
+- `src/swe_mux/voice.py` — `VoiceService` (TTS generate + STT transcribe), `VoiceStore`.
+- `src/swe_mux/server.py` — voice HTTP handlers.
+- `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
+- `frontend/src/voice.ts` — singleton playback, autoplay, barge-in.
+- `frontend/src/VoicePlayer.tsx` — per-pane player strip.
+- `frontend/src/ConversationControl.tsx` — Talk button, capture→transcribe→command loop.
+- `frontend/src/conversation.ts` — VAD capture, WAV encoding, `Mux` command parser.
+- `frontend/src/mobileVoice.ts`, `frontend/src/Settings.tsx` — mobile setup + configuration UI.

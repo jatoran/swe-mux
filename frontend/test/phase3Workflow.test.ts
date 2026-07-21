@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import test from 'node:test'
 import { renderPromptTemplate } from '../src/promptTemplates.ts'
 import { itemsInOrder, reorderForHover, reorderTargetForPoint } from '../src/dragReorder.ts'
-import { classifySoundEvent, isQuietTime, satisfyingSounds, type SoundPreferences } from '../src/sessionSounds.ts'
+import { classifySoundEvent, isQuietTime, normalizeSoundPreferences, satisfyingSounds, type SoundPreferences } from '../src/sessionSounds.ts'
 
 test('prompt variables render as text without adding a submit action',()=>{
   assert.equal(renderPromptTemplate('Review {{target}} then {{ target }}.',{target:'src/app.ts'}),'Review src/app.ts then src/app.ts.')
@@ -19,9 +19,22 @@ test('sound classification admits root events and excludes subagents',()=>{
 })
 
 test('quiet hours support ranges that cross midnight',()=>{
-  const prefs:SoundPreferences={enabled:true,volume:.5,quietStart:'22:00',quietEnd:'07:00',soundId:'two-tone',events:{complete:true,waiting:true,attention:true,failure:true,reset:true}}
+  const prefs:SoundPreferences={enabled:true,volume:.5,quietStart:'22:00',quietEnd:'07:00',events:{complete:true,waiting:true,attention:true,failure:true,reset:true},eventSounds:{complete:'two-tone',waiting:'two-tone',attention:'two-tone',failure:'two-tone',reset:'two-tone'}}
   assert.equal(isQuietTime(prefs,new Date(2026,1,1,23,0)),true)
   assert.equal(isQuietTime(prefs,new Date(2026,1,1,12,0)),false)
+})
+
+test('sound preferences migrate the legacy global choice and allow per-event overrides',()=>{
+  const migrated=normalizeSoundPreferences({soundId:'sonar',events:{waiting:false}})
+  assert.deepEqual(migrated.eventSounds,{complete:'sonar',waiting:'sonar',attention:'sonar',failure:'sonar',reset:'sonar'})
+  assert.equal(migrated.events.waiting,false)
+
+  const customized=normalizeSoundPreferences({soundId:'sonar',customSound:'data:audio/wav;base64,AA==',eventSounds:{complete:'ding',failure:'bong',reset:'custom'}})
+  assert.equal(customized.eventSounds.complete,'ding')
+  assert.equal(customized.eventSounds.waiting,'sonar')
+  assert.equal(customized.eventSounds.failure,'bong')
+  assert.equal(customized.eventSounds.reset,'custom')
+  assert.equal(normalizeSoundPreferences({soundId:'blip',eventSounds:{failure:'custom'}}).eventSounds.failure,'blip')
 })
 
 test('the bundled sound catalog is curated and defaults can reference stable ids',()=>{

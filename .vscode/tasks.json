@@ -9,9 +9,7 @@
         "-m",
         "swe_mux",
         "--config",
-        "${workspaceFolder}\\.runtime\\config.toml",
-        "--port",
-        "18765"
+        "${workspaceFolder}\\.runtime\\config.toml"
       ],
       "options": {
         "cwd": "${workspaceFolder}",
@@ -29,7 +27,7 @@
         "background": {
           "activeOnStart": true,
           "beginsPattern": ".*",
-          "endsPattern": "Running on http://127\\.0\\.0\\.1:18765"
+          "endsPattern": "Running on http://127\\.0\\.0\\.1:8765"
         }
       },
       "presentation": {

@@ -135,9 +135,23 @@ class HistoryBackfillManager:
         try:
             job.status = "running"
             job.phase = "scanning"
+            project = self.projects.projects[job.project_id]
+
+            def _progress(count: int) -> None:
+                job.scanned = count
+
             transcripts = await asyncio.to_thread(
-                scan_external_transcripts, self.home, limit=None
+                scan_external_transcripts,
+                self.home,
+                limit=None,
+                roots=[project.root],
+                should_cancel=lambda: job.cancel_requested,
+                on_progress=_progress,
             )
+            if job.cancel_requested:
+                job.status = "cancelled"
+                job.phase = "cancelled"
+                return
             job.scanned = len(transcripts)
             candidates = []
             for item in transcripts:
@@ -148,7 +162,6 @@ class HistoryBackfillManager:
                     candidates.append(item)
             job.total = len(candidates)
             job.phase = "indexing"
-            project = self.projects.projects[job.project_id]
             history_ids = await self.history.native_history_ids()
             for item in candidates:
                 if job.cancel_requested:

@@ -20,17 +20,14 @@ type Experience={id:string;backend:string;error_summary:string;resolution_summar
 type InjectionSafety={version:number;research_only:boolean;authorizes_actuation:boolean;shadow_metrics:{evaluations:Record<string,number>;reasons:Record<string,number>;tracked_sessions:number;unknown_duration_s:number;transitions:number};parser_coverage:Array<{session_id:string;backend:string;schema_version?:string;status:string;recognized:number;unknown:number;unknown_rate?:number;unknown_signatures:Record<string,number>;diagnostic?:string}>;sessions:Array<{session_id:string;backend:string;state:string;delivery_state:'safe'|'blocked'|'unknown';reason:string;reasons:string[];candidate_safe:boolean;authorized:boolean;diagnostic:string;checks:Record<string,boolean|null>;evidence:Record<string,unknown>}>}
 type EndedRun={id:string;backend:string;name:string;generated_title?:string;auto_named?:number;cwd:string;spawned_at:number;exited_at?:number;transcript_path?:string;project_label?:string}
 type ObserverBatch={id:string;kind:string;status:string;run_ids:string[];preview:unknown[];calls:number;tokens:number;cost_usd:number;error?:string;created_at:number;completed_at?:number}
-type View='overview'|'automations'|'attention'|'notes'|'health'|'knowledge'|'diagnostics'
+type View='automations'|'attention'|'notes'|'health'|'knowledge'|'diagnostics'
 
-const tabs:Array<{id:View;label:string}>=[
-  {id:'overview',label:'overview'},
-  {id:'automations',label:'automations'},
-  {id:'attention',label:'attention'},
-  {id:'notes',label:'run notes'},
-  {id:'health',label:'all-session health'},
-  {id:'knowledge',label:'learned fixes'},
-  {id:'diagnostics',label:'diagnostics'},
+const groups:Array<{id:string;label:string;views:View[]}>=[
+  {id:'configure',label:'configure',views:['automations']},
+  {id:'attend',label:'attend',views:['attention','health']},
+  {id:'review',label:'review',views:['notes','knowledge']},
 ]
+const viewLabels:Record<View,string>={automations:'rules & observers',attention:'attention',health:'all-session health',notes:'run notes',knowledge:'learned fixes',diagnostics:'diagnostics'}
 const healthSignals=[
   ['Needs you','Unattended approvals and requests waiting for user input.'],
   ['Possibly stuck','Stalls, repeated tool failures, and output without meaningful progress.'],
@@ -53,7 +50,8 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession}:{onClose
   const [telemetry,setTelemetry]=useState<Telemetry|null>(null)
   const [experiences,setExperiences]=useState<Experience[]>([])
   const [injectionSafety,setInjectionSafety]=useState<InjectionSafety|null>(null)
-  const [view,setView]=useState<View>('overview')
+  const [view,setView]=useState<View>('automations')
+  const [showHelp,setShowHelp]=useState(false)
   const [message,setMessage]=useState('Loading automation state…')
   const [error,setError]=useState('')
   const [eventSeq,setEventSeq]=useState('')
@@ -65,7 +63,9 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession}:{onClose
   const [batches,setBatches]=useState<ObserverBatch[]>([])
   const [batchPreview,setBatchPreview]=useState<Record<string,unknown>|null>(null)
   const panel=useRef<HTMLElement>(null)
-  useModalFocus(panel,onClose)
+  const helpPanel=useRef<HTMLElement>(null)
+  useModalFocus(panel,onClose,!showHelp)
+  useModalFocus(helpPanel,()=>setShowHelp(false),showHelp)
 
   const load=async()=>{
     try{
@@ -93,19 +93,18 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession}:{onClose
   const toggleBatchRun=(id:string)=>{setBatchPreview(null);setBatchRuns(current=>{const next=new Set(current);if(next.has(id))next.delete(id);else if(next.size<25)next.add(id);return next})}
   const enabledBuiltins=(data?.engine.built_in_rules||[]).filter(item=>item.enabled).length
   const attentionObserversEnabled=(data?.engine.built_in_rules||[]).some(item=>item.setting_key==='phase7_observers_enabled'&&item.enabled)
+  const activeGroup=groups.find(group=>group.views.includes(view))
+  const unread=data?.unread_notifications||0
 
   return <div class="usage-layer automation-layer" role="dialog" aria-modal="true" aria-label="Automation" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
     <section class="usage-panel automation-panel" ref={panel}>
-      <header><div><span>AUTOMATION</span><strong>Observe sessions · surface attention · retain useful findings</strong></div><div class="usage-header-actions"><button onClick={onConfigure}>settings</button><button aria-label="Close automation" onClick={onClose}>×</button></div></header>
-      <div class="usage-actions automation-tabs" role="tablist">{tabs.map(tab=><button role="tab" aria-selected={view===tab.id} class={view===tab.id?'active':''} onClick={()=>setView(tab.id)}>{tab.label}{tab.id==='attention'&&data?.unread_notifications?` [${data.unread_notifications}]`:''}</button>)}</div>
+      <header><div><span>AUTOMATION</span><strong>Observe sessions · surface attention · retain useful findings</strong></div><div class="usage-header-actions"><button class="automation-help-btn" aria-label="How automation works" title="How it works" onClick={()=>setShowHelp(true)}>?</button><button aria-pressed={view==='diagnostics'} title="Developer diagnostics" onClick={()=>setView(view==='diagnostics'?'automations':'diagnostics')}>diagnostics</button><button onClick={onConfigure}>settings</button><button aria-label="Close automation" onClick={onClose}>×</button></div></header>
+      <div class="usage-actions automation-tabs" role="tablist">{groups.map(group=><button role="tab" aria-selected={activeGroup?.id===group.id} class={activeGroup?.id===group.id?'active':''} onClick={()=>setView(group.views[0])}>{group.label}{group.id==='attend'&&unread?` [${unread}]`:''}</button>)}</div>
+      {activeGroup&&activeGroup.views.length>1&&<div class="usage-actions automation-subtabs" role="tablist">{activeGroup.views.map(sub=><button role="tab" aria-selected={view===sub} class={view===sub?'active':''} onClick={()=>setView(sub)}>{viewLabels[sub]}{sub==='attention'&&unread?` [${unread}]`:''}</button>)}</div>}
       <div class={`usage-progress ${!data&&!error?'running':''}`} role="status" aria-live="polite"><span>{error?'!':data?'·':'◌'}</span><strong>{error||message}</strong></div>
       <main>
-        {view==='overview'&&<>
-          <section class="usage-table automation-explainer"><h3>How it works</h3><div class="automation-flow"><article><strong>1 · Agent activity</strong><span>Claude and Codex emit normalized lifecycle, turn, tool, approval, and context events.</span></article><article><strong>2 · Matching automation</strong><span>A system or custom rule checks the event. Most health checks are deterministic.</span></article><article><strong>3 · Optional observer</strong><span>A bounded transcript slice may be sent to the configured OpenRouter model.</span></article><article><strong>4 · Visible result</strong><span>The result becomes a run note or an attention item. It never types into the terminal.</span></article></div></section>
-          <div class="usage-summary"><article><span>automation</span><strong>{data?.engine.enabled?'on':'off'}</strong></article><article><span>system observers</span><strong>{enabledBuiltins}/{data?.engine.built_in_rules?.length||0}</strong></article><article><span>custom rules</span><strong>{data?.engine.rules.length||0}</strong></article><article><span>calls today</span><strong>{integer.format(Object.values(data?.observer_calls||{}).reduce((a,b)=>a+b,0))}</strong></article><article><span>tokens today</span><strong>{integer.format(data?.spend_today.tokens||0)}</strong></article><article><span>cost today</span><strong>{money.format(data?.spend_today.cost_usd||0)}</strong></article></div>
-          <section class="usage-table"><h3>Terms used here</h3><div class="automation-term-grid"><article><strong>Observer</strong><span>A read-only LLM call over a bounded transcript slice—not another interactive agent.</span></article><article><strong>Run note</strong><span>Durable metadata attached to one agent run, such as a title, summary, or suggestion.</span></article><article><strong>Attention</strong><span>An inbox item intended to bring you back to a session that may need you.</span></article><article><strong>All-session health</strong><span>Evidence calculated across the complete set of live and recent sessions—the “fleet.”</span></article><article><strong>Learned fix</strong><span>A reviewed error → resolution finding extracted from completed session history.</span></article></div></section>
-        </>}
         {view==='automations'&&<div class="usage-tables">
+          <div class="usage-summary"><article><span>automation</span><strong>{data?.engine.enabled?'on':'off'}</strong></article><article><span>system observers</span><strong>{enabledBuiltins}/{data?.engine.built_in_rules?.length||0}</strong></article><article><span>custom rules</span><strong>{data?.engine.rules.length||0}</strong></article><article><span>calls today</span><strong>{integer.format(Object.values(data?.observer_calls||{}).reduce((a,b)=>a+b,0))}</strong></article><article><span>tokens today</span><strong>{integer.format(data?.spend_today.tokens||0)}</strong></article><article><span>cost today</span><strong>{money.format(data?.spend_today.cost_usd||0)}</strong></article></div>
           <section class="usage-table"><h3>System observers</h3><p>Built-in, read-only rules. The three attention observers share one setting, so enabling or disabling one changes the whole attention group.</p>{data?.engine.built_in_rules?.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">system</span></div><span>{rule.description}</span><small>when::{rule.trigger} · reads::{rule.input}</small><em>{rule.model} → {rule.result} · setting::{rule.setting_label}</em></div><div class="automation-row-actions"><button onClick={()=>void updateBuiltin(rule)}>{rule.enabled?'disable':'enable'}{rule.setting_key==='phase7_observers_enabled'?' group':''}</button></div></article>)}</section>
           <section class="usage-table"><h3>Custom rules</h3><p>Canonical rules saved in the daemon rules file. Configure edits the full TOML definition.</p>{data?.engine.rules.length?data.engine.rules.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">custom</span></div><small>{rule.id} · when::{rule.trigger} · {rule.shadow?'shadow only':'live'}</small><em>{actionSummary(rule)} · revision::{rule.revision}</em></div><div class="automation-row-actions"><button onClick={()=>void updateRule(rule,{enabled:!rule.enabled})}>{rule.enabled?'disable':'enable'}</button><button onClick={()=>void updateRule(rule,{shadow:!rule.shadow})}>{rule.shadow?'make live':'shadow'}</button></div></article>):<div class="automation-empty"><strong>No custom rules</strong><span>Only the system observers listed here are currently configured.</span><button onClick={onConfigure}>edit custom rules</button></div>}</section>
         </div>}
@@ -130,5 +129,14 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession}:{onClose
       </main>
       <footer><span>Out of band · bounded · budgeted · never controls an agent</span><button onClick={()=>void load()}>refresh</button></footer>
     </section>
+    {showHelp&&<div class="usage-layer automation-help-layer" role="dialog" aria-modal="true" aria-label="How automation works" onMouseDown={event=>event.target===event.currentTarget&&setShowHelp(false)}>
+      <section class="usage-panel automation-panel" ref={helpPanel}>
+        <header><div><span>AUTOMATION</span><strong>How it works</strong></div><div class="usage-header-actions"><button aria-label="Close help" onClick={()=>setShowHelp(false)}>×</button></div></header>
+        <main>
+          <section class="usage-table automation-explainer"><h3>The pipeline</h3><div class="automation-flow"><article><strong>1 · Agent activity</strong><span>Claude and Codex emit normalized lifecycle, turn, tool, approval, and context events.</span></article><article><strong>2 · Matching automation</strong><span>A system or custom rule checks the event. Most health checks are deterministic.</span></article><article><strong>3 · Optional observer</strong><span>A bounded transcript slice may be sent to the configured OpenRouter model.</span></article><article><strong>4 · Visible result</strong><span>The result becomes a run note or an attention item. It never types into the terminal.</span></article></div></section>
+          <section class="usage-table"><h3>Terms used here</h3><div class="automation-term-grid"><article><strong>Observer</strong><span>A read-only LLM call over a bounded transcript slice—not another interactive agent.</span></article><article><strong>Run note</strong><span>Durable metadata attached to one agent run, such as a title, summary, or suggestion.</span></article><article><strong>Attention</strong><span>An inbox item intended to bring you back to a session that may need you.</span></article><article><strong>All-session health</strong><span>Evidence calculated across the complete set of live and recent sessions—the “fleet.”</span></article><article><strong>Learned fix</strong><span>A reviewed error → resolution finding extracted from completed session history.</span></article></div></section>
+        </main>
+      </section>
+    </div>}
   </div>
 }

@@ -50,15 +50,22 @@ export class ResilientClipboardProvider implements IClipboardProvider {
   private readonly onPending: (text: string) => void
   private readonly onRejected: (message: string) => void
   private readonly access: ClipboardAccess
+  private readonly suppressWrite: () => boolean
 
   constructor(
     onPending: (text: string) => void,
     onRejected: (message: string) => void,
     access: ClipboardAccess = browserClipboard(),
+    // OSC 52 arrives via replayed scrollback on every re-attach and while the
+    // browser tab is hidden. Honoring those writes silently overwrites the system
+    // clipboard with a stale payload, so the terminal supplies a predicate that
+    // reports when a write does not reflect a live, visible copy.
+    suppressWrite: () => boolean = () => false,
   ) {
     this.onPending = onPending
     this.onRejected = onRejected
     this.access = access
+    this.suppressWrite = suppressWrite
   }
 
   async readText(selection: ClipboardSelectionType): Promise<string> {
@@ -68,6 +75,7 @@ export class ResilientClipboardProvider implements IClipboardProvider {
 
   async writeText(selection: ClipboardSelectionType, text: string): Promise<void> {
     if (selection !== 'c') return
+    if (this.suppressWrite()) return
     if (text.length > MAX_TERMINAL_CLIPBOARD_CHARS) {
       this.onRejected('Terminal clipboard content exceeded the 1,000,000 character safety limit.')
       return

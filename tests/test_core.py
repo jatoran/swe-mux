@@ -96,8 +96,16 @@ def test_one_shot_terminal_exit_outcomes_preserve_failures() -> None:
     assert terminal_exit_outcome(
         "one_shot", stopping=False, exit_code=7, reason="process_exit"
     ) == ("crashed", "process_exit", "exit code 7")
+    # Quitting an interactive agent is a clean or interrupt-driven exit, not a
+    # crash: double Ctrl+C / clean quit (0), POSIX interrupt (130), and Windows
+    # STATUS_CONTROL_C_EXIT all resolve to "exited".
+    for clean_code in (0, 130, 0xC000013A, None):
+        assert terminal_exit_outcome(
+            "interactive", stopping=False, exit_code=clean_code, reason="process_exit"
+        ) == ("exited", "process_exit", None)
+    # A genuine abnormal exit code still surfaces as a crash.
     assert terminal_exit_outcome(
-        "interactive", stopping=False, exit_code=0, reason="process_exit"
+        "interactive", stopping=False, exit_code=1, reason="process_exit"
     ) == ("crashed", "process_exit", None)
 
 

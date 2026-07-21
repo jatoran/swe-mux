@@ -8,6 +8,21 @@ export const COLLAPSED_PROJECTS_KEY = 'mux.sidebar.projectCollapsed.v1'
 
 const DEAD_STATES: ReadonlyArray<Session['state']> = ['exited', 'crashed']
 
+/** Compact Project label for the collapsed desktop rail. Hyphenated names use
+ *  the first letter and the first letter after the first hyphen (`swe-mux` →
+ *  `SM`); other names use their first two letters. */
+export function projectInitials(name: string): string {
+  const trimmed = name.trim()
+  const letters = trimmed.match(/[\p{L}\p{N}]/gu) || []
+  const first = letters[0] || ''
+  const dash = trimmed.indexOf('-')
+  if (dash >= 0) {
+    const afterDash = trimmed.slice(dash + 1).match(/[\p{L}\p{N}]/u)?.[0]
+    if (afterDash) return `${first}${afterDash}`.toLocaleUpperCase()
+  }
+  return (letters.slice(0, 2).join('') || '?').toLocaleUpperCase()
+}
+
 export function loadCollapsedProjects(raw: string | null): Set<string> {
   if (!raw) return new Set()
   try {

@@ -1,25 +1,65 @@
-export type MuxVoiceCommand='send'|'cancel'|'undo'|'mute'|'read'|'summary'|'verbatim'|'help'|'stop'|'interrupt'
+export type MuxVoiceCommand='send'|'cancel'|'undo'|'mute'|'read'|'summary'|'verbatim'|'help'|'stop'|'interrupt'|'standby'|'resume'
 export type ParsedMuxVoice={command:MuxVoiceCommand|null;text:string}
+export type VoiceCommandConfig={action:string;phrases:string[]}
+export type VoiceMatcher={parse(text:string):ParsedMuxVoice}
 
-// Mux is the displayed wake word. Keep close phonetic spellings because speech
-// recognizers occasionally render the product name as "mucks" or "max".
-const MUX_COMMAND=/\b(?:hey\s+|okay\s+)?(?:mux|mucks|max)\s*[,;:\-]?\s*(send(?:\s+(?:it|that|message))?|submit(?:\s+(?:it|that|message))?|cancel(?:\s+that)?|clear(?:\s+that)?|undo(?:\s+(?:that|last(?:\s+(?:phrase|message))?))?|delete\s+last(?:\s+(?:phrase|message))?|mute|stop\s+(?:speaking|playback|audio)|read(?:\s+(?:the\s+)?(?:reply|response)(?:\s+again)?)?|speak\s+(?:the\s+)?(?:reply|response)|summary(?:\s+mode)?|use\s+summaries|verbatim(?:\s+mode)?|read\s+verbatim|help|list\s+commands|what\s+can\s+i\s+say|stop\s+listening|go\s+to\s+sleep|sleep|interrupt(?:\s+(?:the\s+)?agent)?)\s*[.!?]*$/i
+// The client executes this fixed action set; wake words and the phrases mapped to
+// each action are configurable (daemon config, surfaced via /api/voice). Keep in
+// sync with VOICE_COMMAND_ACTIONS / default_voice_commands in config.py — these
+// defaults are only the fallback when the daemon has not supplied a config yet.
+const VOICE_ACTIONS=new Set<MuxVoiceCommand>(['send','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','stop'])
+export const DEFAULT_WAKE_WORDS=['mux','mucks','max']
+export const DEFAULT_COMMANDS:VoiceCommandConfig[]=[
+  {action:'send',phrases:['send','send it','send that','send message','submit','submit it','submit that','submit message']},
+  {action:'cancel',phrases:['cancel','cancel that','clear','clear that']},
+  {action:'undo',phrases:['undo','undo that','undo last','undo last phrase','delete last','delete last phrase']},
+  {action:'mute',phrases:['mute','stop speaking','stop playback','stop audio']},
+  {action:'read',phrases:['read','read reply','read the reply','read reply again','read the reply again','read response','speak reply','speak the reply']},
+  {action:'summary',phrases:['summary','summary mode','use summaries']},
+  {action:'verbatim',phrases:['verbatim','verbatim mode','read verbatim']},
+  {action:'interrupt',phrases:['interrupt','interrupt agent','interrupt the agent']},
+  {action:'help',phrases:['help','list commands','what can i say']},
+  {action:'standby',phrases:['sleep','go to sleep','stand by','standby','pause listening']},
+  {action:'resume',phrases:['wake','wake up','resume','start listening']},
+  {action:'stop',phrases:['stop listening','turn off','shut down']},
+]
+
+const normalizePhrase=(value:string):string=>value.replace(/\s+/g,' ').trim().toLowerCase()
+const escapeRegex=(value:string):string=>value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')
+
+// Commands are recognized only as an utterance SUFFIX: a wake word followed by a
+// known command phrase at the very end. Everything before it is buffered draft
+// text. Phrases are matched longest-first so "read the reply again" wins over
+// "read", and a bare wake word or an unmatched tail leaves the text as draft.
+export function buildVoiceMatcher(wakeWords:string[],commands:VoiceCommandConfig[]):VoiceMatcher{
+  const words=[...new Set(wakeWords.map(normalizePhrase).filter(Boolean))].sort((a,b)=>b.length-a.length)
+  const map=new Map<string,MuxVoiceCommand>()
+  for(const entry of commands){
+    if(!VOICE_ACTIONS.has(entry.action as MuxVoiceCommand))continue
+    for(const phrase of entry.phrases||[]){
+      const key=normalizePhrase(phrase)
+      if(key&&!map.has(key))map.set(key,entry.action as MuxVoiceCommand)
+    }
+  }
+  const phrases=[...map.keys()].sort((a,b)=>b.length-a.length)
+  if(!words.length||!phrases.length)return {parse:(text:string)=>({command:null,text:text.replace(/\s+/g,' ').trim()})}
+  const wakeAlt=words.map(escapeRegex).join('|')
+  const phraseAlt=phrases.map(key=>escapeRegex(key).replace(/\s+/g,'\\s+')).join('|')
+  const pattern=new RegExp(`\\b(?:hey\\s+|okay\\s+|ok\\s+)?(?:${wakeAlt})\\s*[,;:\\-]?\\s*(${phraseAlt})\\s*[.!?]*$`,'i')
+  return {
+    parse(text:string):ParsedMuxVoice{
+      const cleaned=text.replace(/\s+/g,' ').trim()
+      const match=pattern.exec(cleaned)
+      if(!match)return {command:null,text:cleaned}
+      return {command:map.get(normalizePhrase(match[1]))||null,text:cleaned.slice(0,match.index).trim()}
+    },
+  }
+}
+
+const defaultMatcher=buildVoiceMatcher(DEFAULT_WAKE_WORDS,DEFAULT_COMMANDS)
 
 export function parseMuxVoice(text:string):ParsedMuxVoice{
-  const cleaned=text.replace(/\s+/g,' ').trim()
-  const match=MUX_COMMAND.exec(cleaned)
-  if(!match)return {command:null,text:cleaned}
-  const phrase=match[1].toLowerCase()
-  const command:MuxVoiceCommand=phrase.startsWith('send')||phrase.startsWith('submit')?'send'
-    :phrase.startsWith('cancel')||phrase.startsWith('clear')?'cancel'
-    :phrase.startsWith('undo')||phrase.startsWith('delete last')?'undo'
-    :phrase==='mute'||phrase.startsWith('stop speaking')||phrase.startsWith('stop playback')||phrase.startsWith('stop audio')?'mute'
-    :phrase.includes('summary')||phrase==='use summaries'?'summary'
-    :phrase.includes('verbatim')?'verbatim'
-    :phrase==='help'||phrase==='list commands'||phrase==='what can i say'?'help'
-    :phrase.startsWith('read')||phrase.startsWith('speak')?'read'
-    :phrase.startsWith('interrupt')?'interrupt':'stop'
-  return {command,text:cleaned.slice(0,match.index).trim()}
+  return defaultMatcher.parse(text)
 }
 
 export type ConversationCapability={available:boolean;secureContext:boolean;mediaDevices:boolean;audioContext:boolean;reason:string}

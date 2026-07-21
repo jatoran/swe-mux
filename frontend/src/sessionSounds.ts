@@ -1,6 +1,6 @@
 export type SoundEvent='complete'|'waiting'|'attention'|'failure'|'reset'
 export type SoundId='two-tone'|'bong'|'thump'|'blip'|'sonar'|'blop'|'ding'|'custom'
-export type SoundPreferences={enabled:boolean;volume:number;quietStart:string;quietEnd:string;events:Record<SoundEvent,boolean>;soundId:SoundId;customSound?:string}
+export type SoundPreferences={enabled:boolean;volume:number;quietStart:string;quietEnd:string;events:Record<SoundEvent,boolean>;eventSounds:Record<SoundEvent,SoundId>;customSound?:string}
 export type NormalizedMuxEvent={id?:string;type:string;session_id?:string;payload?:Record<string,unknown>;timestamp?:number;ts?:number;seq?:number;replay?:boolean}
 
 export type SoundOption={id:Exclude<SoundId,'custom'>;label:string;description:string;glyph:string}
@@ -16,17 +16,44 @@ export const satisfyingSounds:SoundOption[]=[
 
 const KEY='swe-mux:session-sounds-v1'
 const LAST_KEY='swe-mux:last-session-sound-v1'
-const defaults:SoundPreferences={enabled:false,volume:.4,quietStart:'',quietEnd:'',soundId:'two-tone',events:{complete:true,waiting:true,attention:true,failure:true,reset:true}}
+const soundEvents:SoundEvent[]=['complete','waiting','attention','failure','reset']
+const defaultEvents:Record<SoundEvent,boolean>={complete:true,waiting:true,attention:true,failure:true,reset:true}
+const defaultEventSounds:Record<SoundEvent,SoundId>={complete:'two-tone',waiting:'two-tone',attention:'two-tone',failure:'two-tone',reset:'two-tone'}
+const defaults:SoundPreferences={enabled:false,volume:.4,quietStart:'',quietEnd:'',events:defaultEvents,eventSounds:defaultEventSounds}
+const knownSoundIds=new Set<SoundId>([...satisfyingSounds.map(item=>item.id),'custom'])
 const played=new Map<string,number>()
 let audio:HTMLAudioElement|null=null
 
+function validSoundId(value:unknown,customSound?:string):SoundId|null{
+  return typeof value==='string'&&knownSoundIds.has(value as SoundId)&&(value!=='custom'||Boolean(customSound))?value as SoundId:null
+}
+export function normalizeSoundPreferences(value:unknown):SoundPreferences{
+  const stored=value&&typeof value==='object'?value as Record<string,unknown>:{}
+  const customSound=typeof stored.customSound==='string'&&stored.customSound?stored.customSound:undefined
+  const legacySoundId=validSoundId(stored.soundId,customSound)||'two-tone'
+  const storedEvents=stored.events&&typeof stored.events==='object'?stored.events as Record<string,unknown>:{}
+  const storedEventSounds=stored.eventSounds&&typeof stored.eventSounds==='object'?stored.eventSounds as Record<string,unknown>:{}
+  const events={...defaultEvents}
+  const eventSounds={...defaultEventSounds}
+  for(const event of soundEvents){
+    if(typeof storedEvents[event]==='boolean')events[event]=storedEvents[event] as boolean
+    eventSounds[event]=validSoundId(storedEventSounds[event],customSound)||legacySoundId
+  }
+  const volume=typeof stored.volume==='number'&&Number.isFinite(stored.volume)?Math.max(0,Math.min(1,stored.volume)):defaults.volume
+  return {
+    enabled:typeof stored.enabled==='boolean'?stored.enabled:defaults.enabled,
+    volume,
+    quietStart:typeof stored.quietStart==='string'?stored.quietStart:defaults.quietStart,
+    quietEnd:typeof stored.quietEnd==='string'?stored.quietEnd:defaults.quietEnd,
+    events,
+    eventSounds,
+    ...(customSound?{customSound}:{}),
+  }
+}
 export function soundPreferences():SoundPreferences{
   try{
-    const stored=JSON.parse(localStorage.getItem(KEY)||'{}') as Partial<SoundPreferences>
-    const known=new Set<SoundId>([...satisfyingSounds.map(item=>item.id),'custom'])
-    const soundId=stored.soundId&&known.has(stored.soundId)?stored.soundId:stored.customSound?'custom':defaults.soundId
-    return {...defaults,...stored,soundId,events:{...defaults.events,...stored.events}}
-  }catch{return {...defaults,events:{...defaults.events}}}
+    return normalizeSoundPreferences(JSON.parse(localStorage.getItem(KEY)||'{}'))
+  }catch{return normalizeSoundPreferences({})}
 }
 export function setSoundPreferences(value:SoundPreferences):void{try{localStorage.setItem(KEY,JSON.stringify(value))}catch{/* private mode */}window.dispatchEvent(new CustomEvent('mux:sound-preferences'))}
 export function lastSoundReason():string{try{return JSON.parse(localStorage.getItem(LAST_KEY)||'{}').reason||'No sound fired on this device yet.'}catch{return 'No sound fired on this device yet.'}}
@@ -51,10 +78,10 @@ export function classifySoundEvent(event:NormalizedMuxEvent):{event:SoundEvent;r
   return null
 }
 
-export async function testSessionSound(preferences=soundPreferences()):Promise<void>{
-  const source=preferences.soundId==='custom'&&preferences.customSound
+export async function testSessionSound(preferences=soundPreferences(),soundId=preferences.eventSounds.complete):Promise<void>{
+  const source=soundId==='custom'&&preferences.customSound
     ?preferences.customSound
-    :`/notification-sounds/${preferences.soundId==='custom'?'two-tone':preferences.soundId}.mp3`
+    :`/notification-sounds/${soundId==='custom'?'two-tone':soundId}.mp3`
   audio??=new Audio()
   audio.pause();audio.volume=preferences.volume;audio.src=source;audio.load()
   await audio.play()
@@ -65,7 +92,7 @@ export function handleSessionSound(event:NormalizedMuxEvent,projectAllows=true):
   const key=event.id||`${event.type}:${event.session_id||''}:${String(event.seq||event.ts||event.timestamp||event.payload?.timestamp||'')}`
   const now=Date.now();if((played.get(key)||0)>now-10_000)return
   played.set(key,now);for(const [id,at] of played)if(at<now-60_000)played.delete(id)
-  void testSessionSound(preferences).catch(()=>{/* automatic browser audio is best-effort */})
+  void testSessionSound(preferences,preferences.eventSounds[match.event]).catch(()=>{/* automatic browser audio is best-effort */})
   try{localStorage.setItem(LAST_KEY,JSON.stringify({...match,sessionId:event.session_id,at:now}))}catch{/* private mode */}
   window.dispatchEvent(new CustomEvent('mux:sound-fired',{detail:{...match,sessionId:event.session_id,at:now}}))
 }

@@ -14,7 +14,7 @@ import { PreviewPane } from './PreviewPane'
 import { Notifications, type NotificationData, type UiNotification } from './Notifications'
 import { UsageDashboard } from './UsageDashboard'
 import { HistoryBrowser } from './HistoryBrowser'
-import { AccountSwitcher } from './ProviderAccounts'
+import { AccountSwitcher, providerGlyph, type ProviderName } from './ProviderAccounts'
 import { PromptLibrary } from './PromptLibrary'
 import { SessionNotesBrowser, type SessionNoteSummary } from './SessionNotesBrowser'
 import { ProjectRunMenu } from './ProjectRunMenu'
@@ -37,8 +37,9 @@ import { focusMemoryWith, parseFocusMemory, parseViewPreference, resolveInitialF
 import { reorderForHover, reorderTargetFromContainer, type DropSide } from './dragReorder'
 import {
   COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
-  projectOpenWork, serializeCollapsedProjects, toggleCollapsed,
+  projectInitials, projectOpenWork, serializeCollapsedProjects, toggleCollapsed,
 } from './sidebarProjects'
+import { reconcileSeen, isUnread, projectRailStatus, type ProjectRailActivity, type SeenMap } from './sessionAttention'
 import {
   browserUuid, defaultProjectLayout, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
@@ -71,13 +72,17 @@ function workingCwd(session:Session):string {
 
 function sessionStatus(session: Session): string {
   if (!isAgent(session)) return session.state
-  const context = session.context_pct > 0 ? ` · ctx used ${Math.round(session.context_pct * 100)}%` : ''
+  const context = session.context_pct > 0 ? ` · ${Math.round(session.context_pct * 100)}%` : ''
   const compactions = session.compaction_count > 0 ? ` · compacted ${session.compaction_count}×` : ''
   if (session.state === 'working') return `working${session.state_detail ? ` · ${session.state_detail}` : ''}${context}${compactions}`
   if (session.state === 'idle') return `ready · turn complete${context}${compactions}`
   if (session.state === 'awaiting') return `awaiting approval${session.state_detail ? ` · ${session.state_detail}` : ''}${context}${compactions}`
   if (session.state === 'starting') return 'starting agent…'
   return `${session.state}${context}${compactions}`
+}
+
+const projectRailActivityLabel:Record<ProjectRailActivity,string>={
+  attention:'awaiting attention',working:'working',waiting:'ready for input',running:'sessions running',inactive:'no live sessions',
 }
 
 type HistoryEntry = {
@@ -185,6 +190,7 @@ export function App() {
   const [error, setError] = useState('')
   // '' browses every Project; a Project id prefilters the archive to it.
   const [historyScope,setHistoryScope]=useState('')
+  const [historyOpen,setHistoryOpen]=useState(false)
   const [processScope,setProcessScope]=useState<string|null>(null)
   // Which Project's templates join the global ones. Unlike the other surfaces
   // this is additive rather than restrictive, so the app menu still passes the
@@ -195,6 +201,8 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<ContextState>(null)
   const [projectMenu, setProjectMenu] = useState<ProjectContext>(null)
   const [sidebarMenu,setSidebarMenu]=useState<SidebarContext>(null)
+  // Per-agent read/unread marks for sidebar rows; see sessionAttention.ts.
+  const [seenActivity,setSeenActivity]=useState<SeenMap>({})
   const [noteMenu,setNoteMenu]=useState<NoteContext>(null)
   const [tabMenu,setTabMenu]=useState<TabContext>(null)
   const [emptyMenu, setEmptyMenu] = useState<{x:number;y:number} | null>(null)
@@ -412,7 +420,11 @@ export function App() {
         const live = new Set(nextSessions.filter(session => !['exited', 'crashed'].includes(session.state)).map(session => session.id))
         const livePreviews = new Set(nextPreviews.items.map(item => item.id))
         for (const project of nextProjects) {
-          next[project.id] = reconcilePreviews(reconcileTerminals(parseLayout(project.layout), live), livePreviews)
+          // History graduated from a per-project pane tab to a global overlay;
+          // drop any persisted history leaf so old layouts don't dangle.
+          let base=parseLayout(project.layout)
+          for(const leaf of leaves(base,'history'))base=removeLeaf(base,'history',leaf.id)
+          next[project.id] = reconcilePreviews(reconcileTerminals(base, live), livePreviews)
           for(const [pendingId,placement] of Object.entries(pendingSpawns.current)){
             if(placement.projectId!==project.id)continue
             next[project.id]=placePendingTerminal(next[project.id],placement.resolvedId||pendingId,placement)
@@ -607,6 +619,14 @@ export function App() {
   const activeStack=focusedTabId?stackForView(activeLayout,focusedTabId):null
   const unpanned = sessions.filter(session => session.project_id === projectId && !['exited', 'crashed'].includes(session.state) && !paneIds.includes(session.id))
   const focusedOutsideLayout=!!active&&!['exited','crashed'].includes(active.state)&&active.project_id===projectId&&!paneIds.includes(active.id)
+
+  // Sessions on screen right now (visible pane of the displayed project) count as
+  // "read": their sidebar rows stay muted even while their agent keeps working.
+  const visibleSessionIds=visibleTerminalIds(activeLayout)
+  const visibleSessionKey=visibleSessionIds.join('\n')
+  useEffect(()=>{
+    setSeenActivity(prev=>reconcileSeen(prev,sessions,visibleSessionIds))
+  },[sessions,visibleSessionKey])
 
   useEffect(()=>{
     if(!activeLayout.root){if(focusedViewId)setFocusedViewId(null);return}
@@ -1250,20 +1270,14 @@ export function App() {
   const directionRow=(label:string,onDirection:(option:typeof paneDirectionOptions[number])=>void,available:(direction:PaneDirection)=>boolean=()=>true)=>
     <div class="context-direction-row"><span>{label}</span><div>{paneDirectionOptions.map(option=><button aria-label={`${label} ${option.id}`} title={`${label} ${option.id}`} disabled={!available(option.id)} onClick={()=>onDirection(option)}>{option.glyph}</button>)}</div></div>
 
-  // Scope belongs to the menu that opened the surface: the app menu browses
-  // everything, a Project row browses that Project. History lives in a
-  // Project's workspace, so a scoped open also hosts the tab in that Project.
-  const showHistory = async (scope:Project|null=null) => {
-    const host=scope||activeProject
-    if(!host){setError('Select a Project before opening History.');return}
+  // History indexes every project's native transcripts, so it is a global
+  // overlay rather than a per-project pane tab. Scope belongs to the menu that
+  // opened it: the app menu browses everything, a Project row pre-filters to
+  // that Project (the browser's own picker can still widen back to all).
+  const showHistory = (scope:Project|null=null) => {
     setHistoryScope(scope?scope.id:'')
-    const id='history:archive'
-    const current=resolveLayout(layoutValues.current[host.id],host.layout)
-    const next=openTab(current,openAnchorId(current,host.id===projectId?focusedViewId:null),resourceLeaf('history',id))
-    setProjectId(host.id)
-    setFocusedViewId(id)
+    setHistoryOpen(true)
     setMainMenuOpen(false);setProjectMenu(null)
-    await updateLayout(host.id,next)
   }
 
   const openHandoff = async (entry:HistoryEntry) => {
@@ -1302,6 +1316,7 @@ export function App() {
     try {
       const resumed = await api<Session>('POST', `/api/history/${entry.id}/resume`, { project_id: projectId, target_session_id: activeId })
       setSessions(items => [...items, resumed]); setActiveId(resumed.id)
+      setHistoryOpen(false)
       await refresh()
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
@@ -1690,7 +1705,7 @@ export function App() {
       if(!identity||!activeProject)return <section class="workspace-leaf-placeholder note-unavailable"><strong>resource unavailable</strong><span>{node.id}</span><button onClick={()=>void removeWorkspaceNote(projectId,node.id)}>close tab</button></section>
       return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>{if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}openProjectFile(activeProject,path)}} onFileDragStart={(path,event)=>beginFileTabDrag(event,path)}/>
     }
-    if(node.kind==='history')return <HistoryBrowser key={`${historyScope}:${node.id}`} projects={projects} initialProjectId={historyScope} onResume={resumeHistoryEntry} onSessionNote={openHistorySessionNote} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>
+    if(node.kind==='history')return <section class="workspace-leaf-placeholder"><strong>History moved</strong><span>Session history is now a full-screen overlay.</span><button onClick={()=>{setHistoryOpen(true);void updateLayout(projectId,removeLeaf(layoutValues.current[projectId]||emptyLayout(),'history',node.id))}}>Open History</button></section>
     if (node.kind === 'preview') {
       const preview = previews[node.id]
       if (!preview) return <section class="workspace-leaf-placeholder"><strong>preview unavailable</strong><span>{node.id}</span></section>
@@ -1729,7 +1744,7 @@ export function App() {
       {!voiceAvailable&&<button class="voice-chip mobile-voice-action" aria-label="Set up read aloud" title="Read aloud is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>tts:setup</button>}
       {conversationAvailable&&<ConversationControl session={session} status={voiceStatus} onSession={updateSession}/>}
       {!conversationAvailable&&<button class="conversation-chip mobile-voice-action" aria-label="Set up hands-free conversation" title="Microphone conversation is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>talk:setup</button>}
-      {voiceAvailable&&<>
+      {voiceStripVisible&&<>
         <button class="mobile-voice-action voice-speak-now" title="Generate and play the latest agent reply" onClick={()=>void speakLastReply(session)}>speak</button>
         <button class={`mobile-voice-action voice-content ${voiceContent}`} title={`Spoken replies: ${voiceContent} · tap to switch`} onClick={toggleVoiceContent}>{voiceContent}</button>
         <button class={`mobile-voice-action voice-autoplay ${autoplayEnabled()?'active':''}`} aria-pressed={autoplayEnabled()} title={`${autoplayEnabled()?'Disable':'Enable'} automatic reply playback on this device`} onClick={()=>{setAutoplayEnabled(!autoplayEnabled());setVoiceUiRevision(value=>value+1)}}>{autoplayEnabled()?'audio:auto':'audio:tap'}</button>
@@ -1815,9 +1830,17 @@ export function App() {
       .filter(server=>!spawnedPreviews.some(preview=>preview.port===server.port))
     const sessionNoteId=noteResourceId('session-note',session.note_id||session.id)
     const showSessionNote=!!session.note_exists||workspaceNoteIds(session.project_id).includes(sessionNoteId)
-    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} class={`session-row ${activeId === session.id ? 'active' : ''} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){beginLongPress(event,(x,y)=>openSessionMenu(session,x,y,'sidebar'));beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
+    // Sidebar attention tier for agent rows. The focused row keeps its own
+    // `.active` treatment; a row visible in another split pane reads as
+    // "viewing" (on screen, not focused); an off-screen row with unseen output
+    // is "unread"; an off-screen, already-seen row is "read" and recedes.
+    const agent=isAgent(session)
+    const attention=!agent||activeId===session.id?''
+      :visibleSessionIds.includes(session.id)?'viewing'
+      :isUnread(session,seenActivity)?'unread':'read'
+    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){beginLongPress(event,(x,y)=>openSessionMenu(session,x,y,'sidebar'));beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       <span class={`state-dot ${session.state}`} />
-      <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`}>[{session.backend}]</span>}{sessionName(session)}{relation==='tab'&&<span class="layout-affinity tab" title="Shares one pane region with the other bracketed sessions">▤</span>}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
+      <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={session.backend}>{providerGlyph(session.backend as ProviderName)}</span>}{sessionName(session)}{relation==='tab'&&<span class="layout-affinity tab" title="Shares one pane region with the other bracketed sessions">▤</span>}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
     </button>{showSessionNote&&sidebarNoteRow(sessionNoteId,session.project_id)}{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}{spawnedServers.map(server=>sidebarServerRow(server,session))}</div>
   }
@@ -1836,7 +1859,6 @@ export function App() {
     const label=node.type==='stack'?'Sessions sharing one tabbed pane':`${node.direction} split branches`
     const owner=sessions.find(item=>ids.includes(item.id))
     return <section data-sidebar-stack-id={node.type==='stack'?node.id:undefined} data-sidebar-project-id={node.type==='stack'?owner?.project_id:undefined} class={`layout-cluster ${node.type} ${node.type==='split'?node.direction:''}`} role="group" aria-label={label}>
-      <span class="layout-cluster-glyph" aria-hidden="true" title={label}>{node.type==='stack'?'▤':node.direction==='horizontal'?'↔':'↕'}</span>
       {branches.map((child,index)=><div class={`layout-branch ${index===0?'first':''} ${index===branches.length-1?'last':''}`} key={child.id}>{sidebarNode(child,node.type==='stack'?'tab':undefined)}</div>)}
     </section>
   }
@@ -1952,6 +1974,18 @@ export function App() {
       {/* The collapsed strip keeps the sidebar's own controls reachable rather
           than forcing an expand round-trip for menu, projects, or status. */}
       {sidebarCollapsed&&<nav class="sidebar-rail" aria-label="Sidebar shortcuts">
+        <div class="rail-projects" aria-label="Projects">
+          {visibleProjects.map(project=>{const status=projectRailStatus(sessions,project.id,seenActivity);const selected=project.id===projectId;const readLabel=status.agentCount?(status.unread?' · unread output':' · read'):'';const countLabel=status.liveCount?` · ${status.liveCount} live session${status.liveCount===1?'':'s'}`:'';return <button
+            key={project.id}
+            data-sidebar-project-id={project.id}
+            class={`rail-project activity-${status.activity} ${status.unread?'unread':'read'} ${selected?'active':''}`}
+            aria-label={`Open ${project.name} · ${projectRailActivityLabel[status.activity]}${readLabel}`}
+            aria-current={selected?'page':undefined}
+            title={`${project.name} · ${projectRailActivityLabel[status.activity]}${readLabel}${countLabel}`}
+            onContextMenu={event=>{event.preventDefault();setProjectMenu({project,x:event.clientX,y:event.clientY})}}
+            onClick={()=>setProjectId(project.id)}
+          ><span>{projectInitials(project.name)}</span><i aria-hidden="true" /></button>})}
+        </div>
         {/* Status above, actions at the very bottom, mirroring the expanded
             sidebar where menu and projects are the last rows. */}
         <div class="rail-status">
@@ -2139,6 +2173,8 @@ export function App() {
     </div>}
 
     {sessionNotesScope!==null&&<SessionNotesBrowser projects={orderedProjects} initialProjectId={sessionNotesScope||null} onClose={()=>setSessionNotesScope(null)} onOpen={openBrowsedSessionNote}/>}
+
+    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSessionNote={openHistorySessionNote} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
 
     {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} onClose={()=>setProjectsManagerOpen(false)} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onSettings={project=>{setProjectsManagerOpen(false);openSettings('Current project',project.root)}} onNote={project=>{setProjectsManagerOpen(false);openProjectNotes(project)}} onFiles={project=>{setProjectsManagerOpen(false);openProjectFiles(project)}} onPatch={patchManagedProject} onDelete={deleteProject}/>}
 

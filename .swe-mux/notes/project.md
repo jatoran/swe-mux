@@ -1,6 +1,8 @@
 ---
 swe_mux_note = 1
 kind = "projects"
-id = "bdc7e826-bdb9-4345-abed-8f115fe0c6cc"
+id = "29a044bb-a06b-4216-95e4-39c5e91d48fb"
 ---
-https://desktop-dnld8aa.taild42d36.ts.net/
+# swe-mux project swe-mux 
+
+

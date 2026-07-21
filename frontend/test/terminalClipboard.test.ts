@@ -37,6 +37,25 @@ test('OSC 52 clipboard payloads are bounded', async () => {
   assert.match(rejected, /safety limit/)
 })
 
+test('replayed OSC 52 writes are dropped instead of overwriting the clipboard', async () => {
+  let suppressed = true
+  const writes: string[] = []
+  const provider = new ResilientClipboardProvider(
+    () => assert.fail('suppressed writes must not become pending'),
+    () => assert.fail('suppressed writes must not be rejected'),
+    { readText: async () => '', writeText: async text => { writes.push(text) } },
+    () => suppressed,
+  )
+  // While replaying (or the tab is hidden) the predicate reports true and the
+  // stale scrollback payload never reaches the system clipboard.
+  await provider.writeText('c', 'stale replay payload')
+  assert.deepEqual(writes, [])
+  // A live copy once the predicate clears still writes through.
+  suppressed = false
+  await provider.writeText('c', 'live copy')
+  assert.deepEqual(writes, ['live copy'])
+})
+
 test('manual copy fallback runs synchronously while mobile activation is live', async () => {
   const calls:string[] = []
   const textarea = {
