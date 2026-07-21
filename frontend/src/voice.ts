@@ -1,4 +1,4 @@
-// Client-side read-aloud playback and dictation.
+// Client-side read-aloud playback.
 //
 // One module-level <audio> element plays every clip. Mobile browsers only allow
 // programmatic play() on an element that has already played inside a user
@@ -13,8 +13,10 @@ const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAI
 
 let audioElement: HTMLAudioElement | null = null
 let currentClipId: string | null = null
+let currentStreamId: string | null = null
 let unlocked = false
-let queue: string[] = []
+let queue: Array<{clipId:string;streamId:string|null}> = []
+const suppressedStreams = new Set<string>()
 let state: PlaybackState = { clipId: null, playing: false, position: 0, duration: 0 }
 const listeners = new Set<() => void>()
 
@@ -36,7 +38,7 @@ function ensureAudio(): HTMLAudioElement {
   audio.addEventListener('ended', () => {
     setState({ playing: false })
     const next = queue.shift()
-    if (next) void playClip(next).catch(() => { /* autoplay chain stops on error */ })
+    if (next) void playQueuedClip(next).catch(() => { /* autoplay chain stops on error */ })
   })
   audioElement = audio
   return audio
@@ -60,6 +62,17 @@ export function unlockPlayback(): void {
 }
 
 export async function playClip(clipId: string): Promise<void> {
+  currentStreamId = null
+  await playClipAudio(clipId)
+}
+
+async function playQueuedClip(item:{clipId:string;streamId:string|null}):Promise<void>{
+  if(item.streamId&&suppressedStreams.has(item.streamId))return
+  currentStreamId=item.streamId
+  await playClipAudio(item.clipId)
+}
+
+async function playClipAudio(clipId:string):Promise<void>{
   const audio = ensureAudio()
   if (currentClipId === clipId && audio.src && !audio.ended) {
     if (audio.paused) await audio.play()
@@ -90,75 +103,21 @@ export function setAutoplayEnabled(value: boolean): void {
   notify()
 }
 
-export function enqueueAutoplay(clipId: string): void {
+export function enqueueAutoplay(clipId: string, streamId: string | null = null): void {
   if (!autoplayEnabled()) return
-  if (state.playing && currentClipId && currentClipId !== clipId) { queue.push(clipId); return }
+  if(streamId&&suppressedStreams.has(streamId))return
+  const item={clipId,streamId}
+  if (state.playing && currentClipId && currentClipId !== clipId) { queue.push(item); return }
   queue = []
-  void playClip(clipId).catch(() => { /* blocked until a gesture unlocks the element */ })
+  void playQueuedClip(item).catch(() => { /* blocked until a gesture unlocks the element */ })
 }
 
-// ---- Dictation (Web Speech API) ----------------------------------------------------
-
-type SpeechRecognitionLike = {
-  continuous: boolean
-  interimResults: boolean
-  lang: string
-  onresult: ((event: SpeechResultEventLike) => void) | null
-  onerror: ((event: { error?: string }) => void) | null
-  onend: (() => void) | null
-  start(): void
-  stop(): void
-}
-type SpeechResultEventLike = {
-  resultIndex: number
-  results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>
-}
-
-function recognitionConstructor(): (new () => SpeechRecognitionLike) | null {
-  const scope = window as unknown as Record<string, unknown>
-  return (scope.SpeechRecognition || scope.webkitSpeechRecognition) as (new () => SpeechRecognitionLike) | null
-}
-
-export function sttAvailable(): boolean {
-  return sttCapability().available
-}
-
-export type SttCapability={available:boolean;backend:'browser-web-speech';secureContext:boolean;recognizer:boolean;reason:string;contentTelemetry:false}
-export function sttCapability():SttCapability{
-  const secureContext=window.isSecureContext,recognizer=recognitionConstructor()!==null
-  return {available:secureContext&&recognizer,backend:'browser-web-speech',secureContext,recognizer,
-    reason:!secureContext?'A secure browser context is required.':!recognizer?'This browser does not expose Web Speech Recognition.':'Browser Web Speech Recognition is available.',contentTelemetry:false}
-}
-
-export interface DictationHandlers {
-  onInterim(text: string): void
-  onFinal(text: string): void
-  onEnd(): void
-  onError(message: string): void
-}
-
-export function startDictation(handlers: DictationHandlers): (() => void) | null {
-  const Recognition = recognitionConstructor()
-  if (!Recognition || !window.isSecureContext) return null
-  const recognition = new Recognition()
-  recognition.continuous = false
-  recognition.interimResults = true
-  recognition.lang = navigator.language || 'en-US'
-  let finalText = ''
-  recognition.onresult = event => {
-    let interim = ''
-    for (let index = event.resultIndex; index < event.results.length; index++) {
-      const result = event.results[index]
-      if (result.isFinal) finalText += result[0].transcript
-      else interim += result[0].transcript
-    }
-    if (interim) handlers.onInterim(interim)
+export function bargeInPlayback():void{
+  if(currentStreamId){
+    suppressedStreams.add(currentStreamId)
+    if(suppressedStreams.size>64)suppressedStreams.delete(suppressedStreams.values().next().value as string)
   }
-  recognition.onerror = event => handlers.onError(String(event.error || 'speech recognition failed'))
-  recognition.onend = () => {
-    if (finalText.trim()) handlers.onFinal(finalText.trim())
-    handlers.onEnd()
-  }
-  try { recognition.start() } catch { return null }
-  return () => recognition.stop()
+  queue=[]
+  audioElement?.pause()
+  setState({playing:false})
 }

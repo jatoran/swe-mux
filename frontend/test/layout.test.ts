@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  activateContainingStack, emptyLayout, groupTerminalsInStack, leaves, moveLeafToSplit,
-  moveLeafToStack, noteResourceId, openTab, paneNeighborIds, paneStacks, parseLayout, parseNoteResourceId,
+  activateContainingStack, defaultProjectLayout, emptyLayout, groupTerminalsInStack, leaves, moveLeafToSplit,
+  moveLeafToStack, noteResourceId, openTab, paneNeighborIds, paneStack, paneStacks, parseLayout, parseNoteResourceId,
   placeCompanionLeaf, reconcilePreviews, removeLeaf, reorderStack, resourceLeaf, setSplitRatio,
-  splitTerminal, splitView, swapPanes, swapTerminals, terminalIds, terminalLeaf, visibleTerminalIds,
+  openAnchorId, stackHasFiles,
+  spawnAnchorId, splitTerminal, splitView, swapPanes, swapTerminals, terminalIds, terminalLeaf, visibleTerminalIds,
 } from '../src/layout.ts'
 
 const noteLeaf=(id='sessions:one')=>resourceLeaf('note',noteResourceId('session-note',id))
@@ -22,12 +23,22 @@ test('a companion note splits beside its terminal instead of covering it',()=>{
 
 test('a companion note reuses an existing non-terminal pane',()=>{
   let layout=openTab(emptyLayout(),null,terminalLeaf('one'))
-  layout=splitView(layout,'one',resourceLeaf('note','files:main'),'horizontal')
+  layout=splitView(layout,'one',resourceLeaf('note','note:main'),'horizontal')
   const placed=placeCompanionLeaf(layout,'one',noteLeaf())
   assert.equal(paneStacks(placed).length,2)
-  const resourcePane=paneStacks(placed).find(pane=>pane.children.some(child=>child.id==='files:main'))
+  const resourcePane=paneStacks(placed).find(pane=>pane.children.some(child=>child.id==='note:main'))
   assert.ok(resourcePane?.children.some(child=>child.id===noteLeaf().id))
   assert.equal(resourcePane?.active_child_id,noteLeaf().id)
+})
+
+test('a companion note never reuses a Files pane, splitting beside the anchor instead',()=>{
+  let layout=openTab(emptyLayout(),null,terminalLeaf('one'))
+  layout=splitView(layout,'one',resourceLeaf('note',noteResourceId('files','project-a')),'horizontal')
+  const placed=placeCompanionLeaf(layout,'one',noteLeaf())
+  // The Files pane is not a valid companion host, so a third pane is created for the note.
+  assert.equal(paneStacks(placed).length,3)
+  const filesPane=paneStacks(placed).find(pane=>stackHasFiles(pane))!
+  assert.ok(!filesPane.children.some(child=>child.id===noteLeaf().id))
 })
 
 test('a companion note that is already open is focused, never duplicated',()=>{
@@ -91,6 +102,58 @@ test('visible v5 resources migrate into a real adjacent pane',()=>{
   assert.deepEqual(leaves(migrated,'note').map(leaf=>leaf.id),['note:main','files:main'])
   assert.equal(paneStacks(migrated).at(-1)?.active_child_id,'files:main')
   assert.equal(migrated.root?.type==='split'?migrated.root.ratio:0,.56)
+})
+
+test('a seeded Project opens Files narrow beside its Project note',()=>{
+  const layout=defaultProjectLayout('project-a')
+  assert.equal(layout.root?.type,'split')
+  const split=layout.root?.type==='split'?layout.root:null
+  assert.equal(split?.direction,'horizontal')
+  assert.ok(split&&split.ratio<.3,`Files must stay narrow, got ${split?.ratio}`)
+  const [filesPane,notePane]=paneStacks(layout)
+  assert.deepEqual(filesPane.children.map(child=>child.id),[noteResourceId('files','project-a')])
+  assert.deepEqual(notePane.children.map(child=>child.id),[noteResourceId('note','project-a')])
+  // Nothing is spawned: both seeded leaves are viewports, so no terminal exists yet.
+  assert.deepEqual(terminalIds(layout),[])
+})
+
+test('the first terminal joins the seeded note pane rather than the Files column',()=>{
+  const layout=defaultProjectLayout('project-a')
+  const opened=openTab(layout,noteResourceId('note','project-a'),terminalLeaf('term-a'))
+  assert.equal(paneStacks(opened).length,2)
+  const notePane=paneStacks(opened).at(-1)
+  assert.deepEqual(notePane?.children.map(child=>child.id),[noteResourceId('note','project-a'),'term-a'])
+  assert.equal(notePane?.active_child_id,'term-a')
+  assert.deepEqual(visibleTerminalIds(opened),['term-a'])
+})
+
+test('openAnchorId and openTab never default a new leaf into a Files pane',()=>{
+  const seeded=defaultProjectLayout('project-a')
+  const filesId=noteResourceId('files','project-a'),noteId=noteResourceId('note','project-a')
+  // Files is first in tree order; an unanchored open and a Files-focused open both avoid it.
+  assert.equal(openAnchorId(seeded,null),noteId)
+  assert.equal(openAnchorId(seeded,filesId),noteId)
+  assert.equal(openAnchorId(seeded,noteId),noteId)
+  const opened=openTab(seeded,null,terminalLeaf('term-a'))
+  const filesPane=paneStacks(opened).find(pane=>pane.children.some(child=>child.id===filesId))!
+  assert.ok(!filesPane.children.some(child=>child.id==='term-a'),'terminal must not join the Files pane')
+  assert.deepEqual(visibleTerminalIds(opened),['term-a'])
+  // When Files is the only pane, it is the last-resort anchor (nothing else exists).
+  const onlyFiles={version:6 as const,root:paneStack([resourceLeaf('note',filesId)])}
+  assert.equal(openAnchorId(onlyFiles,null),filesId)
+  assert.ok(stackHasFiles(paneStacks(onlyFiles)[0])&&!stackHasFiles(paneStacks(seeded).find(p=>p.children.some(c=>c.id===noteId))!))
+})
+
+test('a background-project spawn anchors outside the Files column',()=>{
+  const seeded=defaultProjectLayout('project-a')
+  // No focused view exists for a Project the browser is not viewing, and Files is first in
+  // tree order, so the anchor must skip it rather than bury a terminal in a narrow pane.
+  assert.equal(spawnAnchorId(seeded),noteResourceId('note','project-a'))
+  const withTerminal=openTab(seeded,noteResourceId('note','project-a'),terminalLeaf('term-a'))
+  assert.equal(spawnAnchorId(withTerminal),'term-a')
+  assert.equal(spawnAnchorId(emptyLayout()),null)
+  const filesOnly=openTab(emptyLayout(),null,resourceLeaf('note',noteResourceId('files','project-a')))
+  assert.equal(spawnAnchorId(filesOnly),noteResourceId('files','project-a'))
 })
 
 test('hidden v5 resource workspace migrates as closed views',()=>{

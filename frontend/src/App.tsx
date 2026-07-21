@@ -19,12 +19,15 @@ import { PromptLibrary } from './PromptLibrary'
 import { SessionNotesBrowser, type SessionNoteSummary } from './SessionNotesBrowser'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
-import { MicButton, VoicePlayer } from './VoicePlayer'
+import { VoicePlayer } from './VoicePlayer'
+import { ConversationControl } from './ConversationControl'
 import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, unlockPlayback } from './voice'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
-import type { Project, ProjectGroup, Session, ShellProfile, VoiceClip, VoiceMode, VoiceStatus } from './types'
+import type { Project, ProjectGroup, Session, ShellProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
 import { keyChord } from './keys'
 import { Settings } from './Settings'
+import { GuidedTutorial, type TutorialStepId } from './GuidedTutorial'
+import { completeTutorial, emitTutorialAction, resetTutorial, shouldStartTutorial } from './tutorial'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command } from './commands'
 import { clampContextMenuLeft } from './menuPosition'
@@ -33,13 +36,16 @@ import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, resolveInitialFocus, viewUrl } from './viewState'
 import { reorderForHover, reorderTargetFromContainer, type DropSide } from './dragReorder'
 import {
-  browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf,
+  COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
+  projectOpenWork, serializeCollapsedProjects, toggleCollapsed,
+} from './sidebarProjects'
+import {
+  browserUuid, defaultProjectLayout, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
-  activateContainingStack, activateStackChild, addToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, openTab, paneNeighborIds, paneStacks, placeCompanionLeaf, reorderStack, resolveLayout, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
+  activateContainingStack, activateStackChild, addLeafToStack, addToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, openAnchorId, openTab, paneNeighborIds, paneStacks, placeCompanionLeaf, reorderStack, resolveLayout, spawnAnchorId, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
   type PaneDirection, type PaneLeaf, type PaneLeafKind, type PaneNode, type SplitDirection,
 } from './layout'
 
-const annotationMoney=new Intl.NumberFormat(undefined,{style:'currency',currency:'USD',maximumFractionDigits:4})
 const paneDirectionOptions:Array<{id:PaneDirection;glyph:string;direction:SplitDirection;position:'before'|'after'}>=[
   {id:'left',glyph:'←',direction:'horizontal',position:'before'},
   {id:'right',glyph:'→',direction:'horizontal',position:'after'},
@@ -85,14 +91,9 @@ type HistoryEntry = {
   auto_named?:number;generated_title?:string
   note_id?:string
 }
-type DerivedAnnotation={id:string;tag:string;content:string;provenance:string;resolved_model?:string;confidence?:number;cost_usd?:number;created_at:number}
-type Transcript = { entry: HistoryEntry; messages: Array<{ role: string; content: Array<{ type: string; text?: string; name?: string; input?: unknown }> }>;annotations:DerivedAnnotation[] }
-type LineageEdge={id:string;parent_run_id:string;child_run_id:string;relation:'resume'|'handoff'|'continuation'|'review';metadata:Record<string,unknown>;created_at:number}
 type ReviewPreview={source_run_id:string;source_backend:string;backend:'claude'|'codex';cwd:string;worktree_context:string;prompt:string;relation:'review';preview_token:string}
 type ReviewState={entry:HistoryEntry;instructions:string;project:string;preview:ReviewPreview;dirty:boolean;loading:boolean;error:string}
 type HandoffState={entry:HistoryEntry;markdown:string;message:string}
-type HistoryPage = { items: HistoryEntry[]; next_cursor: string | null }
-type HistoryProject = { project_id: string | null; label: string; root?: string; sessions: number; last_activity: number }
 type ContextState = { session: Session; x: number; y: number; source: 'sidebar'|'tab'|'pane'|'mobile' } | null
 type ProjectContext = { project: Project; x: number; y: number } | null
 type SidebarContext = { x:number;y:number } | null
@@ -182,7 +183,6 @@ export function App() {
   const [paletteQuery, setPaletteQuery] = useState('')
   const [paletteIndex, setPaletteIndex] = useState(0)
   const [error, setError] = useState('')
-  const [historyOpen, setHistoryOpen] = useState(false)
   // '' browses every Project; a Project id prefilters the archive to it.
   const [historyScope,setHistoryScope]=useState('')
   const [processScope,setProcessScope]=useState<string|null>(null)
@@ -190,22 +190,6 @@ export function App() {
   // this is additive rather than restrictive, so the app menu still passes the
   // active Project: opening "unscoped" would remove templates, not filters.
   const [promptScope,setPromptScope]=useState<Project|null>(null)
-  const [history, setHistory] = useState<HistoryEntry[]>([])
-  const [historyProjects, setHistoryProjects] = useState<HistoryProject[]>([])
-  const [historyNext, setHistoryNext] = useState<string | null>(null)
-  const [historyLoading, setHistoryLoading] = useState(false)
-  const [historyError, setHistoryError] = useState('')
-  const [historyQuery, setHistoryQuery] = useState('')
-  const [historyBackend, setHistoryBackend] = useState('')
-  const [historyProject, setHistoryProject] = useState<string>('')
-  const [historyState, setHistoryState] = useState('')
-  const [historyExternal, setHistoryExternal] = useState('')
-  const [historyFrom, setHistoryFrom] = useState('')
-  const [historyTo, setHistoryTo] = useState('')
-  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set())
-  const [confirmHistoryDelete, setConfirmHistoryDelete] = useState<string | null>(null)
-  const [transcript, setTranscript] = useState<Transcript | null>(null)
-  const [lineage,setLineage]=useState<LineageEdge[]>([])
   const [reviewState,setReviewState]=useState<ReviewState|null>(null)
   const [handoffState,setHandoffState]=useState<HandoffState|null>(null)
   const [contextMenu, setContextMenu] = useState<ContextState>(null)
@@ -218,6 +202,8 @@ export function App() {
   const [keybindings, setKeybindings] = useState<Record<string, string>>({ 'ctrl+alt+t': 'session.spawnShell', 'ctrl+alt+p': 'palette.open' })
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null)
   const [confirmProjectDeleteId, setConfirmProjectDeleteId] = useState<string | null>(null)
+  const [confirmHideId, setConfirmHideId] = useState<string | null>(null)
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => loadCollapsedProjects(localStorage.getItem(COLLAPSED_PROJECTS_KEY)))
   const [mainMenuOpen, setMainMenuOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>localStorage.getItem('mux.sidebar.collapsed.v1')==='true')
@@ -237,6 +223,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState('General')
   const [settingsCwd,setSettingsCwd]=useState<string|null>(null)
+  const [tutorialOpen,setTutorialOpen]=useState(()=>shouldStartTutorial())
   const [processSession, setProcessSession] = useState<Session | null>(null)
   const [processViewerOpen,setProcessViewerOpen]=useState(false)
   const [sessionProcesses,setSessionProcesses]=useState<Record<string,ProcessItem[]>>({})
@@ -267,6 +254,7 @@ export function App() {
   const [mobileInput, setMobileInput] = useState<MobileInputSettings>(defaultMobileInputSettings)
   const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
+  const [voiceUiRevision,setVoiceUiRevision]=useState(0)
   const [profiles, setProfiles] = useState<ShellProfile[]>([])
   const [defaultProfile, setDefaultProfile] = useState('default')
   const [launcherProfile, setLauncherProfile] = useState(localStorage.getItem('mux.lastProfile') || '')
@@ -344,8 +332,9 @@ export function App() {
   const sessionsRef=useRef<Session[]>([])
   const projectsRef=useRef<Project[]>([])
   const layoutRevisions = useRef<Record<string,number>>({})
-  const layoutWriteChains = useRef<Record<string,Promise<void>>>({})
+  const layoutWriteChains = useRef<Record<string,Promise<boolean>>>({})
   const layoutWriteGeneration = useRef<Record<string,number>>({})
+  const seededLayouts = useRef<Set<string>>(new Set())
   const requestedView = useRef(parseViewPreference(location.search))
   const focusMemory = useRef(parseFocusMemory(localStorage.getItem('mux.focus.v1')))
   const [focusHydrated,setFocusHydrated]=useState(false)
@@ -550,10 +539,15 @@ export function App() {
         queueRefresh()
         try {
           const event = JSON.parse(String(message.data))
+          // Catch-up events (marked replay by the daemon) are a historical resync sent on
+          // every (re)connect. They must drive state refresh but never re-fire live-only
+          // effects like notification sounds or voice autoplay, or reopening the app would
+          // replay old audio.
+          const isReplay = event.replay === true
           const soundEvent=event as NormalizedMuxEvent
           const eventSession=sessionsRef.current.find(item=>item.id===soundEvent.session_id)
           const eventProject=projectsRef.current.find(item=>item.id===(eventSession?.project_id||String(soundEvent.payload?.project_id||'')))
-          handleSessionSound(soundEvent,eventProject?.effective_options?.notification_sounds_enabled!==false)
+          if (!isReplay) handleSessionSound(soundEvent,eventProject?.effective_options?.notification_sounds_enabled!==false)
           if (['notification','notification_created'].includes(event.type)) void loadNotifications(true)
           if (event.type === 'voice_clip_ready' || event.type === 'voice_clip_failed') {
             const clipId = String(event.payload?.clip_id || '')
@@ -561,8 +555,9 @@ export function App() {
               sessionId: event.session_id, clipId,
               status: event.type === 'voice_clip_ready' ? 'ready' : 'failed',
               trigger: event.payload?.trigger,
+              streamId: event.payload?.stream_id,
             } }))
-            if (event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoplayEnabled()) enqueueAutoplay(clipId)
+            if (!isReplay && event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoplayEnabled()) enqueueAutoplay(clipId,String(event.payload?.stream_id||'')||null)
           }
           if (event.type === 'configuration_changed') void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>{})
           if(event.type==='project_files_changed')window.dispatchEvent(new CustomEvent('mux:project-files-changed',{detail:{projectId:event.payload?.project_id,paths:event.payload?.paths||[]}}))
@@ -847,7 +842,7 @@ export function App() {
     const startupOrigin=performance.now()
     const pendingId=`pending-${browserUuid()}`
     const currentLayout=layoutValues.current[targetProject]||layoutMap[targetProject]||parseLayout(target.layout)
-    const focused=targetSessionId??(targetProject===projectId?focusedViewId||activeId:leaves(currentLayout)[0]?.id||null)
+    const focused=targetSessionId??(targetProject===projectId?openAnchorId(currentLayout,focusedViewId||activeId):spawnAnchorId(currentLayout))
     const placement:PendingSpawnPlacement={projectId:targetProject,split,targetId:focused,position}
     pendingSpawns.current[pendingId]=placement
     const optimisticLayout=placePendingTerminal(currentLayout,pendingId,placement)
@@ -876,6 +871,7 @@ export function App() {
       const withPending=terminalIds(latestLayout).includes(pendingId)?latestLayout:placePendingTerminal(latestLayout,pendingId,placement)
       const nextLayout=replaceTerminal(withPending,pendingId,next.id)
       await updateLayout(targetProject, nextLayout)
+      emitTutorialAction({action:'session-launched',backend})
       // Protect against an event refresh that began with the pre-spawn layout.
       window.setTimeout(()=>{delete pendingSpawns.current[pendingId]},500)
     } catch (cause) {
@@ -911,7 +907,7 @@ export function App() {
     const target=projectsRef.current.find(item=>item.id===targetProject)
     if(!target)return
     let nextLayout=layoutValues.current[targetProject]||layoutMap[targetProject]||parseLayout(target.layout)
-    let targetId=targetProject===projectId?(focusedViewId||activeId):leaves(nextLayout)[0]?.id||null
+    let targetId=openAnchorId(nextLayout,targetProject===projectId?(focusedViewId||activeId):null)
     for(const session of nextSessions){nextLayout=openTab(nextLayout,targetId,terminalLeaf(session.id));targetId=session.id}
     layoutValues.current[targetProject]=nextLayout
     setSessions(items=>[...items.filter(item=>!nextSessions.some(next=>next.id===item.id)),...nextSessions])
@@ -929,9 +925,44 @@ export function App() {
     setProjectsManagerOpen(true);setMainMenuOpen(false);setSidebarMenu(null);setProjectMenu(null)
   }
 
+  const closeTutorial=()=>{
+    completeTutorial()
+    setTutorialOpen(false)
+  }
+  const startTutorial=()=>{
+    resetTutorial()
+    setTutorialOpen(true)
+  }
+  const navigateTutorial=(step:TutorialStepId)=>{
+    if(step!=='feature-menu')setMainMenuOpen(false)
+    if(step!=='run-choice')setRunMenu(null)
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setTabMenu(null);setNoteMenu(null)
+    if(step==='welcome'||step==='projects'){
+      setSettingsOpen(false);setProjectsManagerOpen(false);setProjectCreateOpen(false);setFolderPickerOpen(false)
+      if(step==='projects'&&mobileWorkspace)setSidebarOpen(true)
+      return
+    }
+    if(step==='project-add'||step==='project-open'){
+      setSettingsOpen(false);setProjectCreateOpen(false);setFolderPickerOpen(false);setProjectsManagerOpen(true);return
+    }
+    if(step==='project-create'){
+      setSettingsOpen(false);setProjectsManagerOpen(true);return
+    }
+    if(step==='accounts'){
+      setProjectCreateOpen(false);setFolderPickerOpen(false);setProjectsManagerOpen(false);openSettings('Accounts');return
+    }
+    if(['run','run-choice','workspace','new-tab','tabs','splits','resources','features','feature-menu','ready'].includes(step)){
+      setSettingsOpen(false);setSettingsCwd(null);setProjectsManagerOpen(false);setProjectCreateOpen(false);setFolderPickerOpen(false)
+      const first=projectsRef.current[0]
+      if(first&&!projectsRef.current.some(project=>project.id===projectId))setProjectId(first.id)
+      if(mobileWorkspace&&(step==='resources'||step==='features'||step==='feature-menu'))setSidebarOpen(true)
+    }
+  }
+
   const submitProject=async()=>{
     const next=await api<Project>('POST','/api/projects',{name:projectCreate.name,root:projectCreate.root,group_id:projectCreate.group_id||null})
     setProjects(items=>[...items,next]);setProjectId(next.id);setProjectCreateOpen(false);setFolderPickerOpen(false)
+    emitTutorialAction({action:'project-created'})
   }
 
   const submitGroup=async()=>{
@@ -998,6 +1029,35 @@ export function App() {
     return updated
   }
 
+  const toggleProjectCollapsed=(id:string)=>setCollapsedProjects(current=>{
+    const next=toggleCollapsed(current,id)
+    localStorage.setItem(COLLAPSED_PROJECTS_KEY,serializeCollapsedProjects(next))
+    return next
+  })
+
+  // Hiding a project only removes it from the sidebar; its record, notes, and
+  // layout stay in the registry. We refuse while live work is attached so a
+  // running terminal or preview can't be stranded off-screen.
+  const openWorkFor=(project:Project)=>projectOpenWork(sessions,project.id,leaves(layoutMap[project.id]||parseLayout(project.layout),'preview').map(leaf=>leaf.id))
+  const hideProject=async(project:Project)=>{
+    await patchManagedProject(project,{sidebar_visible:false})
+    setCollapsedProjects(current=>{
+      if(!current.has(project.id))return current
+      const next=toggleCollapsed(current,project.id)
+      localStorage.setItem(COLLAPSED_PROJECTS_KEY,serializeCollapsedProjects(next))
+      return next
+    })
+  }
+  const closeWorkAndHideProject=async(project:Project)=>{
+    const {liveSessions}=openWorkFor(project)
+    await Promise.all(liveSessions.map(session=>api('DELETE',`/api/sessions/${session.id}`)))
+    let layout=layoutMap[project.id]||parseLayout(project.layout)
+    for(const session of liveSessions)layout=removeLeaf(layout,'terminal',session.id)
+    for(const leaf of leaves(layout,'preview'))layout=removeLeaf(layout,'preview',leaf.id)
+    await updateLayout(project.id,layout)
+    await hideProject(project)
+  }
+
   const killNow = async (session: Session) => {
     await api('DELETE', `/api/sessions/${session.id}`)
     setConfirmKillId(null)
@@ -1038,8 +1098,8 @@ export function App() {
     setLayoutMap(current => ({ ...current, [targetProject]: layout }))
     const generation=(layoutWriteGeneration.current[targetProject]||0)+1
     layoutWriteGeneration.current[targetProject]=generation
-    const previous=layoutWriteChains.current[targetProject]||Promise.resolve()
-    const operation=previous.catch(()=>undefined).then(async()=>{
+    const previous=layoutWriteChains.current[targetProject]||Promise.resolve(true)
+    const operation=previous.catch(()=>false).then(async()=>{
       const revision=layoutRevisions.current[targetProject]??projects.find(project=>project.id===targetProject)?.layout_revision??0
       try {
         const updated = await api<Project>('PATCH', `/api/projects/${targetProject}`, { layout, layout_revision: revision })
@@ -1050,23 +1110,44 @@ export function App() {
           layoutValues.current[targetProject]=persisted
           setLayoutMap(current => ({ ...current, [targetProject]: persisted }))
         }
+        return true
       } catch (cause) {
         await refresh()
         const message = cause instanceof Error ? cause.message : String(cause)
         setError(message.includes('stale layout revision') ? 'Layout changed in another client; reloaded the current layout.' : message)
+        return false
       }
     })
     layoutWriteChains.current[targetProject]=operation
-    await operation
+    const persisted=await operation
     if(layoutWriteChains.current[targetProject]===operation)delete layoutWriteChains.current[targetProject]
+    return persisted
   }
+
+  // A Project's first open seeds Files beside its Project note instead of a bare stage.
+  // Revision 0 with a null root is the only state that means "never arranged", so a user
+  // who later closes every pane keeps their empty workspace rather than being re-seeded.
+  // Neither leaf spawns anything; the note's pane is simply where the first terminal lands.
+  useEffect(()=>{
+    if(!focusHydrated||!activeProject||activeLayout.root)return
+    const project=activeProject
+    if(seededLayouts.current.has(project.id))return
+    if((layoutRevisions.current[project.id]??project.layout_revision)!==0)return
+    seededLayouts.current.add(project.id)
+    setFocusedViewId(noteResourceId('note',project.id))
+    void updateLayout(project.id,defaultProjectLayout(project.id))
+      .then(persisted=>{if(!persisted)seededLayouts.current.delete(project.id)})
+  },[focusHydrated,activeProject,activeLayout])
 
   const showResourceForTarget = async (target:NoteTarget,targetViewId?:string) => {
     const resourceId=noteIdForTarget(target)
     const targetProject=projects.some(project=>project.id===target.projectId)?target.projectId:(activeProject?.id||projects[0]?.id)
     if(!resourceId||!targetProject){setError('A live Project is required to open this resource.');return}
     const current=resolveLayout(layoutMap[targetProject],projects.find(project=>project.id===targetProject)?.layout)
-    const focused=targetViewId||(targetProject===projectId&&focusedViewId&&stackForView(current,focusedViewId)?focusedViewId:null)||target.terminalSessionId||terminalIds(current)[0]||leaves(current)[0]?.id||null
+    // An explicit target (drag/drop, session-note anchor) is honored exactly; an implicit open
+    // (clicking a file, a menu) is steered to the next available pane, never a Files pane.
+    const preferredAnchor=(targetProject===projectId&&focusedViewId&&stackForView(current,focusedViewId)?focusedViewId:null)||target.terminalSessionId||terminalIds(current)[0]||leaves(current)[0]?.id||null
+    const focused=targetViewId||openAnchorId(current,preferredAnchor)
     setProjectId(targetProject);if(target.terminalSessionId)setActiveId(target.terminalSessionId);setFocusedViewId(resourceId)
     setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setMainMenuOpen(false);setEmptyMenu(null)
     // A session note accompanies its terminal, so it opens beside it rather than
@@ -1169,32 +1250,6 @@ export function App() {
   const directionRow=(label:string,onDirection:(option:typeof paneDirectionOptions[number])=>void,available:(direction:PaneDirection)=>boolean=()=>true)=>
     <div class="context-direction-row"><span>{label}</span><div>{paneDirectionOptions.map(option=><button aria-label={`${label} ${option.id}`} title={`${label} ${option.id}`} disabled={!available(option.id)} onClick={()=>onDirection(option)}>{option.glyph}</button>)}</div></div>
 
-  const loadHistory = async (options: {append?:boolean;query?:string;backend?:string;project?:string;state?:string;external?:string;from?:string;to?:string} = {}) => {
-    const query = options.query ?? historyQuery
-    const backend = options.backend ?? historyBackend
-    const project = options.project === undefined ? historyProject : options.project
-    const state = options.state ?? historyState
-    const external = options.external ?? historyExternal
-    const from = options.from ?? historyFrom
-    const to = options.to ?? historyTo
-    setHistoryLoading(true); setHistoryError('')
-    try {
-      const parameters = new URLSearchParams({ limit: '50' })
-      if (query) parameters.set('q', query)
-      if (backend) parameters.set('backend', backend)
-      if (project) parameters.set('project', project)
-      if (state) parameters.set('state', state)
-      if (external) parameters.set('external', external)
-      if (from) parameters.set('date_from', String(new Date(from).getTime() / 1000))
-      if (to) parameters.set('date_to', String(new Date(to).getTime() / 1000))
-      if (options.append && historyNext) parameters.set('cursor', historyNext)
-      const page = await api<HistoryPage>('GET', `/api/history?${parameters}`)
-      setHistory(items => options.append ? [...items, ...page.items] : page.items)
-      setHistoryNext(page.next_cursor)
-    } catch (cause) { setHistoryError(cause instanceof Error ? cause.message : String(cause)) }
-    finally { setHistoryLoading(false) }
-  }
-
   // Scope belongs to the menu that opened the surface: the app menu browses
   // everything, a Project row browses that Project. History lives in a
   // Project's workspace, so a scoped open also hosts the tab in that Project.
@@ -1204,33 +1259,14 @@ export function App() {
     setHistoryScope(scope?scope.id:'')
     const id='history:archive'
     const current=resolveLayout(layoutValues.current[host.id],host.layout)
-    const next=openTab(current,host.id===projectId?focusedViewId:null,resourceLeaf('history',id))
+    const next=openTab(current,openAnchorId(current,host.id===projectId?focusedViewId:null),resourceLeaf('history',id))
     setProjectId(host.id)
     setFocusedViewId(id)
     setMainMenuOpen(false);setProjectMenu(null)
     await updateLayout(host.id,next)
   }
 
-  const deleteHistory = async (entry: HistoryEntry) => {
-    if (confirmHistoryDelete !== entry.id) { setConfirmHistoryDelete(entry.id); return }
-    await api('DELETE', `/api/history/${entry.id}`)
-    setHistory(items => items.filter(item => item.id !== entry.id))
-    if (transcript?.entry.id === entry.id) setTranscript(null)
-    setConfirmHistoryDelete(null)
-  }
-
-  const viewHistory = async (entry: HistoryEntry) => {
-    setHistoryError('')
-    setLineage([])
-    try {
-      setTranscript(await api<Transcript>('GET', `/api/history/${entry.id}/transcript`))
-      api<{items:LineageEdge[]}>('GET',`/api/lineage?run_id=${encodeURIComponent(entry.id)}`).then(result=>setLineage(result.items)).catch(()=>setLineage([]))
-    }
-    catch (cause) { setTranscript(null); setHistoryError(cause instanceof Error ? cause.message : String(cause)) }
-  }
-
   const openHandoff = async (entry:HistoryEntry) => {
-    setHistoryError('')
     try {
       const result=await api<{markdown:string}>('GET',`/api/history/${entry.id}/handoff`)
       setHandoffState({entry,markdown:result.markdown,message:'Review this export before using it as agent context.'})
@@ -1238,7 +1274,6 @@ export function App() {
   }
 
   const previewSecondOpinion = async (entry:HistoryEntry,instructions='',targetProject=entry.project_id||projectId) => {
-    setHistoryError('')
     try {
       const result=await api<{preview:ReviewPreview}>('POST',`/api/history/${entry.id}/second-opinion`,{confirm:false,instructions})
       setReviewState({entry,instructions,project:targetProject,preview:result.preview,dirty:false,loading:false,error:''})
@@ -1259,14 +1294,14 @@ export function App() {
     setReviewState(current=>current?{...current,loading:true,error:''}:current)
     try{
       const result=await api<{session:Session}>('POST',`/api/history/${reviewState.entry.id}/second-opinion`,{confirm:true,preview_token:reviewState.preview.preview_token,instructions:reviewState.instructions,backend:reviewState.preview.backend,project_id:reviewState.project,target_session_id:activeId})
-      setReviewState(null);setHistoryOpen(false);await refresh();setProjectId(result.session.project_id);setActiveId(result.session.id)
+      setReviewState(null);await refresh();setProjectId(result.session.project_id);setActiveId(result.session.id)
     }catch(cause){setReviewState(current=>current?{...current,loading:false,error:cause instanceof Error?cause.message:String(cause)}:current)}
   }
 
   const resumeHistoryEntry = async (entry: HistoryEntry) => {
     try {
       const resumed = await api<Session>('POST', `/api/history/${entry.id}/resume`, { project_id: projectId, target_session_id: activeId })
-      setSessions(items => [...items, resumed]); setActiveId(resumed.id); setHistoryOpen(false)
+      setSessions(items => [...items, resumed]); setActiveId(resumed.id)
       await refresh()
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
@@ -1415,7 +1450,7 @@ export function App() {
       const command = keybindings[keyChord(event)]
       if (command && runNamedCommand(command)) event.preventDefault()
       if (event.key === 'Escape') {
-        setPaletteOpen(false); setLauncherOpen(false); setContextMenu(null); setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null); setEmptyMenu(null); setMainMenuOpen(false); setSidebarOpen(false); setRenameTarget(null); setNotificationsOpen(false); setProcessSession(null);setProcessViewerOpen(false); setSettingsOpen(false); setProjectsManagerOpen(false); setHistoryOpen(false); setTranscript(null);setReviewState(null);setHandoffState(null)
+        setPaletteOpen(false); setLauncherOpen(false); setContextMenu(null); setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null); setEmptyMenu(null); setMainMenuOpen(false); setSidebarOpen(false); setRenameTarget(null); setNotificationsOpen(false); setProcessSession(null);setProcessViewerOpen(false); setSettingsOpen(false); setProjectsManagerOpen(false); setReviewState(null);setHandoffState(null)
       }
     }
     const onPointerDown = (event: PointerEvent) => {
@@ -1491,7 +1526,7 @@ export function App() {
 
   const beginWorkspaceTabDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,initial:StackTabDrag,label:string)=>{
     beginPointerDrag(event,label,`tab:${initial.childId}`,
-      ()=>{dragStackTabRef.current=initial},
+      ()=>{dragStackTabRef.current=initial;emitTutorialAction({action:'tab-drag-started'})},
       pointer=>{
         const hit=document.elementFromPoint(pointer.clientX,pointer.clientY) as HTMLElement|null
         const paneElement=hit?.closest<HTMLElement>('.pane-stack[data-pane-stack-id]')
@@ -1530,12 +1565,70 @@ export function App() {
         if(current.zone!=='tabs'){
           const direction=current.zone==='left'||current.zone==='right'?'horizontal':'vertical'
           const position=current.zone==='left'||current.zone==='top'?'before':'after'
-          void updateLayout(projectId,moveLeafToSplit(latest,current.kind,current.childId,current.targetStackId,direction,position));return
+          void updateLayout(projectId,moveLeafToSplit(latest,current.kind,current.childId,current.targetStackId,direction,position)).then(persisted=>persisted&&emitTutorialAction({action:'tab-dropped',zone:current.zone}));return
         }
         const moved=current.stackId===current.targetStackId?latest:moveLeafToStack(latest,current.kind,current.childId,current.targetStackId)
-        void updateLayout(projectId,reorderStack(moved,current.targetStackId,current.previewIds))
+        void updateLayout(projectId,reorderStack(moved,current.targetStackId,current.previewIds)).then(persisted=>persisted&&emitTutorialAction({action:'tab-dropped',zone:'tabs'}))
       },
-      ()=>setDragStackTab(null),
+      ()=>{setDragStackTab(null);emitTutorialAction({action:'tab-drag-cancelled'})},
+    )
+  }
+
+  // Drag a file row out of the Files tree as a brand-new tab. Unlike a workspace-tab drag this
+  // leaf does not exist yet, so the drop creates it (openTab/split) rather than moving it; if it
+  // is already open elsewhere it is moved instead. Reuses the pane hit-test and drop indicators.
+  const beginFileTabDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,path:string)=>{
+    const childId=noteResourceId('file',path)
+    const fileLeaf=resourceLeaf('note',childId)
+    let drop:{targetStackId:string;zone:PaneDropZone;previewIds:string[]}|null=null
+    beginPointerDrag(event,path.split('/').pop()||path,`file:${childId}`,
+      ()=>{drop=null},
+      pointer=>{
+        const hit=document.elementFromPoint(pointer.clientX,pointer.clientY) as HTMLElement|null
+        const paneElement=hit?.closest<HTMLElement>('.pane-stack[data-pane-stack-id]')
+        const targetStackId=paneElement?.dataset.paneStackId
+        if(!paneElement||!targetStackId){drop=null;showPointerDropIndicator(null);return}
+        const latest=layoutValues.current[projectId]||activeLayout
+        const targetPane=paneStacks(latest).find(pane=>pane.id===targetStackId)
+        if(!targetPane){drop=null;showPointerDropIndicator(null);return}
+        const tabStrip=paneElement.querySelector<HTMLElement>(':scope > .stack-tabs')
+        const tabBox=tabStrip?.getBoundingClientRect()
+        if(tabStrip&&tabBox&&pointer.clientY>=tabBox.top&&pointer.clientY<=tabBox.bottom){
+          const target=reorderTargetFromContainer(tabStrip,childId,'horizontal',pointer.clientX)
+          const base=[...targetPane.children.map(child=>child.id),childId]
+          const previewIds=target?reorderForHover(base,childId,target.id,target.side):base
+          drop={targetStackId,zone:'tabs',previewIds}
+          const targetElement=target?Array.from(tabStrip.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).find(item=>item.dataset.reorderId===target.id)||null:null
+          showPointerDropIndicator(targetElement||tabStrip,targetElement?`insert-${target?.side}`:'tab-bar')
+          return
+        }
+        const box=paneElement.getBoundingClientRect(),x=(pointer.clientX-box.left)/box.width,y=(pointer.clientY-box.top)/box.height
+        const edges:[PaneDropZone,number][]=[['left',x],['right',1-x],['top',y],['bottom',1-y]]
+        const nearest=edges.sort((a,b)=>a[1]-b[1])[0]
+        const zone:PaneDropZone=nearest[1]<.2?nearest[0]:'tabs'
+        drop={targetStackId,zone,previewIds:[...targetPane.children.map(child=>child.id),childId]}
+        showPointerDropIndicator(zone==='tabs'?(tabStrip||paneElement):paneElement,zone==='tabs'?'tab-bar':`split-${zone}`)
+      },
+      ()=>{
+        const current=drop
+        if(!current)return
+        const latest=layoutValues.current[projectId]||activeLayout
+        const targetPane=paneStacks(latest).find(pane=>pane.id===current.targetStackId)
+        if(!targetPane)return
+        const exists=leaves(latest).some(leaf=>leaf.id===childId)
+        let next:PaneLayout
+        if(current.zone!=='tabs'){
+          const direction=current.zone==='left'||current.zone==='right'?'horizontal':'vertical'
+          const position=current.zone==='left'||current.zone==='top'?'before':'after'
+          next=exists?moveLeafToSplit(latest,'note',childId,current.targetStackId,direction,position):splitView(latest,targetPane.active_child_id,fileLeaf,direction,position)
+        }else{
+          const base=exists?moveLeafToStack(latest,'note',childId,current.targetStackId):addLeafToStack(latest,current.targetStackId,fileLeaf)
+          next=reorderStack(base,current.targetStackId,current.previewIds)
+        }
+        setFocusedViewId(childId)
+        void updateLayout(projectId,next)
+      },
+      ()=>{showPointerDropIndicator(null)},
     )
   }
 
@@ -1567,7 +1660,7 @@ export function App() {
           void updateLayout(projectId,removeLeaf(latest,child.kind,child.id))
         }}>{confirming?'✓':'×'}</button>
       }
-      return <section data-pane-stack-id={node.id} class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={()=>setFocusedViewId(activeChild.id)}><div class="stack-tabs" role="tablist" aria-label="Workspace tabs">
+      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={()=>setFocusedViewId(activeChild.id)}><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Workspace tabs">
         {node.children.map(child=>{
           const activate=()=>{if(suppressDragClickRef.current===`tab:${child.id}`){suppressDragClickRef.current=null;return}setFocusedViewId(child.id);if(child.kind==='terminal')setActiveId(child.id);if(child.id!==activeChild.id)void updateLayout(projectId,activateStackChild(activeLayout,node.id,child.id))}
           const dragClass=dragStackTab?.overId===child.id&&dragStackTab.side?`drag-over drop-${dragStackTab.side}`:''
@@ -1575,27 +1668,27 @@ export function App() {
           if(child.kind==='preview'){
             const preview=previews[child.id]
             const label=preview?.url||child.id
-            return <div key={child.id} data-reorder-id={child.id} style={dragStyle} class={`stack-tab-shell draggable-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} preview tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main preview-tab ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◱</span>{preview?`:${preview.port}`:child.id}</button>{closeTab(child,label)}</div>
+            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} preview tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main preview-tab ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◱</span>{preview?`:${preview.port}`:child.id}</button>{closeTab(child,label)}</div>
           }
           if(child.kind==='note'){
             const label=noteTabLabel(child.id)
-            return <div key={child.id} data-reorder-id={child.id} style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} resource tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◇</span>{label}</button>{closeTab(child,label)}</div>
+            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} resource tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◇</span>{label}</button>{closeTab(child,label)}</div>
           }
           if(child.kind==='history'){
             const label='History'
-            return <div key={child.id} data-reorder-id={child.id} style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label="History tab" title="Search session history" aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◷</span>{label}</button>{closeTab(child,label)}</div>
+            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label="History tab" title="Search session history" aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◷</span>{label}</button>{closeTab(child,label)}</div>
           }
           const session=sessions.find(item=>item.id===child.id)
           const label=session?.name||child.id
-          return <div key={child.id} data-reorder-id={child.id} style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={`state-dot ${session?.state||'running'}`}/>{label}</button>{closeTab(child,label,session)}</div>
+          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={`state-dot ${session?.state||'running'}`}/>{label}</button>{closeTab(child,label,session)}</div>
         })}
-        <button class="stack-add" style={{order:node.children.length}} aria-label="New terminal tab" title="New terminal tab" disabled={!activeProject} onClick={()=>activeProject&&void spawnTerminal(activeProject.id,'stack',undefined,activeChild.id)}>+</button>
+        <button data-tutorial="new-tab" class="stack-add" style={{order:node.children.length}} aria-label="New terminal tab" title="New terminal tab" disabled={!activeProject} onClick={()=>activeProject&&void spawnTerminal(activeProject.id,'stack',undefined,activeChild.id)}>+</button>
       </div><div class="stack-active">{renderPaneNode(activeChild,`${path}t`,true)}</div></section>
     }
     if(node.kind==='note'){
       const identity=parseNoteResourceId(node.id)
       if(!identity||!activeProject)return <section class="workspace-leaf-placeholder note-unavailable"><strong>resource unavailable</strong><span>{node.id}</span><button onClick={()=>void removeWorkspaceNote(projectId,node.id)}>close tab</button></section>
-      return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>openProjectFile(activeProject,path,node.id)} onClose={()=>void removeWorkspaceNote(projectId,node.id)}/>
+      return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>{if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}openProjectFile(activeProject,path)}} onFileDragStart={(path,event)=>beginFileTabDrag(event,path)}/>
     }
     if(node.kind==='history')return <HistoryBrowser key={`${historyScope}:${node.id}`} projects={projects} initialProjectId={historyScope} onResume={resumeHistoryEntry} onSessionNote={openHistorySessionNote} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>
     if (node.kind === 'preview') {
@@ -1618,21 +1711,45 @@ export function App() {
     const displayedCwd=session.runtime_cwd||session.spawn_cwd||session.cwd
     const cwdIsLive=session.runtime_cwd_live
     const openPaneMenu=(event:{clientX:number;clientY:number;preventDefault?:()=>void;stopPropagation?:()=>void})=>{event.preventDefault?.();event.stopPropagation?.();openSessionMenu(session,event.clientX,event.clientY,'pane')}
-    const voiceMode=voiceStatus?.enabled&&isAgent(session)?effectiveVoiceMode(session):'off'
-    const voiceStripVisible=voiceStatus?.enabled&&isAgent(session)&&voiceMode!=='off'
-    const terminalPane=<section class={`terminal-pane ${activeId === id ? 'focused' : ''} ${voiceStripVisible?'with-voice':''}`} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
+    const agentVoice=isAgent(session)
+    const voiceMode=voiceStatus?.enabled&&agentVoice?effectiveVoiceMode(session):'off'
+    const voiceAvailable=!!voiceStatus?.enabled&&agentVoice
+    const conversationAvailable=!!voiceStatus?.stt_enabled&&agentVoice
+    const voiceStripVisible=voiceAvailable&&voiceMode!=='off'
+    const voiceContent:VoiceContent=session.voice_content==='summary'||session.voice_content==='verbatim'?session.voice_content:(voiceStatus?.content||'summary')
+    const toggleVoiceContent=()=>{
+      const next:VoiceContent=voiceContent==='summary'?'verbatim':'summary'
+      void api<Session>('PATCH',`/api/sessions/${session.id}`,{voice_content:next}).then(updateSession).catch(cause=>setError(cause instanceof Error?cause.message:String(cause)))
+    }
+    // The read-aloud toggle and mic live in the terminal's own bottom rail (leading the
+    // clipboard actions), and the playback strip sits just above that rail, so both stay
+    // inside the pane below the terminal rather than in the header.
+    const railLeading=agentVoice&&voiceStatus?<>
+      {voiceAvailable&&<button class={`voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}
+      {!voiceAvailable&&<button class="voice-chip mobile-voice-action" aria-label="Set up read aloud" title="Read aloud is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>tts:setup</button>}
+      {conversationAvailable&&<ConversationControl session={session} status={voiceStatus} onSession={updateSession}/>}
+      {!conversationAvailable&&<button class="conversation-chip mobile-voice-action" aria-label="Set up hands-free conversation" title="Microphone conversation is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>talk:setup</button>}
+      {voiceAvailable&&<>
+        <button class="mobile-voice-action voice-speak-now" title="Generate and play the latest agent reply" onClick={()=>void speakLastReply(session)}>speak</button>
+        <button class={`mobile-voice-action voice-content ${voiceContent}`} title={`Spoken replies: ${voiceContent} · tap to switch`} onClick={toggleVoiceContent}>{voiceContent}</button>
+        <button class={`mobile-voice-action voice-autoplay ${autoplayEnabled()?'active':''}`} aria-pressed={autoplayEnabled()} title={`${autoplayEnabled()?'Disable':'Enable'} automatic reply playback on this device`} onClick={()=>{setAutoplayEnabled(!autoplayEnabled());setVoiceUiRevision(value=>value+1)}}>{autoplayEnabled()?'audio:auto':'audio:tap'}</button>
+      </>}
+      <button class="mobile-voice-action voice-settings" title="Open all Voice settings" onClick={()=>openSettings('Voice')}>audio…</button>
+    </>:null
+    const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} onSession={updateSession} />:null
+    const voiceKey=`${voiceStatus?.enabled?1:0}${voiceStatus?.stt_enabled?1:0}${voiceStatus?.stt_available?1:0}|${voiceMode}|${voiceStripVisible?1:0}|${session.voice_content||''}|${session.name}|${voiceUiRevision}`
+    const terminalPane=<section class={`terminal-pane ${activeId === id ? 'focused' : ''}`} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
       <div class="pane-bar" onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
         <div><span class={`pane-state ${session.state}`} title={[session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}</span></div>
         <div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>
-        <div class="pane-tools"><button class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button><button class="pane-tool-label" aria-label={`Inspect processes for ${sessionName(session)}`} title="Processes and previews" onClick={() => {setActiveId(session.id);openProcessViewer(session)}}>proc</button>{voiceStatus?.enabled&&isAgent(session)&&<button class={`pane-tool-label voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}{voiceStatus?.stt_enabled&&isAgent(session)&&<MicButton sessionId={session.id}/>}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
+        <div class="pane-tools"><button class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button><button class="pane-tool-label" aria-label={`Inspect processes for ${sessionName(session)}`} title="Processes and previews" onClick={() => {setActiveId(session.id);openProcessViewer(session)}}>proc</button><button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
-      {voiceStripVisible&&voiceStatus&&<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} onSession={updateSession} />}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} mobileInput={mobileInput} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} mobileInput={mobileInput} voiceStrip={voiceStripNode} railLeading={railLeading} voiceKey={voiceKey} />
     </section>
     if(insideStack)return terminalPane
-    return <section class="pane-stack singleton-stack"><div class="stack-tabs" role="tablist" aria-label="Terminal tabs">
-      <div class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setActiveId(id);openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={`state-dot ${session.state}`}/>{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${confirmKillId===id?'Confirm close':'Close'} terminal: ${sessionName(session)}`} title={confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
-      <button class="stack-add" aria-label="New terminal tab" title="New terminal tab" onClick={()=>void spawnTerminal(session.project_id,'stack',undefined,id)}>+</button>
+    return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Terminal tabs">
+      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setActiveId(id);openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={`state-dot ${session.state}`}/>{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${confirmKillId===id?'Confirm close':'Close'} terminal: ${sessionName(session)}`} title={confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
+      <button data-tutorial="new-tab" class="stack-add" aria-label="New terminal tab" title="New terminal tab" onClick={()=>void spawnTerminal(session.project_id,'stack',undefined,id)}>+</button>
     </div><div class="stack-active">{terminalPane}</div></section>
   }
 
@@ -1659,7 +1776,7 @@ export function App() {
     const workspaceOpen=workspaceNoteIds(targetProject).includes(resourceId)
     const selected=targetProject===projectId&&stackForView(noteLayout,resourceId)?.active_child_id===resourceId
     const label=identity.kind==='note'?'Project note':identity.kind==='session-note'?'Session note':identity.kind==='files'?'Files':identity.id.split('/').pop()||'File'
-    return <button class={`sidebar-note-row ${selected?'active':''} ${workspaceOpen?'open':''}`} title={`${label} · opens in the focused pane`} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openNoteContext(resourceId,targetProject,event.clientX,event.clientY)}} onClick={event=>{event.stopPropagation();showNoteResource(resourceId,targetProject);setSidebarOpen(false)}}>
+    return <button data-tutorial={identity.kind==='note'?'project-note':undefined} class={`sidebar-note-row ${selected?'active':''} ${workspaceOpen?'open':''}`} title={`${label} · opens in the focused pane`} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openNoteContext(resourceId,targetProject,event.clientX,event.clientY)}} onClick={event=>{event.stopPropagation();showNoteResource(resourceId,targetProject);setSidebarOpen(false)}}>
       <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>{label}</strong></span>
     </button>
   }
@@ -1777,10 +1894,10 @@ export function App() {
       <button class={`tab-close ${confirming?'confirming':''}`} disabled={leaf.kind==='terminal'&&(!session||!!session.pending)} aria-label={`${confirming?'Confirm close':'Close'} ${label}`} title={confirming?'Confirm kill terminal':`Close ${label}`} onClick={event=>{event.stopPropagation();closeMobileTab(leaf,session)}}>{confirming?'✓':'×'}</button>
     </div>
   }
-  const mobileUnifiedWorkspace=<section class="pane-stack mobile-unified-workspace">
-    <div class="stack-tabs mobile-unified-tabs" role="tablist" aria-label="All Project tabs">
+  const mobileUnifiedWorkspace=<section data-tutorial="workspace-pane" class="pane-stack mobile-unified-workspace">
+    <div data-tutorial="tab-strip" class="stack-tabs mobile-unified-tabs" role="tablist" aria-label="All Project tabs">
       {mobileProjection.tabs.map(mobileTab)}
-      <button class="stack-add" aria-label="New terminal tab" title="New terminal tab" disabled={!activeProject} onClick={()=>{if(!activeProject)return;const target=mobileProjection.selected&&stackForView(activeLayout,mobileProjection.selected.id)?mobileProjection.selected.id:null;void (target?spawnTerminal(activeProject.id,'stack',undefined,target):spawnTerminal(activeProject.id))}}>+</button>
+      <button data-tutorial="new-tab" class="stack-add" aria-label="New terminal tab" title="New terminal tab" disabled={!activeProject} onClick={()=>{if(!activeProject)return;const target=mobileProjection.selected&&stackForView(activeLayout,mobileProjection.selected.id)?mobileProjection.selected.id:null;void (target?spawnTerminal(activeProject.id,'stack',undefined,target):spawnTerminal(activeProject.id))}}>+</button>
     </div>
     <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Open a terminal, Project note, Files, or a preview to begin.</p></div>}</div>
   </section>
@@ -1790,7 +1907,7 @@ export function App() {
     <div class="mobile-toolbar">
       <button class="nav-toggle mobile-nav-toggle" onClick={() => setSidebarOpen(value => !value)}>:nav</button>
       <strong class="mobile-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>
-      <button class="mobile-run-trigger" disabled={!activeProject} onClick={event=>activeProject&&openRunMenu(activeProject,event.currentTarget)}>▶ Run</button>
+      <button data-tutorial="run" class="mobile-run-trigger" disabled={!activeProject} onClick={event=>activeProject&&openRunMenu(activeProject,event.currentTarget)}>▶ Run</button>
       <AccountSwitcher variant="compact" onManage={()=>openSettings('Accounts')}/>
     </div>
 
@@ -1799,11 +1916,11 @@ export function App() {
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''}`} style={{'--sidebar-width':`${sidebarWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
-        <div class="app-identity"><strong>swe_mux</strong><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span>{activeProject&&<button class="project-run-header" title={`Run in ${activeProject.name}`} onClick={event=>openRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
+        <div class="app-identity"><strong>swe_mux</strong><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span>{activeProject&&<button data-tutorial="run" class="project-run-header" title={`Run in ${activeProject.name}`} onClick={event=>openRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         <div class="project-tree">
-          {visibleProjects.length===0&&<button class="empty-project-cta" onClick={openProjectsManager}><strong>{projects.length?'No Projects shown':'Create your first Project'}</strong><small>{projects.length?'Open Projects to show or add an active Project.':'Open Projects to add a canonical folder.'}</small></button>}
+          {visibleProjects.length===0&&<button data-tutorial="empty-project" class="empty-project-cta" onClick={openProjectsManager}><strong>{projects.length?'No Projects shown':'Create your first Project'}</strong><small>{projects.length?'Open Projects to show or add an active Project.':'Open Projects to add a canonical folder.'}</small></button>}
           {projectBuckets.map(bucket=>{const peerIds=bucket.items.map(item=>item.id);return <section class="sidebar-project-bucket" key={bucket.id}><header><span>{bucket.name}</span>{bucket.id!=='ungrouped'&&<><button title="Rename group" onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)setGroupEdit({id:group.id,name:group.name})}}>✎</button><button title="Remove group (projects become ungrouped)" onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)void deleteGroup(group)}}>×</button></>}</header>{bucket.items.map(project => {
             const children = sessions
               .filter(session => session.project_id === project.id)
@@ -1812,15 +1929,17 @@ export function App() {
             const projectPaneIds=terminalIds(projectLayout)
             const unpanedChildren=children.filter(session=>!projectPaneIds.includes(session.id))
             const dropClass=dragProject?.overId===project.id&&dragProject.side?`project-drop-target drop-${dragProject.side}`:''
-            return <section key={project.id} data-reorder-id={project.id} style={{order:projectPreviewIds.indexOf(project.id)}} class={`project-group ${project.id === projectId ? 'active' : ''} ${dropClass}`}>
+            const collapsed=collapsedProjects.has(project.id)
+            const liveCount=children.filter(session=>!session.pending&&!['exited','crashed'].includes(session.state)).length
+            return <section key={project.id} data-reorder-id={project.id} style={{order:projectPreviewIds.indexOf(project.id)}} class={`project-group ${project.id === projectId ? 'active' : ''} ${collapsed?'collapsed':''} ${dropClass}`}>
               <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title="Drag to reorder Project" onPointerDown={event=>{beginLongPress(event,(x,y)=>setProjectMenu({project,x,y}));beginProjectPointerDrag(event,project,peerIds)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setProjectMenu({ project, x: event.clientX, y: event.clientY }) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}setProjectId(project.id)}}>
-                <span class="project-chevron" aria-hidden="true">{project.id === projectId ? '◆' : '◇'}</span><strong>{project.name}</strong><button class="project-row-run" title={`Run in ${project.name}`} aria-label={`Run in ${project.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
+                <button class="project-chevron project-collapse-toggle" aria-expanded={!collapsed} aria-label={`${collapsed?'Expand':'Collapse'} ${project.name}`} title={collapsed?'Expand project':'Collapse project'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();toggleProjectCollapsed(project.id)}}>{collapsed?'▸':'▾'}</button><strong class="project-name-cell"><span class="project-name-text">{project.name}</span>{collapsed&&liveCount>0&&<span class="project-collapsed-badge" title={`${liveCount} active session${liveCount===1?'':'s'}`}>{liveCount}</span>}</strong><button data-tutorial="project-run" class="project-row-run" title={`Run in ${project.name}`} aria-label={`Run in ${project.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
               </div>
-              <div class="project-note-list">{sidebarNoteRow(noteResourceId('note',project.id),project.id)}{sidebarNoteRow(noteResourceId('files',project.id),project.id)}</div>
-              <div class="session-list">
+              {!collapsed&&<div data-tutorial="project-resources" class="project-note-list">{sidebarNoteRow(noteResourceId('note',project.id),project.id)}{sidebarNoteRow(noteResourceId('files',project.id),project.id)}</div>}
+              {!collapsed&&<div class="session-list">
                 {sidebarNode(projectLayout.root)}
                 {unpanedChildren.map(session=>sessionRow(session))}
-              </div>
+              </div>}
             </section>
           })}</section>})}
         </div>
@@ -1828,7 +1947,7 @@ export function App() {
           <AccountSwitcher onManage={()=>openSettings('Accounts')}/>
           <ResourceUsageSummary snapshot={processFleet} sessions={sessions} projects={projects} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
         </div>
-        <div class="sidebar-footer"><button class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button class="project-trigger" onClick={openProjectsManager}><span>◇</span> projects</button></div>
+        <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button data-tutorial="projects" class="project-trigger" onClick={openProjectsManager}><span>◇</span> projects</button></div>
       </aside>
       {/* The collapsed strip keeps the sidebar's own controls reachable rather
           than forcing an expand round-trip for menu, projects, or status. */}
@@ -1844,11 +1963,11 @@ export function App() {
       </nav>}
       <div class="sidebar-resizer" role="separator" tabindex={0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={190} aria-valuemax={480} aria-valuenow={Math.round(sidebarWidth)} title="Drag to resize · arrow keys adjust · double-click to reset" onPointerDown={beginSidebarResize} onDblClick={()=>persistSidebarWidth(254)} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();persistSidebarWidth(event.key==='Home'?190:event.key==='End'?480:sidebarWidth+(event.key==='ArrowLeft'?-10:10))}} />
 
-      <main class="main-stage" onContextMenu={event => { if (!activeLayout.root) { event.preventDefault(); setEmptyMenu({ x: event.clientX, y: event.clientY }) } }}>
+      <main data-tutorial="workspace" class="main-stage" onContextMenu={event => { if (!activeLayout.root) { event.preventDefault(); setEmptyMenu({ x: event.clientX, y: event.clientY }) } }}>
         <div class="project-workspace unified-workspace">
           <div class="terminal-workspace">
-            {mobileWorkspace?mobileUnifiedWorkspace:(activeLayout.root||focusedOutsideLayout) ? <div class="pane-tree">{renderPaneNode(zoomedId ? stackForView(activeLayout,zoomedId)||activeLayout.root! : focusedOutsideLayout&&activeId ? paneStack([terminalLeaf(activeId)],activeId) : activeLayout.root!)}</div> : <div class="pane-tree"><section class="pane-stack empty-workspace-pane">
-              <div class="stack-tabs" role="tablist" aria-label="Workspace tabs"><button class="stack-add" aria-label="New terminal tab" title="New terminal tab" disabled={!activeProject} onClick={()=>activeProject&&void spawnTerminal(activeProject.id)}>+</button></div>
+            {mobileWorkspace?mobileUnifiedWorkspace:(activeLayout.root||focusedOutsideLayout) ? <div class="pane-tree">{renderPaneNode(zoomedId ? stackForView(activeLayout,zoomedId)||activeLayout.root! : focusedOutsideLayout&&activeId ? paneStack([terminalLeaf(activeId)],activeId) : activeLayout.root!)}</div> : <div class="pane-tree"><section data-tutorial="workspace-pane" class="pane-stack empty-workspace-pane">
+              <div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Workspace tabs"><button data-tutorial="new-tab" class="stack-add" aria-label="New terminal tab" title="New terminal tab" disabled={!activeProject} onClick={()=>activeProject&&void spawnTerminal(activeProject.id)}>+</button></div>
               <div class="stack-active empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Open a terminal, Project note, Files, or a preview to begin.</p></div>
             </section></div>}
           </div>
@@ -1927,6 +2046,14 @@ export function App() {
       <button onClick={()=>{openProjectFiles(projectMenu.project);setProjectMenu(null)}}>Browse files…</button>
       <div class="context-subtitle">PROJECT</div>
       <button onClick={() => runNamedCommand('project.reveal')}>Reveal in Explorer</button>
+      <button onClick={()=>{const target=projectMenu.project;setProjectMenu(null);toggleProjectCollapsed(target.id)}}>{collapsedProjects.has(projectMenu.project.id)?'Expand in sidebar':'Collapse in sidebar'}</button>
+      {confirmHideId!==projectMenu.project.id&&<button onClick={()=>{const target=projectMenu.project;if(canHideProject(openWorkFor(target))){setProjectMenu(null);void hideProject(target)}else setConfirmHideId(target.id)}}>Hide from sidebar</button>}
+      {confirmHideId===projectMenu.project.id&&<>
+        <div class="context-subtitle">CLOSE OPEN WORK TO HIDE</div>
+        <div class="context-note">{describeOpenWork(openWorkFor(projectMenu.project))||'No live work'} still attached. Hiding would strand it off-screen.</div>
+        <button class="danger" onClick={()=>{const target=projectMenu.project;setProjectMenu(null);setConfirmHideId(null);void closeWorkAndHideProject(target)}}>Close it &amp; hide</button>
+        <button onClick={()=>setConfirmHideId(null)}>Cancel</button>
+      </>}
       <label class="context-select">Group<select value={projectMenu.project.group_id||''} onChange={event=>{const target=projectMenu.project;const group_id=event.currentTarget.value||null;void api<Project>('PATCH',`/api/projects/${target.id}`,{group_id}).then(updated=>setProjects(items=>items.map(item=>item.id===updated.id?updated:item)));setProjectMenu(null)}}><option value="">Ungrouped</option>{projectGroups.map(group=><option value={group.id}>{group.name}</option>)}</select></label>
       <button onClick={() => runNamedCommand('project.rename')}>Rename project</button>
       <button disabled={!commands.find(item=>item.id==='project.moveUp')?.available} onClick={()=>runNamedCommand('project.moveUp')}>Move Project up</button>
@@ -1976,7 +2103,7 @@ export function App() {
       {unpanned.map(session => <button role="menuitem" onClick={() => runNamedCommand(`session.attach(${session.id})`)}><span class={`state-dot ${session.state}`} />{sessionName(session)}</button>)}
     </div>}
 
-    {mainMenuOpen && <div class="context-menu main-menu" role="menu" aria-label="swe-mux menu">
+    {mainMenuOpen && <div data-tutorial="main-menu" class="context-menu main-menu" role="menu" aria-label="swe-mux menu">
       <div class="context-title"><strong>swe-mux menu</strong></div>
       {/* Everything under BROWSE opens across every Project. Right-clicking a
           Project row opens the same surfaces prefiltered to it. */}
@@ -2015,46 +2142,16 @@ export function App() {
 
     {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} onClose={()=>setProjectsManagerOpen(false)} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onSettings={project=>{setProjectsManagerOpen(false);openSettings('Current project',project.root)}} onNote={project=>{setProjectsManagerOpen(false);openProjectNotes(project)}} onFiles={project=>{setProjectsManagerOpen(false);openProjectFiles(project)}} onPatch={patchManagedProject} onDelete={deleteProject}/>}
 
-    {projectCreateOpen&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setProjectCreateOpen(false)}><form class="modal" onSubmit={event=>{event.preventDefault();void submitProject()}}><div class="modal-heading"><div><span>PROJECT::CREATE</span><h2>Add a project</h2></div><button type="button" onClick={()=>setProjectCreateOpen(false)}>×</button></div><label>Name<input value={projectCreate.name} onInput={event=>setProjectCreate(value=>({...value,name:event.currentTarget.value}))} autofocus /></label><label>Folder<div class="project-folder-field"><input value={projectCreate.root} onInput={event=>setProjectCreate(value=>({...value,root:event.currentTarget.value}))} placeholder="D:\\projects\\horizon" /><button type="button" onClick={()=>setFolderPickerOpen(true)}>Browse…</button></div></label><label>Group<select value={projectCreate.group_id} onChange={event=>setProjectCreate(value=>({...value,group_id:event.currentTarget.value}))}><option value="">Ungrouped</option>{projectGroups.map(group=><option value={group.id}>{group.name}</option>)}</select></label><p class="modal-note">Creating the project initializes .swe-mux in this folder. Every session starts at this exact root.</p><div class="modal-footer"><button type="button" onClick={()=>setProjectCreateOpen(false)}>Cancel</button><button class="primary" type="submit" disabled={!projectCreate.name.trim()||!projectCreate.root.trim()}>Create project</button></div></form></div>}
+    {projectCreateOpen&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setProjectCreateOpen(false)}><form data-tutorial="project-form" class="modal" onSubmit={event=>{event.preventDefault();void submitProject()}}><div class="modal-heading"><div><span>PROJECT::CREATE</span><h2>Add a project</h2></div><button type="button" onClick={()=>setProjectCreateOpen(false)}>×</button></div><label>Name<input value={projectCreate.name} onInput={event=>setProjectCreate(value=>({...value,name:event.currentTarget.value}))} autofocus /></label><label>Folder<div class="project-folder-field"><input value={projectCreate.root} onInput={event=>setProjectCreate(value=>({...value,root:event.currentTarget.value}))} placeholder="D:\\projects\\horizon" /><button type="button" onClick={()=>setFolderPickerOpen(true)}>Browse…</button></div></label><label>Group<select value={projectCreate.group_id} onChange={event=>setProjectCreate(value=>({...value,group_id:event.currentTarget.value}))}><option value="">Ungrouped</option>{projectGroups.map(group=><option value={group.id}>{group.name}</option>)}</select></label><p class="modal-note">Creating the project initializes .swe-mux in this folder. Every session starts at this exact root.</p><div class="modal-footer"><button type="button" onClick={()=>setProjectCreateOpen(false)}>Cancel</button><button class="primary" type="submit" disabled={!projectCreate.name.trim()||!projectCreate.root.trim()}>Create project</button></div></form></div>}
     {folderPickerOpen&&<DirectoryPicker initialPath={projectCreate.root} onCancel={()=>setFolderPickerOpen(false)} onSelect={root=>{setProjectCreate(value=>({...value,root,name:folderNameFromPath(root)}));setFolderPickerOpen(false)}} />}
 
     {groupEdit&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setGroupEdit(null)}><form class="modal rename-modal" onSubmit={event=>{event.preventDefault();void submitGroup()}}><div class="modal-heading"><div><span>GROUP::{groupEdit.id?'RENAME':'CREATE'}</span><h2>Sidebar group</h2></div><button type="button" onClick={()=>setGroupEdit(null)}>×</button></div><label>Name<input value={groupEdit.name} onInput={event=>setGroupEdit(current=>current?{...current,name:event.currentTarget.value}:current)} autofocus /></label><p class="modal-note">Groups only organize the sidebar. They never affect sessions, panes, or project data.</p><div class="modal-footer"><button type="button" onClick={()=>setGroupEdit(null)}>Cancel</button><button class="primary" type="submit" disabled={!groupEdit.name.trim()}>Save group</button></div></form></div>}
-
-    {historyOpen && <div class="history-layer" role="dialog" aria-modal="true" aria-label="Agent session history">
-      <div class="history-header"><div><span>SESSION ARCHIVE</span><h2>History</h2></div><button onClick={() => setHistoryOpen(false)}>×</button></div>
-      <div class="history-body">
-        <aside><div class="history-search"><input placeholder="Search agent history…" value={historyQuery} onInput={event => { const query = event.currentTarget.value; setHistoryQuery(query); void loadHistory({ query }) }} />
-          <select aria-label="Filter history backend" value={historyBackend} onChange={event => { const backend = event.currentTarget.value; setHistoryBackend(backend); void loadHistory({ backend }) }}><option value="">Claude + Codex</option><option value="claude">Claude</option><option value="codex">Codex</option></select>
-          <select aria-label="Filter history state" value={historyState} onChange={event => { const state=event.currentTarget.value;setHistoryState(state);void loadHistory({state}) }}><option value="">All states</option><option value="idle">Completed</option><option value="exited">Exited</option><option value="crashed">Crashed</option></select>
-          <select aria-label="Filter history project" value={historyProject} onChange={event => { const project=event.currentTarget.value;setHistoryProject(project);void loadHistory({project}) }}><option value="">All projects</option>{projects.map(project=><option value={project.id}>{project.name}</option>)}</select>
-          <select aria-label="Filter external history" value={historyExternal} onChange={event => { const external=event.currentTarget.value;setHistoryExternal(external);void loadHistory({external}) }}><option value="">Mux + external</option><option value="false">Mux sessions</option><option value="true">External sessions</option></select>
-          <input type="datetime-local" aria-label="History from date" value={historyFrom} onChange={event=>{const from=event.currentTarget.value;setHistoryFrom(from);void loadHistory({from})}} />
-          <input type="datetime-local" aria-label="History to date" value={historyTo} onChange={event=>{const to=event.currentTarget.value;setHistoryTo(to);void loadHistory({to})}} />
-        </div>
-          {historyError && <div class="history-inline-state error" role="alert">{historyError}</div>}
-          {!historyLoading && !historyError && history.length === 0 && <div class="history-inline-state">No Claude or Codex history matches these filters.</div>}
-          {historyProjects.filter(project => !historyProject || project.project_id === historyProject || (historyProject === '__ungrouped__' && project.project_id === null)).map(project => {
-            const key = project.project_id || 'ungrouped'
-            const entries = history.filter(entry => (entry.project_id || null) === project.project_id)
-            if (!entries.length) return null
-            const collapsed = collapsedProjects.has(key)
-            return <section class="history-project"><button class="history-project-heading" aria-expanded={!collapsed} onClick={() => setCollapsedProjects(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next })}><strong>{collapsed ? '▸' : '▾'} {project.label}</strong><span>{entries.length}</span></button>
-              {!collapsed && entries.map(entry => <article class={`history-row ${transcript?.entry.id === entry.id ? 'active' : ''}`}><button onClick={() => void viewHistory(entry)}><strong>[{entry.backend}] {historyName(entry)}</strong><span>{new Date(entry.spawned_at * 1000).toLocaleString()}</span><small>{entry.final_state || entry.exit_reason || 'indexed'}{entry.external ? ' · external' : ''}{entry.compaction_count?` · compacted ${entry.compaction_count}×`:''}</small></button><button class={confirmHistoryDelete === entry.id ? 'danger confirming' : 'danger'} aria-label={`Delete history index entry ${historyName(entry)}`} onClick={() => void deleteHistory(entry)}>{confirmHistoryDelete === entry.id ? '✓' : '×'}</button></article>)}
-            </section>
-          })}
-          {historyLoading && <div class="history-inline-state">Loading agent history…</div>}
-          {historyNext && !historyLoading && <button class="history-load-more" onClick={() => void loadHistory({ append: true })}>Load more</button>}
-        </aside>
-        <main>{transcript ? <><div class="transcript-heading"><button class="history-back" onClick={()=>setTranscript(null)}>← Back</button><div><h3>[{transcript.entry.backend}] {historyName(transcript.entry)}</h3><span>{transcript.entry.project_label || 'Ungrouped'} · {transcript.entry.cwd}</span><small>{transcript.entry.exit_reason || transcript.entry.final_state || 'indexed'} · {transcript.entry.model || 'model unavailable'} · {transcript.entry.external ? 'external' : 'mux session'}</small><small>{transcript.entry.context_window ? `context final ${Math.round((transcript.entry.final_context_pct || 0) * 100)}% · peak ${Math.round((transcript.entry.peak_context_pct || 0) * 100)}% · ${transcript.entry.measurement_source || 'native observation'}` : 'context unavailable'} · tokens in {transcript.entry.tokens_in || 0} / out {transcript.entry.tokens_out || 0}</small>{transcript.entry.compaction_count?<small>explicit compactions {transcript.entry.compaction_count} · last {transcript.entry.last_compaction_at?new Date(transcript.entry.last_compaction_at*1000).toLocaleString():'unknown'} · {transcript.entry.compaction_capability||'native evidence'} · confidence {transcript.entry.compaction_confidence||'unknown'}</small>:<small>compaction count unavailable — token drops are not treated as compaction evidence</small>}</div><button class="primary" onClick={() => void resumeHistoryEntry(transcript.entry)}>Resume as new</button></div>
-          <div class="transcript-actions"><button onClick={()=>void openHandoff(transcript.entry)}>Export handoff</button><button class="primary" onClick={()=>void previewSecondOpinion(transcript.entry)}>Review with {transcript.entry.backend==='claude'?'Codex':'Claude'}</button></div>{lineage.length>0&&<section class="transcript-lineage"><h4>Work lineage</h4>{lineage.map(edge=><article><strong>{edge.relation}</strong><span>{edge.parent_run_id} → {edge.child_run_id}</span><small>{new Date(edge.created_at*1000).toLocaleString()}</small></article>)}</section>}{transcript.annotations.length>0&&<section class="transcript-annotations"><h4>Run notes</h4>{transcript.annotations.map(item=><details><summary>{item.tag} · {item.content}</summary><small>{new Date(item.created_at*1000).toLocaleString()} · {item.provenance} · model::{item.resolved_model||'deterministic'} · confidence::{item.confidence??'—'} · cost::{annotationMoney.format(item.cost_usd||0)}</small></details>)}</section>}<div class="messages">{transcript.messages.length ? transcript.messages.map(message => <article class={message.role}><header>{message.role}</header>{message.content.map(block => block.type === 'text' ? <p>{block.text}</p> : <pre>{block.type === 'tool_use' ? `${block.name}\n${JSON.stringify(block.input, null, 2)}` : block.type}</pre>)}</article>) : <div class="no-transcript">No native transcript is available for this session.</div>}</div></> : <div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Read its native transcript without resuming it.</p></div>}</main>
-      </div>
-    </div>}
 
     {reviewState&&<div class="modal-layer control-plane-modal-layer" role="dialog" aria-modal="true" aria-label="Cross-vendor second opinion" onMouseDown={event=>event.target===event.currentTarget&&setReviewState(null)}><section class="modal control-plane-modal"><div class="modal-heading"><div><span>CROSS-VENDOR REVIEW</span><h2>{reviewState.preview.source_backend} → {reviewState.preview.backend}</h2></div><button aria-label="Close review" onClick={()=>setReviewState(null)}>×</button></div><div class="control-plane-modal-body"><p>This is user-initiated. The generated prompt is shown in full and no rule or observer can start this session.</p><label>Target project<select value={reviewState.project} onChange={event=>setReviewState(current=>current?{...current,project:event.currentTarget.value}:current)}>{projects.map(project=><option value={project.id}>{project.name}</option>)}</select></label><label>Additional review instructions<textarea value={reviewState.instructions} onInput={event=>setReviewState(current=>current?{...current,instructions:event.currentTarget.value,dirty:true}:current)} placeholder="Optional constraints or review focus" /></label><label>Reviewed prompt<textarea class="review-prompt" readOnly value={reviewState.preview.prompt}/></label>{reviewState.dirty&&<p class="modal-warning">Instructions changed. Refresh the prompt before spawning.</p>}{reviewState.error&&<p class="modal-warning" role="alert">{reviewState.error}</p>}</div><div class="modal-footer"><span>{reviewState.loading?'working…':reviewState.dirty?'preview stale':'prompt reviewed'}</span><button onClick={()=>setReviewState(null)}>Cancel</button><button onClick={()=>void refreshSecondOpinion()} disabled={reviewState.loading}>Refresh preview</button><button class="primary" disabled={reviewState.loading||reviewState.dirty} onClick={()=>void confirmSecondOpinion()}>Spawn {reviewState.preview.backend} review</button></div></section></div>}
 
     {handoffState&&<div class="modal-layer control-plane-modal-layer" role="dialog" aria-modal="true" aria-label="Handoff export" onMouseDown={event=>event.target===event.currentTarget&&setHandoffState(null)}><section class="modal control-plane-modal"><div class="modal-heading"><div><span>HANDOFF::EXPORT</span><h2>{historyName(handoffState.entry)}</h2></div><button aria-label="Close handoff" onClick={()=>setHandoffState(null)}>×</button></div><div class="control-plane-modal-body"><p>{handoffState.message}</p><textarea class="handoff-export" readOnly value={handoffState.markdown}/></div><div class="modal-footer"><span>read-only annotation export</span><button onClick={()=>{const blob=new Blob([handoffState.markdown],{type:'text/markdown'});const url=URL.createObjectURL(blob);const anchor=document.createElement('a');anchor.href=url;anchor.download=`handoff-${handoffState.entry.id}.md`;anchor.click();URL.revokeObjectURL(url)}}>Download</button><button class="primary" onClick={()=>void navigator.clipboard.writeText(handoffState.markdown).then(()=>setHandoffState(current=>current?{...current,message:'Copied to clipboard.'}:current)).catch(()=>setHandoffState(current=>current?{...current,message:'Clipboard blocked. Select the text and copy it manually.'}:current))}>Copy</button></div></section></div>}
 
-    {settingsOpen && <Settings cwd={settingsCwd||activeProject?.root} initialSection={settingsSection} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false);setSettingsCwd(null); void refresh(); void loadProfiles(); void api<Record<string,unknown>>('GET','/api/config').then(config=>setMobileInput(mobileInputSettings(config))) }} />}
+    {settingsOpen && <Settings cwd={settingsCwd||activeProject?.root} initialSection={settingsSection} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false);setSettingsCwd(null); void refresh(); void loadProfiles(); void api<Record<string,unknown>>('GET','/api/config').then(config=>setMobileInput(mobileInputSettings(config))) }} />}
 
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={active?.backend} onClose={()=>setPromptLibraryOpen(false)} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}}))}/>}
 
@@ -2070,6 +2167,8 @@ export function App() {
     {notificationsOpen&&<Notifications data={notificationData} onClose={()=>setNotificationsOpen(false)} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The notification session is no longer live.');return}setNotificationsOpen(false);void selectSession(session)}} />}
 
     {notificationToast&&<button class="notification-toast" aria-live="assertive" onClick={()=>{setNotificationToast(null);openNotifications()}}><strong>{notificationToast.session_name||'daemon'}</strong><span>{notificationToast.type.replaceAll('_',' ')}</span><small>open notifications</small></button>}
+
+    {tutorialOpen&&<GuidedTutorial hasProject={projects.length>0} onNavigate={navigateTutorial} onExit={closeTutorial} onComplete={closeTutorial}/>}
 
     {error && <div class="toast" onClick={() => setError('')}>{error}<span>×</span></div>}
   </div>

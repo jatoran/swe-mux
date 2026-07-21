@@ -46,7 +46,8 @@
 - `<project>/.swe-mux/config.toml`: versioned, typed portable Project profile, prompt-scope,
   notification-permission, and additive ignore overrides. Legacy `resource_open_mode` input
   remains parseable for compatibility but is omitted from current effective/public options.
-- `<project>/.swe-mux/notes/project.md`: the Project's one canonical note.
+- `<project>/.swe-mux/notes/project.md`: the Project's one canonical note, seeded at creation
+  with a Project-named heading only when the file is absent.
 - `<project>/.swe-mux/notes/sessions/<safe-session-id>.md`: lazily initialized notes owned by
   individual terminal sessions. Unsafe or external identities map to a stable hashed filename;
   note contents remain ordinary Project files and are not stored in SQLite.

@@ -19,14 +19,17 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   loopback fetch/XHR/WebSocket calls between services in one Project are remapped to the
   destination service's registered route, never to the remote device's loopback.
 - `0.0.0.0`, LAN interfaces, port forwarding, and Tailscale Funnel are unsupported.
-- Tailscale Serve is optional HTTPS termination for browser secure-context APIs:
-  `tailscale serve --bg http://127.0.0.1:8765`. swe-mux never changes tailnet policy,
-  enables Serve, or enables Funnel automatically.
+- Direct tailnet HTTP remains the supported remote transport. Browser microphone capture requires
+  a secure context; when no verified HTTPS endpoint is available, the mobile-voice setup route
+  returns a diagnostic and leaves ordinary mobile access unchanged. swe-mux never enables Funnel
+  or changes tailnet policy, ACLs, shields, or device authorization.
 
 ## Boundaries and diagnostics
 
 - Settings and `mux doctor` report localhost, detected tailnet address/direct URL,
-  listener state, optional Serve URL/command, and Funnel warning.
+  listener state, secure mobile URL/status, and Funnel warning. `POST
+  /api/remote/mobile-voice/enable` requires the dedicated explicit-action header and returns a
+  secure URL only when one is actually available; otherwise it returns a non-destructive error.
 - Browser control validates Host plus the full Origin authority, including an explicit
   port, on mutations and WebSocket upgrades. Responses carry CSP, nosniff, referrer,
   permissions, opener, and resource policy headers.
@@ -51,7 +54,8 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   operations because the URL is not a browser secure context. OSC-52 copy failures retain the
   prepared text for a one-tap retry/selectable fallback. A browser-delivered paste event can
   still carry an image, but proactive clipboard reads (including the long-press Paste fallback)
-  require a secure context. Use optional Serve when those capabilities matter.
+  require a secure context. Press Talk or Enable secure mobile access to provision the private
+  HTTPS address without entering a Serve command, then grant the browser microphone permission.
 - Do not enable Funnel. Re-run `mux doctor` or use Settings → Remote and security after
   changing Tailscale/listener configuration.
 
@@ -59,5 +63,6 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
 
 - Listener/config policy: `src/swe_mux/config.py`, `src/swe_mux/__main__.py`
 - Browser boundary and status route: `src/swe_mux/server.py`
-- Tailscale inspection: `src/swe_mux/tailscale.py`
-- Settings status: `frontend/src/Settings.tsx`
+- Tailscale inspection and bounded Serve setup: `src/swe_mux/tailscale.py`
+- Settings/status and browser redirect: `frontend/src/Settings.tsx`,
+  `frontend/src/mobileVoice.ts`, `frontend/src/ConversationControl.tsx`

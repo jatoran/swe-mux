@@ -14,6 +14,7 @@ from swe_mux.project_files import (
     parse_project_config,
     read_note,
     read_project_config,
+    search_project_files,
     write_note,
     write_project_config,
 )
@@ -116,3 +117,31 @@ def test_project_file_tree_combines_global_and_project_ignore_patterns(tmp_path:
     assert ignored_project_path("nested/node_modules/pkg/index.js", patterns)
     assert ignored_project_path("nested/private/key.txt", patterns)
     assert not ignored_project_path("src/main.py", patterns)
+
+
+def test_project_search_matches_names_contents_and_respects_ignores(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "node_modules" / "pkg").mkdir(parents=True)
+    (tmp_path / "src" / "widget.ts").write_text("export const value = 1\n", encoding="utf-8")
+    (tmp_path / "src" / "helper.ts").write_text(
+        "// uses the widget value\nconst x = 2\n", encoding="utf-8"
+    )
+    (tmp_path / "notes.md").write_text("nothing relevant here\n", encoding="utf-8")
+    (tmp_path / "node_modules" / "pkg" / "widget.js").write_text("widget", encoding="utf-8")
+    (tmp_path / "blob.bin").write_bytes(b"widget\x00binary")
+    patterns = effective_project_ignores(tmp_path, ["node_modules"])
+
+    names = search_project_files(tmp_path, "widget", mode="names", ignore_patterns=patterns)
+    assert [item["path"] for item in names["items"]] == ["src/widget.ts"]
+
+    contents = search_project_files(tmp_path, "widget", mode="contents", ignore_patterns=patterns)
+    hit = next(item for item in contents["items"] if item["path"] == "src/helper.ts")
+    assert hit["match"] == "content" and hit["line"] == 1
+    assert hit["snippet"] == "// uses the widget value"
+    # The binary file contains the needle but must never surface as a content match.
+    assert all(item["path"] != "blob.bin" for item in contents["items"])
+
+    both = search_project_files(tmp_path, "widget", mode="both", ignore_patterns=patterns)
+    paths = [item["path"] for item in both["items"]]
+    assert paths == ["src/widget.ts", "src/helper.ts"]  # name match sorts before content match
+    assert not search_project_files(tmp_path, "", mode="both", ignore_patterns=patterns)["items"]

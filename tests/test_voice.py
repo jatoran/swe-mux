@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import time
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -15,7 +17,7 @@ from swe_mux.config import load_config, update_config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.openrouter import OpenRouterResult
-from swe_mux.server import session_last_reply
+from swe_mux.server import session_last_reply, voice_submit
 from swe_mux.voice import (
     VOICE_RULE_ID,
     VoiceError,
@@ -26,6 +28,7 @@ from swe_mux.voice import (
     last_reply_text,
     soften_stops,
     speechify,
+    streaming_segments,
 )
 
 
@@ -219,6 +222,14 @@ def test_soften_stops_shortens_sentence_pauses() -> None:
     assert estimate_duration_seconds("one two three four five six", "+0%") > 0
 
 
+def test_streaming_segments_preserve_text_and_bound_chunks() -> None:
+    text = "First result is ready. " + ("A deliberately long sentence " * 30) + "Done!"
+    chunks = streaming_segments(text, max_chars=120)
+    assert len(chunks) > 2
+    assert all(0 < len(chunk) <= 120 for chunk in chunks)
+    assert " ".join(chunks) == " ".join(text.split())
+
+
 def test_last_reply_text_collects_only_assistant_text() -> None:
     text = last_reply_text(REPLY_MESSAGES)
     assert "The test passes now" in text and "Next I suggest a rerun" in text
@@ -396,6 +407,155 @@ async def test_auto_turn_ended_debounces_and_generates(tmp_path: Path) -> None:
     finally:
         voice_module.DEBOUNCE_SECONDS = original
         await service.stop()
+        service.store.close()
+
+
+async def test_auto_generation_emits_short_audio_segments_in_order(tmp_path: Path) -> None:
+    speech = (
+        "First sentence is ready and contains " + "useful detail " * 18 + ". "
+        "Second sentence follows with " + "another detail " * 18 + ". "
+        "Third sentence finishes the spoken response."
+    )
+    service, _events, emitted, _record = make_service(
+        tmp_path, content="summary", provider=ProviderStub(speech=speech)
+    )
+    patch_slice(service, REPLY_MESSAGES)
+    spoken = patch_engine(service)
+    try:
+        await service.generate("s1", trigger="auto")
+        ready = [event for event in emitted if event.type == "voice_clip_ready"]
+        assert len(ready) == len(spoken) >= 2
+        assert [event.payload["segment_index"] for event in ready] == list(range(len(ready)))
+        assert len({event.payload["stream_id"] for event in ready}) == 1
+        assert " ".join(spoken) == speech
+    finally:
+        service.store.close()
+
+
+def wav_bytes(seconds: float = 0.2, rate: int = 16_000) -> bytes:
+    target = io.BytesIO()
+    with wave.open(target, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(rate)
+        output.writeframes(b"\x00\x00" * int(seconds * rate))
+    return target.getvalue()
+
+
+async def test_daemon_stt_validates_wav_and_deletes_temporary_audio(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    service.config.stt_engine = "sapi"
+    seen: list[Path] = []
+
+    async def transcribe(audio_path: Path, text_path: Path) -> str:
+        assert audio_path.exists()
+        seen.extend([audio_path, text_path])
+        return "  Mux   send that  "
+
+    service._transcribe_sapi = transcribe  # type: ignore[method-assign]
+    try:
+        assert await service.transcribe_wav(wav_bytes()) == "Mux send that"
+        assert seen and all(not path.exists() for path in seen)
+        with pytest.raises(VoiceError, match="valid WAV"):
+            await service.transcribe_wav(b"not audio")
+    finally:
+        service.store.close()
+
+
+def test_whisper_transcription_uses_accuracy_and_technical_context(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    calls: list[dict[str, object]] = []
+
+    class Model:
+        def transcribe(self, _path: str, **options: object):
+            calls.append(options)
+            return [SimpleNamespace(text=" Run the TypeScript tests. ")], SimpleNamespace()
+
+    service._whisper_model = Model()
+    try:
+        result = service._run_whisper_transcription(tmp_path / "speech.wav")
+        assert result == "Run the TypeScript tests."
+        assert calls[0]["beam_size"] == 5
+        assert calls[0]["condition_on_previous_text"] is False
+        assert calls[0]["vad_filter"] is False
+        assert "TypeScript" in str(calls[0]["hotwords"])
+    finally:
+        service.store.close()
+
+
+def test_whisper_model_load_falls_back_when_cuda_runtime_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ctranslate2
+
+    service, _events, _emitted, _record = make_service(tmp_path)
+    calls: list[tuple[str, str]] = []
+
+    class Model:
+        def __init__(self, _name: str, *, device: str, compute_type: str) -> None:
+            calls.append((device, compute_type))
+            if device == "cuda":
+                raise RuntimeError("CUDA runtime unavailable")
+
+    monkeypatch.setattr(ctranslate2, "get_cuda_device_count", lambda: 1)
+    try:
+        service._load_whisper_model(Model)
+        assert calls == [("cuda", "float16"), ("cpu", "int8")]
+        assert service._whisper_device == "cpu"
+        assert service._whisper_model is not None
+    finally:
+        service.store.close()
+
+
+def test_voice_submission_idempotency_is_bounded(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    try:
+        assert service.claim_submission("utterance-1") is True
+        assert service.claim_submission("utterance-1") is False
+        for index in range(600):
+            assert service.claim_submission(f"utterance-{index + 2}") is True
+        assert service.claim_submission("utterance-1") is True
+    finally:
+        service.store.close()
+
+
+async def test_voice_submit_writes_prompt_and_enter_once_and_marks_human_input(
+    tmp_path: Path,
+) -> None:
+    service, events, emitted, record = make_service(tmp_path)
+    writes: list[str] = []
+    session = SimpleNamespace(
+        record=record,
+        pty=SimpleNamespace(write=writes.append),
+        input_revision=0,
+        last_input_event_ts=0.0,
+        last_input_report_ts=0.0,
+    )
+
+    class Request:
+        match_info = {"sid": "s1"}
+        app = {
+            "voice": service,
+            "sessions": SimpleNamespace(resolve=lambda _sid: session),
+            "events": events,
+        }
+
+        async def json(self) -> dict[str, str]:
+            return {"utterance_id": "voice-1", "text": "Run the focused tests"}
+
+    try:
+        first = await voice_submit(cast(Any, Request()))
+        duplicate = await voice_submit(cast(Any, Request()))
+        await asyncio.sleep(0)
+        assert json.loads(first.text)["duplicate"] is False
+        assert json.loads(duplicate.text)["duplicate"] is True
+        assert writes == ["Run the focused tests\r"]
+        assert session.input_revision == 1
+        assert {event.type for event in emitted} == {
+            "terminal_input",
+            "voice_prompt_submitted",
+        }
+    finally:
         service.store.close()
 
 

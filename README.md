@@ -52,7 +52,9 @@ Useful controls:
 - `Ctrl+Alt+P`: command palette.
 - Right-click a terminal: copy, paste, select all, find, clear.
 - Right-click a session: rename, split, broadcast, reveal, or kill.
-- New terminals replace the focused pane by default; splits occur only through explicit context actions.
+- A new project opens with a narrow Files column beside its project note; the first terminal
+  joins the note's pane. Nothing is spawned until you ask for it.
+- New terminals open as a tab in the focused pane; splits occur only through explicit context actions.
 - Sidebar/header `×` uses inline two-click confirmation; context-menu Kill is immediate.
 - Right-click a project for terminals, its project note, files, settings, and grouping.
 - Use **Run** in the active-project header, Project row, or mobile toolbar to start Claude,
@@ -63,6 +65,10 @@ Useful controls:
 - Each project exposes terminals, previews, its project note, Files, and file editors in one
   unified tab/pane workspace; any tab can share a pane or split into another.
 - `Ctrl+Alt+Left/Right` focuses adjacent panes; `Ctrl+Alt+1..9` switches projects.
+- Agent pane `talk:` enables hands-free Conversation mode. Speak across natural pauses, then use
+  the `Mux` wake word: `send`, `cancel`, `undo`, `mute`, `read reply`, `summary`, `verbatim`,
+  `interrupt`, `help`, or `stop listening`. Completed replies play as short streamed clips;
+  speaking over playback stops the remaining reply.
 - Git status remains available, while worktrees are intentionally not a first-class UI surface.
 - On narrow screens, `:nav` opens the project/session drawer and only the focused pane is shown.
 

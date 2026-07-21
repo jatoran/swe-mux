@@ -275,14 +275,12 @@ attribution.
 
 ### Voice boundary
 
-- [x] Document browser Web Speech Recognition as the current zero-install STT backend,
-  including browser support, secure-context requirements, privacy/provider variability,
-  and mobile keyboard-dictation behavior.
+- [x] Keep microphone capture app-owned in a secure browser context and transcription
+  daemon-owned through offline Windows Speech Recognition or optional local faster-whisper.
 - [x] Instrument capability/availability only; never retain audio or transcript content for
   analytics without explicit consent.
-- [x] Treat local Whisper/faster-whisper or a Windows-native recognizer as a separate
-  opt-in decision gate if Web Speech reliability becomes product-limiting. Do not add an
-  STT service merely for feature symmetry.
+- [x] Bound utterance size and duration, delete temporary WAV input after every outcome,
+  and commit buffered speech only through explicit wake commands.
 
 ### Searchable session archive
 

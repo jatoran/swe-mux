@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import type { Session, VoiceClip, VoiceContent, VoiceStatus } from './types'
 import {
   autoplayEnabled, getPlayback, pausePlayback, playClip, seekTo,
-  setAutoplayEnabled, sttAvailable, startDictation, subscribePlayback, unlockPlayback,
+  setAutoplayEnabled, subscribePlayback, unlockPlayback,
 } from './voice'
 
 const formatSeconds = (value: number) => {
@@ -114,32 +114,4 @@ export function VoicePlayer({ session, status, mode, onSession }: { session: Ses
     {clip?.status === 'failed' && <span class="voice-error" title={clip.error || 'generation failed'}>failed</span>}
     {error && <span class="voice-error" title={error}>{error.length > 42 ? `${error.slice(0, 42)}…` : error}</span>}
   </div>
-}
-
-// Desktop dictation chip. Rendered only where SpeechRecognition exists in a secure
-// context (localhost, or tailnet behind Tailscale Serve HTTPS); mobile keyboards
-// already provide dictation, so the chip is hidden on coarse pointers via CSS.
-export function MicButton({ sessionId }: { sessionId: string }) {
-  const [listening, setListening] = useState(false)
-  const [interim, setInterim] = useState('')
-  const stopRef = useRef<(() => void) | null>(null)
-  useEffect(() => () => stopRef.current?.(), [sessionId])
-  if (!sttAvailable()) return null
-  const toggle = () => {
-    if (listening) { stopRef.current?.(); return }
-    setInterim('')
-    const stop = startDictation({
-      onInterim: setInterim,
-      onFinal: text => window.dispatchEvent(new CustomEvent('mux:terminal-action', { detail: { sessionId, action: 'insertText', text } })),
-      onEnd: () => { setListening(false); setInterim(''); stopRef.current = null },
-      onError: message => {
-        if (message !== 'no-speech' && message !== 'aborted') window.dispatchEvent(new CustomEvent('mux:error', { detail: `Dictation failed: ${message}` }))
-      },
-    })
-    if (stop) { stopRef.current = stop; setListening(true) }
-    else window.dispatchEvent(new CustomEvent('mux:error', { detail: 'Dictation needs a secure context (localhost or HTTPS) and a supported browser.' }))
-  }
-  return <button class={`pane-tool-label voice-mic ${listening ? 'recording' : ''}`} aria-pressed={listening}
-    title={listening ? (interim ? `Heard: ${interim}` : 'Listening… click to stop') : 'Dictate into this terminal. Text is inserted without submitting; press Enter to send.'}
-    onClick={toggle}>{listening ? '◉ rec' : 'mic'}</button>
 }

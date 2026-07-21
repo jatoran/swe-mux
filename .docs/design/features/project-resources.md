@@ -8,7 +8,9 @@ views participate in the same pane/tab layout as terminals and previews.
 
 ## Notes
 
-- Every Project has one canonical note at `.swe-mux/notes/project.md`.
+- Every Project has one canonical note at `.swe-mux/notes/project.md`. Creation seeds an absent
+  file with a `# <Project name> notes` heading followed by two blank lines. An existing note is
+  never rewritten, and renaming a Project never rewrites its heading.
 - Every shell, Claude, or Codex terminal can lazily initialize a distinct note at
   `.swe-mux/notes/sessions/<safe-session-id>.md`. Unsafe/external identities use a stable hashed
   filename. Opening an existing note never overwrites it.
@@ -44,12 +46,19 @@ views participate in the same pane/tab layout as terminals and previews.
   same clean-state revision check so a browser returning from suspension catches up.
 - A browser ignores its own echoed save event by comparing storage revisions. Simultaneous edits
   remain intentionally non-merged and use the existing optimistic revision conflict flow.
-- The controlled Continuity editor creates and reconciles its document in layout effects.
-  Passive prop synchronization can replay a stale pre-keystroke value and produce an apparent
-  render/input loop.
-- Narrow or coarse-pointer clients use a browser-native textarea backed by the same save queue.
-  Mobile IME/autocorrect input therefore has one browser-owned mutation path; it never passes
-  through the desktop projection engine's canceled `beforeinput` reconciliation.
+- One shared Continuity editor renders every editable Markdown surface (project note, session
+  note, and Markdown files opened from the browser) on desktop and mobile, and all of them
+  autosave through the same resource-scoped queue. Only the save target differs: notes PUT the
+  note endpoint (`{markdown, revision}`); Markdown files PUT the file endpoint
+  (`{path, text, revision}`). The queue's debounce, in-flight coalescing, 409 conflict banner,
+  retry, and teardown beacon are identical for both.
+- The editor is remounted whenever a different document loads so a new engine cannot leak text
+  between documents. Ordinary edits do not remount it, so cursor and undo history survive. A
+  host replacement is an echo of pushed text and is never committed back.
+- A Markdown file's change event carries no storage revision, so the browser cannot tell its own
+  echoed write from an external one. It therefore does not auto-reload an open Markdown file on a
+  file-change event; a genuine out-of-band edit surfaces as a 409 conflict banner on the next
+  save, with the same reload/overwrite choices as a note conflict.
 
 ### Known nested-Project gap
 
@@ -64,16 +73,28 @@ include a registered Project nested below another Git root.
 
 - The file browser is lazily expanded from the canonical Project root. Traversal and symlink
   escapes are rejected; one directory response is capped at 2,000 entries.
+- A debounced search box at the top of the Files pane filters recursively by file name, file
+  content, or both (a scope toggle). A non-empty query replaces the lazy tree with a flat,
+  path-ordered result list (content matches show the first matching line); clearing it restores
+  the tree. Results and the tree share the same open, context-menu, and drag behavior.
+- Clicking a file opens it as a tab in the next available pane, never inside the Files pane
+  itself; only when Files is the sole pane does the file open there. A file row can also be
+  dragged out of the tree or results and dropped onto any pane as a tab or a new edge split,
+  reusing the ordinary workspace-tab drop targets.
+- The Project-folder chooser (Add project) has an equivalent debounced name filter over the
+  listed folders; contents/both do not apply to a folder chooser.
 - UTF-8 files up to 2 MiB open in revision-checked editor tabs. Binary and larger files remain
-  discoverable but do not enter the text-edit path.
+  discoverable but do not enter the text-edit path. Markdown files (`.md`/`.markdown`/`.mdx`)
+  open in the shared Continuity editor and autosave like notes; every other text file uses a
+  plain textarea with an explicit Save button and baseline diff.
 - Global `project_ignore_patterns` and Project-local `ignore_patterns` compose. They filter the
   browser and watcher only, never Git. Settings preserves line breaks while editing and trims
   blank entries only on explicit Save.
 - A file/folder context menu can reveal it in the host file manager, add its basename to global
   ignores, or add its Project-relative path to Project ignores. Windows reveal selects a file
   and asks Explorer to foreground its window.
-- `Tab` inserts a literal tab in note/file editors. Note `Enter` carries leading indentation,
-  and soft-wrapped lines retain that visual indentation.
+- `Tab` inserts a literal tab in the plain-textarea file editor. Continuity Markdown surfaces
+  handle their own indentation and list behavior.
 
 ## Watch efficiency
 

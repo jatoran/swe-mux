@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { memo } from 'preact/compat'
+import type { ComponentChildren } from 'preact'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
@@ -41,6 +42,13 @@ interface Props {
   keybindings: Record<string, string>
   scrollback: number
   mobileInput: MobileInputSettings
+  // Read-aloud UI lives in this pane's own bottom region so the terminal sizes above it.
+  // The playback strip sits just over the clipboard rail; the toggle chips lead the rail.
+  // `voiceKey` folds every input those nodes render from so the memo re-renders when the
+  // voice state actually changes without recomputing on unrelated App refreshes.
+  voiceStrip?: ComponentChildren
+  railLeading?: ComponentChildren
+  voiceKey?: string
 }
 
 function runCommand(command: string) {
@@ -92,7 +100,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session) {
   term.focus()
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, mobileInput }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, mobileInput, voiceStrip, railLeading }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
@@ -113,6 +121,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const manualPasteRef=useRef<HTMLTextAreaElement>(null)
   const mobileLiveInputRef=useRef<HTMLTextAreaElement>(null)
   const focusTerminalInputRef=useRef<()=>void>(()=>{})
+  // Read/select mode: when on (touch only), tapping the terminal no longer raises the soft
+  // keyboard, so you can select, scroll, and paste without it. The ref is what the pointer
+  // and focus closures created in the mount effect read at call time.
+  const keyboardOffRef=useRef(false)
+  const [keyboardOff,setKeyboardOff]=useState(false)
+  // Set inside the mount effect; lets a layout change outside the ResizeObserver's reach
+  // (the voice strip appearing/vanishing under the terminal) force an xterm re-fit.
+  const scheduleFitRef=useRef<()=>void>(()=>{})
   const lastAutoCopiedSelectionRef=useRef('')
   const clipboardStatusTimerRef=useRef<number|null>(null)
   const stateRef=useRef(session.state)
@@ -217,6 +233,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     term.open(host.current)
     const mobileLiveInput=isMobileTerminalInput()?mobileLiveInputRef.current:null
     const focusTerminalInput=()=>{
+      if(keyboardOffRef.current)return
       if(mobileLiveInput){
         mobileLiveInput.focus({preventScroll:true})
         const end=mobileLiveInput.value.length
@@ -314,6 +331,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     const scheduleFit = () => scheduleViewport(false)
     const scheduleFullRedraw = () => scheduleViewport(true)
+    scheduleFitRef.current = scheduleFullRedraw
     // Chromium device emulation can preserve a live WebGL context while changing
     // its emulated pixel ratio, leaving xterm interactive but visually blank.
     // The built-in renderer is reliable for the single full-screen mobile pane.
@@ -785,6 +803,23 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     return () => window.removeEventListener('mux:terminal-action', onAction)
   }, [session.id, session.backend])
 
+  // The read-aloud strip shares the terminal-surface grid, so showing or hiding it changes
+  // the terminal's row count. Re-fit on that flip so the bottom line is never clipped under
+  // the strip. A boolean (not the VNode) keeps this to the actual show/hide transition.
+  const voiceVisible = !!voiceStrip
+  useEffect(() => { scheduleFitRef.current() }, [voiceVisible])
+
+  // Rail key buttons inject raw bytes on the normal onData path (broadcast + replay aware).
+  // In read/select mode we deliberately do not refocus, so sending a key never raises the
+  // soft keyboard back up.
+  const sendKey=(sequence:string)=>{termRef.current?.input(sequence,true);if(!keyboardOffRef.current)focusTerminalInputRef.current()}
+  const toggleKeyboard=()=>{
+    const next=!keyboardOffRef.current
+    keyboardOffRef.current=next;setKeyboardOff(next)
+    if(next)mobileLiveInputRef.current?.blur()
+    else focusTerminalInputRef.current()
+  }
+
   const retryPreparedCopy=async()=>{
     if(!preparedClipboard)return
     if(await copyPreparedText(preparedClipboard,manualClipboardRef.current)){
@@ -794,7 +829,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     requestAnimationFrame(()=>{manualClipboardRef.current?.focus();manualClipboardRef.current?.select()})
   }
 
-  return <div class="terminal-surface"><div class="terminal-host" ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class="terminal-action-rail" role="toolbar" aria-label="Terminal clipboard actions"><button disabled={session.backend==='shell'} title={session.backend==='shell'?'Copy reply is available in Claude and Codex sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}>Copy reply</button><button onClick={()=>void paste()}>Paste</button><span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span></div>{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  return <div class="terminal-surface"><div class="terminal-host" ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{voiceStrip}<div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions" onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{railLeading}<button class={`term-key kbd-toggle ${keyboardOff?'active':''}`} aria-pressed={keyboardOff} title={keyboardOff?'Read mode: tap the terminal to select/scroll without the keyboard. Click to type again.':'Hide the on-screen keyboard so you can select, scroll, and paste'} onClick={toggleKeyboard}>⌨</button><button class="term-key" title="Escape" onClick={()=>sendKey('\x1b')}>Esc</button><button class="term-key" title="Enter" onClick={()=>sendKey('\r')}>⏎</button><button class="term-key" title="Tab" onClick={()=>sendKey('\t')}>Tab</button><button class="term-key" title="Interrupt (Ctrl-C)" onClick={()=>sendKey('\x03')}>^C</button><button class="term-key" title="Up / previous command" onClick={()=>sendKey('\x1b[A')}>↑</button><button class="term-key" title="Down / next command" onClick={()=>sendKey('\x1b[B')}>↓</button><button class="term-key" title="Left" onClick={()=>sendKey('\x1b[D')}>←</button><button class="term-key" title="Right" onClick={()=>sendKey('\x1b[C')}>→</button><button disabled={session.backend==='shell'} title={session.backend==='shell'?'Copy reply is available in Claude and Codex sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}>Copy reply</button><button onClick={()=>void paste()}>Paste</button><span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span></div>{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }
@@ -839,5 +874,6 @@ export const TerminalPane = memo(TerminalPaneImpl, (a, b) =>
   a.broadcast === b.broadcast &&
   a.scrollback === b.scrollback &&
   a.keybindings === b.keybindings &&
-  a.mobileInput === b.mobileInput,
+  a.mobileInput === b.mobileInput &&
+  a.voiceKey === b.voiceKey,
 )

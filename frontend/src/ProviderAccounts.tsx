@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { setSoundPreferences, soundPreferences } from './sessionSounds'
 import { accountPopoverStyle, formatResetRemaining, percent, providerWeeklyUsage, quotaSummary, quotaWindowSummary, usageBand } from './providerAccountDisplay'
+import { emitTutorialAction } from './tutorial'
 
 export type ProviderName='claude'|'codex'
 type QuotaWindow={used_percent:number;window_minutes:number;resets_at?:number|null}
@@ -158,20 +159,20 @@ export function AccountSettings() {
   const [labels,setLabels]=useState<Record<ProviderName,string>>({claude:'',codex:''})
   const [confirmRemove,setConfirmRemove]=useState('')
   const grouped=useMemo(()=>({claude:status?.accounts.filter(account=>account.provider==='claude')||[],codex:status?.accounts.filter(account=>account.provider==='codex')||[]}),[status])
-  const mutate=async(key:string,method:string,path:string,body?:unknown)=>{
+  const mutate=async(key:string,method:string,path:string,body?:unknown,tutorialAction=false)=>{
     setBusy(key);setError('');setMessage('')
-    try{const next=await api<ProviderAccountsStatus>(method,path,body);setStatus(next);notifyChanged();setMessage('Account state updated.')}
+    try{const next=await api<ProviderAccountsStatus>(method,path,body);setStatus(next);notifyChanged();setMessage('Account state updated.');if(tutorialAction)emitTutorialAction({action:'account-saved'})}
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
   }
-  const add=(provider:ProviderName,login:boolean)=>void mutate(`${provider}-${login?'login':'capture'}`,'POST',`/api/provider-accounts/${provider}/${login?'login':'capture'}`,{label:labels[provider]||undefined})
+  const add=(provider:ProviderName,login:boolean)=>void mutate(`${provider}-${login?'login':'capture'}`,'POST',`/api/provider-accounts/${provider}/${login?'login':'capture'}`,{label:labels[provider]||undefined},true)
   const reauthenticate=(account:ProviderAccount)=>void mutate(account.id,'POST',`/api/provider-accounts/${account.provider}/login`,{replace_id:account.id,label:account.label})
   const rename=(account:ProviderAccount,label:string)=>{if(label.trim()&&label.trim()!==account.label)void mutate(account.id,'PATCH',`/api/provider-accounts/${account.provider}/${account.id}`,{label})}
   const remove=(account:ProviderAccount)=>{if(confirmRemove!==account.id){setConfirmRemove(account.id);return}setConfirmRemove('');void mutate(account.id,'DELETE',`/api/provider-accounts/${account.provider}/${account.id}`)}
-  return <section class="account-settings"><h3>Provider accounts</h3><p>Switching replaces only the provider's system authentication file. Global config, skills, projects, and histories remain shared. Existing Claude and Codex processes observe the same system-wide login.</p>
+  return <section data-tutorial="provider-accounts" class="account-settings"><h3>Provider accounts</h3><p>Switching replaces only the provider's system authentication file. Global config, skills, projects, and histories remain shared. Existing Claude and Codex processes observe the same system-wide login.</p>
     {(['claude','codex'] as ProviderName[]).map(provider=>{const current=status?.current[provider];const active=grouped[provider].find(account=>account.id===current?.account_id);return <div class="account-provider-settings"><header><div><strong>{provider.toUpperCase()}</strong><small>{grouped[provider].length} saved · quotas refresh every {status?.poll_minutes||15} minutes</small></div><button disabled={!!busy} onClick={()=>void mutate('refresh','POST','/api/provider-accounts/refresh',{})}>refresh quotas</button></header>
       <div class={`account-current ${current?.state||'signed_out'}`}><span>LIVE SYSTEM AUTH</span><strong>{currentDescription(current,active)}</strong><small>swe-mux follows the daemon host credentials; startup never restores an older saved account.</small></div>
-      <div class="account-add"><input aria-label={`New ${provider} account label`} placeholder="optional label" value={labels[provider]} onInput={event=>setLabels(value=>({...value,[provider]:event.currentTarget.value}))}/><button class="primary" disabled={!!busy} onClick={()=>add(provider,true)}>{busy===`${provider}-login`?'waiting for sign-in…':'sign in + save'}</button><button disabled={!!busy} onClick={()=>add(provider,false)}>{busy===`${provider}-capture`?'saving…':'save current login'}</button></div>
+      <div data-tutorial="provider-account-actions" class="account-add"><input aria-label={`New ${provider} account label`} placeholder="optional label" value={labels[provider]} onInput={event=>setLabels(value=>({...value,[provider]:event.currentTarget.value}))}/><button class="primary" disabled={!!busy} onClick={()=>add(provider,true)}>{busy===`${provider}-login`?'waiting for sign-in…':'sign in + save'}</button><button disabled={!!busy} onClick={()=>add(provider,false)}>{busy===`${provider}-capture`?'saving…':'save current login'}</button></div>
       <p class="account-help">“Sign in + save” launches <code>{provider==='claude'?'claude auth login --claudeai':'codex login'}</code> on the daemon host. “Save current login” captures an account you signed into separately.</p>
       <div class="account-list">{grouped[provider].map(account=><article class={status?.selected[provider]===account.id?'active':''}><span class="account-state">{status?.selected[provider]===account.id?'◆ active':'◇ saved'}</span><input aria-label={`${provider} account label`} defaultValue={account.label} onBlur={event=>rename(account,event.currentTarget.value)}/><small>{account.email||account.organization||account.provider_account_id||'identity unavailable'}</small><div class="account-quota" title={quotaTitle(account)}><span>session <b>{percent(account.quota?.session)}</b></span><span>weekly <b>{percent(account.quota?.weekly)}</b></span>{account.quota?.fable&&<span>fable <b>{percent(account.quota.fable)}</b></span>}<em>{account.quota?.status||'pending'}{account.quota?.error?` · ${account.quota.error}`:''}</em></div><div class="account-actions"><button disabled={!!busy||status?.selected[provider]===account.id} onClick={()=>void mutate(account.id,'POST',`/api/provider-accounts/${provider}/${account.id}/select`,{})}>use</button><button disabled={!!busy} onClick={()=>reauthenticate(account)}>sign in again</button><button class={confirmRemove===account.id?'danger confirming':'danger'} disabled={!!busy} onClick={()=>remove(account)}>{confirmRemove===account.id?'confirm remove':'remove'}</button></div></article>)}{!grouped[provider].length&&<div class="account-empty">No {provider} accounts saved yet.</div>}</div>
     </div>})}

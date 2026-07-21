@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useRef, useState } from 'preact/hooks'
 import type {
   ContinuityChangeDetail,
   ContinuityEditorElement,
   ContinuityRequestDetail,
 } from '@continuity-editor/editor'
 import { ContinuityEditor } from '@continuity-editor/editor/react'
-import { insertEditorTab, prefersPlainMobileEditor } from './editorText'
 import { noteQueueKey, noteSaveQueue } from './noteSaveQueue'
 
 type Props = {
@@ -24,28 +23,6 @@ const NOTE_SHORTCUTS = {
   'mod+r': 'editor.toggle_bullet_at_line_start',
   'mod+e': 'markdown.toggle_task',
 } as const
-
-function usePlainMobileEditor(): boolean {
-  const readPreference = () => prefersPlainMobileEditor(
-    window.matchMedia('(max-width: 760px)').matches,
-    window.matchMedia('(pointer: coarse)').matches,
-  )
-  const [preferred, setPreferred] = useState(readPreference)
-
-  useEffect(() => {
-    const narrow = window.matchMedia('(max-width: 760px)')
-    const coarse = window.matchMedia('(pointer: coarse)')
-    const update = () => setPreferred(prefersPlainMobileEditor(narrow.matches, coarse.matches))
-    narrow.addEventListener('change', update)
-    coarse.addEventListener('change', update)
-    return () => {
-      narrow.removeEventListener('change', update)
-      coarse.removeEventListener('change', update)
-    }
-  }, [])
-
-  return preferred
-}
 
 /** Route the editor's host requests through the app's ordinary browser policies. */
 function routeRequest(detail: ContinuityRequestDetail): void {
@@ -68,51 +45,34 @@ function routeRequest(detail: ContinuityRequestDetail): void {
 }
 
 /**
- * Project-note surface backed by the Continuity WebAssembly editor engine.
+ * Shared Continuity WebAssembly markdown surface for every editable `.md` view: project
+ * and session notes and markdown files opened from the Files browser, on desktop and mobile.
  *
- * Two revisions are kept strictly separate. `engine` is Continuity's in-memory
- * snapshot (its own revision starts at 0 for a freshly loaded note) and is the
- * only revision handed to the `<ContinuityEditor>` `revision` prop. The daemon's
- * optimistic storage revision lives entirely in the resource-scoped save queue
- * and is never passed here. On change we send only the text to the queue.
+ * It owns only Continuity's in-memory revision (starting at 0 for a freshly loaded
+ * document); the daemon's optimistic storage revision never reaches here. How a committed
+ * snapshot is persisted is the caller's concern, passed as `onCommit`: notes push to the
+ * autosave queue, while file editors only mark their draft dirty for an explicit Save. A
+ * host replacement is an echo of text we pushed in and is never committed back.
  *
- * This component is remounted (keyed by project/resource/load-generation) when a
- * different note loads, so switching notes constructs a fresh engine and cannot
- * leak text or revisions between notes.
+ * Remount this (via a caller-supplied key) whenever a different document loads, so a fresh
+ * engine cannot leak text or revisions between documents.
  */
-export function ProjectNoteEditor({ projectId, resourceId, initialText, label = 'Project note' }: Props) {
+export function ContinuityMarkdownEditor({
+  initialText,
+  label,
+  spellcheck = false,
+  onCommit,
+}: {
+  initialText: string
+  label: string
+  spellcheck?: boolean
+  onCommit: (text: string) => void
+}) {
   const editorRef = useRef<ContinuityEditorElement>(null)
-  const plainMobileEditor = usePlainMobileEditor()
   const [engine, setEngine] = useState<{ text: string; revision: number }>({
     text: initialText,
     revision: 0,
   })
-  const key = noteQueueKey(projectId, resourceId)
-
-  const commitUserText = (text: string) => {
-    setEngine(current => ({ text, revision: current.revision + 1 }))
-    noteSaveQueue.submit(key, text)
-  }
-
-  if (plainMobileEditor) {
-    return <textarea
-      class="note-editor mobile-note-editor"
-      aria-label={label}
-      defaultValue={engine.text}
-      spellcheck={false}
-      autoCapitalize="sentences"
-      onInput={event => commitUserText(event.currentTarget.value)}
-      onKeyDown={event => {
-        if (event.key !== 'Tab') return
-        event.preventDefault()
-        const input = event.currentTarget
-        const next = insertEditorTab(input.value, input.selectionStart, input.selectionEnd)
-        input.value = next.text
-        input.setSelectionRange(next.caret, next.caret)
-        commitUserText(next.text)
-      }}
-    />
-  }
 
   return (
     <ContinuityEditor
@@ -129,15 +89,13 @@ export function ProjectNoteEditor({ projectId, resourceId, initialText, label = 
       }}
       value={engine.text}
       revision={engine.revision}
-      spellcheck={false}
+      spellcheck={spellcheck}
       shortcutPolicy="browser-safe"
       shortcutBindings={NOTE_SHORTCUTS}
       onChange={(detail: ContinuityChangeDetail) => {
         setEngine({ text: detail.snapshot.text, revision: detail.snapshot.revision })
-        // A host replacement is an echo of text we pushed in; never save it back.
-        if (detail.source !== 'hostReplacement') {
-          noteSaveQueue.submit(key, detail.snapshot.text)
-        }
+        // A host replacement is an echo of text we pushed in; never commit it back.
+        if (detail.source !== 'hostReplacement') onCommit(detail.snapshot.text)
       }}
       onRevisionConflict={() => {
         // Local typing won a race against a host replacement: keep local state.
@@ -145,6 +103,19 @@ export function ProjectNoteEditor({ projectId, resourceId, initialText, label = 
         if (current) setEngine({ text: current.text, revision: current.revision })
       }}
       onRequest={routeRequest}
+    />
+  )
+}
+
+/** Project/session note surface: Continuity committing through the resource-scoped autosave
+ *  queue. Remounted (keyed by project/resource/load-generation) when a different note loads. */
+export function ProjectNoteEditor({ projectId, resourceId, initialText, label = 'Project note' }: Props) {
+  const key = noteQueueKey(projectId, resourceId)
+  return (
+    <ContinuityMarkdownEditor
+      initialText={initialText}
+      label={label}
+      onCommit={text => noteSaveQueue.submit(key, text)}
     />
   )
 }

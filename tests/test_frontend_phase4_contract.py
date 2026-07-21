@@ -192,7 +192,6 @@ def test_dialog_layers_stack_above_persistent_chrome() -> None:
     chrome = ["mobile-toolbar", "mobile-nav-toggle", "app-topbar", "context-menu"]
     dialogs = [
         "modal-layer",
-        "history-layer",
         "prompt-library-layer",
         "projects-manager-layer",
         "process-layer",

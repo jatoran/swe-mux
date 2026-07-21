@@ -36,7 +36,7 @@
   `design/features/operational-telemetry.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing shell/profile creation: `design/features/shell-profiles.md`
 - Changing usage analytics: `design/features/usage.md`
-- Changing read aloud or dictation: `design/features/voice.md`
+- Changing read aloud or hands-free conversation: `design/features/voice.md`
 - Changing listeners, Tailscale, browser security, or remote operation:
   `design/features/remote-access.md`
 - Planning remaining work: `development/ROADMAP.md`; control-plane ideas:

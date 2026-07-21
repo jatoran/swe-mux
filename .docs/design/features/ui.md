@@ -84,6 +84,35 @@ responsive controls.
 - Notification sounds preview immediately after browser audio unlock. Bundled choices are
   intentionally restrained; volume, per-event enablement, quiet hours, and test playback are
   device preferences.
+- General exposes **Reset & run tutorial**. Starting it shares the ordinary Settings
+  Save/Discard guard, so replay never silently loses a dirty draft.
+
+## Guided first-run tutorial
+
+- A versioned device-local completion marker opens the tutorial on the first browser/WebView
+  visit. Finish and **Exit tour** both suppress later automatic runs; Settings reset removes the
+  marker and starts immediately.
+- The action-driven walkthrough covers the real Projects registry and creation form,
+  provider-native Claude/Codex login or current-login capture, Run menu, shell launch, pane/tab
+  lifetime, second-tab creation, tab movement, pane-edge splitting, Project notes, menu browsers,
+  and keyboard shortcuts. Replay with an existing Project opens it instead of forcing a duplicate.
+- Highlighted product controls replace **Next** for action steps. Transparent blockers leave only
+  the spotlight opening and tutorial card interactive; Project creation, account save, terminal
+  launch, and layout drops advance only after their ordinary operation reports success.
+- Run requires opening the actual menu and selecting Shell. Account setup requires either
+  **sign in + save** or **save current login** to complete successfully. Failures remain on the
+  current step with the owning feature's normal error surface.
+- Drag coaching is gesture-aware. Before movement, only the source tab is marked. After the
+  pointer gesture crosses the real five-pixel drag threshold, the spotlight moves to the tab bar
+  or a right-edge split zone; the native insertion/split preview remains visible and unobscured.
+  Only a completed tab-bar or pane-edge drop advances its matching step.
+- Narrow/mobile replay replaces desktop drag/split actions with the unified-tab-rail explanation;
+  mobile intentionally cannot perform or persist desktop pane geometry.
+- Resize, scroll, responsive changes, folder-picker transitions, and drag phase changes recompute
+  coach-mark geometry without persisting tutorial geometry. Escape and the visible header exit
+  work on every step; progress, reduced-motion styling, and the mobile bottom sheet remain.
+- Completion is browser-local only. No daemon config, Project file, account metadata, or layout
+  field records tutorial state.
 
 ## Focus and responsive behavior
 
@@ -104,8 +133,20 @@ responsive controls.
 - Narrow and coarse-pointer terminals focus a dedicated native IME bridge. Android composition
   replacements are converted to incremental terminal text and DEL input as they happen, so Gboard
   and other composing keyboards provide live PTY input without xterm's temporary composition box.
-- Every terminal has an in-flow clipboard rail on desktop and mobile. Paste uses the browser
-  clipboard when permitted and otherwise opens a focused native-paste target. Claude and Codex
+- Every terminal has an in-flow action rail at the bottom of its pane on desktop and mobile,
+  below the terminal rather than over it. It carries, in order, the agent read-aloud and
+  hands-free Conversation toggles (agent panes only), a keyboard toggle plus terminal-key
+  buttons (Esc, Enter, Tab,
+  Ctrl-C, and the four arrows), then Copy reply and Paste, then a status readout. Keys inject
+  raw bytes on the normal input path. The rail overflows on narrow panes and scrolls
+  horizontally (touch drag, scrollbar, or mouse wheel); it never wraps. On agent panes the
+  read-aloud player strip sits directly above it.
+- The keyboard toggle is a touch-only read/select mode: while on, tapping the terminal selects,
+  scrolls, and positions without raising the on-screen keyboard, so selection auto-copy and
+  Paste work keyboard-down; tapping the toggle again restores typing. Sending a key from the
+  rail in this mode never raises the keyboard.
+- Paste uses the browser clipboard when permitted and otherwise opens a focused native-paste
+  target. Claude and Codex
   rails prefetch normalized transcript text so Copy reply runs inside the button gesture rather
   than typing `/copy` or waiting for OSC 52. Reply extraction walks back to the newest turn with
   meaningful assistant text; provider control acknowledgements such as `No response requested.`
@@ -140,8 +181,11 @@ Detailed UI behavior belongs with the owning feature:
 - `frontend/src/App.tsx`
 - `frontend/src/ProjectsManager.tsx`
 - `frontend/src/Settings.tsx`
+- `frontend/src/GuidedTutorial.tsx`
+- `frontend/src/tutorial.ts`
 - `frontend/src/ProviderAccounts.tsx`
 - `frontend/src/ResourceUsage.tsx`
 - `frontend/src/TerminalPane.tsx`
 - `frontend/src/ProjectRunMenu.tsx`
+- `frontend/src/DirectoryPicker.tsx`
 - `frontend/src/style.css`

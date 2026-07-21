@@ -72,6 +72,7 @@ from .project_files import (
     read_note,
     read_project_config,
     read_project_file,
+    search_project_files,
     session_note_summaries,
     write_note,
     write_project_config,
@@ -262,6 +263,7 @@ def create_app(
             web.get("/api/health", health),
             web.post("/api/desktop/shutdown", desktop_shutdown),
             web.get("/api/remote/status", remote_status),
+            web.post("/api/remote/mobile-voice/enable", enable_mobile_voice),
             web.get("/api/config", get_config),
             web.patch("/api/config", patch_config),
             web.post("/api/config/reset", reset_config),
@@ -320,6 +322,7 @@ def create_app(
             web.post("/api/projects/{project_id}/session-notes/{note_id}", initialize_session_note),
             web.put("/api/projects/{project_id}/session-notes/{note_id}", put_session_note),
             web.get("/api/projects/{project_id}/files", list_project_files),
+            web.get("/api/projects/{project_id}/search", search_project_files_route),
             web.get("/api/projects/{project_id}/file", get_project_file),
             web.put("/api/projects/{project_id}/file", put_project_file),
             web.post("/api/projects/{project_id}/reveal", reveal_project_resource),
@@ -365,6 +368,9 @@ def create_app(
             web.get("/api/events", list_events),
             web.get("/api/notifications", list_notifications),
             web.get("/api/voice", voice_status),
+            web.post("/api/sessions/{sid}/voice/transcribe", voice_transcribe),
+            web.post("/api/sessions/{sid}/voice/submit", voice_submit),
+            web.post("/api/sessions/{sid}/voice/interrupt", voice_interrupt),
             web.post("/api/sessions/{sid}/voice/generate", voice_generate),
             web.get("/api/voice/clips", list_voice_clips),
             web.get("/api/voice/clips/{clip_id}/audio", voice_clip_audio),
@@ -686,6 +692,28 @@ async def remote_status(request: web.Request) -> web.Response:
     config: Config = request.app["config"]
     return json_response(
         await tailscale_status(config.port, tailnet_enabled=config.tailnet_enabled)
+    )
+
+
+async def enable_mobile_voice(request: web.Request) -> web.Response:
+    config: Config = request.app["config"]
+    if request.headers.get("X-Mux-User-Gesture") != "mobile-voice-setup":
+        return json_response({"error": "mobile voice setup requires an explicit user action"}, 400)
+    if not config.tailnet_enabled:
+        return json_response(
+            {"error": "Enable the Tailscale listener in Settings before mobile voice."}, 409
+        )
+    return json_response(
+        {
+            "status": "error",
+            "url": None,
+            "authorization_url": None,
+            "diagnostic": (
+                "Secure mobile voice is unavailable on this device. "
+                "Regular tailnet access remains available over the 100.x address."
+            ),
+        },
+        409,
     )
 
 
@@ -2793,6 +2821,25 @@ async def list_project_files(request: web.Request) -> web.Response:
     )
 
 
+async def search_project_files_route(request: web.Request) -> web.Response:
+    project = _request_project(request)
+    mode = request.query.get("mode", "names")
+    if mode not in ("names", "contents", "both"):
+        mode = "names"
+    query = request.query.get("q", "")
+    patterns = effective_project_ignores(
+        project.root, request.app["config"].project_ignore_patterns
+    )
+    # The recursive walk (and any content reads) is blocking, so keep it off the event loop.
+    result = await asyncio.get_running_loop().run_in_executor(
+        None,
+        lambda: search_project_files(
+            project.root, query, mode=mode, ignore_patterns=patterns
+        ),
+    )
+    return json_response(result)
+
+
 async def get_project_file(request: web.Request) -> web.Response:
     project = _request_project(request)
     return json_response(read_project_file(project.root, request.query.get("path", "")))
@@ -3069,6 +3116,79 @@ async def list_notifications(request: web.Request) -> web.Response:
 async def voice_status(request: web.Request) -> web.Response:
     voice: VoiceService = request.app["voice"]
     return json_response(await voice.status())
+
+
+async def voice_transcribe(request: web.Request) -> web.Response:
+    voice: VoiceService = request.app["voice"]
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    if session.record.backend not in {"claude", "codex"}:
+        return json_response({"error": "conversation mode requires an agent session"}, 409)
+    if request.content_type not in {"audio/wav", "audio/x-wav", "application/octet-stream"}:
+        return json_response({"error": "voice transcription requires WAV audio"}, 415)
+    if request.content_length is not None and request.content_length > 2 * 1024 * 1024:
+        return json_response({"error": "voice utterance must not exceed 2 MiB"}, 413)
+    try:
+        audio = await request.read()
+        text = await voice.transcribe_wav(audio)
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 409)
+    return json_response({"text": text})
+
+
+def _record_voice_input(request: web.Request, session: Any, data: str) -> None:
+    session.pty.write(data)
+    now = time.monotonic()
+    session.input_revision += 1
+    session.last_input_event_ts = now
+    session.last_input_report_ts = now
+    request.app["events"].emit_background(
+        "terminal_input",
+        session_id=session.record.id,
+        source="voice",
+        input_owner=True,
+        bytes=len(data.encode("utf-8")),
+    )
+
+
+async def voice_submit(request: web.Request) -> web.Response:
+    voice: VoiceService = request.app["voice"]
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    if session.record.backend not in {"claude", "codex"}:
+        return json_response({"error": "conversation mode requires an agent session"}, 409)
+    if session.record.state in {"exited", "crashed"}:
+        return json_response({"error": "the agent session has ended"}, 409)
+    body = await request.json()
+    text = str(body.get("text") or "").strip()
+    utterance_id = str(body.get("utterance_id") or "").strip()
+    if not utterance_id or len(utterance_id) > 100:
+        raise ValueError("utterance_id is required and must be at most 100 characters")
+    if not text or len(text) > 20_000:
+        raise ValueError("voice prompt must contain 1–20000 characters")
+    if any(ord(character) < 32 and character not in {"\t", "\n"} for character in text):
+        raise ValueError("voice prompt contains terminal control characters")
+    if not voice.claim_submission(utterance_id):
+        return json_response({"ok": True, "duplicate": True})
+    _record_voice_input(request, session, f"{text}\r")
+    await request.app["events"].emit(
+        "voice_prompt_submitted",
+        session_id=session.record.id,
+        source="voice",
+        characters=len(text),
+    )
+    return json_response({"ok": True, "duplicate": False, "characters": len(text)})
+
+
+async def voice_interrupt(request: web.Request) -> web.Response:
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    if session.record.backend not in {"claude", "codex"}:
+        return json_response({"error": "conversation mode requires an agent session"}, 409)
+    if session.record.state in {"exited", "crashed"}:
+        return json_response({"ok": True, "already_ended": True})
+    _record_voice_input(request, session, "\x03")
+    await request.app["events"].emit(
+        "voice_agent_interrupted", session_id=session.record.id, source="voice"
+    )
+    return json_response({"ok": True, "already_ended": False})
 
 
 async def session_last_reply(request: web.Request) -> web.Response:
@@ -4058,6 +4178,11 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
             after_seq=last_sequence,
         )
         for event in catch_up:
+            # Catch-up events are a historical replay for state reconstruction, not
+            # live activity. Mark them so the browser suppresses live-only side effects
+            # (voice autoplay, notification sounds) that would otherwise re-fire every
+            # reconnect or reopen.
+            event["replay"] = True
             await ws.send_json(event)
             last_sequence = max(last_sequence, int(event["seq"]))
         while True:

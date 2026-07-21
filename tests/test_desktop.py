@@ -95,14 +95,14 @@ def test_frozen_desktop_dispatches_allowlisted_internal_modules(
     assert not dispatch_internal_module(["-m", "os", "system"])
 
 
-def test_tray_quit_confirmation_does_not_depend_on_visible_webview(
+def test_tray_quit_shuts_down_without_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
 
     class HiddenWindow:
         def create_confirmation_dialog(self, *_: object) -> bool:
-            raise AssertionError("tray confirmation must not use the hidden WebView")
+            raise AssertionError("tray quit must not prompt via the hidden WebView")
 
         def destroy(self) -> None:
             events.append("window-destroyed")
@@ -121,46 +121,16 @@ def test_tray_quit_confirmation_does_not_depend_on_visible_webview(
         "swe_mux.desktop.request_daemon_shutdown",
         lambda *_args, **_kwargs: events.append("daemon-stopped") or True,
     )
-    monkeypatch.setattr(
-        "swe_mux.desktop.confirm_desktop_quit",
-        lambda message: events.append(message) or True,
-    )
 
     runtime.quit()
 
     assert events == [
-        "Quit the desktop app and stop the daemon?",
         "daemon-stopped",
         "icon-stopped",
         "window-destroyed",
     ]
     assert runtime.exiting
     assert runtime.stop.is_set()
-
-
-def test_tray_quit_cancel_keeps_hidden_runtime_running(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = object.__new__(DesktopRuntime)
-    runtime.url = "http://127.0.0.1:8765"
-    runtime.token = "desktop-secret"
-    runtime.child = None
-    runtime.window = SimpleNamespace()
-    runtime.icon = None
-    runtime.exiting = False
-    runtime.stop = threading.Event()
-
-    monkeypatch.setattr("swe_mux.desktop.health_snapshot", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("swe_mux.desktop.confirm_desktop_quit", lambda _message: False)
-    monkeypatch.setattr(
-        "swe_mux.desktop.request_daemon_shutdown",
-        lambda *_args, **_kwargs: pytest.fail("cancel must not stop the daemon"),
-    )
-
-    runtime.quit()
-
-    assert not runtime.exiting
-    assert not runtime.stop.is_set()
 
 
 def test_desktop_control_accepts_only_ip_loopback_peers() -> None:

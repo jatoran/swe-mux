@@ -29,8 +29,17 @@ PaneLeaf = terminal | note | preview | history
 
 ## Placement and persistence
 
-- A new Project begins with an empty pane. New terminals and resources join the focused pane by
-  default; explicit directional actions create a split left/right/above/below.
+- A never-arranged Project seeds its workspace on first browser open: a narrow Files column
+  beside a wider pane holding the Project note, which starts focused. Both leaves are viewports,
+  so a first open still spawns no process, and the first terminal joins the note's pane under the
+  ordinary focused-pane rule. Seeding requires layout revision 0 and an empty root together, so a
+  Project whose panes were all deliberately closed stays empty and is never re-seeded.
+- New terminals and resources join the focused pane by default; explicit directional actions
+  create a split left/right/above/below.
+- Placement never defaults a new view into a pane holding the Files browser: an unanchored open,
+  a Files-focused open, and companion-note reuse all skip Files panes and prefer the first
+  non-Files pane. An explicit drop or drag target is still honored exactly. Files is used as a
+  last resort only when it is the sole pane.
 - Every pane has its own tab strip, active tab, and add action. There is no global tab strip,
   dock/pop-out mode, detached layout, or separate resource workspace.
 - Layout changes update the local `layoutValues` ref and rendered map immediately, then serialize

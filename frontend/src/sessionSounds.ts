@@ -1,7 +1,7 @@
 export type SoundEvent='complete'|'waiting'|'attention'|'failure'|'reset'
 export type SoundId='two-tone'|'bong'|'thump'|'blip'|'sonar'|'blop'|'ding'|'custom'
 export type SoundPreferences={enabled:boolean;volume:number;quietStart:string;quietEnd:string;events:Record<SoundEvent,boolean>;soundId:SoundId;customSound?:string}
-export type NormalizedMuxEvent={id?:string;type:string;session_id?:string;payload?:Record<string,unknown>;timestamp?:number;ts?:number;seq?:number}
+export type NormalizedMuxEvent={id?:string;type:string;session_id?:string;payload?:Record<string,unknown>;timestamp?:number;ts?:number;seq?:number;replay?:boolean}
 
 export type SoundOption={id:Exclude<SoundId,'custom'>;label:string;description:string;glyph:string}
 export const satisfyingSounds:SoundOption[]=[

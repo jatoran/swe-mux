@@ -59,6 +59,11 @@ def test_terminal_clipboard_rail_and_selection_autocopy_are_wired() -> None:
     assert "/last-reply" in pane
     assert "autoCopySelection" in pane and "requestAnimationFrame(autoCopySelection)" in pane
     assert ".terminal-action-rail" in css
+    # The rail also sends terminal keys and toggles the on-screen keyboard for read/select
+    # mode; it overflows and scrolls horizontally rather than wrapping.
+    assert "sendKey" in pane and "toggleKeyboard" in pane
+    assert "\\x03" in pane and "\\x1b[A" in pane and "kbd-toggle" in pane
+    assert "overflow-x:auto" in css and ".terminal-action-rail .kbd-toggle" in css
 
 
 def test_mobile_terminal_ime_streams_composition_without_xterm_overlay() -> None:

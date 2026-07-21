@@ -84,6 +84,7 @@ GET      /projects/{project_id}/session-notes/{note_id}
 POST     /projects/{project_id}/session-notes/{note_id}   initialize if absent
 PUT      /projects/{project_id}/session-notes/{note_id}
 GET     /projects/{project_id}/files?path=RELATIVE
+GET     /projects/{project_id}/search?q=&mode=names|contents|both
 GET     /projects/{project_id}/file?path=RELATIVE
 PUT     /projects/{project_id}/file   {path, text, revision}
 POST    /projects/{project_id}/reveal {path: RELATIVE}
@@ -99,6 +100,13 @@ Project; an unknown `project_id` is rejected. Each row carries `note_id`, Projec
 `owner_live`/`owner_known` resolved from live sessions then history. The listing is derived from
 the filesystem, so it outlives sessions, history rows, and daemon restarts; per-Project scans are
 capped and empty notes are omitted.
+
+`GET /search` recursively finds files by name and/or UTF-8 content beneath the canonical root,
+reusing the same ignore rules as the browser and running off the event loop. `mode` selects
+`names`, `contents`, or `both` (invalid values fall back to `names`); content matching skips
+binary and oversized files. It returns `{items: [{path, name, match: name|content, line, snippet}],
+truncated}`, name matches sorted before content matches, bounded on files visited, bytes read,
+per-file size, and result count.
 
 Paths are relative to the canonical root and may not escape it. Project and session-note writes
 are revision checked. A session note can be initialized only for a live terminal, a History row
@@ -171,6 +179,40 @@ including bracketed paste, advances the human-input boundary.
 `GET /sessions/{id}/last-reply` returns the newest meaningful Claude/Codex assistant turn for
 gesture-safe clipboard prefetch. Provider control acknowledgements are skipped; the route does
 not type `/copy` into the PTY.
+
+## Voice and Conversation mode
+
+```text
+GET  /remote/status
+POST /remote/mobile-voice/enable   X-Mux-User-Gesture: mobile-voice-setup
+```
+
+The mobile-voice request is accepted only while the Tailscale listener is enabled and only from
+the explicit Talk/Settings action. It returns a secure URL only when the daemon has a verified
+secure endpoint; otherwise it returns `error` without changing the working direct HTTP listener.
+It does not change tailnet policy or make swe-mux public.
+
+```text
+GET    /voice
+POST   /sessions/{id}/voice/generate
+POST   /sessions/{id}/voice/transcribe   Content-Type: audio/wav; bounded mono PCM
+POST   /sessions/{id}/voice/submit       {utterance_id, text}
+POST   /sessions/{id}/voice/interrupt
+GET    /voice/clips[?session=&run=&limit=]
+GET    /voice/clips/{clip_id}/audio
+DELETE /voice/clips/{clip_id}
+```
+
+Transcription accepts at most 2 MiB and 35 seconds of mono 16-bit PCM at 8–48 kHz. Raw audio is
+temporary and deleted after recognition. Submit is agent-only, rejects control characters, caps
+text at 20,000 characters, deduplicates bounded recent `utterance_id` values, writes text plus one
+Enter, and advances the ordinary human-input revision. Interrupt sends one Ctrl-C and records the
+same boundary. Neither route approves provider prompts or derives authorization from delivery
+readiness.
+
+Automatic completed-reply synthesis emits ordered `voice_clip_ready` events sharing
+`stream_id`, `segment_index`, and `segment_count`; each ready segment is independently playable.
+Summary/verbatim selection remains the existing session/global contract.
 
 ## Delivery diagnostics
 

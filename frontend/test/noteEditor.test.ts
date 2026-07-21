@@ -1,32 +1,31 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { insertEditorTab, prefersPlainMobileEditor } from '../src/editorText.ts'
+import { insertEditorTab } from '../src/editorText.ts'
 import {
   NoteSaveQueue,
+  fileSaveTarget,
   noteQueueKey,
+  noteSaveTarget,
   type NoteSaveAck,
   type NoteSaveState,
+  type ResourceSaveTarget,
 } from '../src/noteSaveQueue.ts'
 
 type Deferred = { resolve: (ack: NoteSaveAck) => void; reject: (error: unknown) => void }
 
 function makeTransport() {
-  const calls: { projectId: string; markdown: string; revision: string; sessionNoteId?:string }[] = []
+  const calls: { url: string; text: string; revision: string }[] = []
   const deferreds: Deferred[] = []
-  const transport = (projectId: string, markdown: string, revision: string, sessionNoteId?:string|null) => {
-    calls.push({...{ projectId, markdown, revision },...(sessionNoteId?{sessionNoteId}:{})})
+  const transport = (target: ResourceSaveTarget, text: string, revision: string) => {
+    calls.push({ url: target.url, text, revision })
     return new Promise<NoteSaveAck>((resolve, reject) => deferreds.push({ resolve, reject }))
   }
   return { transport, calls, deferreds }
 }
 
-const tick = () => new Promise(resolve => setImmediate(resolve))
+const noteTarget = noteSaveTarget('p1', null)
 
-test('coarse pointers and narrow screens use the native mobile note editor', () => {
-  assert.equal(prefersPlainMobileEditor(true, false), true)
-  assert.equal(prefersPlainMobileEditor(false, true), true)
-  assert.equal(prefersPlainMobileEditor(false, false), false)
-})
+const tick = () => new Promise(resolve => setImmediate(resolve))
 
 test('Tab inserts a literal tab and replaces the active selection', () => {
   assert.deepEqual(insertEditorTab('hello world', 5, 5), { text: 'hello\t world', caret: 6 })
@@ -39,10 +38,10 @@ test('save queue commits text with the storage revision and advances it on ack',
   const key = noteQueueKey('p1', 'r1')
   const states: NoteSaveState[] = []
   queue.subscribe(key, state => states.push(state))
-  queue.reset(key, 'p1', 'rev0')
+  queue.reset(key, noteTarget, 'rev0')
   queue.submit(key, 'hello')
   queue.flush(key)
-  assert.deepEqual(calls, [{ projectId: 'p1', markdown: 'hello', revision: 'rev0' }])
+  assert.deepEqual(calls, [{ url: '/api/projects/p1/note', text: 'hello', revision: 'rev0' }])
   deferreds[0].resolve({ revision: 'rev1', status: 'ready' })
   await tick()
   assert.equal(queue.getState(key).storageRevision, 'rev1')
@@ -53,7 +52,7 @@ test('only the newest pending snapshot is sent while one save is in flight', asy
   const { transport, calls, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p', 'r')
-  queue.reset(key, 'p', 'rev0')
+  queue.reset(key, noteTarget, 'rev0')
   queue.submit(key, 'A')
   queue.flush(key) // A now in flight against rev0
   queue.submit(key, 'B') // queued behind the in-flight save
@@ -61,7 +60,7 @@ test('only the newest pending snapshot is sent while one save is in flight', asy
   deferreds[0].resolve({ revision: 'rev1', status: 'ready' })
   await tick()
   queue.flush(key)
-  assert.deepEqual(calls.map(call => call.markdown), ['A', 'C'])
+  assert.deepEqual(calls.map(call => call.text), ['A', 'C'])
   assert.equal(calls[1].revision, 'rev1') // second save uses the acked revision
 })
 
@@ -69,7 +68,7 @@ test('a storage conflict keeps local text, blocks auto-save, and overwrite re-co
   const { transport, calls, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p', 'r')
-  queue.reset(key, 'p', 'rev0')
+  queue.reset(key, noteTarget, 'rev0')
   queue.submit(key, 'mine')
   queue.flush(key)
   deferreds[0].reject(Object.assign(new Error('note changed externally'), { status: 409 }))
@@ -85,16 +84,16 @@ test('a storage conflict keeps local text, blocks auto-save, and overwrite re-co
   // Resolve by adopting the on-disk revision and overwriting with local text.
   queue.overwrite(key, 'rev5')
   assert.equal(calls.length, 2)
-  assert.deepEqual(calls[1], { projectId: 'p', markdown: 'mine2', revision: 'rev5' })
+  assert.deepEqual(calls[1], { url: '/api/projects/p1/note', text: 'mine2', revision: 'rev5' })
 })
 
 test('reset adopts a fresh revision and clears conflict/pending state', () => {
   const { transport } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p', 'r')
-  queue.reset(key, 'p', 'rev0')
+  queue.reset(key, noteTarget, 'rev0')
   queue.submit(key, 'x')
-  queue.reset(key, 'p', 'rev9')
+  queue.reset(key, noteTarget, 'rev9')
   const state = queue.getState(key)
   assert.equal(state.storageRevision, 'rev9')
   assert.equal(state.status, 'idle')
@@ -105,7 +104,7 @@ test('live follow is allowed only for a different remote revision while locally 
   const { transport, deferreds } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('p', 'r')
-  queue.reset(key, 'p', 'rev0')
+  queue.reset(key, noteTarget, 'rev0')
   assert.equal(queue.canFollowRemote(key, 'rev1'), true)
   assert.equal(queue.canFollowRemote(key, 'rev0'), false)
 
@@ -123,8 +122,20 @@ test('session notes retain their storage identity through queued saves', () => {
   const { transport, calls } = makeTransport()
   const queue = new NoteSaveQueue(transport)
   const key = noteQueueKey('project', 'session-note:terminal')
-  queue.reset(key, 'project', 'rev0', 'terminal')
+  queue.reset(key, noteSaveTarget('project', 'terminal'), 'rev0')
   queue.submit(key, 'session context')
   queue.flush(key)
-  assert.deepEqual(calls, [{projectId:'project',markdown:'session context',revision:'rev0',sessionNoteId:'terminal'}])
+  assert.deepEqual(calls, [{ url: '/api/projects/project/session-notes/terminal', text: 'session context', revision: 'rev0' }])
+})
+
+test('markdown files queue-save to the project file endpoint with their path', () => {
+  const { transport, calls } = makeTransport()
+  const queue = new NoteSaveQueue(transport)
+  const key = noteQueueKey('project', 'file:docs/readme.md')
+  queue.reset(key, fileSaveTarget('project', 'docs/readme.md'), 'rev0')
+  queue.submit(key, '# hi')
+  queue.flush(key)
+  assert.deepEqual(calls, [{ url: '/api/projects/project/file', text: '# hi', revision: 'rev0' }])
+  const body = fileSaveTarget('project', 'docs/readme.md').body('# hi', 'rev0')
+  assert.deepEqual(body, { path: 'docs/readme.md', text: '# hi', revision: 'rev0' })
 })

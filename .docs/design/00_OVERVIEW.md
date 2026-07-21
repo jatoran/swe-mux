@@ -51,7 +51,7 @@
 - Shell profiles: `features/shell-profiles.md`
 - Provider accounts: `features/provider-accounts.md`
 - Usage analytics: `features/usage.md`
-- Read aloud and dictation: `features/voice.md`
+- Read aloud and hands-free conversation: `features/voice.md`
 
 ### Technical
 

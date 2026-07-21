@@ -1,0 +1,70 @@
+// Pure helpers for sidebar project rows: which projects are collapsed
+// (persisted set) and whether a project can be hidden from the sidebar.
+// Kept free of runtime imports so the guard logic can be unit tested under the
+// node type-stripping runner; the caller supplies preview leaf ids.
+import type { Session } from './types'
+
+export const COLLAPSED_PROJECTS_KEY = 'mux.sidebar.projectCollapsed.v1'
+
+const DEAD_STATES: ReadonlyArray<Session['state']> = ['exited', 'crashed']
+
+export function loadCollapsedProjects(raw: string | null): Set<string> {
+  if (!raw) return new Set()
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Set()
+    return new Set(parsed.filter((id): id is string => typeof id === 'string'))
+  } catch {
+    return new Set()
+  }
+}
+
+export function serializeCollapsedProjects(ids: Set<string>): string {
+  return JSON.stringify([...ids])
+}
+
+export function toggleCollapsed(ids: Set<string>, id: string): Set<string> {
+  const next = new Set(ids)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  return next
+}
+
+/** Sessions that still hold a live process (a "starting" session counts; a
+ *  pending optimistic row does not, and exited/crashed rows are inert). */
+export function liveSessionsFor(sessions: Session[], projectId: string): Session[] {
+  return sessions.filter(
+    session =>
+      session.project_id === projectId &&
+      !session.pending &&
+      !DEAD_STATES.includes(session.state),
+  )
+}
+
+export interface ProjectOpenWork {
+  liveSessions: Session[]
+  previewIds: string[]
+}
+
+export function projectOpenWork(
+  sessions: Session[],
+  projectId: string,
+  previewIds: string[],
+): ProjectOpenWork {
+  return { liveSessions: liveSessionsFor(sessions, projectId), previewIds }
+}
+
+/** A project may be hidden from the sidebar only once nothing live is attached
+ *  to it — otherwise hiding would strand running terminals and previews. */
+export function canHideProject(work: ProjectOpenWork): boolean {
+  return work.liveSessions.length === 0 && work.previewIds.length === 0
+}
+
+export function describeOpenWork(work: ProjectOpenWork): string {
+  const parts: string[] = []
+  if (work.liveSessions.length)
+    parts.push(`${work.liveSessions.length} live session${work.liveSessions.length === 1 ? '' : 's'}`)
+  if (work.previewIds.length)
+    parts.push(`${work.previewIds.length} preview${work.previewIds.length === 1 ? '' : 's'}`)
+  return parts.join(' · ')
+}

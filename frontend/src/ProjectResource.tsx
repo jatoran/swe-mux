@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
+import type { JSX } from 'preact'
 import { api } from './api'
 import { insertEditorTab } from './editorText'
 import { clampContextMenuLeft } from './menuPosition'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
-import { noteQueueKey, noteSaveQueue, type NoteSaveState } from './noteSaveQueue'
+import { fileSaveTarget, noteQueueKey, noteSaveQueue, noteSaveTarget, type NoteSaveState, type ResourceSaveTarget } from './noteSaveQueue'
 import type { Project } from './types'
 
 export type ProjectResourceIdentity={kind:'note'|'session-note'|'files'|'file';id:string}
@@ -15,6 +16,9 @@ type DirectoryPayload={path:string;parent:string|null;items:DirectoryItem[];trun
 type ResourceEvent={projectId:string;paths:string[]}
 type NoteResourceEvent={projectId:string;kind:'note'|'session-note';noteId:string|null;revision:string}
 type TreeMenu={item:DirectoryItem;x:number;y:number}
+type SearchMode='names'|'contents'|'both'
+type SearchHit={name:string;path:string;match:'name'|'content';line:number|null;snippet:string|null}
+type SearchPayload={items:SearchHit[];truncated:boolean}
 type FileDraft={revision:string;text:string;baseline:string;status:string;saveState:'idle'|'modified'|'saving'|'saved'|'error';error:string}
 type BrowserState={directories:Record<string,DirectoryPayload>;expanded:Set<string>}
 
@@ -28,14 +32,21 @@ type Props={
   project:Project
   resource:ProjectResourceIdentity
   onOpenFile:(path:string)=>void
-  onClose:()=>void
+  onFileDragStart?:(path:string,event:JSX.TargetedPointerEvent<HTMLElement>)=>void
 }
 
 const parentPath=(path:string)=>path.includes('/')?path.slice(0,path.lastIndexOf('/')):''
 const watchIdentity=()=>`resource-${Date.now()}-${Math.random().toString(36).slice(2)}`
 
-export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
+export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Props){
   const isNote=resource.kind==='note'||resource.kind==='session-note'
+  // Markdown files opened from the browser render in Continuity and autosave through the same
+  // resource-scoped queue as notes; only their save target (endpoint/body) differs.
+  const isMarkdownFile=resource.kind==='file'&&/\.(md|markdown|mdx)$/i.test(resource.id)
+  const autosaved=isNote||isMarkdownFile
+  const saveTarget=():ResourceSaveTarget=>isNote
+    ?noteSaveTarget(project.id,resource.kind==='session-note'?resource.id:null)
+    :fileSaveTarget(project.id,resource.id)
   const noteEndpoint=resource.kind==='session-note'
     ?`/api/projects/${project.id}/session-notes/${encodeURIComponent(resource.id)}`
     :`/api/projects/${project.id}/note`
@@ -52,7 +63,13 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
   const [directories,setDirectories]=useState<Record<string,DirectoryPayload>>(cachedBrowser?.directories||{})
   const [expanded,setExpanded]=useState<Set<string>>(cachedBrowser?.expanded||new Set())
   const [treeMenu,setTreeMenu]=useState<TreeMenu|null>(null)
-  // A fresh note load remounts the editor so a new Continuity engine is built.
+  const [query,setQuery]=useState('')
+  const [searchMode,setSearchMode]=useState<SearchMode>('names')
+  const [results,setResults]=useState<SearchHit[]|null>(null)
+  const [searching,setSearching]=useState(false)
+  const [searchTruncated,setSearchTruncated]=useState(false)
+  const searchGeneration=useRef(0)
+  // A fresh note/markdown-file load remounts the editor so a new Continuity engine is built.
   const [loadGeneration,setLoadGeneration]=useState(0)
   const [noteSave,setNoteSave]=useState<NoteSaveState>({status:'idle',storageRevision:'missing',banner:null})
   const noteKey=noteQueueKey(project.id,`${resource.kind}:${resource.id}`)
@@ -82,9 +99,10 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
       if(isNote&&requestGeneration!==noteLoadGeneration.current)return
       const next='markdown' in payload?payload.markdown:payload.text||''
       setRevision(payload.revision);setText(next);setBaseline(next);setStatus(payload.status);setSaveState('idle')
-      if(isNote){
-        // The queue owns the daemon storage revision; the editor starts fresh at 0.
-        noteSaveQueue.reset(noteKey,project.id,payload.revision,resource.kind==='session-note'?resource.id:null)
+      if(autosaved){
+        // The queue owns the daemon storage revision; the editor starts fresh at 0. Remounting
+        // it on a fresh load shows the new text while ordinary edits keep cursor/undo history.
+        noteSaveQueue.reset(noteKey,saveTarget(),payload.revision)
         setLoadGeneration(generation=>generation+1)
       }
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause));setStatus('error')}
@@ -136,6 +154,23 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
     }
   },[treeMenu])
 
+  // Debounced recursive search. An empty query restores the tree; a generation guard drops a
+  // slow response that arrives after the query already moved on.
+  useEffect(()=>{
+    if(resource.kind!=='files')return
+    const q=query.trim()
+    if(!q){searchGeneration.current++;setResults(null);setSearching(false);setSearchTruncated(false);return}
+    setSearching(true)
+    const generation=++searchGeneration.current
+    const handle=window.setTimeout(()=>{
+      void api<SearchPayload>('GET',`/api/projects/${project.id}/search?q=${encodeURIComponent(q)}&mode=${searchMode}`)
+        .then(payload=>{if(generation!==searchGeneration.current)return;setResults(payload.items);setSearchTruncated(payload.truncated);setError('')})
+        .catch(cause=>{if(generation!==searchGeneration.current)return;setError(cause instanceof Error?cause.message:String(cause));setResults([])})
+        .finally(()=>{if(generation===searchGeneration.current)setSearching(false)})
+    },250)
+    return()=>window.clearTimeout(handle)
+  },[resource.kind,project.id,query,searchMode])
+
   const watchedPaths=resource.kind==='files'
     ?['',...expanded]
     :resource.kind==='file'?[parentPath(resource.id)]:[]
@@ -157,6 +192,11 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
         const affected=new Set(detail.paths.map(parentPath))
         for(const folder of Object.keys(directories))if(affected.has(folder))void loadDirectory(folder)
       }else if(resource.kind==='file'&&detail.paths.includes(resource.id)){
+        // A markdown file autosaves through the queue, whose own event carries no revision to
+        // distinguish our own echoed write. Rather than reload (and disrupt an active editor)
+        // on every file-changed event, leave the local editor authoritative; a genuine
+        // out-of-band edit surfaces as a 409 conflict banner on the next save.
+        if(isMarkdownFile)return
         if(textRef.current===baselineRef.current)void loadText()
         else setError('File changed externally while this tab has unsaved edits.')
       }
@@ -178,7 +218,7 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
         if(!noteSaveQueue.canFollowRemote(noteKey,payload.revision))return
         setRevision(payload.revision);setText(payload.markdown);setBaseline(payload.markdown)
         setStatus(payload.status);setSaveState('idle');setError('')
-        noteSaveQueue.reset(noteKey,project.id,payload.revision,resource.kind==='session-note'?resource.id:null)
+        noteSaveQueue.reset(noteKey,saveTarget(),payload.revision)
         setLoadGeneration(generation=>generation+1)
       }catch(cause){
         if(requestGeneration===noteLoadGeneration.current)setError(cause instanceof Error?cause.message:String(cause))
@@ -210,16 +250,20 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
   }
 
   const editable=status==='ready'||status==='missing'
-  // Notes persist through the resource-scoped save queue (outside this component
-  // so a pane close cannot cancel a save); we only mirror its state for display.
+  // Notes and markdown files persist through the resource-scoped save queue (outside this
+  // component so a pane close cannot cancel a save); we only mirror its state for display.
   useEffect(()=>{
-    if(!isNote)return
-    return noteSaveQueue.subscribe(noteKey,setNoteSave)
-  },[isNote,noteKey])
+    if(!autosaved)return
+    const unsubscribe=noteSaveQueue.subscribe(noteKey,setNoteSave)
+    // The header no longer carries a close button, so flush any pending edit when the
+    // resource unmounts (tab close or reparent) instead of relying on that button.
+    return()=>{unsubscribe();noteSaveQueue.flush(noteKey)}
+  },[autosaved,noteKey])
 
   const resolveKeepMine=async()=>{
     try{
-      const payload=await api<NotePayload>('GET',noteEndpoint)
+      const endpoint=isNote?noteEndpoint:`/api/projects/${project.id}/file?path=${encodeURIComponent(resource.id)}`
+      const payload=await api<{revision:string}>('GET',endpoint)
       noteSaveQueue.overwrite(noteKey,payload.revision)
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
@@ -262,13 +306,36 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
     return <>{directory.items.map(item=>item.kind==='directory'?<div class="file-tree-branch" key={item.path}>
       <button class="file-tree-row directory" style={{paddingLeft:`${9+depth*15}px`}} onClick={()=>toggleDirectory(item.path)} onContextMenu={event=>openTreeMenu(item,event)} aria-expanded={expanded.has(item.path)}><span>{expanded.has(item.path)?'▾':'▸'}</span><strong>{item.name}</strong><small>folder</small></button>
       {expanded.has(item.path)&&tree(item.path,depth+1)}
-    </div>:<button class="file-tree-row file" key={item.path} style={{paddingLeft:`${9+depth*15}px`}} onClick={()=>onOpenFile(item.path)} onContextMenu={event=>openTreeMenu(item,event)}><span>·</span><strong>{item.name}</strong><small>{item.size!==null?`${item.size.toLocaleString()} B`:''}</small></button>)}{directory.truncated&&<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>Showing the first 2,000 entries.</p>}</>
+    </div>:<button class="file-tree-row file" key={item.path} style={{paddingLeft:`${9+depth*15}px`}} onPointerDown={event=>onFileDragStart?.(item.path,event)} onClick={()=>onOpenFile(item.path)} onContextMenu={event=>openTreeMenu(item,event)}><span>·</span><strong>{item.name}</strong><small>{item.size!==null?`${item.size.toLocaleString()} B`:''}</small></button>)}{directory.truncated&&<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>Showing the first 2,000 entries.</p>}</>
   }
 
+  const searchModes:SearchMode[]=['names','contents','both']
+  const searchModeLabel:Record<SearchMode,string>={names:'Names',contents:'Contents',both:'Both'}
   if(resource.kind==='files')return <section class="project-resource file-browser">
-    <header><div><strong>{project.name} / Files</strong><span>{project.root}</span></div><div class="resource-actions"><button aria-label="Close Files tab" title="Close tab" onClick={()=>{browserStates.delete(resourceKey);onClose()}}>×</button></div></header>
-    {error&&<p class="resource-error">{error}</p>}
-    <div class="file-tree" role="tree">{tree('')}</div>
+    <header><div><strong>{project.root}</strong></div></header>
+    <div class="file-browser-body">
+      <div class="file-search">
+        <div class="file-search-field">
+          <input class="file-search-input" value={query} onInput={event=>setQuery(event.currentTarget.value)} placeholder="Search files…" aria-label="Search files" spellcheck={false} autoCapitalize="off" autoCorrect="off"/>
+          {query&&<button class="file-search-clear" aria-label="Clear search" title="Clear search" onClick={()=>setQuery('')}>×</button>}
+        </div>
+        <div class="file-search-modes" role="group" aria-label="Search scope">
+          {searchModes.map(mode=><button key={mode} class={searchMode===mode?'active':''} aria-pressed={searchMode===mode} title={`Match file ${searchModeLabel[mode].toLowerCase()}`} onClick={()=>setSearchMode(mode)}>{searchModeLabel[mode]}</button>)}
+        </div>
+      </div>
+      {error&&<p class="resource-error">{error}</p>}
+      {results!==null
+        ?<div class="file-results" role="list" aria-busy={searching}>
+          {searching&&!results.length?<p class="file-tree-loading">Searching…</p>
+            :!results.length?<p class="file-tree-loading">No matches.</p>
+            :<>{results.map(hit=><button class="file-tree-row file file-result-row" key={hit.path} onPointerDown={event=>onFileDragStart?.(hit.path,event)} onClick={()=>onOpenFile(hit.path)} onContextMenu={event=>openTreeMenu({name:hit.name,path:hit.path,kind:'file',size:null},event)}>
+                <span class="file-result-line"><span>·</span><strong>{hit.name}</strong><small>{hit.path}</small></span>
+                {hit.match==='content'&&hit.snippet&&<em class="file-result-snippet">{hit.line!=null?`${hit.line}: `:''}{hit.snippet}</em>}
+              </button>)}
+              {searchTruncated&&<p class="file-tree-loading">Showing the first {results.length} matches; refine to narrow.</p>}</>}
+        </div>
+        :<div class="file-tree" role="tree">{tree('')}</div>}
+    </div>
     {treeMenu&&<div class="context-menu project-file-menu" ref={treeMenuPanel} role="menu" aria-label={`File actions for ${treeMenu.item.name}`} style={{left:clampContextMenuLeft(treeMenu.x,window.innerWidth),top:Math.max(4,Math.min(treeMenu.y,window.innerHeight-140))}} onMouseDown={event=>event.stopPropagation()}>
       <div class="context-title"><strong>{treeMenu.item.name}</strong></div>
       <button role="menuitem" onClick={()=>void revealResource(treeMenu.item)}>Open in default explorer</button>
@@ -285,12 +352,11 @@ export function ProjectResource({project,resource,onOpenFile,onClose}:Props){
     setText(result.text)
     requestAnimationFrame(()=>editor.setSelectionRange(result.caret,result.caret))
   }
-  const stateLabel=isNote?(noteSave.status==='idle'?status:noteSave.status):(saveState==='idle'?status:saveState)
-  const closeResource=()=>{if(isNote)noteSaveQueue.flush(noteKey);else fileDrafts.delete(resourceKey);onClose()}
+  const stateLabel=autosaved?(noteSave.status==='idle'?status:noteSave.status):(saveState==='idle'?status:saveState)
   return <section class="project-resource file-editor">
-    <header><div><strong>{isNote?noteLabel:resource.id}</strong><span>{project.name} · {stateLabel}</span></div><div class="resource-actions">{resource.kind==='file'&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}<button aria-label={`Close ${isNote?noteLabel:resource.id} tab`} title="Close tab" onClick={closeResource}>×</button></div></header>
+    <header><div>{!isNote&&<strong>{resource.id}</strong>}<span>{project.name} · {stateLabel}</span></div>{resource.kind==='file'&&!isMarkdownFile&&<div class="resource-actions"><button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button></div>}</header>
     {error&&<p class="resource-error">{error}</p>}
-    {isNote&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
-    {editable?(isNote?<ProjectNoteEditor key={`${project.id}:${resource.kind}:${resource.id}:${loadGeneration}`} projectId={project.id} resourceId={`${resource.kind}:${resource.id}`} initialText={text} label={noteLabel}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>):<div class="resource-unavailable">{status==='binary'?'Binary files cannot be edited here.':status==='too-large'?'This file exceeds the 2 MiB editor limit.':'This resource is read-only.'}</div>}
+    {autosaved&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
+    {editable?(autosaved?<ProjectNoteEditor key={`${project.id}:${resource.kind}:${resource.id}:${loadGeneration}`} projectId={project.id} resourceId={`${resource.kind}:${resource.id}`} initialText={text} label={isNote?noteLabel:resource.id}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>):<div class="resource-unavailable">{status==='binary'?'Binary files cannot be edited here.':status==='too-large'?'This file exceeds the 2 MiB editor limit.':'This resource is read-only.'}</div>}
   </section>
 }

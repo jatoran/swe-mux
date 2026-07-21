@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {"light", "dark", "system", "solarized-dark", "tokyo-night", "custom"}
 CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "accent", "error"}
@@ -190,6 +190,9 @@ class Config:
     tts_daily_budget_usd: float = 1.0
     tts_cache_mb: int = 200
     stt_enabled: bool = True
+    stt_engine: str = "whisper"
+    stt_language: str = "en-US"
+    stt_whisper_model: str = "turbo"
     data_dir: Path = Path.home() / ".mux"
     config_path: Path | None = field(default=None, repr=False)
 
@@ -322,6 +325,12 @@ def _validate(config: Config) -> None:
         errors["tts_daily_budget_usd"] = "must be between 0 and 100"
     if not 10 <= config.tts_cache_mb <= 5000:
         errors["tts_cache_mb"] = "must be between 10 and 5000"
+    if config.stt_engine not in {"sapi", "whisper"}:
+        errors["stt_engine"] = "must be sapi or whisper"
+    if not re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?", config.stt_language):
+        errors["stt_language"] = "must be a language tag such as en-US"
+    if not config.stt_whisper_model.strip() or len(config.stt_whisper_model) > 120:
+        errors["stt_whisper_model"] = "must name a Whisper model in 120 characters or fewer"
     if config.theme not in THEMES:
         errors["theme"] = f"must be one of {', '.join(sorted(THEMES))}"
     if set(config.custom_theme) != CUSTOM_THEME_KEYS or any(
@@ -460,6 +469,15 @@ def load_config(path: Path | None = None) -> Config:
             if key in raw:
                 setattr(cfg, key, Path(raw[key]) if key == "data_dir" else raw[key])
         cfg.shell_profiles = [ShellProfile(**item) for item in raw.get("shell_profiles", [])]
+        if (
+            source_schema < 14
+            and raw.get("stt_engine", "sapi") == "sapi"
+            and raw.get("stt_whisper_model", "base.en") == "base.en"
+        ):
+            # SAPI/base.en was the short-lived initial Conversation-mode default.
+            # Migrate only that untouched pair; explicit engine/model choices survive.
+            cfg.stt_engine = "whisper"
+            cfg.stt_whisper_model = "turbo"
     if not cfg.shell_profiles:
         if "shell_exe" not in raw and shutil.which("pwsh.exe"):
             cfg.shell_exe = "pwsh.exe"

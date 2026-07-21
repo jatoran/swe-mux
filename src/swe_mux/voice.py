@@ -12,11 +12,16 @@ one place.
 from __future__ import annotations
 
 import asyncio
+import io
+import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import time
 import uuid
+import wave
+from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -40,6 +45,9 @@ VOICE_MODES = {"off", "on_demand", "auto"}
 AGENT_BACKENDS = {"claude", "codex"}
 DEBOUNCE_SECONDS = 1.0
 ENGINE_TIMEOUT_SECONDS = 45.0
+STT_TIMEOUT_SECONDS = 60.0
+STT_MAX_BYTES = 2 * 1024 * 1024
+STT_MAX_SECONDS = 35.0
 SUMMARY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {"speech": {"type": "string"}},
@@ -90,6 +98,19 @@ $synth.Rate = $Rate
 $synth.SetOutputToWaveFile($OutPath)
 $synth.Speak([IO.File]::ReadAllText($TextPath))
 $synth.Dispose()
+"""
+
+SAPI_STT_SCRIPT = r"""param([string]$AudioPath,[string]$TextPath,[string]$Culture)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Speech
+$cultureInfo = [Globalization.CultureInfo]::GetCultureInfo($Culture)
+$recognizer = New-Object System.Speech.Recognition.SpeechRecognitionEngine($cultureInfo)
+$recognizer.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
+$recognizer.SetInputToWaveFile($AudioPath)
+$result = $recognizer.Recognize()
+$text = if ($null -eq $result) { '' } else { $result.Text }
+$recognizer.Dispose()
+[IO.File]::WriteAllText($TextPath, $text, (New-Object Text.UTF8Encoding($false)))
 """
 
 
@@ -170,6 +191,43 @@ def estimate_duration_seconds(text: str, rate: str) -> float:
     if match:
         per_second *= 1 + int(match.group(1)) / 100
     return round(words / max(per_second, 0.5), 1)
+
+
+def streaming_segments(text: str, max_chars: int = 420) -> list[str]:
+    """Split speakable text into short independently playable clips.
+
+    Auto read-aloud emits each clip as soon as its synthesis finishes. Sentence
+    boundaries keep the audio natural; long sentences fall back to word chunks.
+    """
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    if not cleaned:
+        return []
+    sentences = re.split(r"(?<=[.!?])\s+", cleaned)
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentences:
+        words = sentence.split()
+        pieces: list[str] = []
+        piece = ""
+        for word in words:
+            candidate = f"{piece} {word}".strip()
+            if piece and len(candidate) > max_chars:
+                pieces.append(piece)
+                piece = word
+            else:
+                piece = candidate
+        if piece:
+            pieces.append(piece)
+        for item in pieces:
+            candidate = f"{current} {item}".strip()
+            if current and len(candidate) > max_chars:
+                chunks.append(current)
+                current = item
+            else:
+                current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 class VoiceStore:
@@ -340,6 +398,13 @@ class VoiceService:
         self._locks: dict[str, asyncio.Lock] = {}
         self._engine_semaphore = asyncio.Semaphore(2)
         self._sapi_script_path: Path | None = None
+        self._sapi_stt_script_path: Path | None = None
+        self._stt_lock = asyncio.Lock()
+        self._whisper_model: Any = None
+        self._whisper_model_name: str | None = None
+        self._whisper_device: str | None = None
+        self._submitted_ids: deque[str] = deque(maxlen=512)
+        self._submitted_id_set: set[str] = set()
 
     @property
     def clip_directory(self) -> Path:
@@ -356,6 +421,17 @@ class VoiceService:
         if content in {"summary", "verbatim"}:
             return str(content)
         return self.config.tts_content
+
+    def claim_submission(self, utterance_id: str) -> bool:
+        """Idempotency gate for reconnect-safe voice prompt commits."""
+        if utterance_id in self._submitted_id_set:
+            return False
+        if len(self._submitted_ids) == self._submitted_ids.maxlen:
+            expired = self._submitted_ids.popleft()
+            self._submitted_id_set.discard(expired)
+        self._submitted_ids.append(utterance_id)
+        self._submitted_id_set.add(utterance_id)
+        return True
 
     def start(self) -> None:
         if self._task:
@@ -427,44 +503,11 @@ class VoiceService:
         if lock.locked() and trigger == "auto":
             return {}  # a clip for this session is already being generated
         async with lock:
-            clip_id = str(uuid.uuid4())
-            row: dict[str, Any] = {
-                "id": clip_id,
-                "session_id": session_id,
-                "agent_run_id": record.agent_run_id,
-                "created_at": time.time(),
-                "trigger": trigger,
-                "content_mode": self.effective_content(record),
-                "engine": self.config.tts_engine,
-                "voice": self._voice_label(),
-                "text": "",
-                "file_path": "",
-                "format": "mp3" if self.config.tts_engine == "edge" else "wav",
-                "size_bytes": 0,
-                "duration_hint_s": None,
-                "status": "failed",
-                "error": None,
-                "model": None,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cost_usd": None,
-            }
+            stream_id = str(uuid.uuid4())
+            content_mode = self.effective_content(record)
+            row = self._new_clip_row(session_id, trigger, record.agent_run_id, content_mode)
             try:
                 spoken = await self._spoken_text(session, row)
-                row["text"] = spoken
-                destination = self.clip_directory / f"{clip_id}.{row['format']}"
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                async with self._engine_semaphore:
-                    await asyncio.wait_for(
-                        self._synthesize(spoken, destination), timeout=ENGINE_TIMEOUT_SECONDS
-                    )
-                row["file_path"] = str(destination)
-                row["size_bytes"] = destination.stat().st_size
-                row["duration_hint_s"] = estimate_duration_seconds(
-                    spoken, self.config.tts_edge_rate if self.config.tts_engine == "edge" else "+0%"
-                )
-                row["status"] = "ready"
-                self.diagnostic = None
             except (VoiceError, OpenRouterError, TimeoutError, OSError) as exc:
                 message = str(exc)[:500] or exc.__class__.__name__
                 row["error"] = message
@@ -474,22 +517,99 @@ class VoiceService:
                     "voice_clip_failed",
                     session_id=session_id,
                     source="daemon",
-                    clip_id=clip_id,
+                    clip_id=row["id"],
                     trigger=trigger,
                     error=message,
                 )
                 raise VoiceError(message) from exc
-            await self.store.add_clip(row)
+            segments = streaming_segments(spoken) if trigger == "auto" else [spoken]
+            if not segments:
+                raise VoiceError("nothing speakable remained after preprocessing")
+            first: dict[str, Any] | None = None
+            for index, segment in enumerate(segments):
+                segment_row = row if index == 0 else self._new_clip_row(
+                    session_id, trigger, record.agent_run_id, content_mode
+                )
+                if index > 0:
+                    # Summary accounting belongs to the first clip only; repeating it on
+                    # every audio segment would inflate clip-level diagnostics.
+                    segment_row["model"] = row["model"]
+                try:
+                    await self._synthesize_clip(segment_row, segment)
+                except (VoiceError, TimeoutError, OSError) as exc:
+                    message = str(exc)[:500] or exc.__class__.__name__
+                    segment_row["error"] = message
+                    self.diagnostic = message
+                    await self.store.add_clip(segment_row)
+                    await self.events.emit(
+                        "voice_clip_failed",
+                        session_id=session_id,
+                        source="daemon",
+                        clip_id=segment_row["id"],
+                        trigger=trigger,
+                        stream_id=stream_id,
+                        segment_index=index,
+                        segment_count=len(segments),
+                        error=message,
+                    )
+                    raise VoiceError(message) from exc
+                await self.store.add_clip(segment_row)
+                await self.events.emit(
+                    "voice_clip_ready",
+                    session_id=session_id,
+                    source="daemon",
+                    clip_id=segment_row["id"],
+                    agent_run_id=record.agent_run_id,
+                    trigger=trigger,
+                    stream_id=stream_id,
+                    segment_index=index,
+                    segment_count=len(segments),
+                )
+                if first is None:
+                    first = clip_snapshot(segment_row)
             await self._prune()
-            await self.events.emit(
-                "voice_clip_ready",
-                session_id=session_id,
-                source="daemon",
-                clip_id=clip_id,
-                agent_run_id=record.agent_run_id,
-                trigger=trigger,
+            return first or {}
+
+    def _new_clip_row(
+        self, session_id: str, trigger: str, agent_run_id: str | None, content_mode: str
+    ) -> dict[str, Any]:
+        return {
+            "id": str(uuid.uuid4()),
+            "session_id": session_id,
+            "agent_run_id": agent_run_id,
+            "created_at": time.time(),
+            "trigger": trigger,
+            "content_mode": content_mode,
+            "engine": self.config.tts_engine,
+            "voice": self._voice_label(),
+            "text": "",
+            "file_path": "",
+            "format": "mp3" if self.config.tts_engine == "edge" else "wav",
+            "size_bytes": 0,
+            "duration_hint_s": None,
+            "status": "failed",
+            "error": None,
+            "model": None,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": None,
+        }
+
+    async def _synthesize_clip(self, row: dict[str, Any], spoken: str) -> None:
+        row["text"] = spoken
+        destination = self.clip_directory / f"{row['id']}.{row['format']}"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        async with self._engine_semaphore:
+            await asyncio.wait_for(
+                self._synthesize(spoken, destination), timeout=ENGINE_TIMEOUT_SECONDS
             )
-            return clip_snapshot(row)
+        row["file_path"] = str(destination)
+        row["size_bytes"] = destination.stat().st_size
+        row["duration_hint_s"] = estimate_duration_seconds(
+            spoken, self.config.tts_edge_rate if self.config.tts_engine == "edge" else "+0%"
+        )
+        row["status"] = "ready"
+        self.diagnostic = None
 
     async def _spoken_text(self, session: Any, row: dict[str, Any]) -> str:
         transcript = await self.slices.build(
@@ -659,6 +779,180 @@ class VoiceService:
         self._sapi_script_path = path
         return path
 
+    async def transcribe_wav(self, audio: bytes) -> str:
+        """Transcribe one bounded speech utterance without retaining its audio."""
+        if not self.config.stt_enabled:
+            raise VoiceError("microphone transcription is disabled in Settings")
+        self._validate_wav(audio)
+        async with self._stt_lock:
+            utterance_id = str(uuid.uuid4())
+            directory = self.clip_directory / "stt"
+            directory.mkdir(parents=True, exist_ok=True)
+            audio_path = directory / f"{utterance_id}.wav"
+            text_path = directory / f"{utterance_id}.txt"
+            await asyncio.to_thread(audio_path.write_bytes, audio)
+            try:
+                if self.config.stt_engine == "whisper":
+                    text = await asyncio.wait_for(
+                        asyncio.to_thread(self._transcribe_whisper, audio_path),
+                        timeout=STT_TIMEOUT_SECONDS,
+                    )
+                else:
+                    text = await self._transcribe_sapi(audio_path, text_path)
+            finally:
+                audio_path.unlink(missing_ok=True)
+                text_path.unlink(missing_ok=True)
+            normalized = re.sub(r"\s+", " ", text).strip()
+            if not normalized:
+                raise VoiceError("no speech was recognized")
+            return normalized[:20_000]
+
+    @staticmethod
+    def _validate_wav(audio: bytes) -> None:
+        if not audio or len(audio) > STT_MAX_BYTES:
+            raise VoiceError("voice utterance must be between 1 byte and 2 MiB")
+        try:
+            with wave.open(io.BytesIO(audio), "rb") as source:
+                channels = source.getnchannels()
+                width = source.getsampwidth()
+                rate = source.getframerate()
+                frames = source.getnframes()
+        except (EOFError, wave.Error) as exc:
+            raise VoiceError("voice utterance must be a valid WAV file") from exc
+        if channels != 1 or width != 2 or not 8_000 <= rate <= 48_000:
+            raise VoiceError("voice WAV must be mono 16-bit PCM at 8–48 kHz")
+        if frames <= 0 or frames / rate > STT_MAX_SECONDS:
+            raise VoiceError("voice utterance must be no longer than 35 seconds")
+
+    async def _transcribe_sapi(self, audio_path: Path, text_path: Path) -> str:
+        if os.name != "nt" or not shutil.which("powershell.exe"):
+            raise VoiceError("Windows Speech Recognition is available only on Windows")
+        script = self._ensure_sapi_stt_script()
+        command = [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-AudioPath",
+            str(audio_path),
+            "-TextPath",
+            str(text_path),
+            "-Culture",
+            self.config.stt_language,
+        ]
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                command,
+                capture_output=True,
+                text=True,
+                timeout=STT_TIMEOUT_SECONDS,
+                creationflags=background_creation_flags(),
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            raise VoiceError(f"Windows speech recognition failed: {exc}") from exc
+        if result.returncode != 0 or not text_path.exists():
+            detail = (result.stderr or result.stdout or "recognizer unavailable").strip()
+            raise VoiceError(f"Windows speech recognition failed: {detail[:300]}")
+        return text_path.read_text(encoding="utf-8")
+
+    def _transcribe_whisper(self, audio_path: Path) -> str:
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as exc:
+            raise VoiceError(
+                "faster-whisper is not installed; reinstall/sync swe-mux dependencies "
+                "or select Windows Speech Recognition in Settings"
+            ) from exc
+        if (
+            self._whisper_model is None
+            or self._whisper_model_name != self.config.stt_whisper_model
+        ):
+            try:
+                self._load_whisper_model(WhisperModel)
+            except Exception as exc:
+                raise VoiceError(
+                    f"local Whisper model could not load: {str(exc)[:300]}"
+                ) from exc
+        try:
+            return self._run_whisper_transcription(audio_path)
+        except Exception as first_error:
+            if self._whisper_device == "cuda":
+                # CTranslate2 can see a GPU even when a required CUDA/cuDNN runtime
+                # DLL is absent. Conversation mode should remain useful in that case.
+                self._whisper_model = WhisperModel(
+                    self.config.stt_whisper_model, device="cpu", compute_type="int8"
+                )
+                self._whisper_device = "cpu"
+                try:
+                    return self._run_whisper_transcription(audio_path)
+                except Exception as fallback_error:
+                    raise VoiceError(
+                        f"local Whisper transcription failed: {str(fallback_error)[:300]}"
+                    ) from fallback_error
+            raise VoiceError(
+                f"local Whisper transcription failed: {str(first_error)[:300]}"
+            ) from first_error
+
+    def _load_whisper_model(self, model_class: Any) -> None:
+        device = "cpu"
+        compute_type = "int8"
+        try:
+            import ctranslate2
+
+            if ctranslate2.get_cuda_device_count() > 0:
+                device = "cuda"
+                compute_type = "float16"
+        except Exception:  # noqa: BLE001 - automatic acceleration is best-effort
+            pass
+        self._whisper_model = None
+        self._whisper_device = None
+        try:
+            self._whisper_model = model_class(
+                self.config.stt_whisper_model,
+                device=device,
+                compute_type=compute_type,
+            )
+        except Exception:
+            if device != "cuda":
+                raise
+            device = "cpu"
+            self._whisper_model = model_class(
+                self.config.stt_whisper_model,
+                device=device,
+                compute_type="int8",
+            )
+        self._whisper_model_name = self.config.stt_whisper_model
+        self._whisper_device = device
+
+    def _run_whisper_transcription(self, audio_path: Path) -> str:
+        segments, _info = self._whisper_model.transcribe(
+            str(audio_path),
+            language=self.config.stt_language.split("-", 1)[0],
+            beam_size=5,
+            temperature=0,
+            condition_on_previous_text=False,
+            vad_filter=False,
+            hotwords=(
+                "swe-mux, Mux, Muxie, Claude, Codex, Git, GitHub, Python, "
+                "TypeScript, terminal, API, send, submit, cancel, undo, mute, "
+                "read reply, summary, verbatim, interrupt, stop listening"
+            ),
+        )
+        return " ".join(str(segment.text).strip() for segment in segments).strip()
+
+    def _ensure_sapi_stt_script(self) -> Path:
+        if self._sapi_stt_script_path and self._sapi_stt_script_path.exists():
+            return self._sapi_stt_script_path
+        path = self.clip_directory / "sapi_stt.ps1"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(SAPI_STT_SCRIPT, encoding="utf-8")
+        self._sapi_stt_script_path = path
+        return path
+
     async def _prune(self) -> None:
         removed = await self.store.prune(self.config.tts_cache_mb * 1024 * 1024)
         for file_path in removed:
@@ -675,6 +969,23 @@ class VoiceService:
                 engine_diagnostic = "edge-tts package is not installed; run `uv sync`"
         stats = await self.store.cache_stats()
         spend = await self.automation_store.spend(rule_id=VOICE_RULE_ID)
+        stt_available = True
+        stt_diagnostic: str | None = None
+        if self.config.stt_engine == "sapi":
+            if os.name != "nt" or not shutil.which("powershell.exe"):
+                stt_available = False
+                stt_diagnostic = "Windows Speech Recognition requires Windows PowerShell"
+        else:
+            try:
+                import faster_whisper  # noqa: F401
+            except ImportError:
+                stt_available = False
+                stt_diagnostic = "faster-whisper is missing; reinstall/sync swe-mux"
+            else:
+                runtime = self._whisper_device or "automatic GPU/CPU"
+                stt_diagnostic = (
+                    f"local Whisper model {self.config.stt_whisper_model}; runtime {runtime}"
+                )
         return {
             "enabled": self.config.tts_enabled,
             "engine": self.config.tts_engine,
@@ -690,4 +1001,9 @@ class VoiceService:
             "cache_limit_bytes": self.config.tts_cache_mb * 1024 * 1024,
             "clip_count": stats["count"],
             "stt_enabled": self.config.stt_enabled,
+            "stt_engine": self.config.stt_engine,
+            "stt_available": stt_available,
+            "stt_diagnostic": stt_diagnostic,
+            "stt_language": self.config.stt_language,
+            "stt_whisper_model": self.config.stt_whisper_model,
         }

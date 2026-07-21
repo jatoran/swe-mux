@@ -22,7 +22,8 @@ async def test_project_creation_initializes_resources_and_persists_layout(
     project = await projects.create("Main", str(root))
     assert Path(project.root) == root.resolve()
     assert (root / ".swe-mux" / "config.toml").read_text(encoding="utf-8") == "version = 1\n"
-    assert (root / ".swe-mux" / "notes" / "project.md").is_file()
+    note = root / ".swe-mux" / "notes" / "project.md"
+    assert note.read_text(encoding="utf-8") == "# Main notes\n\n\n"
 
     updated = await projects.update(
         project.id,
@@ -48,6 +49,32 @@ async def test_project_creation_initializes_resources_and_persists_layout(
     assert layout_terminal_ids(reopened.projects[project.id].layout) == ["one"]
     assert reopened.projects[project.id].sidebar_visible is False
     reopened_history.close()
+
+
+async def test_project_note_seeding_never_overwrites_existing_text(tmp_path: Path) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    root = tmp_path / "repo"
+    notes = root / ".swe-mux" / "notes"
+    notes.mkdir(parents=True)
+    note = notes / "project.md"
+    note.write_text("existing text\n", encoding="utf-8")
+
+    project = await projects.create("  Main   Repo  ", str(root))
+    assert note.read_text(encoding="utf-8") == "existing text\n"
+
+    # A never-arranged Project stays structurally empty; the browser seeds its first
+    # layout on open, so revision 0 with an empty root stays the "untouched" signal.
+    assert project.layout == {"version": 6, "root": None}
+    assert project.layout_revision == 0
+
+    other = tmp_path / "second"
+    other.mkdir()
+    await projects.create("  Main   Repo  ", str(other))
+    seeded = other / ".swe-mux" / "notes" / "project.md"
+    assert seeded.read_text(encoding="utf-8") == "# Main Repo notes\n\n\n"
+    history.close()
 
 
 async def test_projects_require_distinct_existing_folders(tmp_path: Path) -> None:

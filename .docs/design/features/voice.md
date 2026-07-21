@@ -1,9 +1,9 @@
-# Read aloud and dictation
+# Read aloud and hands-free conversation
 
 ## What it is
 
-Optional per-session reply synthesis plus browser-native dictation, isolated from terminal,
-history, Project, and transcript correctness.
+Optional per-session reply synthesis plus a browser-captured, daemon-transcribed Conversation
+mode, isolated from terminal, history, Project, and transcript correctness.
 
 ## Contract
 
@@ -20,9 +20,11 @@ PTY, session state, transcripts, history, or projects.
 - Per-session generation mode is volatile live-session state: `off`, `on_demand`, or `auto`.
   `null` inherits the configured global default while the global TTS toggle is on. The mode
   is set through ordinary `PATCH /sessions/{id}` and dies with the session.
-- `auto` subscribes to `turn_ended`, debounces one second per session, extracts the
-  `last_turn` transcript slice, and produces one clip per completed reply. Manual
-  generation uses `POST /sessions/{id}/voice/generate` and returns the finished clip.
+- `auto` subscribes to `turn_ended`, debounces one second per session, and extracts the
+  completed `last_turn` transcript slice. The summary/verbatim text is split at sentence/word
+  boundaries into short ordered clips; every clip emits readiness immediately, allowing the
+  browser to start playback before later clips finish encoding. Manual generation remains one
+  clip through `POST /sessions/{id}/voice/generate`.
 - Content is `summary` (spoken-word summary via OpenRouter, strict JSON schema) or
   `verbatim` (assistant text with markdown, code fences, links, and tables reduced to
   listenable prose, bounded by a character cap). The global setting is the default; each
@@ -41,32 +43,57 @@ PTY, session state, transcripts, history, or projects.
   stale failed rows expire after a day.
 - `GET /voice/clips/{id}/audio` serves the file with range support; the browser player is
   an HTML5 audio element, so seeking is native. `voice_clip_ready` / `voice_clip_failed`
-  events drive the UI and autoplay.
+  events drive the UI and autoplay. Autoplay fires only for live events: the event stream
+  replays recent persisted events on every (re)connect for state reconstruction, and those
+  catch-up events are flagged `replay` so the client refreshes the clip list without
+  re-playing old audio. Without the flag, reopening the app would replay the last `auto`
+  clip.
 - Playback policy is per browser, not per session: one unlocked singleton audio element is
   reused so mobile browsers allow programmatic playback after any voice-UI gesture, and a
   localStorage device-autoplay toggle decides whether `auto` clips play on that client.
+- Auto clips share a stream ID. Barge-in pauses playback, clears its queue, and suppresses
+  later clips from the same reply while leaving manual replay available.
 
 ## Browser surface
 
-- Agent panes show a `tts:` chip (off / tap / auto, click to cycle) and, when the mode is
-  active, a one-row player strip: play/pause, seek bar, clip navigation, on-demand
-  generate, and the device autoplay toggle. The session context menu and command palette
-  expose the same operations; Settings → Voice owns engine, voice, content, budget, cache,
-  and dictation configuration.
-- Dictation (STT) is browser-side Web Speech recognition behind a per-pane mic chip on
-  agent sessions. It requires a secure context (localhost, or optional Tailscale Serve
-  HTTPS; plain tailnet HTTP cannot use the microphone) and inserts the transcript through
-  the ordinary paste path without submitting. Mobile keyboards already provide dictation,
-  so the chip hides on coarse pointers. No audio reaches the daemon.
-- The browser reports only capability facts: secure-context availability, recognizer
-  availability, backend name, and a diagnostic reason. Audio and recognized transcript text
-  are never retained as analytics. Browser/vendor support and privacy behavior vary; mobile
-  keyboard dictation is the fallback. Local Whisper/faster-whisper or Windows-native
-  recognition is a separate opt-in product decision, not an implicit daemon service.
+- Agent panes lead the terminal's bottom rail with the `tts:` chip (off / tap / auto) and
+  `talk:` Conversation toggle before terminal keys, Copy reply, and Paste. When TTS is
+  active, a one-row player strip (play/pause, seek bar, clip navigation, on-demand generate,
+  device autoplay toggle) sits directly above that rail, inside the pane below the terminal,
+  so enabling read aloud shortens the terminal rather than overlaying it. The session context
+  menu and command palette expose the same playback operations; Settings → Voice owns engines,
+  voice, language/model, content, budget, and cache configuration.
+- On mobile agent panes, the horizontally scrollable bottom rail also exposes `speak`,
+  summary/verbatim selection, per-device autoplay, and `audio…` Settings. `tts:setup` and
+  `talk:setup` remain visible when their global feature is disabled, preventing an unavailable
+  feature from becoming undiscoverable on devices without a desktop context menu.
+- Conversation mode uses `getUserMedia` plus Web Audio voice activity detection. It remains
+  armed across silence, sends only bounded mono PCM WAV utterances, accumulates transcriptions
+  across pauses, and recognizes commands only as an utterance suffix beginning with the `Mux`
+  wake word. Commands: `send`/`submit`; `cancel`/`clear`; `undo` the latest transcribed phrase;
+  `mute` current playback; `read reply`; select `summary` or `verbatim`; show `help`; `interrupt`
+  the agent; or `stop listening`/`sleep`. Close phonetic `Mux` transcriptions remain accepted
+  internally. Exactly one pane owns capture per browser. Enabling it selects `auto` TTS and
+  device autoplay.
+- muxd transcribes speech with local faster-whisper (`turbo`, default), automatically preferring
+  CUDA/float16 and falling back to CPU/int8. Decoding uses software-development hotwords and
+  keeps independent utterances from contaminating one another. Legacy offline Windows
+  System.Speech remains available as `sapi`. Audio is deleted after each transcription;
+  no audio or recognized draft is retained as telemetry. A submitted prompt uses an idempotent
+  utterance ID, writes text plus one Enter atomically, and advances the human-input boundary.
+- The selected Whisper model downloads once from Hugging Face on first use, then runs from the
+  local cache. Download, model-load, GPU-runtime, and CPU-fallback failures surface through the
+  STT diagnostic without retaining or submitting the affected utterance.
+- Speech detection during playback triggers barge-in before transcription. `Mux, interrupt`
+  additionally sends one Ctrl-C; ordinary speech only stops playback and buffers the follow-up.
+- Capture requires a secure context (localhost or Tailscale Serve HTTPS). Plain tailnet HTTP
+  cannot request the microphone. Browser/PWA background survival is not guaranteed.
 
 ## Key files
 
 - `src/swe_mux/voice.py`
 - `frontend/src/VoicePlayer.tsx`
 - `frontend/src/voice.ts`
+- `frontend/src/ConversationControl.tsx`
+- `frontend/src/conversation.ts`
 - `frontend/src/Settings.tsx`

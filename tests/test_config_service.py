@@ -34,6 +34,35 @@ def test_legacy_config_migrates_with_backup_and_removes_obsolete_secret(tmp_path
     assert config.public_dict()["access_mode"] == "local+tailnet"
 
 
+def test_conversation_stt_defaults_and_untouched_sapi_pair_migrate_to_whisper(
+    tmp_path: Path,
+) -> None:
+    fresh = load_config(tmp_path / "fresh" / "config.toml")
+    assert fresh.stt_engine == "whisper"
+    assert fresh.stt_whisper_model == "turbo"
+
+    legacy_path = tmp_path / "legacy" / "config.toml"
+    legacy_path.parent.mkdir()
+    legacy_path.write_text(
+        'schema_version = 13\nstt_engine = "sapi"\nstt_whisper_model = "base.en"\n',
+        encoding="utf-8",
+    )
+    migrated = load_config(legacy_path)
+    assert migrated.stt_engine == "whisper"
+    assert migrated.stt_whisper_model == "turbo"
+    assert legacy_path.with_suffix(".toml.bak").is_file()
+
+    custom_path = tmp_path / "custom" / "config.toml"
+    custom_path.parent.mkdir()
+    custom_path.write_text(
+        'schema_version = 13\nstt_engine = "sapi"\nstt_whisper_model = "small.en"\n',
+        encoding="utf-8",
+    )
+    custom = load_config(custom_path)
+    assert custom.stt_engine == "sapi"
+    assert custom.stt_whisper_model == "small.en"
+
+
 def test_first_run_prefers_powershell_7_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

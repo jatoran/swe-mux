@@ -7,8 +7,8 @@ import { AccountSettings } from './ProviderAccounts'
 import { NotificationSoundSettings } from './NotificationSoundSettings'
 import { comparableProjectDefaults, normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
+import { enableMobileVoice } from './mobileVoice'
 import type { ShellProfile, Project } from './types'
-import { sttCapability } from './voice'
 
 type Config = {
   revision:number; host:string; port:number; data_dir:string; requires_auth:boolean; access_mode:string; tailnet_enabled:boolean
@@ -42,11 +42,14 @@ type Config = {
   tts_soften_stops:boolean;tts_sapi_voice:string;tts_sapi_rate:number
   tts_summary_model:string;tts_summary_max_tokens:number;tts_verbatim_max_chars:number
   tts_daily_budget_usd:number;tts_cache_mb:number;stt_enabled:boolean
+  stt_engine:'sapi'|'whisper';stt_language:string;stt_whisper_model:string
 }
 type VoiceStatusInfo = {
   enabled:boolean;engine:string;engine_available:boolean;diagnostic?:string|null;voice:string
   summary_model:string;spend_today:{tokens:number;cost_usd:number};daily_budget_usd:number
   cache_bytes:number;cache_limit_bytes:number;clip_count:number;stt_enabled:boolean
+  stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null
+  stt_language:string;stt_whisper_model:string
 }
 const EDGE_VOICE_SUGGESTIONS = [
   'en-AU-NatashaNeural','en-AU-WilliamNeural','en-US-AndrewNeural','en-US-AriaNeural',
@@ -70,6 +73,7 @@ type RemoteStatus = {
   mode:string;listen_url:string;available:boolean;serve_configured:boolean
   serve_url?:string|null;funnel_detected:boolean;setup_command:string;diagnostic:string
   tailnet_enabled:boolean;tailnet_ip?:string|null;tailnet_urls:string[];direct_available:boolean
+  mobile_voice_configured:boolean;mobile_voice_url?:string|null;mobile_voice_https_port:number
 }
 type KeybindingCommand = {id:string;label:string;category:string}
 type KeybindingPolicy = {browser_reserved:string[];terminal_reserved:string[];rules:string[]}
@@ -77,7 +81,7 @@ type KeybindingsResponse = {
   bindings:Record<string,string>;defaults:Record<string,string>;commands:KeybindingCommand[]
   policy:KeybindingPolicy;rejected:Record<string,string>
 }
-type CloseIntent = 'close'|'usage'|'automation'
+type CloseIntent = 'close'|'usage'|'automation'|'tutorial'
 
 const settingsTabs = [
   {id:'general',label:'General'},
@@ -102,7 +106,7 @@ const tabForSection = (section:string):SettingsTab => ({
   Automation:'automation','Hooks and notifications':'notifications',Notifications:'notifications',Voice:'voice','Remote and security':'remote',Appearance:'appearance',
 }[section] as SettingsTab|undefined)||'general'
 
-export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, cwd, initialSection='General' }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void; cwd?:string; initialSection?:string }) {
+export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, cwd, initialSection='General' }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; cwd?:string; initialSection?:string }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
   const [rules, setRules] = useState('version = 1\n')
@@ -125,6 +129,8 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
   const [usageRefreshMessage, setUsageRefreshMessage] = useState('')
   const [remote, setRemote] = useState<RemoteStatus | null>(null)
+  const [mobileVoiceBusy,setMobileVoiceBusy]=useState(false)
+  const [mobileVoiceMessage,setMobileVoiceMessage]=useState('')
   const [projectConfig, setProjectConfig] = useState<ProjectConfig | null>(null)
   const [projectValues, setProjectValues] = useState<ProjectConfig['values']>({})
   const [savedProjectValues, setSavedProjectValues] = useState<ProjectConfig['values']>({})
@@ -188,8 +194,9 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
     setCloseIntent(null)
     if(intent==='usage'&&openUsage){openUsage();return}
     if(intent==='automation'&&openAutomation){openAutomation();return}
+    if(intent==='tutorial'&&onStartTutorial){onClose();onStartTutorial();return}
     onClose()
-  },[onClose,openUsage,openAutomation])
+  },[onClose,openUsage,openAutomation,onStartTutorial])
 
   const requestClose = useCallback((intent:CloseIntent='close') => {
     if(dirty){setCloseIntent(intent);return}
@@ -197,6 +204,18 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   },[dirty,leaveSettings])
   const onOpenUsage=useCallback(()=>requestClose('usage'),[requestClose])
   const onOpenAutomation=useCallback(()=>requestClose('automation'),[requestClose])
+
+  const setupMobileVoice=async()=>{
+    if(mobileVoiceBusy)return
+    setMobileVoiceBusy(true);setMobileVoiceMessage('Creating and verifying the private HTTPS address…')
+    try{
+      const result=await enableMobileVoice()
+      if(!result.url){setMobileVoiceMessage('Complete the one-time Tailscale approval, then tap Enable secure mobile voice again.');return}
+      setMobileVoiceMessage(result.diagnostic)
+      setRemote(current=>current&&{...current,mobile_voice_configured:true,mobile_voice_url:result.url,mobile_voice_https_port:result.https_port||config?.port||8765,serve_configured:false,serve_url:null,diagnostic:result.diagnostic})
+    }catch(cause){setMobileVoiceMessage(cause instanceof Error?cause.message:String(cause))}
+    finally{setMobileVoiceBusy(false)}
+  }
 
   useEffect(() => {
     if(!closeIntent)return
@@ -406,6 +425,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <label>Default backend<select value={draft.default_backend} onChange={e=>change('default_backend',e.currentTarget.value)}><option value="shell">Shell</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label>
           <label>Scrollback bytes<input type="number" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} /></label>
           <label>History limit<input type="number" value={draft.history_limit} onInput={e=>change('history_limit',Number(e.currentTarget.value))} /></label>
+          <div class="settings-tutorial-reset"><div><strong>Getting started tutorial</strong><p>Replay the guided tour of Projects, provider accounts, tabs, pane splits, resources, and the main navigation.</p></div><button onClick={()=>requestClose('tutorial')}>Reset &amp; run tutorial</button></div>
         </section>}
 
         {activeTab==='terminals'&&<section class="profile-settings"><h3>Terminals</h3>
@@ -524,11 +544,31 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <label>Verbatim character cap<input type="number" min="200" max="40000" value={draft.tts_verbatim_max_chars} onInput={e=>change('tts_verbatim_max_chars',Number(e.currentTarget.value))} /></label>
           <h3>Storage and dictation</h3>
           <label>Audio cache limit (MB)<input type="number" min="10" max="5000" value={draft.tts_cache_mb} onInput={e=>change('tts_cache_mb',Number(e.currentTarget.value))} /></label>
-          <label class="check"><span>Microphone dictation button on agent panes</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
-          <p>Capability::{sttCapability().available?'available':'unavailable'} · backend::browser Web Speech · {sttCapability().reason}</p><p>Support and recognition providers vary by browser. swe-mux records capability/availability only; it does not retain audio or transcript content for analytics. Phone keyboard dictation remains the mobile fallback. Transcribed text is inserted without submitting. Local Whisper or Windows-native recognition remains a separate opt-in decision if browser reliability proves limiting.</p>
+          <label class="check"><span>Enable microphone input and hands-free Conversation mode</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
+          <label>Daemon transcription engine<select value={draft.stt_engine} onChange={e=>change('stt_engine',e.currentTarget.value as Config['stt_engine'])}><option value="whisper">Whisper Turbo (local, recommended)</option><option value="sapi">Windows Speech Recognition (legacy)</option></select></label>
+          <label>Recognition language<input value={draft.stt_language} placeholder="en-US" onInput={e=>change('stt_language',e.currentTarget.value)} /></label>
+          {draft.stt_engine==='whisper'&&<label>Whisper model<input value={draft.stt_whisper_model} placeholder="turbo" onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /></label>}
+          <p>STT::{voiceInfo?.stt_available?'available':'unavailable'} · engine::{voiceInfo?.stt_engine||draft.stt_engine}{voiceInfo?.stt_diagnostic?` · ${voiceInfo.stt_diagnostic}`:''}</p>
+          <p>Conversation mode captures microphone audio in swe-mux, sends bounded speech-only WAV utterances to muxd, and keeps listening across pauses. Use the <code>Mux</code> wake word: <code>Mux, send</code>, <code>cancel</code>, <code>undo</code>, <code>mute</code>, <code>read reply</code>, <code>summary</code>, <code>verbatim</code>, <code>interrupt</code>, <code>help</code>, or <code>stop listening</code>. Raw audio is deleted after transcription.</p>
+          <h3>Mobile voice</h3>
+          <p>Regular mobile access works over the direct 100.x Tailscale address. Browser microphone capture additionally requires HTTPS; automatic secure mobile voice is unavailable on this device.</p>
+          <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile voice':'Enable secure mobile voice'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure mobile voice</a>}</div>
+          {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
         </section>}
 
-        {activeTab==='remote'&&<section><h3>Remote and security</h3><label class="check"><span>Listen on Tailscale IPv4</span><input type="checkbox" checked={draft.tailnet_enabled} onChange={event=>change('tailnet_enabled',event.currentTarget.checked)} /></label><p>Changing the listener requires a daemon restart. swe-mux binds localhost plus the specific Tailscale address—never every LAN interface.</p><dl><dt>Local URL</dt><dd>{remote?.listen_url||`http://${draft.host}:${draft.port}`}</dd><dt>Direct tailnet</dt><dd>{remote?.direct_available?'active':draft.tailnet_enabled?'Tailscale address unavailable':'disabled'}</dd>{remote?.tailnet_urls.map(url=><Fragment key={url}><dt>Tailnet URL</dt><dd><a href={url} target="_blank" rel="noreferrer">{url}</a></dd></Fragment>)}</dl><p>Direct tailnet HTTP is encrypted in transit by Tailscale, but browsers may restrict secure-context clipboard APIs. Normal terminal input remains available.</p><strong>Optional HTTPS with Tailscale Serve</strong><p>{remote?.diagnostic||'Checking Tailscale Serve…'}</p>{remote?.serve_url&&<p><a href={remote.serve_url} target="_blank" rel="noreferrer">{remote.serve_url}</a></p>}{remote?.funnel_detected&&<p class="settings-inline-error">Tailscale Funnel appears enabled. Public ingress is unsupported; use direct tailnet access or tailnet-only Serve.</p>}<label>Optional Serve command<input readonly value={remote?.setup_command||`tailscale serve --bg http://127.0.0.1:${draft.port}`} onFocus={event=>event.currentTarget.select()} /></label><div class="theme-actions"><button onClick={()=>void navigator.clipboard.writeText(remote?.setup_command||`tailscale serve --bg http://127.0.0.1:${draft.port}`)}>Copy Serve command</button><button onClick={()=>void api<RemoteStatus>('GET','/api/remote/status').then(setRemote)}>Recheck</button></div><p>No swe-mux login is used. Tailscale access policy controls which tailnet devices can connect.</p></section>}
+        {activeTab==='remote'&&<section>
+          <h3>Remote and security</h3>
+          <label class="check"><span>Listen on Tailscale IPv4</span><input type="checkbox" checked={draft.tailnet_enabled} onChange={event=>change('tailnet_enabled',event.currentTarget.checked)} /></label>
+          <p>Changing the listener requires a daemon restart. swe-mux binds localhost plus the specific Tailscale address—never every LAN interface.</p>
+          <dl><dt>Local URL</dt><dd>{remote?.listen_url||`http://${draft.host}:${draft.port}`}</dd><dt>Direct tailnet</dt><dd>{remote?.direct_available?'active':draft.tailnet_enabled?'Tailscale address unavailable':'disabled'}</dd>{remote?.tailnet_urls.map(url=><Fragment key={url}><dt>Tailnet URL</dt><dd><a href={url} target="_blank" rel="noreferrer">{url}</a></dd></Fragment>)}</dl>
+          <p>Direct tailnet HTTP is encrypted in transit by Tailscale. Mobile microphone access additionally requires the private HTTPS address below.</p>
+          <strong>Secure mobile access</strong>
+          <p>{remote?.diagnostic||'Checking the private HTTPS address…'}</p>
+          {remote?.funnel_detected&&<p class="settings-inline-error">Tailscale Funnel appears enabled. Public ingress is unsupported; swe-mux only configures private tailnet access.</p>}
+          <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile access':'Enable secure mobile access'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure address</a>}<button onClick={()=>void api<RemoteStatus>('GET','/api/remote/status').then(setRemote)}>Recheck</button></div>
+          {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
+          <p>No public Funnel access is enabled. Regular mobile access remains available at the direct 100.x tailnet URL; Tailscale access policy controls which devices can connect.</p>
+        </section>}
 
         {activeTab==='appearance'&&<section><h3>Appearance</h3><label>Theme<select value={draft.theme} onChange={e=>{const value=e.currentTarget.value as ThemeName;change('theme',value);applyTheme(value)}}><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option><option value="solarized-dark">Solarized Dark</option><option value="tokyo-night">Tokyo Night</option><option value="custom">Custom</option></select></label>{draft.theme==='custom' && <div class="theme-tokens">{Object.entries(draft.custom_theme).map(([key,value])=><label>{key}<input value={value} onInput={e=>{const custom={...draft.custom_theme,[key]:e.currentTarget.value};change('custom_theme',custom);configureCustomTheme(custom);applyTheme('custom')}} /></label>)}</div>}<input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} /><div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div><p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p></section>}
       </div>

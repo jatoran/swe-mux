@@ -48,6 +48,8 @@ export interface VoiceStatus {
   content:'summary'|'verbatim'; default_mode:VoiceMode; voice:string; summary_model:string
   spend_today:{tokens:number;cost_usd:number}; daily_budget_usd:number
   cache_bytes:number; cache_limit_bytes:number; clip_count:number; stt_enabled:boolean
+  stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null
+  stt_language:string;stt_whisper_model:string
 }
 
 export type ProjectBackend='shell'|'claude'|'codex'

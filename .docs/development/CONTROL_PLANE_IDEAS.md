@@ -6,6 +6,14 @@ OpenRouter-only LLM access, write-only Settings key management, durable agent-ru
 annotation ownership, inert repository rules, and the actuation deferrals. The remaining
 catalog stays unscheduled unless promoted into the roadmap explicitly.
 
+This revision reorganizes the catalog around a **substrate → consumer hierarchy**, adds
+the **return path** (how accumulated insight reaches the coding agent), an **enablement
+model** (per-project opt-in with a dependency graph), and an **implementation order**. It
+folds in a 2024–2026 research review (agent-failure taxonomies, trajectory telemetry,
+compression-chain fidelity, cascade economics, and supervisory-control/HCI). Where a
+design choice is now backed by evidence, the finding and its source are named inline so
+the rationale travels with the idea.
+
 ---
 
 ## 1. Framing: swe-mux as an agent control plane
@@ -27,7 +35,9 @@ across apps that update independently. swe-mux is that for agent CLIs:
 Related terms of art that apply: **out-of-band supervision** (the layer watches
 from a position the supervised process cannot reach or corrupt) and **ambient
 agents** (cheap background models that react to events rather than holding a
-conversation).
+conversation). The mental image the design serves: the interactive agent is a
+pillar; cheap ambient agents buzz around it, scaffolding, annotating, and doing
+small bounded jobs, while a stronger agent is invoked rarely for deeper analysis.
 
 ### Why this position is durable
 
@@ -41,6 +51,13 @@ context as virtual memory, sessions as processes, budgets as cgroups), swe-mux
 is a **userspace daemon** — systemd/Kubernetes, not the kernel — which is the
 side of the commoditization line where differentiation survives.
 
+Two independent 2026 arguments reinforce the out-of-band stance beyond agnosticism:
+governance metadata is only defeat-proof when it rides a channel the agent cannot
+see or edit (in-band policy sitting in the prompt is defeatable by injection); and
+flag-don't-block is a published monitoring posture, not a compromise — continuous
+monitors that score rather than gate are the established design for supervising a
+process you do not control.
+
 ### Design laws
 
 These are the non-negotiables that keep the layer scaffold-agnostic and safe:
@@ -52,179 +69,798 @@ These are the non-negotiables that keep the layer scaffold-agnostic and safe:
    to a vendor hook API and loses its agnosticism.
 2. **Above and around, never inside.** The layer observes, annotates, and
    notifies. It does not steer sessions. Actuation (`write_pty`) exists but is
-   deliberately gated (see §9).
+   deliberately gated (see §16). Note the one *inverse* arrow: the data plane may
+   pull from the control plane on its own initiative (§7). That is the agent using
+   a tool, not the control plane entering its execution path.
 3. **Consume normalized events and normalized transcript slices only.** No
    rule, observer, or feature outside an adapter may reference a native schema,
    path, or flag. Scaffold drift is absorbed in one adapter file.
-4. **Advisory, not orchestration.** The spec killed roles, leads, and DONE
-   protocols deliberately. Observers notice; they do not command. Anything
-   that directs agent behavior goes through the reserved relay path (spec §7)
-   as an explicit future product decision, never as feature creep through the
-   rules file.
+4. **Advisory, not orchestration.** Roles, leads, and DONE protocols were killed
+   deliberately. Observers notice; they do not command. Anything that directs
+   agent behavior goes through the reserved relay path as an explicit future
+   product decision, never as feature creep through the rules file.
 5. **Eventually consistent by design.** Nothing in this layer participates in
    a turn. That constraint is why the layer survives scaffold updates.
+6. **Prefer ground truth to self-report.** The one structural advantage of the
+   out-of-band position is that the observer cannot be gaslit by the agent's
+   narrative. A feature that reads the transcript is reading the agent's *story*
+   about what it did. Wherever a fact exists deterministically — a git diff, a
+   test exit code, a file hash — condition on the fact, not the claim. (TRAIL,
+   2025: the best frontier model localized errors in full coding traces at ~5%.
+   AgentLens, 2026: of 1,136 *passing* SWE-bench runs, only 20% had a clean
+   trajectory. Passing tests and "done" claims are not evidence of correctness.)
+7. **A better monitor can make oversight worse.** Reliable automation trains the
+   human to stop checking (automation-induced complacency, Parasuraman 1993) and
+   degrades their ability to take over when it fails (out-of-the-loop decrement,
+   Endsley & Kiris 1995). Polished rationales *increase* deference rather than
+   scrutiny (HBS/Lane 2025). Countermeasures are mandatory, not optional: always
+   display suppressed-item counts (silence must never read as absence), keep the
+   interrupt volume low enough that each item still gets real thought, and
+   periodically surface a low-confidence item the layer explicitly will not judge.
+8. **Nothing runs on a project that did not opt in.** Every automation is
+   per-project opt-in; the substrate it needs is enabled with it through a
+   dependency graph (§8). There are no automations that execute machine-wide.
 
 ---
 
-## 2. Naming conventions
+## 2. The evidence base
+
+The catalog below rests on a 2024–2026 review. The load-bearing findings, so the
+rationales downstream are not folklore:
+
+- **Failure taxonomies.** MAST (2025, 1,642 traces): the most frequent failure
+  modes are step repetition (~16%), reasoning-action mismatch (~13%),
+  termination-unawareness (~12%). Stopping behavior (premature termination +
+  unawareness of termination) is roughly as failure-prone as looping — a monitor
+  that only detects loops misses half the mass. TRAIL (2025): ~42% of trace
+  errors are formatting / instruction non-compliance.
+- **Windowing beats whole-transcript.** TRACE (2026): a windowed monitor hit
+  recall 0.844 vs 0.405 for a full-trajectory monitor, using *fewer* model calls.
+  Sampling is the accuracy-correct approach, not merely the cheap one.
+- **Loop detection is hybrid, not semantic-only.** Unsupervised cycle detection
+  (2026): structural signal alone F1 0.08, semantic alone 0.28, hybrid 0.72 at
+  0.62 precision. Wink (2026, ~43k production traces) operationalizes a loop as
+  ≥3 repeated/near-identical actions and calibrates classifiers to ≥80%
+  precision. A no-progress gate is required to avoid flagging legitimate repeats.
+- **Compression chains fail silently.** Slipstream (2026): ~90% of compaction
+  failures are omissions; the continuation stays coherent with the bad summary,
+  so the error is invisible. MemCollab (2026): weak-model records consumed by a
+  strong model help 3–8% when good but *hurt 5–12%* when bad, because a wrong
+  record is worse than a missing one. Governance-decay work (2026): repeated
+  compaction drove constraint-violation rates from 0% to 30–59% unless
+  constraints were pinned. → Never make a summary the only copy; keep source
+  pointers and re-expansion.
+- **Structured > prose for downstream machine use.** PrefixGuard (2026): typed
+  step representations beat raw text by +0.137 AUPRC; removing tool-result
+  fields collapsed performance. Factory compression eval (2025, 36,611 SWE
+  messages): explicit typed sections beat free-form prose, and artifact/file
+  tracking is the worst dimension across every compactor (2.19–2.45/5) — file
+  paths must be a lossless list, never narrative.
+- **Cascade economics.** With current pricing (Haiku vs Opus/Sonnet tiers), a
+  single strong-model analysis pass already pays back the cheap-tier ingestion
+  cost of a whole session. The break-even variable in *this* design is the
+  **rehydration rate**: how often the strong model must expand a source pointer
+  and read raw. Keep it under ~50% and the compression pays; above it, it's an
+  expensive detour. Instrument it from day one.
+- **Fixed-clock sampling is under-studied and probably wrong alone.** No
+  controlled study supports wall-clock semantic sampling. Shipped monitors
+  (SWE-PRM, Wink) sample on agent *steps*; compaction work (SelfCompact 2026)
+  finds semantic-boundary triggers match or beat fixed intervals at 30–70% lower
+  cost. → event-triggered with a max-time heartbeat, not clock-only.
+- **Attention is the scarce resource, and its budget is tiny.** Three unrelated
+  fields converge: AI-control audit budgets run at ~1%; SRE guidance says a human
+  can absorb "a few pages a day" before fatigue; clinical alarm research shows the
+  failure state at high volume is >60% of alarms getting no response. Budget
+  interrupts per *day*, not per hour.
+- **Self-report is unreliable.** METR RCT (2025): experienced devs were 19%
+  slower with AI while believing they were ~20% faster. Do not build interrupt
+  policy on stated preference; learn from observed behavior (what the user acts on
+  vs dismisses) and show the induced rule for accept/reject (PrefMiner pattern).
+- **Fan-out is the organizing metric.** Supervisory-control theory (Olsen &
+  Goodrich 2004): agents-per-human ≈ neglect-time ÷ interaction-time. swe-mux
+  owns both halves (scan timeline gives neglect time; attach/input telemetry
+  gives interaction time), so it can compute a live sustainable-agent estimate no
+  vendor can.
+- **Provenance beats inferred causality.** Distributed-tracing lineage (Lamport
+  1978; Dapper 2010) is deterministic and reliable; statistical root-cause over
+  event streams over-attributes. → build the factual provenance graph; never emit
+  a causal blame label.
+- **Retrieval precision is a trust gate.** A usually-wrong `prior-resolution`
+  poisons the whole annotation surface; a weak cross-session route costs an
+  interrupt. Empty beats wrong for anything the agent or human will act on.
+
+---
+
+## 3. Naming conventions
 
 Decided vocabulary. "Meta-hooks" is retired: "meta" says nothing concrete and
 "hooks" collides with the CLIs' native hooks; the term also names the layer
-after its most fragile input (it hooks *events*, not hooks — see §3).
+after its most fragile input (it hooks *events*, not hooks — see §10).
 
 | Term | Meaning |
 |---|---|
 | **Universal hooks** | User-facing name for the whole layer: hooks defined once, above the CLI, that fire for any backend and survive CLI updates. The pitch word. |
 | **Rules** | The mechanical tier: trigger → conditions → actions, deterministic, no model call. `hooks.toml` becomes `rules.toml`. |
-| **Observers** | The LLM tier: stateless model calls via the `llm` action — read a transcript slice, emit an annotation or notification. No session, no tools, read-only. The titler, summarizer, stall detector are observers. Cheap, safe, plentiful. |
-| **Workers** | Full agent sessions a rule spawns via the `spawn` action + a session template to *do* something (update docs, consolidate memory). Data-plane work, control-plane initiated; once spawned it is an ordinary session with history and a lineage edge back to its cause. Mutates the world, so it sits behind the actuation gate (§9). A "doc agent" is really an observer→worker pipeline: observe cheap, act expensive, human in between until trust is earned. |
+| **Observers** | The LLM tier: stateless model calls via the `llm` action — read a normalized slice, emit an annotation or notification. No session, no tools, read-only. Cheap, safe, plentiful. |
+| **Workers** | Full agent sessions a rule spawns via the `spawn` action to *do* something. Data-plane work, control-plane initiated; once spawned it is an ordinary session with a lineage edge back to its cause. Mutates the world, so it sits behind the actuation gate (§16). |
+| **Substrate** | The foundational layers every consumer reads from: event log, raw store, Tier 0 facts, project card, scan timeline. Mostly deterministic and cheap. |
+| **Consumer** | A feature assembled from substrate: provenance graph, dead-end memory, declared-vs-verified, loop detection, doc-debt, interlocks, attention ranking, digests, continuous title. |
+| **Tier 0 / Tier 1 / Tier 2** | Deterministic facts / cheap-model semantic index (the scan timeline) / strong-model analysis. Named after cost and cadence, not model brand. |
+| **Scan timeline** | The Tier 1 semantic index: periodic/event-triggered cheap-model records of what each session is doing, forming a per-session behavioral timeline. |
+| **Return path** | The inverse arrow: how accumulated insight reaches the coding agent, primarily a queryable **mux MCP** read surface the agent pulls from (§7). |
+| **Enablement DAG** | The per-project opt-in dependency graph: a consumer cannot be enabled unless its substrate dependencies are enabled for that project (§8). |
 | **Automation layer** | Umbrella term for rules + observers when one word is needed. |
 | **Native hooks** | Reserved exclusively for the CLIs' own hook systems (Claude Code hooks, Codex `notify`). They are an event *source*, nothing more. |
-| **Annotations** | Persisted observer/rule output attached to sessions (titles, summaries, verdicts). |
-| **Universal commands** | Input-side sibling of universal hooks: mux-level canned prompts/commands injectable into any backend (see §11). |
-| **Rulepacks** | Shareable, parameterized bundles of rules + observers + scripts (see §8). |
+| **Annotations** | Persisted observer/rule output attached to sessions (titles, summaries, verdicts, scan records). |
+| **Universal commands** | Input-side sibling of universal hooks: mux-level canned prompts injectable into any backend (see §17). |
+| **Rulepacks** | Shareable, parameterized bundles of rules + observers + scripts (see §15). |
 
 Clean sentence test: *native hooks feed events, universal hooks fire, rules
-match, observers think, workers act.*
+match, observers think, workers act, the agent pulls.*
 
 ---
 
-## 3. Trigger hierarchy and graceful degradation
+## 4. The architecture: substrate and consumers
+
+The catalog splits into two layers. **Substrate** is foundational: mostly
+deterministic, cheap, and written/read by everything above it. **Consumers** are
+features that combine substrate. The rule of thumb: substrate is where facts live;
+intelligence lives only in the scan timeline (Tier 1) and the ranking layer, and
+both sit on top of everything else. A third, inverse arrow — the **return path**
+(§7) — carries consumer output back to the coding agent on the agent's initiative.
+
+```text
+   DATA PLANE (the coding agent)  ──pull, agent-initiated──►  RETURN PATH (§7)
+        ▲                                                         │ mux MCP read tools
+        │ insight the agent consults while coding                │ instruction sync
+        └─────────────────────────────────────────────◄─────────┘ human-mediated draft
+                                                 │
+                         ┌───────────────────────┴──────────────────────────┐
+                         │              HUMAN ATTENTION                       │
+                         │        (the actual scarce resource)               │
+                         └───────────────────────▲──────────────────────────┘
+                                                 │  budgeted: a few/day
+                    ┌────────────────────────────┴───────────────────────────┐
+                    │   ATTENTION RANKING / INBOX  (the top consumer)         │
+                    │   fan-out estimate · interrupt budget · 4 channels      │
+                    └───▲────────▲────────▲────────▲────────▲────────▲────────┘
+                        │        │        │        │        │        │
+        ┌───────────────┘        │        │        │        │        └──────────────┐
+   ┌────┴─────┐ ┌────┴─────┐ ┌───┴────────┴──┐ ┌───┴────────┴───┐ ┌────┴─────┐ ┌────┴─────┐
+   │ dead-end │ │ declared │ │  loop / stall  │ │  doc-debt      │ │ cross-   │ │ absence  │
+   │ memory   │ │ vs verif │ │  detection     │ │  ledger        │ │ session  │ │ report / │
+   │          │ │          │ │                │ │                │ │ interlock│ │ digest   │
+   └──▲────▲──┘ └────▲─────┘ └───▲────────▲───┘ └───▲────────▲───┘ └────▲─────┘ └──▲────▲──┘
+      │    │        │            │        │         │        │          │         │    │
+      │  ┌─┴────────┴────────────┴──┐  ┌──┴─────────┴──┐  ┌──┴────────┐ │  ┌──────┴────┴──┐
+      │  │   SCAN TIMELINE (Tier 1) │  │  PROJECT CARD │  │ PROVENANCE│ │  │ EVENT LOG    │
+      │  │   cheap-model records;   │  │  distilled    │  │  GRAPH    │ │  │ normalized,  │
+      │  │   the "why" + salient    │  │  architecture │  │ (Tier 0)  │ │  │ sequenced    │
+      │  │   user/agent messages    │  └───────────────┘  └─────▲─────┘ │  └──────▲───────┘
+      │  └───────────▲──────────────┘  (continuous title also   │       │         │
+      │              │                  derives from the        │       │         │
+      │        ┌─────┴──────────────────timeline, §6.11)─────────┴───────┴─────────┴──────┐
+      └────────┤            TIER 0  — DETERMINISTIC FACTS (no model)                      │
+               │  file hashes · git state · test pass/fail · exit codes · tool           │
+               │  fingerprints · process tree · attach/input/focus telemetry             │
+               └────────────────────────────────▲───────────────────────────────────────┘
+                                                 │  pointers back to source
+               ┌─────────────────────────────────┴──────────────────────────────────────┐
+               │      RAW STORE  — immutable native transcripts + PTY bytes              │
+               │      authoritative; every derived record points back into it            │
+               └────────────────────────────────────────────────────────────────────────┘
+
+   Sibling consumers, need only PROJECT CARD + browser surface (not the timeline):
+   ┌───────────────────────────────┐   ┌───────────────────────────────┐
+   │ screenshot-to-agent           │   │ observation inbox (no AI —     │
+   │ send a pane's view to the CLI │   │ a capture keystroke)           │
+   └───────────────────────────────┘   └───────────────────────────────┘
+
+   Every box above is per-project opt-in and gated by the enablement DAG (§8).
+```
+
+Build order follows the graph bottom-up: **raw store → Tier 0 → (project card,
+provenance) → scan timeline → deterministic consumers → ranking last**, because
+ranking needs every other signal to rank anything. See §9 for the full order.
+
+---
+
+## 5. Substrate
+
+### 5.1 Normalized event log
+
+One timestamped, monotonically sequenced stream of everything: tool calls, file
+writes, test runs, process start/exit, git changes, attach/detach, input-owner
+changes, annotation writes. Provider-neutral, so Claude and Codex look identical
+to everything above the adapter. This is the spine — every consumer either writes
+to it or reads from it, and `events` + the EventBus are already the bones of it.
+
+Every event carries `source` (hook / transcript / PTY / mux) and `confidence`, so
+consumers may condition on fidelity without depending on it (§10).
+
+### 5.2 Raw store and source pointers
+
+Native transcripts and PTY bytes are retained immutable and authoritative, and
+**every derived record carries a pointer back to the exact span it came from**
+(`transcript_id, event_id, byte_start, byte_end, content_hash`). This is the
+single most important structural defense in the whole design: the compression
+literature shows summary-only chains fail silently (§2), so nothing that
+summarizes is ever allowed to be the only copy. swe-mux already treats native
+transcripts as authoritative read-only sources with mtime/size watermarks, so this
+layer is half-built.
+
+Caveat the raw store must respect: PTY bytes are a *presentation* stream (redraws,
+ANSI, spinners, truncation), not a clean event log. Structured facts come from the
+adapter/transcript, not from scraping the terminal.
+
+### 5.3 Tier 0 — deterministic facts
+
+The no-model workhorse. Cheap, exact, immune to hallucination:
+
+```text
+file content hashes (read + written) · git HEAD/branch/diff hashes ·
+test pass/fail counts + failing-test ids · command exit codes/classes ·
+tool fingerprints (canonicalized: strip timestamps, temp paths, line numbers,
+  random ids) · process tree (pid + creation time) · descendant listeners/ports ·
+attach / detach / input-owner / focus telemetry · context-compaction records
+```
+
+Provenance, loop detection, and declared-vs-verified are *just queries over Tier
+0*. Keeping these facts lossless and separate from any model output is what lets
+the scan timeline stay cheap (it references Tier 0 rather than re-describing it)
+and what makes the file/artifact trail reliable where every summarizer is weakest.
+
+### 5.4 Project card
+
+A distilled, cached description of the project — what it is, its main subsystems,
+a file→area map — built once from the existing `.docs` (`00_OVERVIEW.md`, the
+`.docs/CLAUDE.md` routing table). A few hundred tokens, prepended to every model
+call. Without it, a scan model sees "edited `processes.py`" and is working blind;
+with it, the model judges against real architecture. The same card feeds
+screenshot-to-agent and any Tier 2 analysis — build once, several consumers use it.
+
+### 5.5 Scan timeline (Tier 1)
+
+The one substrate layer that costs model tokens: a cheap model samples each
+session and emits a compact **structured** record, and the records form a
+per-session behavioral timeline. This is the compression cascade that makes
+whole-session and cross-session analysis affordable: a 6-hour session's ~400k
+transcript tokens become ~120 records (~5k tokens) that a strong model can read in
+one cheap pass.
+
+**What it reads.** The *delta* since the last scan (not the whole transcript),
+plus its own last 2–3 records for continuity, plus the cached project card and the
+session's originating task. Tool calls are paired with their results (a Read alone
+means nothing; Read+result means something), and the fat is stripped — file
+bodies, full diffs, huge command output become "edited `layouts.py`, tests
+failed," with the exact bytes reachable via the source pointer. Cost stays flat
+regardless of session age.
+
+**Emphasis on the human/agent message spine.** Tool churn is not the signal that
+titles, summaries, and digests key off — what a session is *about* lives in the
+user's actual asks (and mid-session redirections) and the agent's salient
+responses and claims. The scan record must capture those as first-class, weighted
+above interim tool chatter: each new or changed user request, and each agent turn
+that states intent, makes a claim, or reports a result. This is what a continuous
+title (§6.11) and the absence digest (§6.8) consume; it is also the "read agent
+and user turns, skip the interim" instinct made concrete — the delta-strip already
+drops tool bodies, but the message spine is preserved and emphasized rather than
+averaged into the noise.
+
+**When it fires.** Event-triggered with a max-time heartbeat, *not* clock-only
+(§2): tool completion/failure, test/build completion, git HEAD or meaningful diff
+transition, process start/exit/crash, user input or wait transition, context
+compaction, agent finish/error, detected no-progress episode; plus a Δmax of 3–5
+minutes as a backstop so silence is still represented. A fixed clock alone smears
+across causal boundaries (one record gets the tool call, the next its result) and
+under/over-samples bursts vs waits.
+
+**The record.** Multi-axis, not a single `state` field — lifecycle, behavior, and
+work-phase are different variables and behavior is multi-label:
+
+```text
+{
+  t0, t1, session_id, schema_version,
+  lifecycle_state,     # starting|running|waiting_user|waiting_tool|
+                       #   rate_limited|errored|finished|stopped
+  behavior[],          # grounding|retrieving|reasoning|planning|
+                       #   executing|evaluating|reflecting  (multi-label)
+  work_phase,          # investigation|implementation|test|debug|review|explain
+  target[],            # files/subsystems, grounded in Tier 0 files_touched
+  intent,              # what it is trying to do
+  claim,               # verbatim if the agent asserts something (NOT paraphrased)
+  user_ask,            # verbatim/near-verbatim new or changed user request
+  blocked_on,          # user_input|tool_error|rate_limit|missing_context|
+                       #   ambiguous_spec|none   (closed vocab; the differentiator)
+  novelty,             # 1 - max_{i<t} sim(e_t, e_i)  — computed mechanically
+  evidence_refs[],     # pointers into raw store (§5.2)
+  tier0_rollup_id,     # link to the deterministic facts for this interval
+  coverage,            # events_seen / represented / pending_results
+  confidence,          # per-field, with a calibration id
+  observer_model, prompt_hash
+}
+```
+
+Design constraints the research forces:
+
+- **`intent` and `claim` are separate fields.** "Plans to fix the parser" ≠ "the
+  parser is fixed." Collapsing them is the reasoning-action-mismatch failure mode.
+- **`novelty` is mechanical, not model-judged.** Embed the record; `novelty =
+  1 - max over prior records of cosine`. Deterministic and free; frees the model
+  budget for the semantic fields. (Use max-over-all-prior, not consecutive-only,
+  to catch two-state oscillation.)
+- **`blocked_on` is the differentiator.** No observability schema (OTel GenAI,
+  OpenInference, Langfuse, Weave) captures "what is the agent waiting on." Closed
+  vocabulary makes it aggregable.
+- **Session token budget, not a hard per-record cap.** 8–20 tokens for an
+  unchanged wait, 40–80 for an ordinary transition, 100–300 + refs for a failure
+  or test outcome. Same ~5k session budget, but information-dense moments get room.
+- **The scan timeline is capture-first, supervision-never in its own right.** Its
+  most defensible immediate payoff is a readable timeline, automatic dead-end
+  capture, and a continuous title; ranking/alerting is a downstream consumer.
+
+**The strong-model contract (Tier 2).** Tier 2 reads the records + Tier 0 rollups
++ pinned constraints *by default*, and may **expand source pointers on demand**
+when it sees low confidence, conflicts, state transitions, novel claims, or a
+loop/stall alert. It is never records-only: MemCollab and Slipstream show that a
+strong model with no source access inherits the cheap model's silent errors as
+ground truth. Trend/portfolio views may stay fully compressed; diagnosis and
+high-stakes conclusions must be allowed to rehydrate. Track the **rehydration
+rate** as a first-class metric — it is the break-even variable for the whole
+architecture (§2).
+
+**Model choice.** Pick the Tier 1 model by a labeled extraction benchmark built
+from real Claude Code / Codex event streams, not chat/arena rankings: schema
+validity, field-level macro-F1, source-attribution precision/recall,
+unsupported-claim rate, outcome-vs-intent confusion, confidence calibration
+(Brier/ECE), and cost per million transcript tokens. Assume mechanical fields
+survive a small model and semantic fields (`claim`, `blocked_on`, `target`,
+`user_ask`) may not — A/B them, and use two model families to expose correlated
+extraction errors.
+
+---
+
+## 6. Consumers
+
+Each consumer names the substrate it reads and the concrete payoff. The first four
+are the highest value-to-risk in the whole catalog (deterministic or nearly so,
+exploit the all-sessions vantage, half-owned already).
+
+### 6.1 Provenance graph  ← Tier 0
+
+Deterministic lineage: every file read/write (by content hash), every test's input
+snapshot, process ancestry, shared-resource holds, recorded as typed edges. Then
+answer factually: *"session B wrote hash X to file F; session A's failing test ran
+against a snapshot containing X."* **Never** *"B caused A to fail"* — causal blame
+over event streams over-attributes (§2); the factual form needs no inference. This
+kills the most expensive class of parallel-work debugging (why did this suddenly
+break) by showing facts instead of making the human reconstruct them. Rated the #1
+value-to-risk capability by the supervisory review. Foundations: Lamport
+happened-before, Dapper propagated ids.
+
+### 6.2 Dead-end / negative-result memory  ← Tier 0 + scan timeline
+
+Auto-capture abandoned work — a file edited then reverted, an approach tried then
+dropped — with the scan timeline supplying the "why." At an abandonment boundary,
+ask the human one compact line to confirm scope and reason; retrieval is
+demand-driven, surfaced when another session is about to repeat a concretely
+similar approach (or pulled by an agent through the return path, §7). Git records
+only what survived; design-rationale capture has been a good idea since the 1980s
+and failed every time because *someone had to write it down* — passive capture
+removes the only thing that ever killed it. Rated #2 value-to-risk, and it is the
+capability that helps a solo hands-on-testing workflow today.
+
+### 6.3 Declared vs verified  ← Tier 0 (test facts) + scan (claim)
+
+Keep three facts that usually get mushed into one strictly apart: the agent
+*declared* done, the tests *passed*, the code is *actually correct*. An agent
+saying "fixed, all green" gets no green status unless tests actually ran and passed
+against the actual current code — and even then it reads "verified," not "correct."
+Status renders as "claims done · tests not run," never a single misleading ✓.
+Directly attacks the documented trap where developers treat passing tests as a
+correctness guarantee (AgentLens: 20% of passing runs are clean; field studies:
+green tests read as proof). Cheap, deterministic, high-signal.
+
+### 6.4 Loop / stall detection  ← Tier 0 (fingerprints) + scan (recurrence)
+
+Hybrid, gated on progress. Fire when the same canonical action fingerprint repeats
+≥3 times, **or** a period-2/3 oscillation score crosses threshold, **or** semantic
+recurrence crosses a *per-agent-calibrated* threshold — **and** no objective
+progress in the window (failing-test set didn't shrink, no new diagnostic, blocker
+unchanged, no target-relevant diff). The no-progress gate is what keeps it from
+crying wolf on legitimate repeated test runs; the ≥3 threshold and ≥80% precision
+target have production precedent (Wink, ~43k traces). Semantic similarity alone is
+weak (F1 0.28); the structural signal is what makes it usable (hybrid 0.72). Feeds
+the ranking layer with a confidence — it does not fire an interrupt itself at 0.62
+precision. Remember stopping-behavior is ~half the failure mass: pair loop
+detection with **premature-termination detection** (turn ended + completion claim +
+no verification evidence + open todos).
+
+### 6.5 Doc-debt ledger  ← Tier 0 (files changed) + project card + routing table
+
+In this repo it is barely an LLM problem: `.docs/CLAUDE.md` is a literal
+change-type → owning-docs routing table. On turn end, map changed files to routing
+entries and mark those docs dirty, with a pointer to the diff. **Do not nag per
+turn** — accumulate a debt ledger with a visible count; when the human hits a
+stopping point, one strong pass clears everything dirty since the last pass with
+all accumulated diffs as context. One expensive call instead of forty
+interruptions, and it enforces the project's own "docs must agree" completion
+policy. Documentation is one consumer among many here, and one of the cheapest
+because the routing table already did the hard part.
+
+### 6.6 Cross-session interlocks  ← provenance graph
+
+Referee environmental collisions agents are individually blind to: two sessions on
+the same branch/subsystem, port collisions among owned listeners, one session's
+dev server feeding another's tests. Temporal correlation is stronger than static
+matching but must stay "candidate contributor," never blame (§2). Composes directly
+out of the provenance graph plus owned-listener data.
+
+### 6.7 Attention ranking / the inbox  ← everything
+
+The top consumer, and the one that makes every other one viable. It decides what is
+worth interrupting the human for. Non-negotiable shape from the HCI review:
+
+- **Fan-out estimate as the headline.** agents-per-human ≈ neglect-time ÷
+  interaction-time (Olsen & Goodrich). The scan timeline + per-project baselines
+  give neglect time; attach/input telemetry gives interaction time. Surface *"you
+  are sustainable at ~3 attended agents right now; 4 more are queued for review,"*
+  not a wall of per-session status lights. No vendor can compute this — it needs
+  both halves, which only the layer owning the human's terminals has.
+- **Budget interrupts per day, small.** ~1% audit budget / "a few a day." An
+  hourly cap silently authorizes 8–16/day, already fatigue territory; keep it only
+  as a burst limiter under a daily budget. Budget is incident-based: many detector
+  outputs about one underlying event consume one slot.
+- **Four channels, split by cost-to-resolve, never merged.** interrupt-now
+  (irreversible/worsening + concrete action + high confidence) · next-breakpoint
+  (actionable, minutes of delay fine) · inbox (schedulable) · timeline/digest
+  (anomaly, weak association, no action). Merging cheap-blocking (permission
+  grants, y/n) with expensive-blocking (wrong plan, spec ambiguity) is the single
+  most common design error and is the clinical-alarm failure mode. Cheap-blocking
+  never spends interrupt budget; batch and drain at the human's next pause.
+- **Deliver at the human's breakpoint, not the agent's.** swe-mux owns the human's
+  terminals too — OSC 133 prompt markers in the *supervisor's* shell reveal "their
+  test run just finished," empirically the strongest interrupt moment. No vendor
+  can see the human finishing a build in another window. Predict relevance, observe
+  timing (relevance is ~91% predictable, opportune-moment ~60%).
+- **Learn from behavior, show the rule.** Mine dismiss/act/edit/rollback, surface
+  the induced rule for accept/reject (PrefMiner). Never build policy on stated
+  preference (METR self-report gap). The learning objective is expected avoided
+  loss per unit attention, not click-through.
+- **Complacency countermeasures are mandatory** (design law 7): display
+  suppressed-item counts, keep rationale evidence-first not persuasive-prose,
+  periodically force a judgment call.
+- **Instrument resumption lag**, not throughput. Interrupted work completes faster
+  but pays in stress that throughput hides (Mark 2008); resumption lag is the real
+  cost function and swe-mux can measure it from focus/input telemetry.
+
+### 6.8 Absence report / digest  ← event log + scan timeline
+
+"What happened while I was away" as a query: everything the fleet did, decided, and
+got stuck on since the last attach/input, in one narrated digest. Composes entirely
+from the scan records (leaning on the user/agent message spine, §5.5) + events; no
+CLI knows when the user was watching. The mobile/Telegram payoff, and the natural
+home for everything demoted out of the interrupt channel (completions are ignored
+50% of the time — they belong here).
+
+### 6.9 Sibling consumers (need substrate but not the scan timeline)
+
+- **Screenshot-to-agent** ← project card + browser surface. Right-click a pane →
+  send its screenshot + viewport + relevant component tree to the focused agent.
+  The single biggest per-iteration cost in a hands-on UI-testing loop is
+  translating "this looks wrong" into words; this collapses it to a click.
+  Playwright is already in the frontend deps and the mux owns the browser surface.
+- **Observation inbox** ← nothing but a keystroke. A capture surface that drops a
+  line into a per-project list without leaving the browser or switching to the
+  agent, so a testing pass ends with six items instead of one plus a nagging sense
+  of five forgotten. No AI at all; hands the batch to the agent at once instead of
+  one-at-a-time context switching.
+
+### 6.10 Novel capabilities only the control plane enables
+
+The CLIs are first-person and present-tense; the control plane is third-person and
+has memory. These require seeing *all agents, all time, one machine* at once:
+
+- **Cross-vendor second opinions.** One keystroke: "have Codex review what Claude
+  just did" — spawn the other backend in the same cwd with a generated prompt
+  referencing the diff. Adversarial review across labs with independent failure
+  modes; structurally exclusive to a neutral control plane; cheap (spawn + prompt
+  template). User-initiated, so it ships as a palette/universal-command before it
+  is ever a rule action.
+- **The experience database.** Error→resolution evidence mined across both
+  backends, all sessions, all time, into a per-machine cumulative cache; an
+  observer annotates a live failure with a prior resolution, and the return path
+  (§7) lets an agent pull it directly. Precision risk: error-string similarity is a
+  poor retrieval key, and a usually-wrong `prior-resolution` poisons trust in the
+  whole annotation surface — require exact normalized error signature + same
+  project before annotating or returning.
+- **Scaffold telemetry / A-B.** Both harnesses observed on real work under
+  identical conditions: which stalls more on this repo, cost per completed task,
+  approval-interrupt rate. The mux as an eval harness *of scaffolds*, on the user's
+  actual workload. Explicitly correlation, never a causal benchmark.
+- **Session lineage.** Resumes, handoffs, continuations, reviews as a graph, giving
+  *work items* continuity across sessions and backends. The CLIs have sessions; the
+  mux can have threads of work.
+
+### 6.11 Continuous session title  ← scan timeline (+ deterministic pin)
+
+A modification to the existing built-in titler, replacing the earlier one-shot
+label. The title **adapts as the session progresses** — an evolving, at-a-glance
+answer to "what is this session about right now."
+
+How it stays efficient and safe:
+
+- **Derive from the scan timeline, don't re-read transcripts.** The records already
+  capture `user_ask`, `intent`, `claim`, `work_phase`, and `target` (§5.5). A title
+  is a cheap derivation over the most recent records — often the current
+  `work_phase` + primary `target` + latest `user_ask`. The scan pass is already
+  paid for; the title rides on it rather than issuing its own reads. This is why
+  §5.5 emphasizes the user/agent message spine: the title (and the digest) are its
+  main consumers.
+- **Recompute on material shift, not per turn.** Gate on a meaningful change —
+  `novelty` spike, `work_phase`/`target` transition, or a new `user_ask` — with
+  debounce and hysteresis so the title doesn't flicker and doesn't cost a call
+  every turn. Interim tool chatter never moves it.
+- **Explicit rename wins, permanently.** If the user renames the shell/session, the
+  title is pinned and auto-update disables for that session. User intent is
+  authoritative; the automation never overwrites a human-chosen name.
+- **Compact task labels**, no backend or "terminal session" prefixes — the existing
+  titling convention carries over.
+
+`design/features/automation.md` now describes this continuous, scan-derived,
+rename-suppressed behavior. The implementation still lags: `automation.py` reserves
+one title run per `agent_run_id` and `test_automation_phase6.py`
+(`test_builtin_titler_reserves_one_paid_call_per_agent_run`) asserts the old
+one-shot guarantee. Both must change for the doc to be true again — the reserve-once
+logic becomes material-shift gating, and the test is rewritten around the new
+behavior.
+
+---
+
+## 7. Return path: making insights available to the data plane
+
+Everything above is the control plane *observing* the agent. The return path is the
+inverse arrow: how accumulated insight gets back *into* the agent while it codes.
+Closing this loop is what makes the system compound instead of merely accumulate.
+
+**Principle: pull, not push.** The control plane is a queryable memory; the agent
+consults it on its own initiative. This is the only channel that respects every
+design law at once — swe-mux never enters the agent's execution path, it just
+answers when asked. The agent reaching out to swe-mux is the agent using a tool,
+same as any other; swe-mux is not gating the turn, so it stays out-of-band.
+
+**Mechanism: a mux MCP server.** Both Claude Code and Codex speak MCP, so swe-mux
+exposes read-only tools the agent calls mid-coding when relevant:
+
+```text
+mux.provenance(file)        → who touched this, what hash, what tests ran on it
+mux.priorResolutions(error) → "this exact error was hit in March; fix was Y"
+mux.deadEnds(subsystem)     → approaches tried and abandoned here, and why
+mux.verifiedStatus(claim)   → is this actually tested, or just declared done
+mux.searchHistory(query)    → cross-vendor transcript search (mostly built)
+```
+
+The control plane's third-person, all-time, all-sessions memory becomes available
+to the first-person agent, on the agent's initiative, with no injection.
+
+**Graded ladder of channels, by authority:**
+
+1. **Pull (agent-initiated).** The MCP tools above. Safest, primary. The agent
+   decides to consult.
+2. **Instruction sync (curated, durable).** Slow-moving distilled insights — a
+   mined convention, a recurring failure mode — rendered into governed
+   sentinel-delimited sections of `CLAUDE.md` / `AGENTS.md` (roadmap Phase 6). The
+   agent sees these as standing context every session, no query needed. Right for
+   stable facts, wrong for live ones.
+3. **Human-mediated injection (queue-draft / universal commands).** Live insight →
+   inert draft → human approves → it enters the agent (§13). Or `/handoff` seeds a
+   new prompt with relevant provenance and dead-ends. Human in the loop, per the
+   actuation gate.
+4. **Actuation (reserved, gated).** The observer autonomously injecting. Stays
+   behind the safe-to-inject predicate (§16); not near-term.
+
+**Precision is a trust gate, not a nicety.** An agent that calls `priorResolutions`
+and gets a plausible-but-wrong match learns to stop calling it — and worse, may act
+on the bad match. The pull tools must return high-precision, tightly scoped results
+(same project, exact normalized error signature, verified provenance) and return
+**nothing** rather than a weak guess. Empty is fine; wrong is corrosive. Same
+principle as the interrupt budget: a usually-wrong signal is worse than none.
+
+**Implications for the substrate.** Every artifact must be **addressable and
+retrievable** — the source pointers, provenance edges, and scan records are not
+just for the human UI, they are the index behind these tools. And insights need a
+**confidence/scope tag** so the retrieval layer can withhold low-confidence items
+from the agent even while showing them (with a suppressed count) to the human.
+
+**Roadmap composition.** The MCP read surface is a natural extension of the typed
+daemon operations Phase 7 already wants (browser, CLI, mailbox routed through
+shared typed ops — MCP is one more consumer). Instruction sync is Phase 6; the
+queue-draft path is Phase 4/5. The return path is a read API layered over machinery
+already scheduled, not a new pillar.
+
+---
+
+## 8. Enablement: per-project opt-in and the dependency graph
+
+Design law 8: nothing runs on a project that did not opt in. The mechanics:
+
+- **Automations are per-project opt-in.** Anything that spends model tokens or
+  consumes attention is enabled explicitly, per project, in `.swe-mux/config.toml`
+  (which already carries an "enabled scope" field for the prompt library). This is
+  not only preference — it is the Phase 5 trust posture: an untrusted repo must not
+  silently make model calls on the user's account or reach actuation.
+- **Substrate is per-project too, but inert.** Event-log and Tier 0 capture record;
+  they never act or spend. A consumer cannot be enabled unless its substrate
+  dependencies are enabled for that project. Enablement is therefore a **dependency
+  DAG**: turning on the provenance graph auto-requires Tier 0 capture; turning on
+  dead-end memory requires Tier 0 + the scan timeline; the ranking layer requires
+  whatever detectors feed it. The UI presents the dependency when you toggle a
+  consumer, and disabling a substrate node disables its dependents.
+- **No global automations.** There is no `rules.toml` that executes on every repo.
+  Global config exists only as an **inherited default template** a new project
+  adopts and then opts into — you get the ergonomics of not reconfiguring titling
+  per repo, without machine-wide execution on untrusted code.
+- **Cross-project consumers are aggregators over the opted-in set.** Fan-out and
+  the absence report are inherently machine-wide, but they are not global
+  automations: they only ever see data from projects that opted into producing it.
+  A repo you never enabled contributes nothing. The rule holds — nothing runs on a
+  non-opted-in project — while the cross-project views operate over the opted-in
+  set.
+- **Config-value precedence is a separate axis.** Once an automation is enabled, a
+  setting still resolves session/request → project → global-default. That value
+  precedence is distinct from enablement gating; do not conflate them.
+
+Project-scoped rules and scripts remain subject to the Phase 5 project-config trust
+boundary: executable behavior requires an explicit trust decision, same as project
+config generally. Files are the source of truth; the Settings UI is a two-way
+editor over them, preserving the atomic-write/last-known-good machinery and making
+**Claude itself a capable rule author** (an agent that knows the schema turns "ping
+my phone when a builder stalls" into a valid, reviewable rules file).
+
+---
+
+## 9. Implementation order
+
+Ordered by the enablement DAG (substrate before consumers, deterministic before
+model), then pulled forward where it helps a solo hands-on-testing loop today.
+
+0. **The enablement framework itself** (§8). Per-project opt-in + dependency gating.
+   Must exist before any consumer, because it is how anything is turned on.
+1. **Substrate: Tier 0 capture** (§5.3) + finish raw store / source pointers
+   (§5.2). The workhorse everything deterministic reads from.
+2. **The two things that help today and barely depend on anything:** the
+   **observation inbox** (§6.9, no AI) and **screenshot-to-agent** (§6.9, needs the
+   project card). Highest daily leverage in a look-change-retest loop; pulled ahead
+   of higher-DAG items because they are cheap and pay off now.
+3. **Deterministic consumers (no model, best value-to-risk):** provenance graph
+   (§6.1), declared-vs-verified (§6.3), doc-debt ledger (§6.5, cheapest in this
+   repo), loop/stall deterministic half (§6.4).
+4. **Project card** (§5.4) — built for step 2 already; formalize and cache for
+   reuse.
+5. **Scan timeline (Tier 1)** (§5.5). First model-cost layer. Ship capture-first:
+   readable timeline + **dead-end memory** (§6.2) + **continuous title** (§6.11).
+   Instrument the rehydration rate from the first commit.
+6. **Model-narration upgrades.** Add the cheap-model "why" on top of the
+   deterministic detectors (loop narration, scope-creep explanation).
+7. **Attention ranking / inbox** (§6.7). Last, because it needs every other signal
+   to rank anything. Fan-out, daily interrupt budget, four channels, breakpoint
+   delivery.
+8. **Cross-session interlocks (§6.6), digests (§6.8), novel capabilities (§6.10),
+   and the return-path MCP surface (§7)** as the substrate they read matures.
+
+The through-line: substrate before consumers, deterministic before model,
+helps-you-today pulled forward, ranking genuinely last.
+
+---
+
+## 10. Trigger hierarchy and graceful degradation
 
 Three signal channels with different fidelity/stability tradeoffs:
 
 | Channel | Fidelity | Stability | Notes |
 |---|---|---|---|
-| **Native hooks** | Exact, semantic, can gate (natively) | Fragile: version-coupled config injection; availability differs per CLI (a hook on Claude may not exist on Codex) | Highest-fidelity event source. Per-CLI wiring lives in adapters. |
+| **Native hooks** | Exact, semantic, can gate (natively) | Fragile: version-coupled; availability differs per CLI | Highest-fidelity source. Per-CLI wiring in adapters. |
 | **Transcript tailing** | Rich, complete payloads | Schemas drift; one-file parser fix | Post-hoc only: can react to a tool call, never gate it. |
-| **PTY bytes + liveness** | Crude, near-zero semantics | Eternal: no scaffold update can remove it; we own the ConPTY | The only source for plain shells and for wedged/dead states. |
+| **PTY bytes + liveness** | Crude, near-zero semantics | Eternal: we own the ConPTY | Only source for plain shells and wedged/dead states. |
 
-The existing state priority (hook > transcript > PTY) is already a graceful
-degradation ladder. The rule layer inherits it:
+The state priority (hook > transcript > PTY) is a graceful-degradation ladder the
+rule layer inherits:
 
-- A rule declares `on: turn_ended`; the daemon resolves the best available
-  source per session/backend. Rules never name sources.
-- Every normalized event carries `source` and `confidence` fields so rules
-  *may* condition on fidelity without depending on it.
-- When a native hook is unavailable (CLI update broke wiring, or the backend
-  never had that hook), the trigger silently degrades to transcript inference;
-  when the parser degrades, features thin out rather than break.
+- A rule declares `on: turn_ended`; the daemon resolves the best available source
+  per session/backend. Rules never name sources.
+- Every normalized event carries `source` and `confidence` so rules *may* condition
+  on fidelity without depending on it.
+- When a native hook is unavailable, the trigger degrades to transcript inference;
+  when the parser degrades, features thin rather than break.
+
+Backend asymmetry is expected and acceptable: Claude Code exposes a rich hook set
+(the non-blocking subset — `SessionStart/End`, `PermissionDenied`, `FileChanged`,
+`PostCompact`, `Notification` with `agent_needs_input`/`idle_prompt`/`agent_
+completed`, etc. — is the principled subscription boundary for an out-of-band
+layer). Codex has no equivalent. Do not degrade Claude to the common denominator;
+consume the richer signal where it exists and fall back where it does not.
 
 ### Degradation detection
 
-Agnosticism requires knowing when fidelity has dropped:
-
-- **Per-adapter capability flags**: each adapter version declares which events
-  it can source at which fidelity (roadmap Phase 4 "parser capability/
-  diagnostic status"). Observers declare required fidelity and disable
+- **Per-adapter capability flags**: each adapter version declares which events it
+  can source at which fidelity. Observers declare required fidelity and disable
   themselves cleanly rather than firing on garbage.
-- **Versioned transcript fixtures + contract tests** (already in place) catch
-  drift at test time.
-- **Runtime probes**: hook silence while transcript shows activity implies
-  broken hook wiring → emit a `capability_degraded` event, surface in
-  Settings diagnostics, and (itself) become a matchable trigger.
-- Transcript silence is ambiguous (idle vs hung vs crashed); PTY signals exist
-  to disambiguate it. Composite triggers (§4.4) formalize this.
+- **Versioned transcript fixtures + contract tests** (already in place) catch drift
+  at test time.
+- **Runtime probes**: hook silence while transcript shows activity implies broken
+  wiring → emit `capability_degraded`, surface in diagnostics, become a matchable
+  trigger.
+- Transcript silence is ambiguous (idle vs hung vs crashed); PTY signals
+  disambiguate it. Composite triggers (§11.4) formalize this.
 
 ---
 
-## 4. Trigger inventory
+## 11. Trigger inventory
 
-### 4.1 Transcript-derived (rich, semantic, post-hoc)
+### 11.1 Transcript-derived (rich, semantic, post-hoc)
 
-Turn structure:
-- `turn_started` / `turn_ended`
-- `user_prompt` with content match (regex over the user's text)
-- `assistant_text` with content match (claims like "tests pass", questions to
-  the user, refusals, retry apologies)
-- `stop_reason` (clean end vs truncation)
-- Derived timing: turn duration, turn count, turns-per-hour velocity
+Turn structure: `turn_started`/`turn_ended`; `user_prompt` with content match;
+`assistant_text` with content match (completion claims, questions, refusals, retry
+apologies); `stop_reason`; derived timing (duration, count, velocity).
 
-Tool activity (observed, never blocking):
-- `tool_use` by name + input payload: file edited (which path), command run
-  (which text), web fetch (which URL), subagent spawned
-- `tool_result`: success vs error content, nonzero exit codes
-- Derived churn: same file edited N times in a window, same command failed M
-  times — the stall detector's raw material
-- Todo/plan payload changes
+Tool activity (observed, never blocking): `tool_use` by name + payload (which file,
+which command, which URL, subagent spawned); `tool_result` success/error + exit
+codes; derived churn (same file edited N times, same command failed M times — the
+loop detector's raw material); todo/plan payload changes.
 
-Resource and model telemetry:
-- Per-message token usage → `context_pct` threshold crossings, cost
-  accumulation, tokens-per-turn velocity
-- Model id change, CLI version from session metadata
-- Compaction/summary records (context was squashed)
+Resource/model: per-message token usage → `context_pct` crossings, cost, velocity;
+model-id change; compaction records.
 
-Session semantics:
-- Sidechain/subagent activity (Claude); patch-applied and exec records (Codex)
-- API errors, retry records
-- Session start metadata (cwd, version)
+Session semantics: sidechain/subagent activity (Claude); patch-applied/exec records
+(Codex); API errors/retries; start metadata.
 
-Limits: strictly after-the-fact; latency is the file-flush interval; schema
-drift is the fragility (adapter parser is the blast radius); silence is
-ambiguous.
+Limits: strictly after-the-fact; latency is the flush interval; schema drift is the
+fragility (adapter parser is the blast radius); silence is ambiguous.
 
-### 4.2 PTY-derived (crude, semantic-free, eternal)
+### 11.2 PTY-derived (crude, semantic-free, eternal)
 
-Process level:
-- `session_exited` / `session_crashed` (EOF + exit code; explicit stop vs
-  unexpected death)
-- Spawn success/failure
-- Via the job object: descendant process start/exit (agent launched a dev
-  server; a test runner is still alive)
-- Polled CPU/memory of the process tree: distinguishes hung from
-  busy-but-silent; catches runaways
+Process: `session_exited`/`session_crashed`; spawn success/failure; job-object
+descendant start/exit; polled CPU/memory of the tree (hung vs busy-but-silent,
+runaways).
 
-Output stream:
-- Activity/silence: bytes flowing vs quiet for N seconds. Combined with
-  transcript state this disambiguates idle from wedged — probably the single
-  most useful PTY trigger.
-- Output rate/volume: bursts, output storms (a loop spraying the terminal)
-- Content match on ANSI-stripped bytes: error strings, permission-prompt text,
-  spinner glyphs. Universal but fragile to theme/version/locale; last-resort
-  fallback only, never a primary source.
+Output: activity/silence (bytes vs quiet for N seconds — combined with transcript
+state, disambiguates idle from wedged); output rate/volume (storms); ANSI-stripped
+content match (error/permission strings — fragile, last-resort only).
 
-Terminal control sequences (underrated):
-- **BEL (0x07)**: CLIs ring the bell on attention/completion; a clean,
-  semantic-ish signal that costs nothing to parse
-- **OSC 0/2 title changes**: CLIs set window titles reflecting state
-- **OSC 133 prompt markers**: with shell integration, plain shells emit
-  command start/end/exit-code markers → `command_finished {exit_code}`
-  triggers for non-agent sessions, which have no transcript at all
-- Alternate-screen enter/exit: TUI came up or dropped to shell — the in-place
-  promotion detector generalized
-- Bracketed-paste / cursor-mode toggles: composer open vs menu state; inputs
-  to a future safe-to-inject predicate (§9)
+Control sequences (underrated): BEL (0x07) attention/completion bell; OSC 0/2 title
+changes; OSC 133 prompt markers → `command_finished {exit_code}` for plain shells
+*and for the human's own shell* (the breakpoint signal in §6.7); alternate-screen
+enter/exit (promotion generalized); bracketed-paste/cursor-mode toggles (composer
+vs menu — inputs to the safe-to-inject predicate).
 
-### 4.3 Mux-side (free because we own the plumbing)
+### 11.3 Mux-side (free because we own the plumbing)
 
-- Attach/detach, input-owner changes, keystrokes flowing → "human is
-  watching/typing" vs unattended; should modulate notification rules (don't
-  push to the phone what the user is looking at)
-- `git_changed` (branch, dirty, ahead/behind per cwd)
-- Space/session lifecycle: spawned, renamed, moved, pinned
-- Timer/interval and threshold triggers (see §5.1)
-- `annotation_created` (observer output re-entering the trigger space, §7)
-- `capability_degraded` (§3)
+Attach/detach, input-owner changes, keystrokes → attended vs unattended (modulates
+notifications; also the interaction-time half of fan-out); `git_changed`;
+session lifecycle; timer/interval and threshold triggers; `annotation_created`
+(observer output re-entering the trigger space); `capability_degraded`;
+`no_progress` (Tier 0 progress gate went N intervals without advancing).
 
-### 4.4 Composite triggers (the valuable ones)
+### 11.4 Composite triggers (the valuable ones)
 
-Some triggers are only expressible across sources, and these are exactly the
-ones no native hook system can offer — the core pitch of universal hooks:
+Only expressible across sources — exactly what no native hook can offer:
 
-- `stalled`: transcript says working + PTY silent + CPU flat
+- `stalled`: transcript working + PTY silent + CPU flat
 - `unattended_attention`: awaiting approval + no browser attached
-- `promotion`: alternate screen entered + native transcript file appeared
+- `promotion`: alternate screen + native transcript appeared
 - `runaway`: output storm + no turn progress
-- `claim_unverified`: assistant text claims completion + no test tool_result
-  in the same turn
+- `claim_unverified`: completion claim + no passing test tool_result in the turn
+- `premature_stop`: turn ended + completion claim + open todos + no verification
+- `test_gamed`: a test file modified in the same turn that made the test pass
+- `looping`: fingerprint recurrence ≥3 + no-progress gate (§6.4)
 
 Design the trigger schema around composites from the start.
 
 ---
 
-## 5. Rule anatomy: trigger → conditions → actions
+## 12. Rule anatomy: trigger → conditions → actions
 
-Steal Home Assistant's proven triad. A rule is:
+Steal Home Assistant's proven triad:
 
 ```toml
 [[rule]]
@@ -241,330 +877,252 @@ do = [
 ]
 ```
 
-### 5.1 Trigger options
+### 12.1 Trigger options
 
-Every trigger supports, uniformly:
-- **Debounce/coalesce**: "on turn_ended, wait 30s, fire once." Without this,
-  observers are economically unviable.
-- **Interval**: fire every N minutes (for polling-style observers and digests).
-- **Threshold**: fire when a numeric field crosses a value (`context_pct > 80`),
-  with hysteresis so it doesn't re-fire every tick.
-- **Content match**: regex/glob params where the trigger carries text.
+Uniformly: **debounce/coalesce** ("wait 30s, fire once" — without it observers are
+economically unviable); **interval** (every N minutes, for digests); **threshold**
+with hysteresis (`context_pct > 80` without re-firing every tick); **content
+match** (regex/glob where the trigger carries text).
 
-### 5.2 Conditions inventory
+### 12.2 Conditions inventory
 
-Guards that gate a fired trigger (cheap field/op/value rows in the UI):
-- Field matches: backend, session name glob, space, cwd/project, state,
-  source, confidence
-- State guards: attended/unattended, context_pct range, session age,
-  pinned, broadcast membership
-- Time windows: quiet hours, weekdays
-- Rate guards: "at most once per session per hour" (beyond per-rule
-  rate limits)
-- Annotation guards: "only if no `stall` annotation in the last 10 minutes"
+Field matches (backend, session glob, project, state, source, confidence); state
+guards (attended/unattended, context_pct range, age, pinned, broadcast); time
+windows (quiet hours, weekdays); rate guards ("at most once per session per hour");
+annotation guards ("only if no `stall` annotation in 10m").
 
-### 5.3 Actions inventory and the action ladder
+### 12.3 Actions inventory and the action ladder
 
-Actions are an ordered list. The design ladder, in the order the UI pushes
-users (declarative first, scripts last):
+Ordered list; the UI pushes declarative first, scripts last:
 
-1. **Declarative primitives** — validated, budgetable, dry-runnable, safe:
-   - `notify {channel, message_template}` (ui, phone/ntfy, telegram-later)
-   - `annotate {tag, content_template}` (writes the annotations table, §7)
-   - `http {url, body_template, timeout, retry}`
-   - `spawn {backend/profile, cwd, prompt_template}` (e.g. second-opinion
-     sessions, §12) — powerful; same gating posture as write_pty
-   - `write_pty {text_template}` — exists, deliberately gated (§9)
-2. **`llm` — the soft script** (§6). Most things users would script
-   (classify, extract, decide-whether-to-escalate) are a prompt + output
-   schema + follow-up action. No file, no language, no platform issues.
-3. **`run` — the hard escape hatch.** Arbitrary script for the residual 10%.
+1. **Declarative primitives** — validated, budgetable, dry-runnable:
+   `notify {channel, message_template}` · `annotate {tag, content_template}` ·
+   `http {url, body_template, timeout, retry}` · `spawn {backend, cwd,
+   prompt_template}` (gated like write_pty) · `write_pty {text_template}` (gated,
+   §16) · **`queue_draft {session, body_template, provenance}`** — write an inert
+   draft into the Phase 4 manual queue (§13).
+2. **`llm` — the soft script** (§14): a prompt + output schema + follow-up action
+   covers most of what users would otherwise script.
+3. **`run` — the hard escape hatch**: arbitrary script for the residual.
 
-Template variables (`{session_name}`, `{payload.tool_name}`,
-`{annotation.content}`) are the connective tissue, with editor autocomplete
-driven by the chosen trigger's event schema.
+Template variables (`{session_name}`, `{payload.tool_name}`, `{annotation.content}`)
+are the connective tissue, with editor autocomplete from the trigger's event schema.
 
-### 5.4 Script contract (`run`)
+### 12.4 Script contract (`run`)
 
-Mirror native hooks so the mental model transfers, plus composability:
-- Event payload as JSON on stdin; template vars in argv/env
-- Daemon-enforced timeout, subprocess lifecycle policy
-- **stdout JSON may emit follow-up actions or annotations**; exit codes have
-  defined meanings — a script is not a dead end; its output re-enters the
-  rule system like any other event
-- Scripts live in a scripts dir (global or project, §10); the UI lists them,
-  reveals the folder, shows last-run/exit/stderr per script
+Mirror native hooks: event payload as JSON on stdin, template vars in argv/env;
+daemon-enforced timeout and lifecycle; **stdout JSON may emit follow-up actions or
+annotations** (a script is not a dead end; its output re-enters the rule system);
+scripts live in a scripts dir (project-scoped, §8); the UI lists them and shows
+last-run/exit/stderr.
 
 ---
 
-## 6. The `llm` action kind and observers
+## 13. The queue-draft channel: actuation-free output
 
-The minimal kernel from which every observer builds:
+Observers cannot type (design law 2). But the Phase 4 manual prompt queue
+introduces a durable `draft` state that is inert by design and requires an explicit
+human arm + send. So **let observers write drafts into the queue** instead of
+nudging:
+
+- The stall detector drafts *"you've retried this approach 4×; the failing
+  assertion is X, consider Y"* into the target session's queue.
+- The diff/scope check drafts *"revert the changes to `layouts.py`, out of scope."*
+- The context advisor drafts the handoff document itself, not a suggestion to write
+  one.
+
+Zero new trust boundary: the draft is text sitting in a queue; head-of-line
+ordering, revision tracking, and the audit trail already apply, and the human
+reviews and sends. This is the entire value of "the ambient layer can act" with
+none of the actuation risk. It needs the Phase 4 message model to carry a
+`sender_kind` for observer provenance and a **structured action payload** (not just
+a body string) that is re-validated at send time — the correct drafting-for-approval
+shape (persist a typed payload, re-check at commit), not "show text and re-ask the
+model to do it." Keep friction proportional to consequence and never pre-focus
+"send," or approval degrades into rubber-stamping (2026 oversight studies: a warned
+monitor still had 56% accept malicious code). This is also channel 3 of the return
+path (§7).
+
+---
+
+## 14. The `llm` action kind and observers
+
+The minimal kernel:
 
 ```
-event pattern → transcript slice → cheap model call → structured output → follow-up action
+event pattern → normalized slice → cheap model call → structured output → follow-up action
 ```
-
-Action shape:
 
 ```toml
 do = [{ kind = "llm",
-        model = "cheap-model-id",
-        input = { slice = "last_turn" },          # TranscriptSlice spec
+        model = "cheap",                          # named tier, resolved in config
+        input = { slice = "last_turn" },          # TranscriptSlice / scan-record spec
         prompt = "...template...",
         schema = "title_v1",                       # JSON schema for output
         on_result = { kind = "annotate", tag = "title", content = "{result.title}" } }]
 ```
 
 Principles:
+
 - The engine stays dumb and deterministic; intelligence is entirely inside the
   model call. "Hooks that can think."
-- Observers are stateless between invocations; their memory is the annotations
-  table. This is the guard rail against re-growing orchestration.
-- Later observers read cheap prior annotations (turn summaries) instead of
-  re-reading transcripts — the summarizer is substrate, not a feature.
+- **Deterministic detector, model describer.** Never spend a model call where a
+  Tier 0 counter can fire. Use the model only to *narrate* an already-suspicious
+  event, so observers fire per-anomaly, not per-turn — two orders of magnitude
+  cheaper and higher precision (the model is never asked the open-ended "is
+  anything wrong?", which it over-answers yes).
+- Observers are stateless between invocations; their memory is the annotations /
+  scan-record tables. This is the guard rail against re-growing orchestration.
+- Later observers read cheap prior records (scan timeline, turn summaries) instead
+  of re-reading transcripts — the summarizer is substrate, not a feature. But note
+  the turn summarizer is substrate *only*; nobody reads a per-turn summary feed, so
+  do not render one. (The continuous title, §6.11, is the visible consumer of that
+  substrate.)
 
 ### TranscriptSlice service
 
-Adapters expose normalized slices in a minimal common shape (role, text, tool
-name, timestamps): `last_turn`, `last_n_messages`, `since_event`,
-`since_annotation`, `full_session_summary_chain`. Observers written against
-this survive parser drift: when a parser degrades, slices get thinner and
-features degrade instead of breaking. No observer ever sees a native schema.
+Adapters expose normalized slices (role, text, tool name, timestamps): `last_turn`,
+`last_n_messages`, `since_event`, `since_annotation`, `full_session_summary_chain`.
+Observers written against these survive parser drift — slices thin, features
+degrade, nothing breaks. No observer sees a native schema.
+
+### Cascade economics reminder
+
+A cheap-model preprocessor feeding a strong consumer is not a cascade (no deferral
+decision), which sidesteps the classic cascade structural cost but forfeits its
+safety signal: nothing says "this window needs raw." Restore it with the per-record
+`confidence` + `coverage` fields and the rehydration path (§5.5). At current
+pricing one strong pass repays a session's cheap ingestion; the variable that
+decides whether the whole thing pays is the rehydration rate, so meter it.
 
 ---
 
-## 7. Annotations table
+## 15. Annotations, safety, economics, and trust machinery
 
-The composition backbone. One table:
+### Annotations table
+
+The composition backbone:
 
 ```
-annotations(id, session_id, kind/tag, content, provenance, model, cost, ts)
+annotations(id, session_id, kind/tag, content, provenance, model, cost, refs[], ts)
 ```
 
-- Writing an annotation emits `annotation_created`, which is itself matchable
-  — titler writes an annotation, the UI renders it, a digest rule aggregates
-  it, nothing is hardcoded.
-- Titles, summaries, verdicts, extracted facts are all annotations over
-  history: queryable via API, displayable in the history browser, exportable.
-- Provenance and cost are first-class columns: every derived artifact knows
-  which rule/model produced it and what it cost.
+Writing an annotation emits `annotation_created`, itself matchable — titler writes
+one, the UI renders it, a digest aggregates it, nothing hardcoded. Titles,
+summaries, verdicts, scan records, extracted facts are all annotations over
+history: queryable, displayable, exportable. Provenance, cost, and source `refs`
+are first-class columns.
 
----
+### Machinery
 
-## 8. Safety, economics, and trust machinery
-
-- **Budgets**: per-rule and global token/dollar caps enforced by the daemon.
-  Once a cap is hit, further `llm` actions fail visibly. Spend per rule is
-  visible in Settings from day one. "Many cheap models buzzing" fails not by
-  being wrong but by silently costing $40/day doing nothing useful.
-- **Chain-depth cap**: rule → action → event → rule chains have a depth limit;
-  loop detection flags a chain that revisits the same rule.
+- **Budgets**: per-rule and global token/dollar caps enforced by the daemon; once
+  hit, `llm` actions fail visibly; spend per rule visible in Settings from day one.
+  "Many cheap models buzzing" fails not by being wrong but by silently costing
+  $40/day doing nothing useful.
+- **Attention budget** (the missing primitive alongside tokens/dollars): a hard cap
+  on interrupts per *day*, with the ranking layer deciding which cross the bar.
+  Volume, not correctness, is what kills the feature in daily use.
+- **Chain-depth cap**: rule → action → event → rule chains have a depth limit; loop
+  detection flags a chain revisiting the same rule.
 - **Kill switch**: one toggle disables the entire automation layer.
-- **Shadow mode**: new rules can run logging-only ("would have fired 12 times
-  today; here's what it would have done") before going live — how users safely
-  tune regexes and debounce values.
-- **Test against history**: pick any recent event from the persisted event
-  log, dry-run a rule against it, see rendered actions without side effects.
-  Nearly free because events are already persisted; nobody trusts an
-  automation they can't test.
-- **Firing log**: per-rule history of trigger event → condition results →
-  actions taken → cost.
-- **Read-only first**: the observer layer ships annotate-and-notify only.
-  That is ~80% of the value at ~5% of the risk. Actuation comes later, gated
-  (§9).
-- **Rulepacks**: a rulepack is a TOML file + optional scripts + declared
-  parameters ("which sessions", "which channel"), imported through the same
-  validation path. Distribution story without a marketplace; also
+- **Shadow mode**: new rules run logging-only ("would have fired 12× today") before
+  going live — how users tune regexes and debounce safely. This is also the Phase 1
+  shadow-readiness posture generalized.
+- **Test against history**: dry-run a rule against any persisted event, see rendered
+  actions with no side effects. Nearly free (events already persisted); nobody
+  trusts an automation they can't test.
+- **Firing log**: per-rule trigger → conditions → actions → cost history.
+- **Read-only first**: the observer layer ships annotate-and-notify (and
+  queue-draft) only — ~80% of the value at ~5% of the risk. Actuation comes later,
+  gated (§16).
+- **Rulepacks**: a TOML file + optional scripts + declared parameters, imported
+  through the same validation path. Distribution without a marketplace;
   agent-generatable and shareable.
 
 ---
 
-## 9. Actuation: the deliberate gate
+## 16. Actuation: the deliberate gate
 
 Observation is safe and scaffold-agnostic. Actuation is the fragile half:
-`write_pty` is typing into a screen whose state is inferred. Inject mid-turn,
-into a menu, or into a permission prompt, and the session is corrupted.
+`write_pty` types into a screen whose state is inferred. Inject mid-turn, into a
+menu, or into a permission prompt, and the session is corrupted.
 
 Posture:
+
 - The observer layer is **read-only first**. `write_pty` (and `spawn` with a
-  prompt) stay out of observer reach until a **safe-to-inject predicate**
-  exists: state is idle, composer empty, per-adapter injection etiquette;
-  bracketed-paste/cursor-mode/alt-screen signals (§4.2) are inputs to it.
-- Nudging a stalled agent, auto-answering approvals, and cross-session relay
-  are all real future features — and all go through the same deliberate gate
-  as the spec's reserved relay (§7 of the spec), as product decisions, not
-  rules-file creep.
-- Auto-approval (approval triage acting on its verdict) additionally requires
-  an explicit allowlist policy and belongs with the Phase 5 trust-boundary
-  work.
-- The line that keeps this from re-growing orchestration: observers are
-  advisory and stateless; anything that *commands* agents is relay, and relay
-  is reserved.
+  prompt) stay out of observer reach until a **safe-to-inject predicate** exists:
+  idle state, empty composer, per-adapter etiquette; bracketed-paste/cursor-mode/
+  alt-screen signals (§11.2) are inputs. This is the same fail-closed
+  `safe|blocked|unknown` contract as delivery-readiness; `unknown` never authorizes
+  a write.
+- Nudging a stalled agent, auto-answering approvals, and cross-session relay are all
+  real future features — all through the same deliberate gate, as product
+  decisions, not rules-file creep.
+- **Never add "re-run the turn" / resample as an automatic remediation.** Adaptive
+  attacks (2026) show resampling amplifies injected content; semantic rewind stays
+  human-directed with a corrected instruction, never an automatic loop.
+- Auto-approval additionally requires an explicit allowlist and belongs with the
+  Phase 5 trust-boundary work.
+- The line that keeps this from re-growing orchestration: observers are advisory and
+  stateless; anything that *commands* agents is relay, and relay is reserved. The
+  drafting-for-approval channel (§13) is the safe pressure-release: it delivers
+  observer intent to the human, not to the PTY.
 
 ---
 
-## 10. Scoping: global and per-project
+## 17. Universal-X: the same abstraction applied elsewhere
 
-All universal hooks machinery is definable at two scopes, mirroring the
-existing config precedence:
+Universal hooks abstracts the CLIs' *signals*. The same move applies elsewhere:
 
-- **Global**: `~/.mux/rules.toml` (+ scripts dir) — machine-wide rules and
-  observers.
-- **Project**: `.swe-mux/rules.toml` (+ `.swe-mux/scripts/`) at the resolved
-  project root — rules that travel with the repo (e.g. "run this verifier
-  after turns in this project", project-specific titling conventions,
-  doc-drift watchers pointed at this repo's docs).
-
-Precedence follows the established ladder: session/request override → space →
-project → global. Project-scoped rules are subject to the Phase 5 project-
-config trust boundary: untrusted repos cannot silently run scripts, make
-model calls on the user's account, or reach actuation — executable behavior
-requires an explicit trust decision, same as project config generally.
-
-Files are the source of truth; the Settings UI is a two-way editor over them,
-not a separate store. This keeps rules versionable/diffable, preserves the
-atomic-write/last-known-good machinery, and — most distinctively — makes
-**Claude itself the best rule author**: an agent that knows the rule schema
-turns "watch my builder sessions and ping my phone when one stalls" into a
-valid rules file. Design the schema for agent authorship (documented, strict
-validation, good error messages); the UI becomes the review-and-toggle
-surface.
+- **Universal commands** (input side): palette entries injecting canned prompts into
+  whatever agent is focused — `/handoff`, `/status-report`, `/review-your-last-turn`
+  identical across backends, living in mux config. A prompt library with injection,
+  and channel 3 of the return path (§7). Skill-shaped things fold into this +
+  rulepacks; skills proper run inside an agent and need no third concept.
+- **Instruction/memory sync**: one canonical instruction set rendered per-backend
+  (CLAUDE.md / AGENTS.md / skills dirs), keeping them from drifting. Also return-path
+  channel 2 (§7).
+- **Universal history/search**: one search across both vendors' transcripts (mostly
+  built; no vendor will build the other half).
+- **Universal budgets**: spend/quota across providers in one place.
+- **Universal attention**: approval routing and notification policy in one place.
 
 ---
 
-## 11. Universal-X: the same abstraction applied elsewhere
+## 18. Open questions
 
-Universal hooks abstracts the CLIs' *signals*. The same move applies to other
-per-CLI surfaces:
-
-- **Universal commands** (input side): palette entries that inject canned
-  prompts into whatever agent is focused, regardless of backend — `/handoff`,
-  `/status-report`, `/review-your-last-turn` working identically in Claude and
-  Codex, living in mux config, surviving CLI churn. A prompt library with
-  injection. Anything "skill-shaped" folds into this plus rulepacks; skills
-  proper run *inside* an agent's context and need no mux-side third concept.
-- **Instruction/memory sync**: one canonical instruction set rendered
-  per-backend (CLAUDE.md / AGENTS.md / skills dirs), keeping them from
-  drifting. The anti-corruption-layer move applied to config.
-- **Universal history/search**: one search across Claude and Codex transcripts
-  (mostly built; no vendor will build the other half).
-- **Universal budgets**: spend/quota across providers in one place (ccusage
-  phase).
-- **Universal attention**: approval routing and notification policy in one
-  place instead of per-CLI config (already the design).
-
----
-
-## 12. Novel capabilities only the control plane enables
-
-The CLIs are first-person and present-tense; the control plane is third-person
-and has memory. These features require seeing *all agents, all time, one
-machine* at once — ground no scaffold update can contest, and no single vendor
-can ship:
-
-- **Cross-vendor second opinions**: one keystroke — "have Codex review what
-  Claude just did" — spawn the other backend in the same cwd with a generated
-  prompt referencing the diff. Adversarial review across labs with genuinely
-  independent failure modes. Structurally exclusive to a neutral control
-  plane; cheap to build (spawn + prompt template).
-- **The experience database**: every error, fix, and dead end across all
-  sessions, both backends, all time, mined from indexed transcripts into an
-  error→resolution cache. An observer annotates a live session: "session X
-  hit this exact error in March; the fix was Y." CLI memory is per-project
-  and per-vendor; this is per-machine and cumulative. Highest-ceiling novel
-  feature in the project.
-- **Scaffold telemetry / A/B**: both harnesses observed doing real work under
-  identical conditions — which backend stalls more on this repo, cost per
-  completed task, approval-interrupt rates. Same-task-both-backends in twin
-  worktrees falls out of existing machinery. The mux as an eval harness *of
-  scaffolds*, on the user's actual workload.
-- **Environment interlocks**: the mux knows every session's cwd, git state,
-  and (roadmap) child processes/ports. Warn when two sessions touch the same
-  branch or files, detect port collisions, flag that session A's dev server is
-  what session B's tests hit. Agents trip over each other's environmental side
-  effects and are individually blind to it; only the layer seeing all of them
-  can referee.
-- **Session lineage**: resumes, handoffs, and continuations tracked as a
-  graph, giving *work items* continuity across sessions and backends (started
-  in Claude Tuesday, resumed twice, verified by a Codex review session). The
-  CLIs have sessions; the mux can have threads of work — a new noun the
-  history UI will eventually want.
-- **The absence report**: event log + annotations makes "what happened while
-  I was away" a query — everything the fleet did, decided, and got stuck on
-  since last attach, in one narrated digest. Composes entirely from planned
-  observers; no CLI knows when the user was watching.
-
----
-
-## 13. Observer ideas catalog
-
-Ordered by a sensible build sequence: 1–2 build infrastructure, 3–5 route
-attention, 6–8 build trust and compound knowledge.
-
-1. **Session titler.** Cheap call over a transcript slice → concise apt title
-   annotation. Trivial, immediately visible (sidebar, history), and forces the
-   whole llm-action pipeline end to end. The right first observer.
-2. **Turn summarizer.** One line per turn into annotations. The substrate:
-   stall detection, digests, and narration consume summaries instead of
-   re-reading transcripts.
-3. **Stall/spiral detector.** Diffs recent turn summaries; flags "no progress
-   in N turns" (retry loops, repeated failed edits, permission thrash).
-   Highest value per token in the catalog: saves frontier-model spend and
-   user attention simultaneously.
-4. **Approval triage.** On `approval_needed`, classify the pending action:
-   badge quietly, or push a one-line summary to the phone. Turns the worst
-   interruption pattern into exception handling. Auto-approve only ever behind
-   an explicit allowlist (§9).
-5. **Attention digest / space narration.** Interval rollup of annotations
-   across sessions into one "state of the workspace" paragraph. The
-   mobile/Telegram payoff; nearly free once 1–3 exist.
-6. **Verifier (trust-but-verify).** After turns claiming completion, a `run`
-   action re-executes tests; an observer compares claim to reality and
-   annotates discrepancies. An independent verifier that never shares the
-   agent's context can't be gaslit by it. Where trust in the layer gets
-   earned — and the precondition for ever considering actuation.
-7. **Handoff generator / context-pressure advisor.** When `context_pct`
-   crosses a threshold, draft a handoff/compact document from the transcript;
-   suggest compaction timing. Pairs with history/resume.
-8. **Overnight miners.** Batch observers over ended sessions: extract durable
-   facts for memory files, cluster failures, harvest real failures into
-   regression tests/eval cases, detect repeated manual procedures and propose
-   skill/command candidates. Lowest urgency, biggest long-term compounding.
-   Transcripts are the richest untapped dataset the mux owns — including
-   externally reconciled ones.
-
-Additional catalog entries (unordered):
-- **Cross-session conflict sentinel**: two sessions in worktrees of one repo
-  touching the same subsystem → warn both (composes with environment
-  interlocks, §12).
-- **Anomaly/injection sentinel**: compare the agent's actions against its
-  stated task; a prompt-injection tripwire at a layer the injected agent
-  cannot touch. Out-of-band position makes this credible where in-scaffold
-  defenses aren't.
-- **Doc-drift watcher**: after turns that edit code, check whether governed
-  docs plausibly need updating; annotate rather than nag.
-- **Prompt/convention auditor**: check outputs against standing project
-  conventions (behavioral lint).
-- **Knowledge-graph builder**: entity/relation extraction over transcripts
-  into a queryable graph (long-horizon variant of the experience database).
-
----
-
-## 14. Open questions
-
-- Trigger schema shape for composites: are composites declared (named,
-  daemon-computed) or user-composed from primitives? Leaning declared, with
-  the primitive fields exposed for conditions.
-- Where does the safe-to-inject predicate live: per-adapter method, or a
-  daemon-level heuristic over PTY mode signals? Probably both (adapter
-  etiquette + daemon state gate).
-- Annotation retention/GC policy, and whether annotations on external
+- Trigger schema for composites: declared (named, daemon-computed) or user-composed
+  from primitives? Leaning declared, with primitive fields exposed for conditions.
+- Where the safe-to-inject predicate lives: per-adapter method or daemon-level
+  heuristic over PTY mode signals? Probably both.
+- Scan-timeline cadence in practice: which event boundaries earn a record, and what
+  Δmax heartbeat balances cost against temporal aliasing. Prototype and measure —
+  fixed-rate sampling is genuinely unvalidated (§2).
+- Scan-record salient-message weighting: how strongly to privilege `user_ask` and
+  agent `claim` over tool activity, and whether that weighting is a prompt concern
+  or a pre-filter on the delta.
+- Continuous title cost gating: the exact material-shift threshold and debounce that
+  keep the title responsive without a call every turn.
+- The rehydration-rate target: instrument it first, then decide the confidence/
+  coverage thresholds that trigger a Tier 2 source expansion.
+- Return-path retrieval precision: the scope/confidence thresholds below which MCP
+  tools return nothing rather than a weak match, per tool.
+- Enablement-DAG UX: how to present a consumer's substrate dependencies when
+  toggling, and how disabling a substrate node communicates to its dependents.
+- Per-project baselines: how much history before an ETA / neglect-time estimate is
+  credible, and how to present it as an uncertainty band, never a percent-complete.
+- Cheap Tier 1 model selection: build the labeled extraction benchmark from real
+  Claude/Codex streams before choosing; A/B semantic fields across two families.
+- Annotation/scan-record retention and GC, and whether records on external
   (reconciled) sessions are allowed.
-- Model routing for observers: fixed per-rule model ids vs a small named-tier
-  indirection ("cheap"/"standard") resolved in global config. Leaning tiers.
-- How rulepack parameters are declared and validated; whether project-scope
-  rulepacks can bundle scripts at all given the trust boundary.
-- Whether `spawn` as a rule action ships gated with actuation or earlier for
-  user-initiated flows only (second opinions are user-initiated, so likely a
-  palette/universal-command first, rule action later).
+- Model routing for observers: fixed per-rule ids vs named tiers ("cheap"/
+  "standard") in global config. Leaning tiers.
+- Rulepack parameter declaration/validation; whether project-scope rulepacks may
+  bundle scripts at all given the trust boundary.
+- Whether `spawn` ships gated with actuation or earlier for user-initiated flows
+  only (second opinions are user-initiated → palette/universal-command first, rule
+  action later).
+- Interrupt-preference learning: which observed signals (dismiss/act/edit/rollback)
+  train the ranking model, and how to surface the induced rule for accept/reject
+  without a black box.
+```

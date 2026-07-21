@@ -25,7 +25,15 @@ from swe_mux.server import (
     rewrite_preview_javascript,
     security_middleware,
 )
-from swe_mux.tailscale import _urls, is_tailscale_ip, listener_host_values
+from swe_mux.tailscale import (
+    _funnel_urls,
+    _serve_urls,
+    _urls,
+    enable_mobile_voice_serve,
+    is_tailscale_ip,
+    listener_host_values,
+    mobile_voice_url,
+)
 
 pytestmark = pytest.mark.filterwarnings(
     "ignore:It is recommended to use web.AppKey instances for keys"
@@ -64,6 +72,64 @@ def test_listener_uses_localhost_plus_only_the_detected_tailnet_address() -> Non
 def test_tailscale_status_url_discovery_is_bounded_to_values() -> None:
     payload = {"TCP": {"443": {"HTTPS": True}}, "Web": {"https://mux.tail.ts.net": {}}}
     assert _urls(payload) == ["https://mux.tail.ts.net"]
+    modern = {
+        "TCP": {"8443": {"HTTPS": True}},
+        "Web": {"mux.tail.ts.net:8443": {"Handlers": {}}},
+    }
+    assert _serve_urls(modern) == ["https://mux.tail.ts.net:8443"]
+    assert _funnel_urls(modern) == []
+    public = {**modern, "AllowFunnel": {"mux.tail.ts.net:8443": True}}
+    assert _funnel_urls(public) == ["https://mux.tail.ts.net:8443"]
+
+
+def test_mobile_voice_selects_only_the_dedicated_https_port() -> None:
+    assert mobile_voice_url(
+        ["https://mux.tail.ts.net", "https://mux.tail.ts.net:8765/"]
+    ) == "https://mux.tail.ts.net:8765"
+    assert mobile_voice_url(["http://mux.tail.ts.net:8443"]) is None
+
+
+@pytest.mark.asyncio
+async def test_mobile_voice_setup_uses_fixed_private_serve_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"Available within your tailnet: https://mux.tail.ts.net:8765/", b""
+
+    async def create_process(*args: object, **_: object) -> Process:
+        calls.append(args)
+        return Process()
+
+    async def status(_: str, command: str) -> tuple[object | None, str]:
+        if command == "funnel":
+            return None, ""
+        return {
+            "Web": {
+                "mux.tail.ts.net:8765": {
+                    "Handlers": {"/": {"Proxy": "http://127.0.0.1:8765"}}
+                }
+            }
+        }, ""
+
+    monkeypatch.setattr("swe_mux.tailscale.shutil.which", lambda _: "tailscale")
+    monkeypatch.setattr("swe_mux.tailscale.asyncio.create_subprocess_exec", create_process)
+    monkeypatch.setattr("swe_mux.tailscale._status", status)
+    result = await enable_mobile_voice_serve(8765)
+
+    assert calls[0][:5] == (
+        "tailscale",
+        "serve",
+        "--bg",
+        "--https=8765",
+        "http://127.0.0.1:8765",
+    )
+    assert result["status"] == "ready"
+    assert result["url"] == "https://mux.tail.ts.net:8765/"
 
 
 def test_preview_html_rewrites_root_resources_into_registration() -> None:

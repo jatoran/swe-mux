@@ -19,7 +19,18 @@ def canonical_project_root(value: str | Path) -> Path:
     return root
 
 
-def initialize_project_files(root: Path) -> None:
+def project_note_template(name: str) -> str:
+    """Seed a new Project note with its own heading and room to start typing.
+
+    An empty file gives the editor no anchor; a heading plus trailing blank lines
+    puts the caret where a person actually writes. Existing notes are never
+    rewritten, so this only ever applies at first initialization.
+    """
+    label = " ".join(name.split()) or "Project"
+    return f"# {label} notes\n\n\n"
+
+
+def initialize_project_files(root: Path, name: str | None = None) -> None:
     mux_dir = root / ".swe-mux"
     notes_dir = mux_dir / "notes"
     notes_dir.mkdir(parents=True, exist_ok=True)
@@ -28,7 +39,7 @@ def initialize_project_files(root: Path) -> None:
         config.write_text("version = 1\n", encoding="utf-8")
     note = notes_dir / "project.md"
     if not note.exists():
-        note.write_text("", encoding="utf-8")
+        note.write_text(project_note_template(name or root.name), encoding="utf-8")
 
 
 class ProjectManager:
@@ -66,7 +77,7 @@ class ProjectManager:
             raise ValueError("that folder is already registered as a project")
         if group_id is not None and group_id not in self.groups:
             raise ValueError("unknown project group")
-        initialize_project_files(canonical)
+        initialize_project_files(canonical, label)
         project = ProjectRecord(
             id=str(uuid.uuid4()),
             name=label,
@@ -118,7 +129,8 @@ class ProjectManager:
                 for item in self.projects.values()
             ):
                 raise ValueError("that folder is already registered as a project")
-            initialize_project_files(root)
+            renamed = changes.get("name")
+            initialize_project_files(root, str(renamed).strip() if renamed else project.name)
             changes["root"] = str(root)
         if "group_id" in changes:
             group_id = changes["group_id"]

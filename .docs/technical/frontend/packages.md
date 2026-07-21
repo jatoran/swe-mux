@@ -21,6 +21,8 @@ rendering and local interaction; pure helpers own transformations that need dete
 | Preview links/views | `previewLinks.ts`, `PreviewPane.tsx`, `TerminalPane.tsx` | loopback normalization, link dispatch, sandboxed registered viewport |
 | Accounts/resources | `ProviderAccounts.tsx`, `ResourceUsage.tsx` | anchored viewport popovers and summaries |
 | Settings | `Settings.tsx`, `settingsDraft.ts` | explicit draft/save/discard lifecycle |
+| Guided onboarding | `GuidedTutorial.tsx`, `tutorial.ts` | action gates, coach-mark geometry, product-event matching, and device-local completion |
+| Voice conversation | `ConversationControl.tsx`, `conversation.ts`, `VoicePlayer.tsx`, `voice.ts`, `mobileVoice.ts` | one-device capture ownership, VAD/WAV encoding, wake commands, playback queue/barge-in, direct private-HTTPS redirect |
 | Automation/usage/processes | feature-named panels | feature-local navigation and presentation |
 | Shared interaction | `dragReorder.ts`, `menuPosition.ts`, `modalFocus.ts`, `keys.ts` | pure or narrowly stateful reusable behavior |
 
@@ -48,9 +50,20 @@ if (mobile) updateLayout(projectId, flattenIntoOneStack(layout))
 - Daemon snapshots are refreshed/coalesced at the composition root.
 - Project layout is optimistic durable state; focus, sidebar size/collapse, audio unlock, and
   responsive mode are device-local state.
+- First-open layout seeding lives in `App.tsx` over the pure `defaultProjectLayout` helper, because
+  `note:`/`files:` resource IDs are a browser encoding that `layouts.py` only stores opaquely. It
+  runs once per Project per session, guarded by revision 0 plus an empty root, and releases its
+  guard when the layout PATCH fails.
 - File/note drafts remain with their resource components/queues and survive view reparenting.
 - Popovers that can escape a narrow sidebar use viewport portals. Modal focus/backdrop behavior
   is centralized rather than reimplemented per dialog.
+- Conversation capture is browser-volatile and pinned to one session. Audio chunks go only to
+  that session's transcription route; wake-command parsing and pending draft stay client-side,
+  while muxd owns idempotent submission and the human-input transition.
+- Tutorial completion is a versioned localStorage preference. Coach-mark navigation opens
+  existing Projects/Accounts/Run surfaces; successful Project, account, spawn, and pointer-drop
+  operations emit UI-only progress events. Those events acknowledge work but never become a
+  second Project, account, session, layout, or Settings state authority.
 - High-frequency pointer movement updates refs and one DOM indicator, not component state. See
   `workspace-state.md`.
 

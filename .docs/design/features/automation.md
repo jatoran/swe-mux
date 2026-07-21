@@ -70,8 +70,13 @@ and the declared minimum observation capability.
 Built-ins are an explicit-name-preserving session titler, one-line turn summarizer, stalled-run
 triage, approval-request triage, and context-handoff suggestion. Duplicate hook/transcript
 completion evidence is coalesced before completion-triggered calls.
-The titler additionally reserves its run before provider I/O and checks durable annotations,
-guaranteeing at most one paid title call per agent run even with concurrent workers. Generated
+The titler adapts a session's title continuously as the session progresses rather than emitting
+a single label per run. It derives the title from the scan timeline where enabled (falling back
+to bounded transcript slices otherwise), keying on the user's actual asks and the agent's salient
+responses rather than interim tool activity, and recomputes only on a material shift (novelty
+spike, work-phase or target change, new user request) with debounce and hysteresis so the title
+neither flickers nor costs a call every turn. An explicit user rename pins the title and disables
+auto-update for that session; the automation never overwrites a human-chosen name. Generated
 titles are compact task labels for tabs/sidebar, without backend or “terminal session” prefixes.
 Provider failure, invalid output, cancellation, queue pressure, or budget failure cannot block
 or change the agent/PTY lifecycle. Canonical observers have no PTY write, approval,

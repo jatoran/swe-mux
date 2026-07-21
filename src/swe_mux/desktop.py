@@ -27,11 +27,8 @@ RUN_VALUE = "swe-mux"
 ERROR_ALREADY_EXISTS = 183
 WAIT_OBJECT_0 = 0
 WAIT_TIMEOUT = 258
-IDYES = 6
 MB_OK = 0x00000000
-MB_YESNO = 0x00000004
 MB_ICONWARNING = 0x00000030
-MB_DEFBUTTON2 = 0x00000100
 MB_SETFOREGROUND = 0x00010000
 MB_TOPMOST = 0x00040000
 
@@ -146,19 +143,6 @@ def create_tray_image(size: int = 64):  # type: ignore[no-untyped-def]
         width=max(1, scale),
     )
     return image
-
-
-def confirm_desktop_quit(message: str) -> bool:
-    """Confirm tray shutdown without depending on WebView visibility or state."""
-    if sys.platform != "win32":
-        return True
-    result = ctypes.windll.user32.MessageBoxW(
-        None,
-        message,
-        "Quit swe-mux?",
-        MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND | MB_TOPMOST,
-    )
-    return int(result) == IDYES
 
 
 def show_desktop_warning(title: str, message: str) -> None:
@@ -321,17 +305,6 @@ class DesktopRuntime:
     def quit(self, *_: object) -> None:
         if self.exiting:
             return
-        snapshot = health_snapshot(self.url) or {}
-        raw_live = snapshot.get("live_sessions", 0)
-        live = raw_live if isinstance(raw_live, int) else 0
-        detail = (
-            f" This will also terminate {live} running terminal session"
-            f"{'s' if live != 1 else ''}."
-            if live
-            else ""
-        )
-        if not confirm_desktop_quit(f"Quit the desktop app and stop the daemon?{detail}"):
-            return
         stopped = request_daemon_shutdown(self.url, self.token)
         if stopped:
             deadline = time.monotonic() + 15
@@ -400,7 +373,7 @@ class DesktopRuntime:
                     "Start with Windows", self.toggle_startup, checked=self.startup_enabled
                 ),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Quit swe-mux…", self.quit),
+                pystray.MenuItem("Quit swe-mux", self.quit),
             ),
         )
         threading.Thread(target=self.icon.run, name="swe-mux-tray", daemon=True).start()

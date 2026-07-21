@@ -247,6 +247,94 @@ def list_project_directory(
     }
 
 
+def search_project_files(
+    root: str | Path,
+    query: str,
+    *,
+    mode: str = "names",
+    ignore_patterns: list[str] | None = None,
+    limit: int = 300,
+) -> dict[str, Any]:
+    """Recursively find files by name and/or UTF-8 content beneath the project root.
+
+    The walk reuses the same ignore rules as the browser, prunes ignored directories, and is
+    bounded on every axis (files visited, bytes read, per-file size, and result count) so a
+    huge tree cannot stall the daemon. Content matching skips binary and oversized files and
+    reports the first matching line as a trimmed snippet. Name matches sort before content
+    matches; within each group results are path-ordered.
+    """
+    project_root = Path(root).resolve()
+    needle = query.strip().casefold()
+    if not needle:
+        return {"items": [], "truncated": False}
+    ignore = ignore_patterns or [".git"]
+    want_names = mode in ("names", "both")
+    want_contents = mode in ("contents", "both")
+    max_files = 20000
+    max_bytes = 64 * 1024 * 1024
+    per_file_bytes = 1024 * 1024
+    items: list[dict[str, Any]] = []
+    truncated = False
+    scanned_files = 0
+    scanned_bytes = 0
+    for dirpath, dirnames, filenames in os.walk(project_root):
+        base = Path(dirpath).relative_to(project_root)
+        prefix = "" if base == Path(".") else f"{base.as_posix()}/"
+        dirnames[:] = [
+            name
+            for name in sorted(dirnames, key=str.casefold)
+            if not ignored_project_path(f"{prefix}{name}", ignore)
+        ]
+        for name in sorted(filenames, key=str.casefold):
+            relative = f"{prefix}{name}"
+            if ignored_project_path(relative, ignore):
+                continue
+            scanned_files += 1
+            if scanned_files > max_files:
+                truncated = True
+                break
+            match: str | None = None
+            line: int | None = None
+            snippet: str | None = None
+            if want_names and needle in name.casefold():
+                match = "name"
+            if match is None and want_contents and scanned_bytes < max_bytes:
+                target = project_root / relative
+                try:
+                    if target.stat().st_size <= per_file_bytes:
+                        data = target.read_bytes()
+                        scanned_bytes += len(data)
+                        if b"\x00" not in data:
+                            text = data.decode("utf-8")
+                            index = text.casefold().find(needle)
+                            if index != -1:
+                                match = "content"
+                                line = text.count("\n", 0, index) + 1
+                                start = text.rfind("\n", 0, index) + 1
+                                end = text.find("\n", index)
+                                stop = end if end != -1 else len(text)
+                                snippet = text[start:stop].strip()[:200]
+                except (OSError, UnicodeDecodeError):
+                    match = None
+            if match is not None:
+                items.append(
+                    {
+                        "name": name,
+                        "path": relative,
+                        "match": match,
+                        "line": line,
+                        "snippet": snippet,
+                    }
+                )
+                if len(items) >= limit:
+                    truncated = True
+                    break
+        if truncated:
+            break
+    items.sort(key=lambda item: (item["match"] != "name", item["path"].casefold()))
+    return {"items": items, "truncated": truncated}
+
+
 def read_project_file(root: str | Path, relative_path: str) -> dict[str, Any]:
     target = project_path(root, relative_path)
     if not target.is_file():

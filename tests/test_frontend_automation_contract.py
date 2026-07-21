@@ -11,6 +11,9 @@ def source(name: str) -> str:
 
 def test_automation_dashboard_exposes_complete_user_facing_model() -> None:
     dashboard = source("AutomationDashboard.tsx")
+    # Run notes render in the transcript reviewer, which is HistoryBrowser. App.tsx
+    # held a second, unreachable copy of that reviewer until it was removed.
+    history = source("HistoryBrowser.tsx")
     app = source("App.tsx")
 
     assert "System observers" in dashboard
@@ -22,7 +25,8 @@ def test_automation_dashboard_exposes_complete_user_facing_model() -> None:
     assert "learned fixes" in dashboard
     assert "previously labelled “Experience index.”" in dashboard
     assert "Built-in observers are controlled in Settings." not in dashboard
-    assert "<h4>Run notes</h4>" in app
+    assert "<h4>Run notes</h4>" in history
+    assert "Derived annotations" not in history
     assert "Derived annotations" not in app
 
 

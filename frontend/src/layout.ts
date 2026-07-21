@@ -139,6 +139,50 @@ export function parseLayout(value:unknown):PaneLayout{
 
 export function resolveLayout(cached:PaneLayout|undefined,persisted:unknown):PaneLayout{return cached??parseLayout(persisted)}
 
+/** Share of the workspace given to the seeded Files column. */
+export const DEFAULT_FILES_RATIO=.22
+
+/** Seed a never-arranged Project with a narrow Files column beside its Project note.
+ *
+ * Both leaves are pure viewports: `project.md` already exists from Project creation and
+ * Files reads on demand, so a first open still costs no process. The note's stack is
+ * deliberately the wide one, because new terminals open as a tab in the focused stack and
+ * therefore land there without any placement special case.
+ */
+export function defaultProjectLayout(projectId:string):PaneLayout{
+  const files=paneStack([resourceLeaf('note',noteResourceId('files',projectId))])
+  const note=paneStack([resourceLeaf('note',noteResourceId('note',projectId))])
+  return {version:6,root:{type:'split',id:groupId(),direction:'horizontal',ratio:clampRatio(DEFAULT_FILES_RATIO),first:files,second:note}}
+}
+
+/** Anchor a terminal spawned into a Project the browser is not currently viewing.
+ *
+ * There is no focused view to inherit, and the first leaf in tree order is the seeded
+ * Files column, so a naive anchor buries terminals in a narrow sidebar-width pane.
+ * Prefer an existing terminal, then any pane that is not a file browser.
+ */
+export function spawnAnchorId(layout:PaneLayout):string|null{
+  const all=leaves(layout)
+  return all.find(leaf=>leaf.kind==='terminal')?.id
+    ??all.find(leaf=>leaf.kind!=='note'||parseNoteResourceId(leaf.id)?.kind!=='files')?.id
+    ??all[0]?.id
+    ??null
+}
+
+/** A Files browser leaf is a `note`-kind leaf whose resource id decodes to kind `files`. */
+export function isFilesLeaf(leaf:PaneLeaf):boolean{return leaf.kind==='note'&&parseNoteResourceId(leaf.id)?.kind==='files'}
+export function stackHasFiles(stack:PaneStack):boolean{return stack.children.some(isFilesLeaf)}
+
+/** A leaf id to anchor a newly opened view, honoring the caller's preference but never a Files
+ *  pane: prefer the preferred leaf's stack when it is not a Files pane, then the first non-Files
+ *  pane, and only when Files is the sole pane fall back to it. Returns null for an empty layout. */
+export function openAnchorId(layout:PaneLayout,preferredId:string|null):string|null{
+  const stacks=paneStacks(layout)
+  const preferred=preferredId?stacks.find(stack=>stack.children.some(child=>child.id===preferredId)):null
+  if(preferred&&!stackHasFiles(preferred))return preferredId
+  return (stacks.find(stack=>!stackHasFiles(stack))||stacks[0])?.active_child_id??null
+}
+
 export function leaves(layout:PaneLayout,kind?:PaneLeafKind):PaneLeaf[]{
   const result:PaneLeaf[]=[]
   const visit=(node:PaneNode|null)=>{if(!node)return;if(node.type==='stack'){for(const child of node.children)if(!kind||child.kind===kind)result.push(child);return}visit(node.first);visit(node.second)}
@@ -180,7 +224,8 @@ export function openTab(layout:PaneLayout,targetId:string|null,next:PaneLeaf):Pa
   if(existing)return activateContainingStack(layout,existing.id)
   if(!layout.root)return {...layout,root:paneStack([next])}
   const target=targetId?stackForView(layout,targetId):null
-  const pane=target||paneStacks(layout)[0]
+  // Never default into a Files pane: an unanchored open lands in the first non-Files pane.
+  const pane=target||paneStacks(layout).find(stack=>!stackHasFiles(stack))||paneStacks(layout)[0]
   if(!pane)return {...layout,root:paneStack([next])}
   return {...layout,root:mapPanes(layout.root,item=>item.id===pane.id?{...item,children:[...item.children,next],active_child_id:next.id}:item)}
 }
@@ -208,7 +253,7 @@ export function splitView(layout:PaneLayout,targetId:string|null,next:PaneLeaf,d
   if(!layout.root)return {...layout,root:paneStack([next])}
   const existing=leaves(layout).find(leaf=>leaf.id===next.id)
   if(existing&&existing.id===targetId)return activateContainingStack(layout,targetId!)
-  const targetPane=(targetId&&stackForView(layout,targetId))||paneStacks(layout)[0]
+  const targetPane=(targetId&&stackForView(layout,targetId))||paneStacks(layout).find(stack=>!stackHasFiles(stack))||paneStacks(layout)[0]
   if(!targetPane)return openTab(layout,null,next)
   const without=existing?removeLeaf(layout,next.kind,next.id):layout
   if(!without.root)return {...without,root:paneStack([next])}
@@ -271,7 +316,7 @@ export function placeCompanionLeaf(
   if(leaves(layout).some(leaf=>leaf.id===next.id))return activateContainingStack(layout,next.id)
   if(!layout.root)return {...layout,root:paneStack([next])}
   const anchorPane=anchorId?stackForView(layout,anchorId):null
-  const others=paneStacks(layout).filter(pane=>pane.id!==anchorPane?.id)
+  const others=paneStacks(layout).filter(pane=>pane.id!==anchorPane?.id&&!stackHasFiles(pane))
   const companion=others.find(pane=>pane.children.every(child=>child.kind!=='terminal'))||others[0]
   if(companion)return addLeafToStack(layout,companion.id,next)
   const anchor=anchorPane?.children.find(child=>child.id===anchorId)?.id
