@@ -30,6 +30,9 @@
 ### Features
 
 - Automation and OpenRouter observers: `features/automation.md`
+- Automation enablement (per-project opt-in DAG): `features/automation-enablement.md`
+- Tier 0 deterministic facts: `features/tier0-facts.md`
+- Observation inbox: `features/observations.md`
 - Backend detection and observation: `features/backends.md`
 - Evidence replay and delivery readiness: `features/delivery-readiness.md`
 - Fleet attention and intelligence: `features/fleet-intelligence.md`
@@ -79,6 +82,9 @@
   resource viewport never implies process or file deletion; closing a terminal requires an
   explicit inline kill confirmation.
 - Automation observers cannot type, approve, spawn, execute scripts, or mutate projects.
+- Control-plane automations are per-project opt-in via a dependency graph: substrate is inert
+  (captures, never acts/spends) and gates its consumers; nothing runs on a project that did not
+  opt in. Tier 0 fact capture is the first gated substrate consumer.
 - Delivery readiness is read-only and fail-closed: `unknown` never authorizes PTY input, and
   child-agent completion never implies root-agent readiness.
 - Operational telemetry is observational: PID alone never identifies a process, reset alerts

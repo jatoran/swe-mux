@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -148,6 +149,55 @@ def _event_timestamp(event: dict[str, Any]) -> float | None:
         except ValueError:
             return None
     return None
+
+
+_TOOL_TARGET_FIELDS = (
+    "file_path",
+    "path",
+    "notebook_path",
+    "filename",
+    "command",
+    "cmd",
+    "pattern",
+    "url",
+)
+_TOOL_CONTENT_FIELDS = ("new_string", "content", "contents", "new_source", "text", "patch")
+
+
+def tool_call_evidence(tool_input: Any) -> tuple[str | None, str | None]:
+    """Extract a normalized target and a parse-time content hash from a tool call.
+
+    Runs at the adapter boundary while the native input is still in hand, so the
+    hash is of the exact bytes the agent wrote — race-free, unlike reading the
+    file back off disk after the event has queued. Native shapes never leave here.
+    """
+    if isinstance(tool_input, str):
+        try:
+            tool_input = json.loads(tool_input)
+        except (json.JSONDecodeError, ValueError):
+            return None, None
+    if not isinstance(tool_input, dict):
+        return None, None
+    target: str | None = None
+    for key in _TOOL_TARGET_FIELDS:
+        value = tool_input.get(key)
+        if isinstance(value, str) and value.strip():
+            target = value.strip()[:512]
+            break
+    parts: list[str] = []
+    for key in _TOOL_CONTENT_FIELDS:
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            parts.append(value)
+    edits = tool_input.get("edits")
+    if isinstance(edits, list):
+        for edit in edits:
+            if isinstance(edit, dict) and isinstance(edit.get("new_string"), str):
+                parts.append(edit["new_string"])
+    content_hash = (
+        hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest() if parts else None
+    )
+    return target, content_hash
 
 
 def _tool_names(session: Session) -> dict[str, str]:
@@ -551,13 +601,36 @@ def _observation_state(session: Session) -> dict[str, Any]:
             "root_turn_active": False,
             "root_completion_seen": False,
             "codex_scope": "root",
+            "closed_by_transcript": False,
         }
         session.observation_state = state
     return state
 
 
+def _transcript_authoritative(session: Session) -> bool:
+    """True once the ordered transcript observer has proven itself healthy.
+
+    Hooks are an unordered, retried side channel — each event is a separate POST
+    with its own backoff, so a late ``PreToolUse``/``PostToolUse`` can land after
+    the transcript's end-of-turn and strand a finished session as "working".
+    Once the parser is ``ready`` the transcript is the authoritative, in-order
+    record of turn boundaries and tool activity, so hooks must not drive that
+    state; while it is still warming up (``watching``, no recognized records yet)
+    or has ``degraded``, hooks remain the fallback that keeps state moving.
+    """
+    return getattr(session.record, "parser_status", "") == "ready"
+
+
 async def _begin_root_turn(session: Session, events: EventBus, *, source: str) -> None:
     state = _observation_state(session)
+    if source == "transcript":
+        # Ordered, in-band evidence of new work supersedes the prior close.
+        state["closed_by_transcript"] = False
+    elif state.get("closed_by_transcript") and _transcript_authoritative(session):
+        # The transcript already closed this turn; a later, unordered hook must
+        # not reopen "working" on a session that is really waiting for input.
+        # Only fresh transcript activity (above) starts the next turn.
+        return
     if (
         not state["root_turn_active"]
         and session.record.state not in {"working", "awaiting"}
@@ -587,6 +660,11 @@ async def _finish_root_turn(
     **payload: Any,
 ) -> None:
     state = _observation_state(session)
+    if source == "transcript":
+        # Latch the transcript's authoritative turn boundary so a late, unordered
+        # hook cannot reopen "working" afterward (set before the early-return so a
+        # trailing turn_duration after a hook Stop still arms the latch).
+        state["closed_by_transcript"] = True
     if not state["root_turn_active"] and state.get("root_completion_seen"):
         return
     # A provider-native completion belongs to the active root turn and is a
@@ -664,11 +742,20 @@ async def apply_hook_observation(
         )
         return
 
+    # Tool-activity and turn-start hooks only drive state as a fallback: when the
+    # transcript observer is authoritative it already records the same boundaries
+    # in order, and a late/reordered hook would only race it (reopening a finished
+    # turn as "working"). Turn-end, approval, and notification hooks below stay
+    # live because they carry signals the transcript lacks or delivers later.
     if event_type == "SessionStart":
         await _transition(session, events, "idle", source="hook")
     elif event_type in {"UserPromptSubmit", "turn_started", "task_started"}:
+        if _transcript_authoritative(session):
+            return
         await _begin_root_turn(session, events, source="hook")
     elif event_type == "PreToolUse":
+        if _transcript_authoritative(session):
+            return
         await _begin_root_turn(session, events, source="hook")
         _observation_state(session)["turn_saw_activity"] = True
         tool = str(payload.get("tool_name") or payload.get("name") or "tool")
@@ -681,6 +768,8 @@ async def apply_hook_observation(
             tool=tool,
         )
     elif event_type in {"PostToolUse", "PostToolUseFailure"}:
+        if _transcript_authoritative(session):
+            return
         await _transition(session, events, "working", source="hook")
     elif event_type in {"PermissionRequest", "approval_needed", "approval-requested"}:
         tool = str(payload.get("tool_name") or payload.get("message") or "approval")
@@ -867,6 +956,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                 tool_use_id = str(block.get("id") or "")
                 if tool_use_id:
                     _tool_names(session)[tool_use_id] = name
+                target, content_hash = tool_call_evidence(block.get("input"))
                 await _transition(session, events, "working", name)
                 await events.emit(
                     "tool_use",
@@ -875,6 +965,8 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                     scope="root",
                     tool=name,
                     call_id=tool_use_id or None,
+                    target=target,
+                    content_hash=content_hash,
                     parser_version=OBSERVATION_SCHEMA_VERSION,
                 )
                 if name.lower() == "skill" and isinstance(block.get("input"), dict):
@@ -1010,6 +1102,9 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         call_id = str(payload.get("call_id") or payload.get("id") or "")
         if call_id:
             _tool_names(session)[call_id] = name
+        target, content_hash = tool_call_evidence(
+            payload.get("arguments") or payload.get("input")
+        )
         await _begin_root_turn(session, events, source="transcript")
         await _transition(session, events, "working", name)
         await events.emit(
@@ -1019,6 +1114,8 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             scope="root",
             tool=name,
             call_id=call_id or None,
+            target=target,
+            content_hash=content_hash,
             parser_version=OBSERVATION_SCHEMA_VERSION,
         )
         explicit_skill = payload.get("skill") or payload.get("skill_name")

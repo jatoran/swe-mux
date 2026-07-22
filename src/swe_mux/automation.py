@@ -176,7 +176,7 @@ EVENT_PAYLOAD_FIELDS: dict[str, set[str]] = {
     "backend_demoted": {"backend", "native_session_id"},
     "turn_started": {"detail"},
     "turn_ended": {"duration_ms", "detail"},
-    "tool_use": {"tool", "detail"},
+    "tool_use": {"tool", "detail", "target"},
     "tool_result": {"tool", "success", "exit_code", "detail"},
     "approval_needed": {"kind", "detail"},
     "state_changed": {"previous", "state", "detail"},

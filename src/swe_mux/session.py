@@ -57,7 +57,11 @@ OBSERVER_RESTART_BACKOFF_MAX_SECONDS = 30.0
 # forces the session idle.  A tool in flight never reads as over, so a genuinely
 # long tool call is never cut short.
 STATE_WATCHDOG_POLL_SECONDS = 5.0
-STATE_WATCHDOG_STUCK_SECONDS = 20.0
+# When the transcript tail *proves* the turn ended, a residual "working" is a
+# stale hook or a missed close, not real work, so recover quickly. The longer
+# window only guarded against cutting a live turn short, which the tail check
+# already prevents (an in-flight tool reads "open").
+STATE_WATCHDOG_ENDED_STUCK_SECONDS = 6.0
 STATE_WATCHDOG_TRANSCRIPT_QUIET_SECONDS = 3.0
 # The PTY backstop is a last resort for when even the transcript carries no
 # terminal record (schema drift): only after a longer stall and only when the
@@ -1035,7 +1039,7 @@ class SessionManager:
                     if session.observation_replay:
                         continue
                     stalled = now - session.last_state_change_ts
-                    if stalled < STATE_WATCHDOG_STUCK_SECONDS:
+                    if stalled < STATE_WATCHDOG_ENDED_STUCK_SECONDS:
                         continue
                     path = session.transcript_path
                     if path is None:

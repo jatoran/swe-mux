@@ -52,15 +52,22 @@ and the declared minimum observation capability.
 
 ## Control-plane presentation
 
-- `Automations` is the complete effective inventory: built-in system observers plus canonical
-  `rules.toml` rules. Disabled built-ins remain visible.
+- The modal groups its views into three top-level tabs — **Configure** (rules & observers),
+  **Attend** (attention · all-session health), **Review** (run notes · learned fixes) — with a
+  secondary sub-tab row shown only when a group has more than one view. A `?` in the header
+  opens a nested help modal (the how-it-works pipeline + glossary); Escape/focus-trap transfer
+  to it while open.
+- Configure is the complete effective inventory: built-in system observers plus canonical
+  `rules.toml` rules, with an at-a-glance status strip (automation on/off, observer counts,
+  spend today). Disabled built-ins remain visible.
 - Each built-in row exposes trigger, bounded input slice, model tier, result destination, and
   owning config setting. Titler and summarizer toggle independently; stall, approval, and
   context observers share the `phase7_observers_enabled` attention setting.
 - `Run notes` is the user-facing label for persisted annotations. `Attention` contains
   notification records that may require user action.
-- Provider traces, event dry-run, queue state, and research-only injection evidence live under
-  Diagnostics rather than the primary workflows.
+- Diagnostics is demoted out of the primary tab row to a header action: provider traces, event
+  dry-run, queue state, firings/observer-call traces, and research-only injection evidence are
+  developer-grade and sit beside daily surfaces no longer.
 - Injection diagnostics use the provider-neutral `safe|blocked|unknown` delivery-readiness
   contract, expose bounded reasons/parser coverage, and are permanently unauthorized in this
   phase. They never write the PTY; see `delivery-readiness.md`.

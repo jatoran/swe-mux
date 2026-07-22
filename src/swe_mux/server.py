@@ -60,10 +60,19 @@ from .models import MuxEvent
 from .observation import apply_hook_observation, hook_event_scope
 from .openrouter import OpenRouterClient, OpenRouterError
 from .operational_telemetry import OperationalTelemetryStore
+from .preview_capture import (
+    INSTALL_HINT as PREVIEW_CAPTURE_INSTALL_HINT,
+)
+from .preview_capture import (
+    VIEWPORT_WIDTHS,
+    capture_available,
+    capture_loopback,
+)
 from .processes import PreviewRegistry, ProcessInspector
 from .profiles import profile_payload, resolve_profile
 from .project_actions import ProjectActionService, runner_spawn_body
 from .project_files import (
+    append_observation,
     effective_project_ignores,
     initialize_note,
     list_project_directory,
@@ -72,11 +81,13 @@ from .project_files import (
     project_automations,
     project_path,
     read_note,
+    read_observations,
     read_project_config,
     read_project_file,
     search_project_files,
     session_note_summaries,
     write_note,
+    write_observations,
     write_project_config,
     write_project_file,
 )
@@ -112,6 +123,7 @@ PREVIEW_WS_MESSAGE_BYTES = 4 * 1024 * 1024
 PREVIEW_WS_IDLE_SECONDS = 30 * 60
 PREVIEW_WS_LIFETIME_SECONDS = 12 * 60 * 60
 SESSION_MEDIA_TTL_SECONDS = 24 * 60 * 60
+PTY_ATTACH_READY_TIMEOUT_SECONDS = 0.25
 HOOK_RATE_WINDOW_SECONDS = 10.0
 HOOK_RATE_LIMIT = 500
 
@@ -324,6 +336,9 @@ def create_app(
             web.post("/api/projects/{project_id}/actions/run", run_project_action),
             web.get("/api/projects/{project_id}/note", get_project_note),
             web.put("/api/projects/{project_id}/note", put_project_note),
+            web.get("/api/projects/{project_id}/observations", get_observations),
+            web.post("/api/projects/{project_id}/observations", post_observation),
+            web.put("/api/projects/{project_id}/observations", put_observations),
             web.get("/api/session-notes", list_session_notes),
             web.get("/api/projects/{project_id}/session-notes/{note_id}", get_session_note),
             web.post("/api/projects/{project_id}/session-notes/{note_id}", initialize_session_note),
@@ -403,6 +418,7 @@ def create_app(
             web.get("/api/previews", list_previews),
             web.post("/api/previews", create_preview),
             web.delete("/api/previews/{preview_id}", delete_preview),
+            web.post("/api/previews/{preview_id}/capture", capture_preview),
             web.route("*", "/preview/{preview_id}/{tail:.*}", preview_proxy),
             web.post("/api/hooks/{sid}", hook_ingress),
             web.get("/api/git/worktrees", list_worktrees),
@@ -1812,6 +1828,46 @@ async def put_project_note(request: web.Request) -> web.Response:
         project_id=project.id,
         revision=result["revision"],
     )
+    result.update({"project_id": project.id, "project_name": project.name})
+    return json_response(result)
+
+
+def _observations_project(request: web.Request):  # type: ignore[no-untyped-def]
+    project = request.app["projects"].projects.get(request.match_info["project_id"])
+    if not project:
+        raise ValueError("unknown project")
+    return project
+
+
+async def get_observations(request: web.Request) -> web.Response:
+    project = _observations_project(request)
+    result = await read_observations(project.root)
+    result.update({"project_id": project.id, "project_name": project.name})
+    return json_response(result)
+
+
+async def post_observation(request: web.Request) -> web.Response:
+    project = _observations_project(request)
+    body = await request.json()
+    result = await append_observation(project.root, str(body.get("body") or ""))
+    result.update({"project_id": project.id, "project_name": project.name})
+    return json_response(result)
+
+
+async def put_observations(request: web.Request) -> web.Response:
+    project = _observations_project(request)
+    body = await request.json()
+    observations = body.get("observations")
+    if not isinstance(observations, list):
+        raise ValueError("observations must be a list")
+    try:
+        result = await write_observations(
+            project.root, observations, str(body.get("revision") or "missing")
+        )
+    except ValueError as exc:
+        if "changed externally" in str(exc):
+            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        raise
     result.update({"project_id": project.id, "project_name": project.name})
     return json_response(result)
 
@@ -3523,6 +3579,64 @@ async def delete_preview(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
+async def capture_preview(request: web.Request) -> web.Response:
+    """Headlessly screenshot a session-owned loopback preview for the agent.
+
+    Returns a typed unavailable state when the optional Playwright backend is not
+    installed. The image is saved server-side and its path returned; the browser
+    inserts a reference into the target agent's composer — this route never writes
+    a PTY or submits anything.
+    """
+    previews: PreviewRegistry = request.app["previews"]
+    config: Config = request.app["config"]
+    item = previews.items.get(request.match_info["preview_id"])
+    if not item:
+        raise ValueError("unknown preview")
+    body = await request.json() if request.can_read_body else {}
+    if not capture_available():
+        return json_response(
+            {
+                "available": False,
+                "reason": "Preview capture needs the optional Playwright backend.",
+                "install": PREVIEW_CAPTURE_INSTALL_HINT,
+            }
+        )
+    viewport = str(body.get("viewport") or "responsive")
+    width = int(body.get("width") or VIEWPORT_WIDTHS.get(viewport, 1280))
+    height = int(body.get("height") or 800)
+    raw_clip = body.get("clip")
+    clip = raw_clip if isinstance(raw_clip, dict) else None
+    url = f"http://{item.host}:{item.port}/"
+    # Save into the owning project's .swe-mux so a local agent can read it without
+    # hunting through the mux data dir; fall back to the data dir if unresolvable.
+    session = request.app["sessions"].sessions.get(item.session_id)
+    root: str | None = None
+    if session is not None:
+        record = session.record
+        root = record.project_root or record.spawn_project_root
+        if not root and record.project_id:
+            project = request.app["projects"].projects.get(record.project_id)
+            root = project.root if project else None
+    shot_dir = (Path(root) / ".swe-mux" if root else config.data_dir) / "preview-shots"
+    out_path = shot_dir / f"{item.id}-{uuid4().hex[:8]}.png"
+    try:
+        await capture_loopback(url, out_path, width=width, height=height, clip=clip)
+    except Exception as exc:  # noqa: BLE001 - a capture failure must not 500
+        log.exception("preview capture failed for %s", url)
+        message = str(exc).splitlines()[0][:300] if str(exc).strip() else exc.__class__.__name__
+        return json_response({"available": True, "error": f"Capture failed: {message}"}, 502)
+    return json_response(
+        {
+            "available": True,
+            "path": str(out_path),
+            "url": url,
+            "width": width,
+            "height": height,
+            "region": bool(clip),
+        }
+    )
+
+
 _PROXY_RESPONSE_HEADERS = {
     "accept-ranges",
     "cache-control",
@@ -4100,6 +4214,41 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         connections=len(session.subscribers),
     )
     await ws.send_json({"type": "state", "snapshot": snapshot, "revision": revision})
+    pending_messages: list[Any] = []
+    attach_deadline = asyncio.get_running_loop().time() + PTY_ATTACH_READY_TIMEOUT_SECONDS
+    attach_closed = False
+    while True:
+        remaining = attach_deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            break
+        try:
+            initial_message = await asyncio.wait_for(ws.receive(), timeout=remaining)
+        except TimeoutError:
+            break
+        if initial_message.type == WSMsgType.TEXT:
+            initial_frame = json.loads(initial_message.data)
+            if initial_frame.get("type") in {"attach_ready", "resize"}:
+                session.pty.resize(
+                    int(initial_frame["cols"]), int(initial_frame["rows"])
+                )
+                break
+            pending_messages.append(initial_message)
+        elif initial_message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
+            attach_closed = True
+            break
+        else:
+            pending_messages.append(initial_message)
+
+    if attach_closed:
+        session.unsubscribe(subscriber)
+        request.app["events"].emit_background(
+            "terminal_detached",
+            session_id=session.record.id,
+            source="daemon",
+            connections=len(session.subscribers),
+        )
+        return ws
+
     await ws.send_json(
         {
             "type": "replay_start",
@@ -4159,69 +4308,74 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         session.unsubscribe(subscriber)
         return ws
 
-    task = asyncio.create_task(sender())
-    try:
-        async for message in ws:
-            if message.type == WSMsgType.BINARY:
-                if session.input_owner == connection_id:
-                    session.pty.write(message.data)
-                    now = time.monotonic()
+    async def handle_client_message(message: Any) -> None:
+        if message.type == WSMsgType.BINARY:
+            if session.input_owner == connection_id:
+                session.pty.write(message.data)
+                now = time.monotonic()
+                session.input_revision += 1
+                session.last_input_event_ts = now
+                if now - session.last_input_report_ts >= 2:
+                    session.last_input_report_ts = now
+                    request.app["events"].emit_background(
+                        "terminal_input",
+                        session_id=session.record.id,
+                        source="daemon",
+                        input_owner=True,
+                        bytes=len(message.data),
+                    )
+        elif message.type == WSMsgType.TEXT:
+            frame = json.loads(message.data)
+            if frame.get("type") == "claim_input":
+                session.input_owner = connection_id
+                await ws.send_json({"type": "input_owner", "active": True})
+            elif frame.get("type") == "input" and session.input_owner == connection_id:
+                data = str(frame.get("data", ""))
+                session.pty.write(data)
+                is_terminal_response = frame.get("kind") == "terminal_response"
+                now = time.monotonic()
+                if not is_terminal_response:
                     session.input_revision += 1
                     session.last_input_event_ts = now
-                    if now - session.last_input_report_ts >= 2:
-                        session.last_input_report_ts = now
-                        request.app["events"].emit_background(
-                            "terminal_input",
-                            session_id=session.record.id,
-                            source="daemon",
-                            input_owner=True,
-                            bytes=len(message.data),
-                        )
-            elif message.type == WSMsgType.TEXT:
-                frame = json.loads(message.data)
-                if frame.get("type") == "claim_input":
-                    session.input_owner = connection_id
-                    await ws.send_json({"type": "input_owner", "active": True})
-                elif frame.get("type") == "input" and session.input_owner == connection_id:
-                    data = str(frame.get("data", ""))
-                    session.pty.write(data)
-                    is_terminal_response = frame.get("kind") == "terminal_response"
-                    now = time.monotonic()
-                    if not is_terminal_response:
-                        session.input_revision += 1
-                        session.last_input_event_ts = now
-                    if not is_terminal_response and now - session.last_input_report_ts >= 2:
-                        session.last_input_report_ts = now
-                        request.app["events"].emit_background(
-                            "terminal_input",
-                            session_id=session.record.id,
-                            source="daemon",
-                            input_owner=True,
-                            bytes=len(data.encode("utf-8")),
-                        )
-                    if frame.get("broadcast") and not is_terminal_response:
-                        await deliver_broadcast(
-                            request.app["sessions"],
-                            data,
-                            request.app["events"],
-                            source_id=session.record.id,
-                        )
-                elif frame.get("type") == "terminal_state" and session.input_owner == connection_id:
-                    mode = str(frame.get("mode") or "")
-                    if mode not in {"normal", "alternate"}:
-                        raise ValueError("terminal mode must be normal or alternate")
-                    changed = session.terminal_mode != mode
-                    session.terminal_mode = mode
-                    session.terminal_mode_updated_at = time.monotonic()
-                    if changed:
-                        request.app["events"].emit_background(
-                            "terminal_mode_changed",
-                            session_id=session.record.id,
-                            source="browser",
-                            mode=mode,
-                        )
-                elif frame.get("type") == "resize":
-                    session.pty.resize(int(frame["cols"]), int(frame["rows"]))
+                if not is_terminal_response and now - session.last_input_report_ts >= 2:
+                    session.last_input_report_ts = now
+                    request.app["events"].emit_background(
+                        "terminal_input",
+                        session_id=session.record.id,
+                        source="daemon",
+                        input_owner=True,
+                        bytes=len(data.encode("utf-8")),
+                    )
+                if frame.get("broadcast") and not is_terminal_response:
+                    await deliver_broadcast(
+                        request.app["sessions"],
+                        data,
+                        request.app["events"],
+                        source_id=session.record.id,
+                    )
+            elif frame.get("type") == "terminal_state" and session.input_owner == connection_id:
+                mode = str(frame.get("mode") or "")
+                if mode not in {"normal", "alternate"}:
+                    raise ValueError("terminal mode must be normal or alternate")
+                changed = session.terminal_mode != mode
+                session.terminal_mode = mode
+                session.terminal_mode_updated_at = time.monotonic()
+                if changed:
+                    request.app["events"].emit_background(
+                        "terminal_mode_changed",
+                        session_id=session.record.id,
+                        source="browser",
+                        mode=mode,
+                    )
+            elif frame.get("type") in {"attach_ready", "resize"}:
+                session.pty.resize(int(frame["cols"]), int(frame["rows"]))
+
+    task = asyncio.create_task(sender())
+    try:
+        for pending_message in pending_messages:
+            await handle_client_message(pending_message)
+        async for message in ws:
+            await handle_client_message(message)
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

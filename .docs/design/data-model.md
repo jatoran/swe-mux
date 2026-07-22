@@ -31,6 +31,10 @@
   estimates.
 - `context_compactions`, `tool_events`, and `transcript_telemetry_coverage`: deduplicated
   explicit provider evidence plus versioned parser coverage.
+- `tier0_facts`: deterministic no-model fact capture (file writes, commands, tests, git, tools)
+  with `content_hash`, canonical `fingerprint`, and a `source_seq` pointer into the event log.
+  Command text is never stored beyond bounded detail. Per-project opt-in and gated; see
+  `features/tier0-facts.md`.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
 - Automation, notification, lineage, experience, batch, and voice tables retain their
@@ -44,8 +48,16 @@
 ## Filesystem records
 
 - `<project>/.swe-mux/config.toml`: versioned, typed portable Project profile, prompt-scope,
-  notification-permission, and additive ignore overrides. Legacy `resource_open_mode` input
-  remains parseable for compatibility but is omitted from current effective/public options.
+  notification-permission, additive ignore overrides, and an `automations` opt-in table gating
+  control-plane substrate/consumers (`features/automation-enablement.md`). Legacy
+  `resource_open_mode` input remains parseable for compatibility but is omitted from current
+  effective/public options.
+- `<project>/.swe-mux/observations.json`: the Project's capture inbox — a bounded list of
+  `{id, body, done, created_at}` notes-to-self, append-only capture with revision-checked
+  edits. Not stored in SQLite. See `features/observations.md`.
+- `<project>/.swe-mux/preview-shots/<id>.png`: headless preview screenshots saved into the
+  owning Project (data-dir fallback) so a local agent can read them. See
+  `features/processes-and-previews.md`.
 - `<project>/.swe-mux/notes/project.md`: the Project's one canonical note, seeded at creation
   with a Project-named heading only when the file is absent.
 - `<project>/.swe-mux/notes/sessions/<safe-session-id>.md`: lazily initialized notes owned by

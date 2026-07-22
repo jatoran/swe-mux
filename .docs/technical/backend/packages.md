@@ -31,6 +31,9 @@ It should call domain packages rather than acquire their storage or process resp
 | `tailscale.py` | direct-tailnet discovery/status and ephemeral certificate preparation for the daemon's direct private HTTPS listener | ACL/policy changes, Serve/Funnel enablement, browser permission |
 | `processes.py` | descendant inspection/actions; Project-wide loopback registration, discovery, listener attribution, and route maps | proxy transport, authoritative ownership from PID alone |
 | `adapters/` | provider command/resume/transcript/state normalization | public HTTP shapes |
+| `automation_registry.py` | control-plane enablement DAG: substrate/consumer deps, cycle-checked resolution | storage, execution |
+| `tier0_store.py` | deterministic no-model fact capture (Tier 0 substrate), gated per-project, source pointers | model calls, actuation |
+| `preview_capture.py` | optional headless preview screenshot (Playwright), typed-unavailable | proxy transport, PTY writes |
 
 Feature stores sharing `mux.db` use their own single-worker executor/connection and the common
 operation coordinator described in `sqlite.md`.

@@ -163,6 +163,7 @@ class Config:
     claude_args: list[str] = field(default_factory=list)
     codex_args: list[str] = field(default_factory=list)
     scrollback_bytes: int = 5 * 1024 * 1024
+    terminal_renderer: str = "auto"
     git_poll_seconds: float = 5.0
     process_poll_seconds: float = 5.0
     process_orphan_grace_seconds: float = 15.0
@@ -227,7 +228,7 @@ class Config:
     observer_summarizer_enabled: bool = False
     phase7_observers_enabled: bool = False
     tts_enabled: bool = False
-    tts_default_mode: str = "on_demand"
+    tts_default_mode: str = "off"
     tts_content: str = "summary"
     tts_engine: str = "edge"
     tts_edge_voice: str = "en-AU-NatashaNeural"
@@ -282,6 +283,8 @@ def _validate(config: Config) -> None:
         errors["port"] = "must be between 1 and 65535"
     if config.default_backend not in {"shell", "claude", "codex"}:
         errors["default_backend"] = "must be shell, claude, or codex"
+    if config.terminal_renderer not in {"auto", "dom", "webgl"}:
+        errors["terminal_renderer"] = "must be auto, dom, or webgl"
     if config.notes_default_open not in {"dock", "popout"}:
         errors["notes_default_open"] = "must be dock or popout"
     if config.mobile_vertical_drag not in {"smart", "terminal", "application", "disabled"}:

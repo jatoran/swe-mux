@@ -29,6 +29,16 @@
 - Changing automation, observers, attention, or legacy hooks:
   `design/features/automation.md`, `design/features/fleet-intelligence.md`,
   `design/features/meta-hooks.md`, `design/features/delivery-readiness.md`
+- Changing per-project automation opt-in or the enablement dependency graph:
+  `design/features/automation-enablement.md`, `design/features/project-resources.md`,
+  `design/data-model.md`, `design/interfaces.md`
+- Changing Tier 0 deterministic fact capture or its source pointers/fingerprints:
+  `design/features/tier0-facts.md`, `design/data-model.md`,
+  `technical/backend/packages.md`, `technical/backend/sqlite.md`
+- Changing the observation inbox: `design/features/observations.md`, `design/interfaces.md`,
+  `design/data-model.md`
+- Changing preview screenshot capture or the region selector:
+  `design/features/processes-and-previews.md`, `design/interfaces.md`
 - Changing processes, listeners, Preview ownership/proxying, or Preview tab lifetime:
   `design/features/processes-and-previews.md`, `design/features/remote-access.md`,
   `technical/backend/packages.md`, `technical/frontend/workspace-state.md`
@@ -39,8 +49,8 @@
 - Changing read aloud or hands-free conversation: `design/features/voice.md`
 - Changing listeners, Tailscale, browser security, or remote operation:
   `design/features/remote-access.md`
-- Planning remaining work: `development/ROADMAP.md`; control-plane ideas:
-  `development/CONTROL_PLANE_IDEAS.md`
+- Planning remaining work: `development/ROADMAP.md`; control-plane plan + completion
+  checklist (start at §9): `development/CONTROL_PLANE_ROADMAP.md`
 - Changing backend package ownership or shared SQLite behavior:
   `technical/backend/packages.md`, `technical/backend/sqlite.md`
 

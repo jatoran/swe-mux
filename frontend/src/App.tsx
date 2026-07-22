@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
 import { api, openWebSocket } from './api'
 import { TerminalPane } from './TerminalPane'
+import type { TerminalRendererPreference } from './terminalRenderer'
 import { ProjectResource } from './ProjectResource'
 import { ContinuityBanner } from './ContinuityBanner'
 import { DirectoryPicker } from './DirectoryPicker'
@@ -11,6 +12,7 @@ import { ResourceUsageSummary } from './ResourceUsage'
 import { ProjectsManager } from './ProjectsManager'
 import { detectedServers, type DetectedServer } from './sessionProcesses'
 import { PreviewPane } from './PreviewPane'
+import { Observations } from './Observations'
 import { Notifications, type NotificationData, type UiNotification } from './Notifications'
 import { UsageDashboard } from './UsageDashboard'
 import { HistoryBrowser } from './HistoryBrowser'
@@ -258,7 +260,9 @@ export function App() {
   const setDragStackTab=(next:StackTabDrag|null)=>{dragStackTabRef.current=next;setDragStackTabState(next)}
   const previewDragStackTab=(next:StackTabDrag)=>{dragStackTabRef.current=next}
   const [promptLibraryOpen,setPromptLibraryOpen]=useState(false)
+  const [observationsOpen,setObservationsOpen]=useState(false)
   const [xtermScrollback, setXtermScrollback] = useState(10000)
+  const [terminalRenderer, setTerminalRenderer] = useState<TerminalRendererPreference>('auto')
   const [mobileInput, setMobileInput] = useState<MobileInputSettings>(defaultMobileInputSettings)
   const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
@@ -450,7 +454,7 @@ export function App() {
 
   useEffect(() => {
     void refresh()
-    void api<{theme:ThemeName;custom_theme:CustomTheme;xterm_scrollback_lines:number}&Record<string,unknown>>('GET','/api/config').then(config => { configureCustomTheme(config.custom_theme); applyTheme(config.theme); setXtermScrollback(config.xterm_scrollback_lines);setMobileInput(mobileInputSettings(config)) })
+    void api<{theme:ThemeName;custom_theme:CustomTheme;xterm_scrollback_lines:number;terminal_renderer:TerminalRendererPreference}&Record<string,unknown>>('GET','/api/config').then(config => { configureCustomTheme(config.custom_theme); applyTheme(config.theme); setXtermScrollback(config.xterm_scrollback_lines);setTerminalRenderer(config.terminal_renderer);setMobileInput(mobileInputSettings(config)) })
     void loadProfiles()
     void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>setVoiceStatus(null))
     void loadNotifications()
@@ -1357,6 +1361,7 @@ export function App() {
     { id: 'palette.open', label: 'Open command palette', category: 'view', available: true, run: () => setPaletteOpen(true) },
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
+    { id:'observations.open',label:'Open observation inbox',category:'input',available:!!activeProject,disabledReason:'No active project',run:()=>{setObservationsOpen(true);setMainMenuOpen(false)} },
     { id: 'session.spawnShell', label: 'New terminal in current project', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => void spawnTerminal() },
     { id: 'session.quickLaunch', label: 'New terminal custom…', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => openLauncher() },
     // `project.create` predates this and opens the registry; adding a Project is
@@ -1759,7 +1764,7 @@ export function App() {
         <div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>
         <div class="pane-tools"><button class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button><button class="pane-tool-label" aria-label={`Inspect processes for ${sessionName(session)}`} title="Processes and previews" onClick={() => {setActiveId(session.id);openProcessViewer(session)}}>proc</button><button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} mobileInput={mobileInput} voiceStrip={voiceStripNode} railLeading={railLeading} voiceKey={voiceKey} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} mobileInput={mobileInput} voiceStrip={voiceStripNode} railLeading={railLeading} voiceKey={voiceKey} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Terminal tabs">
@@ -2152,6 +2157,7 @@ export function App() {
       <button disabled={!activeProject} onClick={() => { setMainMenuOpen(false); runNamedCommand('session.spawnShell') }}>New terminal</button>
       <button disabled={!activeProject} onClick={() => { setMainMenuOpen(false); runNamedCommand('session.quickLaunch') }}>New terminal custom…</button>
       <button disabled={!activeProject} onClick={() => runNamedCommand('settings.project')}>Project settings…</button>
+      <button disabled={!activeProject} onClick={() => runNamedCommand('observations.open')}>Observation inbox…</button>
       <button onClick={() => { setMainMenuOpen(false); runNamedCommand('broadcast.toggle') }}>{broadcast ? 'Stop broadcast input' : 'Start broadcast input'}</button>
       <div class="context-subtitle">CONFIGURATION</div>
       <button onClick={() => runNamedCommand('project.add')}>Add project…</button>
@@ -2187,9 +2193,10 @@ export function App() {
 
     {handoffState&&<div class="modal-layer control-plane-modal-layer" role="dialog" aria-modal="true" aria-label="Handoff export" onMouseDown={event=>event.target===event.currentTarget&&setHandoffState(null)}><section class="modal control-plane-modal"><div class="modal-heading"><div><span>HANDOFF::EXPORT</span><h2>{historyName(handoffState.entry)}</h2></div><button aria-label="Close handoff" onClick={()=>setHandoffState(null)}>×</button></div><div class="control-plane-modal-body"><p>{handoffState.message}</p><textarea class="handoff-export" readOnly value={handoffState.markdown}/></div><div class="modal-footer"><span>read-only annotation export</span><button onClick={()=>{const blob=new Blob([handoffState.markdown],{type:'text/markdown'});const url=URL.createObjectURL(blob);const anchor=document.createElement('a');anchor.href=url;anchor.download=`handoff-${handoffState.entry.id}.md`;anchor.click();URL.revokeObjectURL(url)}}>Download</button><button class="primary" onClick={()=>void navigator.clipboard.writeText(handoffState.markdown).then(()=>setHandoffState(current=>current?{...current,message:'Copied to clipboard.'}:current)).catch(()=>setHandoffState(current=>current?{...current,message:'Clipboard blocked. Select the text and copy it manually.'}:current))}>Copy</button></div></section></div>}
 
-    {settingsOpen && <Settings cwd={settingsCwd||activeProject?.root} initialSection={settingsSection} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false);setSettingsCwd(null); void refresh(); void loadProfiles(); void api<Record<string,unknown>>('GET','/api/config').then(config=>setMobileInput(mobileInputSettings(config))) }} />}
+    {settingsOpen && <Settings cwd={settingsCwd||activeProject?.root} initialSection={settingsSection} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false);setSettingsCwd(null); void refresh(); void loadProfiles(); void api<{xterm_scrollback_lines:number;terminal_renderer:TerminalRendererPreference}&Record<string,unknown>>('GET','/api/config').then(config=>{setXtermScrollback(config.xterm_scrollback_lines);setTerminalRenderer(config.terminal_renderer);setMobileInput(mobileInputSettings(config))}) }} />}
 
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={active?.backend} onClose={()=>setPromptLibraryOpen(false)} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}}))}/>}
+    {observationsOpen&&activeProject&&<Observations project={activeProject} onClose={()=>setObservationsOpen(false)} onInsertBatch={activeId?text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}})):undefined}/>}
 
     {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}
     {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}

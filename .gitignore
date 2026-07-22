@@ -16,6 +16,8 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+frontend/test-results/
+frontend/playwright-report/
 
 # === Python ===
 __pycache__/

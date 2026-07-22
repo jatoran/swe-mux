@@ -287,6 +287,19 @@ def test_mobile_input_defaults_are_hot_reloadable_and_validated(tmp_path: Path) 
         update_config(config, {"mobile_scroll_sensitivity": 10})
 
 
+def test_terminal_renderer_is_hot_reloadable_and_validated(tmp_path: Path) -> None:
+    config = load_config(tmp_path / "config.toml")
+
+    assert config.terminal_renderer == "auto"
+    hot, restart = update_config(config, {"terminal_renderer": "dom"})
+
+    assert hot == {"terminal_renderer"}
+    assert restart == set()
+    assert load_config(tmp_path / "config.toml").terminal_renderer == "dom"
+    with pytest.raises(ValueError, match="auto, dom, or webgl"):
+        update_config(config, {"terminal_renderer": "canvas"})
+
+
 def test_builtin_themes_and_custom_text_meet_readability_contract(tmp_path: Path) -> None:
     assert all(contrast_ratio(*pair) >= 4.5 for pair in BUILTIN_THEME_PAIRS.values())
     config = load_config(tmp_path / "config.toml")

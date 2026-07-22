@@ -75,18 +75,28 @@ def _fact_from_event(event: MuxEvent) -> dict[str, Any] | None:
         kind = "git"
     elif event.type == "context_compacted":
         kind = "compaction"
-    target = None
-    for key in _TARGET_KEYS:
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            target = value.strip()[:_MAX_TARGET_CHARS]
-            break
+    # The adapter emits a normalized target/content hash (observation.tool_call_evidence);
+    # fall back to scanning common keys for events that predate it.
+    target: str | None = None
+    explicit_target = payload.get("target")
+    if isinstance(explicit_target, str) and explicit_target.strip():
+        target = explicit_target.strip()[:_MAX_TARGET_CHARS]
+    else:
+        for key in _TARGET_KEYS:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                target = value.strip()[:_MAX_TARGET_CHARS]
+                break
+    content_hash = payload.get("content_hash")
+    if not isinstance(content_hash, str) or not content_hash:
+        content_hash = None
     detail = json.dumps(payload, default=str)[:_MAX_DETAIL_BYTES]
-    fingerprint = _fingerprint(event.type, kind, target, payload)
+    fingerprint = _fingerprint(event.type, kind, target, payload, content_hash)
     return {
         "session_id": event.session_id or "",
         "kind": kind,
         "target": target,
+        "content_hash": content_hash,
         "fingerprint": fingerprint,
         "detail_json": detail,
         "source_seq": event.seq or None,
@@ -106,18 +116,28 @@ def _classify_tool(tool: str) -> str:
     return "tool"
 
 
-def _fingerprint(event_type: str, kind: str, target: str | None, payload: dict[str, Any]) -> str:
+def _fingerprint(
+    event_type: str,
+    kind: str,
+    target: str | None,
+    payload: dict[str, Any],
+    content_hash: str | None = None,
+) -> str:
     """A canonical action fingerprint for loop detection.
 
     Strips volatile detail (timestamps, exact output) and keys on the semantic
-    shape of the action: what kind, against what target, with what exit class.
+    shape of the action: what kind, against what target, with what exit class,
+    and — when the adapter captured it — the content written. Identical repeated
+    edits share a fingerprint (a loop signal); changed content differs (progress).
     """
     exit_class = ""
     for key in ("exit_code", "exit", "status", "success"):
         if key in payload:
             exit_class = str(payload[key])
             break
-    basis = "\x1f".join((event_type, kind, (target or "").casefold(), exit_class))
+    basis = "\x1f".join(
+        (event_type, kind, (target or "").casefold(), exit_class, content_hash or "")
+    )
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
@@ -207,6 +227,7 @@ class Tier0Store:
             session_id=fact["session_id"],
             kind=fact["kind"],
             target=fact["target"],
+            content_hash=fact["content_hash"],
             fingerprint=fact["fingerprint"],
             detail=json.loads(fact["detail_json"]) if fact["detail_json"] else None,
             source_seq=fact["source_seq"],

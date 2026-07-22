@@ -78,6 +78,8 @@ responsive controls.
 
 - Form changes remain local drafts until explicit Save. Save state is visible as
   dirty/saving/saved, and a background refresh cannot reset the selected settings section.
+- Terminals exposes `auto | webgl | dom` renderer selection. `auto` preserves accelerated WebGL
+  on desktop with automatic DOM fallback; mobile always uses DOM regardless of the preference.
 - Close, Escape, backdrop click, and navigation away all share the Save/Discard guard when a
   draft is dirty. Shell executable/profile paths deliberately use this explicit flow rather
   than per-keystroke persistence.

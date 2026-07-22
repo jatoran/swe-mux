@@ -454,6 +454,80 @@ async def test_local_command_closes_empty_hook_turn_but_not_active_turns() -> No
     assert session.record.state == "working"
 
 
+async def test_healthy_transcript_gates_late_tool_hooks_from_reopening_working() -> None:
+    # When the transcript observer is authoritative, an out-of-order tool hook
+    # arriving after the turn's end_turn must not resurrect "working" — the root
+    # cause of sessions stuck blinking after they finished.
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    events = EventBus()
+    await _claude(session, {"type": "user", "message": {"content": "do it"}}, events)
+    assert session.record.state == "working"
+    await _claude(
+        session,
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"},
+        },
+        events,
+    )
+    assert session.record.state == "idle"
+    for event_type, payload in (
+        ("PostToolUse", {"tool_name": "Bash"}),
+        ("PreToolUse", {"tool_name": "Bash"}),
+        ("UserPromptSubmit", {}),
+    ):
+        await apply_hook_observation(session, event_type, payload, events)
+        assert session.record.state == "idle", f"{event_type} reopened a finished turn"
+
+
+async def test_degraded_transcript_still_lets_hooks_drive_state() -> None:
+    # The gate is a fallback contract: when the parser is not authoritative,
+    # hooks must remain the source of truth so state never freezes.
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "degraded"
+    events = EventBus()
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    assert session.record.state == "working"
+    await apply_hook_observation(session, "PostToolUse", {"tool_name": "Bash"}, events)
+    assert session.record.state == "working"
+
+
+async def test_transcript_close_latch_blocks_hook_reopen_until_new_transcript_turn() -> None:
+    # #2 backstop: independent of the apply_hook gate, a transcript-closed turn
+    # cannot be reopened by a hook-sourced begin; only fresh transcript activity
+    # starts the next turn and clears the latch.
+    from swe_mux.observation import _begin_root_turn, _finish_root_turn
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    events = EventBus()
+    await _begin_root_turn(session, events, source="transcript")
+    assert session.record.state == "working"
+    await _finish_root_turn(session, events, source="transcript")
+    assert session.record.state == "idle"
+    assert session.observation_state["closed_by_transcript"] is True
+
+    await _begin_root_turn(session, events, source="hook")
+    assert session.record.state == "idle"
+
+    await _begin_root_turn(session, events, source="transcript")
+    assert session.record.state == "working"
+    assert session.observation_state["closed_by_transcript"] is False
+
+
+def test_watchdog_recovers_proven_ended_turns_faster_than_pty_backstop() -> None:
+    # #4: a tail that proves the turn ended is high-confidence, so recovery no
+    # longer waits the full stall window; the ambiguous PTY backstop still does.
+    from swe_mux.session import (
+        STATE_WATCHDOG_ENDED_STUCK_SECONDS,
+        STATE_WATCHDOG_PTY_STUCK_SECONDS,
+    )
+
+    assert STATE_WATCHDOG_ENDED_STUCK_SECONDS <= 8.0
+    assert STATE_WATCHDOG_ENDED_STUCK_SECONDS < STATE_WATCHDOG_PTY_STUCK_SECONDS
+
+
 async def test_observe_transcript_suppresses_historical_replay_then_tracks_live(
     tmp_path: Path,
 ) -> None:

@@ -30,6 +30,17 @@ import { isMobileTerminalInput, mobileImeDelta } from './mobileTerminalIme'
 import { clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, ResilientClipboardProvider } from './terminalClipboard'
 import { redrawVisibleTerminal, refitVisibleTerminal } from './terminalViewport'
 import { localPreviewUrl } from './previewLinks'
+import {
+  shouldLoadWebgl,
+  terminalAttachReadyFrame,
+  type ActiveTerminalRenderer,
+  type TerminalRendererPreference,
+} from './terminalRenderer'
+import {
+  isWebglRenderError,
+  recordTerminalRenderDiagnostic,
+  terminalRenderDiagnosticsEnabled,
+} from './terminalRenderDiagnostics'
 
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 
@@ -41,6 +52,7 @@ interface Props {
   broadcast: boolean
   keybindings: Record<string, string>
   scrollback: number
+  rendererPreference: TerminalRendererPreference
   mobileInput: MobileInputSettings
   // Read-aloud UI lives in this pane's own bottom region so the terminal sizes above it.
   // The playback strip sits just over the clipboard rail; the toggle chips lead the rail.
@@ -100,7 +112,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session) {
   term.focus()
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, mobileInput, voiceStrip, railLeading }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, mobileInput, voiceStrip, railLeading }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
@@ -301,6 +313,27 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let redrawFrame = 0
     let invalidateAtlasOnRedraw = false
     let webgl: WebglAddon | null = null
+    let activeRenderer: ActiveTerminalRenderer = 'dom'
+    let awaitingFullRedraw = false
+    const diagnoseRender = terminalRenderDiagnosticsEnabled
+      ? (phase: string, detail?: Record<string, unknown>) => recordTerminalRenderDiagnostic(session.id, phase, detail)
+      : undefined
+    const renderDiagnostic = terminalRenderDiagnosticsEnabled ? term.onRender(event => {
+      if (!awaitingFullRedraw) return
+      awaitingFullRedraw = false
+      diagnoseRender?.('full_redraw_rendered', {
+        start: event.start,
+        end: event.end,
+        cols: term.cols,
+        rows: term.rows,
+        renderer: activeRenderer,
+      })
+    }) : null
+    const onRenderError = terminalRenderDiagnosticsEnabled ? (event: ErrorEvent) => {
+      if (!isWebglRenderError(event)) return
+      diagnoseRender?.('webgl_render_error', { message: event.message, renderer: activeRenderer })
+    } : null
+    if (onRenderError) window.addEventListener('error', onRenderError)
     const loadLatestReply=()=>{
       if(session.backend==='shell')return
       void api<{text:string}>('GET',`/api/sessions/${session.id}/last-reply`).then(result=>{
@@ -320,6 +353,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const terminalStateTimer = window.setInterval(reportTerminalState, 5000)
     const scheduleViewport = (invalidateAtlas: boolean) => {
       invalidateAtlasOnRedraw ||= invalidateAtlas
+      if (invalidateAtlas) diagnoseRender?.('full_redraw_requested', { pendingReplayWrites })
       window.cancelAnimationFrame(fitFrame)
       window.cancelAnimationFrame(redrawFrame)
       fitFrame = window.requestAnimationFrame(() => {
@@ -327,11 +361,20 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if (socket?.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
         }
-        // Canvas/WebGL pixels can be discarded while a pane or browser tab is hidden.
+        // DOM/WebGL pixels can be discarded while a pane or browser tab is hidden.
         // Repaint one frame after layout settles so every terminal row is invalidated.
         redrawFrame = window.requestAnimationFrame(() => {
-          if (invalidateAtlasOnRedraw) webgl?.clearTextureAtlas()
+          const fullRedraw = invalidateAtlasOnRedraw
+          if (fullRedraw) webgl?.clearTextureAtlas()
           invalidateAtlasOnRedraw = false
+          if (fullRedraw && terminalRenderDiagnosticsEnabled) {
+            awaitingFullRedraw = true
+            diagnoseRender?.('full_redraw_issued', {
+              cols: term.cols,
+              rows: term.rows,
+              renderer: activeRenderer,
+            })
+          }
           redrawVisibleTerminal(term, host.current)
         })
       })
@@ -342,22 +385,37 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // Chromium device emulation can preserve a live WebGL context while changing
     // its emulated pixel ratio, leaving xterm interactive but visually blank.
     // The built-in renderer is reliable for the single full-screen mobile pane.
-    if (!window.matchMedia('(max-width:760px)').matches) {
+    const mobileRenderer = window.matchMedia('(max-width:760px)').matches
+    if (shouldLoadWebgl(rendererPreference, mobileRenderer)) {
       try {
         const addon = new WebglAddon()
         webgl = addon
         addon.onContextLoss(() => {
           if (webgl !== addon) return
           webgl = null
+          activeRenderer = 'dom'
           addon.dispose()
+          diagnoseRender?.('webgl_context_lost')
           scheduleFullRedraw()
         })
         term.loadAddon(addon)
-      } catch {
+        activeRenderer = 'webgl'
+      } catch (error) {
         webgl = null
-        // Canvas renderer remains active on machines without WebGL support.
+        activeRenderer = 'dom'
+        diagnoseRender?.('webgl_load_failed', { message: error instanceof Error ? error.message : String(error) })
+        // The built-in DOM renderer remains active on machines without WebGL support.
       }
     }
+    // Establish final geometry after the selected renderer is active and before
+    // the socket can start replaying the terminal buffer.
+    const preconnectFit = refitVisibleTerminal(fit, host.current)
+    diagnoseRender?.('preconnect_fit', {
+      fitted: preconnectFit,
+      cols: term.cols,
+      rows: term.rows,
+      renderer: activeRenderer,
+    })
     const claimInput = () => {
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'claim_input' }))
     }
@@ -435,6 +493,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         reconnectAttempt=0
         setConnectionState('connected')
         if(!reconnecting)reportStartup('socket_open')
+        const fitted = refitVisibleTerminal(fit, host.current)
+        next.send(JSON.stringify(terminalAttachReadyFrame(term.cols, term.rows, activeRenderer)))
+        diagnoseRender?.('attach_ready_sent', {
+          fitted,
+          cols: term.cols,
+          rows: term.rows,
+          renderer: activeRenderer,
+        })
         scheduleFit()
         claimInput()
         reportTerminalState()
@@ -722,8 +788,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     window.visualViewport?.addEventListener('resize',scheduleFit)
     loadLatestReply()
     connect(false)
-    return () => { disposed=true;if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('online',onOnline);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{} }
-  }, [session.id, keybindings, scrollback, mobileInput])
+    return () => { disposed=true;if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('online',onOnline);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{} }
+  }, [session.id, keybindings, scrollback, rendererPreference, mobileInput])
 
   const copy = async () => {
     const term = termRef.current

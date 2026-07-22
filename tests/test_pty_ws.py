@@ -17,6 +17,7 @@ from swe_mux.session import Session
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
 async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
     writes: list[str] = []
+    resizes: list[tuple[int, int]] = []
     record = SessionRecord(
         "mux-id",
         "agent",
@@ -32,7 +33,7 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         Any,
         SimpleNamespace(
             write=writes.append,
-            resize=lambda cols, rows: None,
+            resize=lambda cols, rows: resizes.append((cols, rows)),
             isalive=lambda: True,
         ),
     )
@@ -51,6 +52,12 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         state = await ws.receive_json()
         assert state["type"] == "state"
         assert state["revision"] == 0
+        # Messages that race readiness are held until replay finishes, while the
+        # fitted dimensions reach the PTY before any replay bytes are sent.
+        await ws.send_json({"type": "claim_input"})
+        await ws.send_json(
+            {"type": "attach_ready", "cols": 132, "rows": 41, "renderer": "webgl"}
+        )
         assert await ws.receive_json() == {
             "type": "replay_start",
             "reason": "attach",
@@ -60,7 +67,7 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         assert replay.type == WSMsgType.BINARY
         assert replay.data == b"past"
         assert await ws.receive_json() == {"type": "replay_end", "reason": "attach"}
-        await ws.send_json({"type": "claim_input"})
+        assert resizes == [(132, 41)]
         assert await ws.receive_json() == {"type": "input_owner", "active": True}
         await ws.send_json({"type": "terminal_state", "mode": "normal"})
         await ws.send_json(
@@ -130,11 +137,15 @@ async def test_only_latest_claiming_browser_can_write_input() -> None:
 
     async with TestClient(TestServer(app)) as client:
         first = await client.ws_connect("/pty/mux-id")
+        await first.receive_json()
+        await first.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        await first.receive_json()
+        await first.receive_json()
         second = await client.ws_connect("/pty/mux-id")
-        for socket in (first, second):
-            await socket.receive_json()
-            await socket.receive_json()
-            await socket.receive_json()
+        await second.receive_json()
+        await second.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        await second.receive_json()
+        await second.receive_json()
         await first.send_json({"type": "input", "data": "ignored"})
         await first.send_json({"type": "claim_input"})
         await first.receive_json()
@@ -185,11 +196,46 @@ async def test_pty_replay_does_not_wait_for_event_persistence() -> None:
         ws = await client.ws_connect("/pty/mux-id")
         state = await asyncio.wait_for(ws.receive_json(), timeout=0.25)
         assert state["type"] == "state"
+        # The legacy resize frame also releases replay for older browser builds.
+        await ws.send_json({"type": "resize", "cols": 80, "rows": 24})
         await asyncio.wait_for(sink_started.wait(), timeout=0.25)
         assert (await ws.receive_json())["type"] == "replay_start"
         assert (await ws.receive()).data == b"ready"
         assert (await ws.receive_json())["type"] == "replay_end"
         release_sink.set()
+        await ws.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_pty_replay_has_a_bounded_fallback_for_clients_without_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("swe_mux.server.PTY_ATTACH_READY_TIMEOUT_SECONDS", 0.01)
+    record = SessionRecord(
+        "mux-id", "shell", "default", "shell", "mux-id", ".", "pwsh.exe", [], state="running"
+    )
+    pty = cast(
+        Any,
+        SimpleNamespace(
+            write=lambda _data: None,
+            resize=lambda _cols, _rows: None,
+            isalive=lambda: True,
+        ),
+    )
+    session = Session(record, pty, cast(Any, SimpleNamespace()), 32, "secret")
+    app = web.Application()
+    app["sessions"] = SimpleNamespace(
+        resolve=lambda _identity: session,
+        sessions={record.id: session},
+    )
+    app["events"] = EventBus()
+    app.router.add_get("/pty/{sid}", pty_ws)
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/mux-id")
+        assert (await ws.receive_json())["type"] == "state"
+        assert (await asyncio.wait_for(ws.receive_json(), timeout=0.1))["type"] == "replay_start"
+        assert (await ws.receive_json())["type"] == "replay_end"
         await ws.close()
 
 

@@ -1,18 +1,22 @@
-# Universal hooks and the agent control plane — ideas document
+# Control plane roadmap
 
-Status: brainstorm surface and design reference. The approved read-only control-plane
-subset is scheduled in `ROADMAP.md` Phases 6–7; that roadmap is authoritative for
-OpenRouter-only LLM access, write-only Settings key management, durable agent-run
-annotation ownership, inert repository rules, and the actuation deferrals. The remaining
-catalog stays unscheduled unless promoted into the roadmap explicitly.
+Status: the authoritative roadmap and design reference for the swe-mux control plane — the
+out-of-band automation layer over Claude Code / Codex sessions. **§9 is the implementation
+roadmap with a live completion checklist**; the rest is the design reference the checklist
+points into. An agent picking this up should start at §9, then read the referenced design
+sections for whatever step is next.
 
-This revision reorganizes the catalog around a **substrate → consumer hierarchy**, adds
-the **return path** (how accumulated insight reaches the coding agent), an **enablement
-model** (per-project opt-in with a dependency graph), and an **implementation order**. It
-folds in a 2024–2026 research review (agent-failure taxonomies, trajectory telemetry,
-compression-chain fidelity, cascade economics, and supervisory-control/HCI). Where a
-design choice is now backed by evidence, the finding and its source are named inline so
-the rationale travels with the idea.
+The approved read-only subset is also scheduled in `ROADMAP.md` Phases 6–7 (authoritative
+for OpenRouter-only LLM access, write-only Settings key management, durable agent-run
+annotation ownership, inert repository rules, and actuation deferrals). Items here stay
+unscheduled in that roadmap unless promoted explicitly.
+
+The design is organized as a **substrate → consumer hierarchy** (§4) with a **return path**
+(§7), an **enablement model** (§8, per-project opt-in with a dependency graph), and the
+**implementation roadmap** (§9). It folds in a 2024–2026 research review (agent-failure
+taxonomies, trajectory telemetry, compression-chain fidelity, cascade economics,
+supervisory-control/HCI); where a design choice is evidence-backed, the finding and source
+are named inline (§2).
 
 ---
 
@@ -719,37 +723,71 @@ my phone when a builder stalls" into a valid, reviewable rules file).
 
 ---
 
-## 9. Implementation order
+## 9. Implementation roadmap and status
 
-Ordered by the enablement DAG (substrate before consumers, deterministic before
-model), then pulled forward where it helps a solo hands-on-testing loop today.
+Ordered by the enablement DAG (substrate before consumers, deterministic before model),
+then pulled forward where it helps a solo hands-on-testing loop today. Checkboxes track what
+has actually shipped — implementation + tests + docs must agree before a box is checked — so
+another agent can pick up mid-plan. Section links point to the design detail.
 
-0. **The enablement framework itself** (§8). Per-project opt-in + dependency gating.
-   Must exist before any consumer, because it is how anything is turned on.
-1. **Substrate: Tier 0 capture** (§5.3) + finish raw store / source pointers
-   (§5.2). The workhorse everything deterministic reads from.
-2. **The two things that help today and barely depend on anything:** the
-   **observation inbox** (§6.9, no AI) and **screenshot-to-agent** (§6.9, needs the
-   project card). Highest daily leverage in a look-change-retest loop; pulled ahead
-   of higher-DAG items because they are cheap and pay off now.
-3. **Deterministic consumers (no model, best value-to-risk):** provenance graph
-   (§6.1), declared-vs-verified (§6.3), doc-debt ledger (§6.5, cheapest in this
-   repo), loop/stall deterministic half (§6.4).
-4. **Project card** (§5.4) — built for step 2 already; formalize and cache for
-   reuse.
-5. **Scan timeline (Tier 1)** (§5.5). First model-cost layer. Ship capture-first:
-   readable timeline + **dead-end memory** (§6.2) + **continuous title** (§6.11).
-   Instrument the rehydration rate from the first commit.
-6. **Model-narration upgrades.** Add the cheap-model "why" on top of the
-   deterministic detectors (loop narration, scope-creep explanation).
-7. **Attention ranking / inbox** (§6.7). Last, because it needs every other signal
-   to rank anything. Fan-out, daily interrupt budget, four channels, breakpoint
-   delivery.
-8. **Cross-session interlocks (§6.6), digests (§6.8), novel capabilities (§6.10),
-   and the return-path MCP surface (§7)** as the substrate they read matures.
+### Build order
 
-The through-line: substrate before consumers, deterministic before model,
-helps-you-today pulled forward, ranking genuinely last.
+- [x] **0 · Enablement framework** (§8). Per-project opt-in + dependency-DAG gating; must
+  exist before any consumer.
+  - [x] Registry + cycle-checked DAG + resolver (`automation_registry.py`)
+  - [x] Per-project `automations` opt-in in `.swe-mux/config.toml` (parse/serialize/validate)
+  - [x] Gate wiring + tests (`test_control_plane_enablement.py`)
+- [x] **1 · Substrate: Tier 0 + raw store** (§5.2–5.3). Deterministic fact capture.
+  - [x] `tier0_facts` store, gated per-project capture, source pointers (`tier0_store.py`)
+  - [x] Race-free content hash + normalized target at the adapter boundary
+    (`observation.tool_call_evidence`)
+  - [x] Raw store: native transcripts authoritative + `source_seq` pointer (half — enough)
+  - [ ] **GAP:** git commit/tree hashes + read-side file hashes — needed by provenance (§6.1)
+- [x] **2 · Helps-today siblings** (§6.9). Cheap, high daily leverage, no scan-timeline dep.
+  - [x] Observation inbox (`.swe-mux/observations.json`, no AI) — full stack + tests
+  - [x] Screenshot capture (full + drag region) → copies a reference to the clipboard;
+    optional Playwright backend; saves into the Project's `.swe-mux/preview-shots/`
+- [ ] **3 · Deterministic consumers** (§6.1, 6.3, 6.4, 6.5). No model; write to `annotations`.
+  - [ ] Loop/stall deterministic half (§6.4) — pure Tier 0 fingerprint query; build first
+  - [ ] Declared-vs-verified (§6.3) — Tier 0 test facts + completion-claim regex
+  - [ ] Doc-debt ledger (§6.5) — Tier 0 files-changed + `.docs/CLAUDE.md` routing lookup
+  - [ ] Provenance graph (§6.1) — blocked on the Tier 0 git/read-hash gap in step 1
+- [ ] **4 · Project card** (§5.4). Distilled architecture, cached; feeds scan timeline + Tier 2.
+- [ ] **5 · Scan timeline (Tier 1)** (§5.5). First model-cost layer. Capture-first: readable
+  timeline + dead-end memory (§6.2) + continuous title (§6.11). Instrument the rehydration
+  rate from commit one.
+- [ ] **6 · Model narration** (§14). Cheap-model "why" on top of the deterministic detectors.
+- [ ] **7 · Attention ranking / inbox** (§6.7). Last — needs every other signal. Fan-out,
+  daily interrupt budget, four channels, breakpoint delivery.
+- [ ] **8 · Cross-session + novel + return path** (§6.6, 6.8, 6.10, 7). Interlocks, digests,
+  second opinions, experience DB, the mux MCP read surface.
+
+### UI work (design before it ships — the enablement surface is the big risk)
+
+- [ ] **Enablement-DAG toggle surface.** Toggling a consumer must show its substrate
+  dependencies as a small dependency tree, not a flat checkbox list ("enabling dead-end
+  memory requires Tier 0 + scan timeline"). Design before shipping.
+- [ ] **Per-project scope affordance.** Everything reads as global today; per-project
+  automations need a scope indicator per row + a project selector in the modal.
+- [ ] **Persistent spend/budget line.** Tokens/cost today + the coming daily interrupt
+  budget belong in an always-on status line (like the message bar), not one tab.
+- [ ] **Progressive disclosure on rule rows.** Show name + state + one-line summary by
+  default; expand for `when::trigger · reads::slice · model → result · setting::key`.
+
+### Known gaps and follow-ups
+
+- [ ] **Continuous title is documented but not coded.** `features/automation.md` describes
+  the adaptive, scan-derived, rename-suppressed titler; `automation.py` still reserves one
+  title call per run and `test_automation_phase6.py` asserts the old one-shot behavior. Both
+  must change for the doc to be true (§6.11).
+- [ ] **No opt-in UI yet.** Enabling a consumer means hand-editing `.swe-mux/config.toml`
+  until the toggle surface above ships.
+- [ ] **Preview screenshots have no retention sweep.** `.swe-mux/preview-shots/` accumulates.
+- [ ] **Preview capture assumes a locally installed Chromium.** A clean-machine desktop build
+  needs Chromium bundled or a first-run `playwright install` (Phase 11 packaging).
+
+The through-line: substrate before consumers, deterministic before model, helps-you-today
+pulled forward, ranking genuinely last.
 
 ---
 

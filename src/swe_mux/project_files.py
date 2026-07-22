@@ -5,7 +5,9 @@ import hashlib
 import json
 import os
 import re
+import time
 import tomllib
+import uuid
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -538,6 +540,129 @@ async def write_project_config(
     data = serialize_project_config(values)
     _atomic_write(Path(current["path"]), data)
     return await read_project_config(cwd)
+
+
+OBSERVATIONS_VERSION = 1
+MAX_OBSERVATIONS = 500
+MAX_OBSERVATION_CHARS = 2000
+
+
+def _load_observations(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    parsed = json.loads(path.read_text(encoding="utf-8"))
+    items = parsed.get("observations") if isinstance(parsed, dict) else None
+    if not isinstance(items, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        result.append(
+            {
+                "id": item["id"],
+                "body": str(item.get("body") or "")[:MAX_OBSERVATION_CHARS],
+                "done": bool(item.get("done")),
+                "created_at": float(item.get("created_at") or 0.0),
+            }
+        )
+    return result
+
+
+def _validate_observations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not isinstance(items, list) or len(items) > MAX_OBSERVATIONS:
+        raise ValueError(f"observations must be a list of at most {MAX_OBSERVATIONS} items")
+    cleaned: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("each observation must be an object")
+        identity = item.get("id")
+        body = item.get("body")
+        if not isinstance(identity, str) or not _SAFE_NOTE_ID.fullmatch(identity):
+            raise ValueError("observation id must be a short safe token")
+        if identity in seen:
+            raise ValueError("observation ids must be unique")
+        seen.add(identity)
+        if not isinstance(body, str) or not body.strip() or len(body) > MAX_OBSERVATION_CHARS:
+            raise ValueError(f"observation body must be 1–{MAX_OBSERVATION_CHARS} characters")
+        cleaned.append(
+            {
+                "id": identity,
+                "body": body,
+                "done": bool(item.get("done")),
+                "created_at": float(item.get("created_at") or 0.0),
+            }
+        )
+    return cleaned
+
+
+def _serialize_observations(items: list[dict[str, Any]]) -> bytes:
+    return (
+        json.dumps({"version": OBSERVATIONS_VERSION, "observations": items}, indent=2) + "\n"
+    ).encode("utf-8")
+
+
+async def read_observations(
+    cwd: str | Path, *, project: ProjectIdentity | None = None
+) -> dict[str, Any]:
+    """Read a Project's capture inbox — lightweight notes-to-self dropped while testing."""
+    if project is None:
+        project, mux_dir = await project_status(cwd)
+    else:
+        mux_dir = Path(project.root) / ".swe-mux"
+    path = mux_dir / "observations.json"
+    data = path.read_bytes() if path.is_file() else None
+    try:
+        observations = _load_observations(path)
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        observations = []
+    return {
+        "project": asdict(project),
+        "path": str(path),
+        "exists": path.is_file(),
+        "revision": revision(data),
+        "observations": observations,
+    }
+
+
+async def append_observation(cwd: str | Path, body: str) -> dict[str, Any]:
+    """Append one observation. Append-only capture is conflict-free, so no revision check."""
+    text = body.strip()
+    if not text:
+        raise ValueError("observation body must not be empty")
+    if len(text) > MAX_OBSERVATION_CHARS:
+        raise ValueError(f"observation body must be {MAX_OBSERVATION_CHARS} characters or fewer")
+    project, mux_dir = await project_status(cwd)
+    path = mux_dir / "observations.json"
+    try:
+        current = _load_observations(path)
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        current = []
+    if len(current) >= MAX_OBSERVATIONS:
+        raise ValueError(f"observation inbox is full ({MAX_OBSERVATIONS} items); clear some first")
+    current.append(
+        {
+            "id": uuid.uuid4().hex[:16],
+            "body": text,
+            "done": False,
+            "created_at": time.time(),
+        }
+    )
+    _atomic_write(path, _serialize_observations(_validate_observations(current)))
+    return await read_observations(cwd, project=project)
+
+
+async def write_observations(
+    cwd: str | Path, observations: list[dict[str, Any]], expected_revision: str
+) -> dict[str, Any]:
+    """Replace the whole inbox (toggle done, delete, reorder) with a revision check."""
+    current = await read_observations(cwd)
+    if current["revision"] != expected_revision:
+        raise ValueError("observations changed externally; reload before saving")
+    cleaned = _validate_observations(observations)
+    _atomic_write(Path(current["path"]), _serialize_observations(cleaned))
+    return await read_observations(cwd)
 
 
 async def read_note(cwd: str | Path, kind: str, identity: str) -> dict[str, Any]:

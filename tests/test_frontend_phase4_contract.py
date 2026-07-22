@@ -176,7 +176,10 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     # Scope is a visible, clearable control rather than a hidden mode.
     assert "process-scope-select" in panel
     assert "initialProjectId" in panel
-    assert "const showHistory = async (scope:Project|null=null)" in app
+    # History is a global overlay (not a per-project pane), opened with an
+    # optional scope that pre-filters its own clearable project picker.
+    assert "const showHistory = (scope:Project|null=null)" in app
+    assert "{historyOpen&&<HistoryBrowser" in app
 
 
 def test_dialog_layers_stack_above_persistent_chrome() -> None:

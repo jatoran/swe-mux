@@ -34,6 +34,13 @@ and reattachable browser viewports.
   depend on the history row wait for this registration internally.
 - PTY attach replay and input handling never await attachment/input telemetry persistence.
   Startup metrics separate interactive `server_ready` from `durable_registration` latency.
+- A browser fits xterm after selecting its renderer, then sends `attach_ready` with the active
+  columns and rows. The daemon resizes ConPTY before sending replay bytes; older clients may use
+  their first `resize` frame or the bounded compatibility timeout. Messages received while
+  readiness is pending are processed only after the replay boundary.
+- Desktop terminals default to WebGL with DOM fallback. The pinned xterm 6 WebGL addon carries
+  the upstream missing-buffer-line guard in its runtime bundles, preventing a resize/trim race
+  from aborting a model update and leaving stale glyphs. Mobile remains DOM-only.
 - Agent startup state uses semantic evidence first. Claude normally becomes ready through its
   `SessionStart` hook; Codex (or a degraded Claude hook path) may use settled live PTY output as
   a startup-only, lowest-priority readiness signal until its first native transcript event.

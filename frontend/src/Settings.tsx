@@ -14,6 +14,7 @@ type Config = {
   revision:number; host:string; port:number; data_dir:string; requires_auth:boolean; access_mode:string; tailnet_enabled:boolean
   startup_cwd:string; default_backend:string; shell_exe:string; claude_exe:string
   codex_exe:string; scrollback_bytes:number; history_limit:number
+  terminal_renderer:'auto'|'dom'|'webgl'
   claude_args:string[]; codex_args:string[]
   git_poll_seconds:number; reconcile_external_history:boolean; theme:ThemeName
   process_poll_seconds:number;process_orphan_grace_seconds:number;process_evidence_retention_days:number
@@ -449,6 +450,8 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         </section>}
 
         {activeTab==='terminals'&&<section class="profile-settings"><h3>Terminals</h3>
+          <label>Renderer<select value={draft.terminal_renderer} onChange={e=>change('terminal_renderer',e.currentTarget.value as Config['terminal_renderer'])}><option value="auto">Auto (WebGL with DOM fallback)</option><option value="webgl">Prefer WebGL</option><option value="dom">DOM compatibility mode</option></select></label>
+          <p>Mobile viewports always use the built-in DOM renderer for reliable low-overhead rendering.</p>
           <label>Global default profile<select value={draft.default_shell_profile} onChange={e=>change('default_shell_profile',e.currentTarget.value)}>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label>
           <div class="profile-browser">
             <div class="profile-index" aria-label="Configured terminal profiles">

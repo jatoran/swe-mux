@@ -83,8 +83,8 @@ PaneLeaf = terminal | note | preview | history
 - Mobile never rewrites split geometry, pane membership, or tab order merely because it is
   narrow. Returning to desktop restores the saved pane tree.
 - Mobile menus omit split, directional move, dissolve, and zoom controls. Touch scrolling never
-  initiates tab reorder. Terminals use xterm's built-in renderer because Chromium device
-  emulation can strand WebGL canvases after responsive pixel-ratio changes.
+  initiates tab reorder. Terminals always use xterm's built-in DOM renderer—even when desktop is
+  configured to prefer WebGL—because responsive pixel-ratio changes can strand WebGL canvases.
 - Terminal long-press is an xterm selection gesture, not a pane/session context-menu gesture.
   Dragging before the hold threshold scrolls; dragging after selection extends the selected
   buffer span. Copy actions remain explicit and touch-sized.

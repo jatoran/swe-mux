@@ -92,7 +92,16 @@ POST    /projects/{project_id}/ignore {path: RELATIVE, scope: global|project}
 PUT     /projects/{project_id}/watch  {watch_id?, paths: RELATIVE_DIRECTORY[]}
 DELETE  /projects/{project_id}/watch/{watch_id}
 GET|PUT /project/config               typed portable Project options
+GET     /projects/{project_id}/observations
+POST    /projects/{project_id}/observations   {body}                append one
+PUT     /projects/{project_id}/observations   {observations, revision}   replace
 ```
+
+The observation inbox is a project-owned capture list (`.swe-mux/observations.json`, no AI).
+Append is conflict-free; replace (toggle done, delete, reorder) is revision checked and
+returns `409 revision_conflict`. Bounded to 500 items of 2,000 characters. See
+`features/observations.md`. The typed portable Project options include an `automations`
+opt-in table gating control-plane substrate/consumers (`features/automation-enablement.md`).
 
 `GET /session-notes` lists session notes that hold text, newest first, optionally scoped to one
 Project; an unknown `project_id` is rejected. Each row carries `note_id`, Project identity,
@@ -176,6 +185,11 @@ currently exists.
 PTY WebSocket owners may send `{type:"terminal_state", mode:"normal|alternate"}`. Input
 frames label xterm device replies with `kind:"terminal_response"`; every other input frame,
 including bracketed paste, advances the human-input boundary.
+On initial attach, the daemon sends `state` and waits up to 250 ms for
+`{type:"attach_ready", cols, rows, renderer}`. It applies those dimensions before
+`replay_start`; an old-style `resize` frame also releases replay, and timeout preserves
+compatibility with clients that send neither. Other frames arriving during this window are
+buffered and handled after `replay_end`. Later `attach_ready` frames are equivalent to `resize`.
 `GET /sessions/{id}/last-reply` returns the newest meaningful Claude/Codex assistant turn for
 gesture-safe clipboard prefetch. Provider control acknowledgements are skipped; the route does
 not type `/copy` into the PTY.
@@ -264,8 +278,16 @@ GET    /processes
 POST   /processes/action             {session_id, pid, identity_id, action}
 GET    /previews[?session=]
 POST   /previews                     {session_id, url, approved?, attach?, target_session_id?, direction?}
+POST   /previews/{id}/capture         {viewport?, width?, height?, clip?}
 DELETE /previews/{id}
 ```
+
+`POST /previews/{id}/capture` headlessly screenshots the live loopback server and saves a PNG
+under the owning Project's `.swe-mux/preview-shots/` (data-dir fallback), returning
+`{available, path, url, width, height, region}`. Optional `clip {x,y,width,height}` (page
+pixels, from the top of the page) captures a region. Missing the optional Playwright backend
+returns `{available: false, reason, install}`; a render error returns `{available: true,
+error}` (502). It never writes a PTY. See `features/processes-and-previews.md`.
 
 Git scopes/worktrees are derived tooling APIs, not canonical Project/session ownership and
 not first-class frontend navigation.

@@ -1172,7 +1172,7 @@ ordinary agent operation independent of OpenRouter availability.
 ### Approved release boundary
 
 Phase 6 promotes only the read-only control-plane kernel from
-`CONTROL_PLANE_IDEAS.md`: canonical machine-owned rules, normalized events and transcript
+`CONTROL_PLANE_ROADMAP.md`: canonical machine-owned rules, normalized events and transcript
 slices, durable annotations, bounded asynchronous evaluation, one fixed-origin OpenRouter
 provider, write-only key management in Settings, operator-visible budgets/diagnostics, and
 the titler/summarizer proof path. The ideas document remains a design catalog, not an

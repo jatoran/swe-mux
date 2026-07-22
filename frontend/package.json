@@ -5,9 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "postinstall": "node scripts/patch-xterm-webgl.mjs",
+    "prebuild": "node scripts/patch-xterm-webgl.mjs --check",
     "build": "tsc && vite build",
+    "precheck": "node scripts/patch-xterm-webgl.mjs --check",
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types test/all.ts"
+    "pretest": "node scripts/patch-xterm-webgl.mjs --check",
+    "test": "node --experimental-strip-types test/all.ts",
+    "test:renderer": "playwright test --config playwright.renderer.config.ts"
   },
   "dependencies": {
     "@continuity-editor/editor": "file:vendor/continuity-editor-0.2.7.tgz",

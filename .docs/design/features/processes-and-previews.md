@@ -117,6 +117,23 @@
 - Registrations live with the daemon. An ended source session returns `preview unavailable`;
   daemon restart leaves any restored preview leaf stale rather than guessing a destination.
 
+## Preview capture
+
+- The preview rail can screenshot the live loopback server headlessly and copy a reference
+  to the clipboard (never sends to an agent, never writes a PTY). Full capture or a
+  drag-selected region.
+- Server-side rendering uses the optional `preview-capture` extra (Playwright + Chromium).
+  Absent, the endpoint returns a typed `{available: false, reason, install}` — an optional
+  integration, never a failure. Any render error returns `{available: true, error}` (502),
+  not a 500. Rendering uses `wait_until="load"` (an HMR dev server never reaches
+  `networkidle`) and points Playwright at the standard per-user browser cache so a frozen
+  desktop build resolves the browser installed by `playwright install`.
+- Region clip coordinates are page pixels captured from the top of the page: the iframe
+  omits `allow-same-origin`, so the preview scroll position cannot be read.
+- The PNG is saved into the owning Project's `.swe-mux/preview-shots/` (falling back to the
+  data dir), so a local agent can read it in the repo it is already working in. The absolute
+  path is returned for the copied reference.
+
 ## Key files
 
 - Ownership/registry: `src/swe_mux/processes.py`
@@ -125,5 +142,6 @@
 - Job boundary: `src/swe_mux/win_jobobj.py`, `src/swe_mux/session.py`
 - Inspector: `frontend/src/ProcessPanel.tsx`
 - Resource summary: `frontend/src/ResourceUsage.tsx`, `frontend/src/resourceTotals.ts`
-- Preview leaf: `frontend/src/PreviewPane.tsx`
+- Preview leaf + capture/region UI: `frontend/src/PreviewPane.tsx`
+- Headless capture (optional Playwright): `src/swe_mux/preview_capture.py`
 - Terminal-link routing: `frontend/src/TerminalPane.tsx`, `frontend/src/previewLinks.ts`

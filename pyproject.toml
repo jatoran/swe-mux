@@ -24,6 +24,9 @@ desktop = [
   "pystray>=0.19.5; sys_platform == 'win32'",
   "pywebview>=5.4; sys_platform == 'win32'",
 ]
+preview-capture = [
+  "playwright>=1.49",
+]
 [dependency-groups]
 dev = [
   "mypy>=1.15",
