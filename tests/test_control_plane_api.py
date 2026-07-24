@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -17,6 +19,7 @@ from swe_mux.server import (
     export_handoff,
     get_automation_status,
     list_lineage,
+    relaunch_session,
     second_opinion,
 )
 
@@ -75,6 +78,87 @@ async def test_delete_crashed_session_dismisses_it_without_stopping_pty(
 
     assert response.status == 200
     assert record.id not in manager.sessions
+
+
+async def test_relaunch_replays_task_shell_and_retires_the_old_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old_record = SimpleNamespace(
+        id="old-task",
+        project_id="default",
+        name="frontend",
+        exe="python",
+        args=["-m", "swe_mux.action_runner", "PAYLOAD"],
+        completion_mode="one_shot",
+        state="running",
+        relaunchable=True,
+    )
+    old = SimpleNamespace(record=old_record)
+    new_record = SimpleNamespace(id="new-task", relaunchable=False, snapshot=lambda: {"id": "new-task"})
+    published: list[bool] = []
+    new = SimpleNamespace(record=new_record, publish_update=lambda: published.append(True))
+    stopped: list[str] = []
+
+    class SessionsStub:
+        def __init__(self) -> None:
+            self.sessions = {old_record.id: old}
+
+        def resolve(self, identity: str) -> Any:
+            return self.sessions[identity]
+
+        async def stop(self, identity: str) -> None:
+            stopped.append(identity)
+
+    manager = SessionsStub()
+    captured: dict[str, Any] = {}
+
+    async def fake_spawn(_app: Any, body: dict[str, Any]) -> Any:
+        captured["body"] = body
+        manager.sessions[new_record.id] = new
+        return new
+
+    monkeypatch.setattr("swe_mux.server._spawn_from_body", fake_spawn)
+    request = SimpleNamespace(
+        app={"sessions": manager, "config": SimpleNamespace(data_dir=tmp_path)},
+        match_info={"sid": old_record.id},
+    )
+
+    response = await relaunch_session(cast(Any, request))
+
+    assert response.status == 201
+    # Exact-argv replay from the record — no task file re-read, no trust re-approval.
+    assert captured["body"]["executable"] == "python"
+    assert captured["body"]["argv"] == ["-m", "swe_mux.action_runner", "PAYLOAD"]
+    assert captured["body"]["completion_mode"] == "one_shot"
+    # The running original is stopped and removed; the replacement carries the flag onward.
+    assert stopped == [old_record.id]
+    assert old_record.id not in manager.sessions
+    assert new_record.relaunchable is True
+    assert published
+    assert json.loads(response.text or "")["replaced"] == old_record.id
+
+
+async def test_relaunch_refuses_a_non_relaunchable_session(tmp_path: Path) -> None:
+    record = SimpleNamespace(id="agent", relaunchable=False)
+    session = SimpleNamespace(record=record)
+
+    class SessionsStub:
+        def __init__(self) -> None:
+            self.sessions = {record.id: session}
+
+        def resolve(self, identity: str) -> Any:
+            return self.sessions[identity]
+
+        async def stop(self, _identity: str) -> None:
+            raise AssertionError("a non-relaunchable session must never be stopped")
+
+    request = SimpleNamespace(
+        app={"sessions": SessionsStub(), "config": SimpleNamespace(data_dir=tmp_path)},
+        match_info={"sid": record.id},
+    )
+
+    with pytest.raises(ValueError):
+        await relaunch_session(cast(Any, request))
 
 
 async def test_review_requires_preview_then_explicit_confirm_and_records_lineage(

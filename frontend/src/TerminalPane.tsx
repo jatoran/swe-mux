@@ -15,7 +15,7 @@ import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
 import { AGENT_NEWLINE, terminalKeyDecision } from './terminalKeys'
 import { isTerminalProtocolResponse } from './terminalProtocol'
-import { clampContextMenuLeft } from './menuPosition'
+import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import {
   mobileDragTarget,
   terminalCellAtPoint,
@@ -28,6 +28,9 @@ import {
 } from './mobileInput'
 import { isMobileTerminalInput, mobileImeDelta } from './mobileTerminalIme'
 import { clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, ResilientClipboardProvider } from './terminalClipboard'
+import { resumeCommand } from './resumeCommand'
+import { railPayload, resolveRail, type RailBackend, type RailItem } from './commandRail'
+import { currentProfile, loadRailItems } from './deviceSettings'
 import { redrawVisibleTerminal, refitVisibleTerminal } from './terminalViewport'
 import { localPreviewUrl } from './previewLinks'
 import {
@@ -61,6 +64,10 @@ interface Props {
   voiceStrip?: ComponentChildren
   railLeading?: ComponentChildren
   voiceKey?: string
+  /** Open the command-rail settings editor (the rail's trailing gear). */
+  onConfigureRail?: () => void
+  /** Fork this agent conversation into a sibling pane (rail Branch button). */
+  onBranch?: () => void
 }
 
 function runCommand(command: string) {
@@ -112,7 +119,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session) {
   term.focus()
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, mobileInput, voiceStrip, railLeading }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, mobileInput, voiceStrip, railLeading, onConfigureRail, onBranch }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
@@ -129,6 +136,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const [clipboardStatus,setClipboardStatus]=useState('')
   const [manualPaste,setManualPaste]=useState(false)
   const [imageDropActive,setImageDropActive]=useState(false)
+  // Bumped when another surface edits the shared rail config so this pane re-reads it.
+  const [,bumpRailRev]=useState(0)
+  useEffect(()=>{const on=()=>bumpRailRev(value=>value+1);window.addEventListener('mux:settings-changed',on);return()=>window.removeEventListener('mux:settings-changed',on)},[])
   const manualClipboardRef=useRef<HTMLTextAreaElement>(null)
   const manualPasteRef=useRef<HTMLTextAreaElement>(null)
   const mobileLiveInputRef=useRef<HTMLTextAreaElement>(null)
@@ -615,9 +625,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let touch:{
       pointerId:number
       lastY:number
+      startX:number
       startY:number
+      px:number
+      py:number
+      moved:boolean
       selecting:{start:TerminalCell;length:number}|null
     }|null=null
+    // Focus (and the soft keyboard) is deferred to release: only a still tap sets this,
+    // so a scroll or selection drag never raises the keyboard mid-gesture.
+    let focusOnMouseClaim=false
+    let selectionScrollTimer:number|undefined
+    let selectionScrollDir=0
+    const stopSelectionScroll=()=>{if(selectionScrollTimer!==undefined){window.clearInterval(selectionScrollTimer);selectionScrollTimer=undefined}selectionScrollDir=0}
     const cancelLongPress = () => { if (longPress !== null) window.clearTimeout(longPress); longPress = null }
     const cellAt = (clientX:number,clientY:number) => {
       const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
@@ -631,13 +651,38 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         term.buffer.active.viewportY,
       )
     }
+    const applyTouchSelection=(clientX:number,clientY:number)=>{
+      if(!touch?.selecting)return
+      const cell=cellAt(clientX,clientY)
+      if(!cell)return
+      const span=terminalSelectionSpan(touch.selecting.start,touch.selecting.length,cell,term.cols)
+      term.select(span.column,span.row,span.length)
+    }
+    // Dragging a touch selection into the top/bottom edge scrolls the viewport on a
+    // timer (finger held still fires no move events) and re-extends the selection over
+    // the newly revealed rows, matching desktop drag-select.
+    const updateSelectionAutoScroll=(clientY:number)=>{
+      const rect=term.element?.getBoundingClientRect()
+      if(!rect){stopSelectionScroll();return}
+      const zone=Math.max(20,rect.height/Math.max(term.rows,1))
+      const dir=clientY>rect.bottom-zone?1:clientY<rect.top+zone?-1:0
+      if(dir===0){stopSelectionScroll();return}
+      selectionScrollDir=dir
+      if(selectionScrollTimer!==undefined)return
+      selectionScrollTimer=window.setInterval(()=>{
+        if(!touch?.selecting){stopSelectionScroll();return}
+        const before=term.buffer.active.viewportY
+        term.scrollLines(selectionScrollDir)
+        if(term.buffer.active.viewportY===before){stopSelectionScroll();return}
+        applyTouchSelection(touch.px,touch.py)
+      },60)
+    }
     const pointerClaim = (event: PointerEvent) => {
       claimInput()
       activePointerId=event.pointerId
       if (event.pointerType === 'touch') {
-        focusTerminalInput()
         lastTouchAt = Date.now()
-        touch={pointerId:event.pointerId,lastY:event.clientY,startY:event.clientY,selecting:null}
+        touch={pointerId:event.pointerId,lastY:event.clientY,startX:event.clientX,startY:event.clientY,px:event.clientX,py:event.clientY,moved:false,selecting:null}
         cancelLongPress()
         if(mobileInput.longPress==='context_menu')longPress = window.setTimeout(() => {
           const cell = cellAt(event.clientX,event.clientY)
@@ -656,17 +701,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     const mobileMouseClaim=(event:MouseEvent)=>{
       if(Date.now()-lastTouchAt>=1500)return
-      event.preventDefault();event.stopPropagation();focusTerminalInput()
+      // The synthesized tap after a drag (scroll/selection) is swallowed without
+      // focusing, so only a genuine tap raises the soft keyboard.
+      event.preventDefault();event.stopPropagation()
+      if(focusOnMouseClaim)focusTerminalInput()
     }
     const pointerMove=(event:PointerEvent)=>{
       if(event.pointerType!=='touch'||!touch||event.pointerId!==touch.pointerId)return
+      if(!touch.moved&&Math.hypot(event.clientX-touch.startX,event.clientY-touch.startY)>10)touch.moved=true
       if(touch.selecting){
-        const cell=cellAt(event.clientX,event.clientY)
-        if(cell){
-          const span=terminalSelectionSpan(touch.selecting.start,touch.selecting.length,cell,term.cols)
-          event.preventDefault()
-          term.select(span.column,span.row,span.length)
-        }
+        touch.px=event.clientX;touch.py=event.clientY
+        event.preventDefault()
+        applyTouchSelection(event.clientX,event.clientY)
+        updateSelectionAutoScroll(event.clientY)
         return
       }
       if(Math.abs(event.clientY-touch.startY)>8)cancelLongPress()
@@ -690,12 +737,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const pointerEnd=(event:PointerEvent)=>{
       if(activePointerId!==event.pointerId)return
       activePointerId=null
-      cancelLongPress();touch=null
+      // A quick, still tap means "type here" and raises the keyboard; a drag (scroll or
+      // selection) does not. keyboardOff mode ignores the focus regardless.
+      focusOnMouseClaim=event.pointerType==='touch'&&!!touch&&!touch.selecting&&!touch.moved
+      if(focusOnMouseClaim)focusTerminalInput()
+      stopSelectionScroll();cancelLongPress();touch=null
       requestAnimationFrame(autoCopySelection)
     }
     const pointerCancel=(event:PointerEvent)=>{
       if(activePointerId!==event.pointerId)return
-      activePointerId=null;cancelLongPress();touch=null
+      activePointerId=null;focusOnMouseClaim=false;stopSelectionScroll();cancelLongPress();touch=null
     }
     const openMenu = (event: MouseEvent) => {
       // The terminal body has no context menu: right-click stays out of the
@@ -788,7 +839,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     window.visualViewport?.addEventListener('resize',scheduleFit)
     loadLatestReply()
     connect(false)
-    return () => { disposed=true;if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('online',onOnline);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{} }
+    return () => { disposed=true;stopSelectionScroll();if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('online',onOnline);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, mobileInput])
 
   const copy = async () => {
@@ -893,6 +944,20 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     else focusTerminalInputRef.current()
   }
 
+  // Clean provider resume command (`claude --resume …` / `codex resume …`) for pasting
+  // into a standalone terminal. Null until one exists: shell sessions never have one, and
+  // codex only after its rollout file reveals the native session id (see resumeCommand).
+  const resumeCmd = resumeCommand(session)
+  // Task/Project-Action shells get a leaner rail: a Relaunch button in place of the
+  // agent-only Copy reply / Copy resume actions, which have no meaning for them.
+  const isTask = !!session.relaunchable
+  const copyResumeCommand = async () => {
+    if (!resumeCmd) return
+    if (await copyPreparedText(resumeCmd)) {
+      setPreparedClipboard('');setManualClipboard(false);showClipboardStatus('Resume command copied')
+    } else prepareClipboardFallback(resumeCmd)
+  }
+
   const retryPreparedCopy=async()=>{
     if(!preparedClipboard)return
     if(await copyPreparedText(preparedClipboard,manualClipboardRef.current)){
@@ -902,7 +967,39 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     requestAnimationFrame(()=>{manualClipboardRef.current?.focus();manualClipboardRef.current?.select()})
   }
 
-  return <div class="terminal-surface"><div class="terminal-host" ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{voiceStrip}<div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions" onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{railLeading}<button class={`term-key kbd-toggle ${keyboardOff?'active':''}`} aria-pressed={keyboardOff} title={keyboardOff?'Read mode: tap the terminal to select/scroll without the keyboard. Click to type again.':'Hide the on-screen keyboard so you can select, scroll, and paste'} onClick={toggleKeyboard}>⌨</button><button class="term-key" title="Escape" onClick={()=>sendKey('\x1b')}>Esc</button><button class="term-key" title="Enter" onClick={()=>sendKey('\r')}>⏎</button><button class="term-key" title="Tab" onClick={()=>sendKey('\t')}>Tab</button><button class="term-key" title="Interrupt (Ctrl-C)" onClick={()=>sendKey('\x03')}>^C</button><button class="term-key" title="Up / previous command" onClick={()=>sendKey('\x1b[A')}>↑</button><button class="term-key" title="Down / next command" onClick={()=>sendKey('\x1b[B')}>↓</button><button class="term-key" title="Left" onClick={()=>sendKey('\x1b[D')}>←</button><button class="term-key" title="Right" onClick={()=>sendKey('\x1b[C')}>→</button><button disabled={session.backend==='shell'} title={session.backend==='shell'?'Copy reply is available in Claude and Codex sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}>Copy reply</button><button onClick={()=>void paste()}>Paste</button><span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span></div>{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  // Inject literal text (skills, slash commands, custom macros) then optionally
+  // submit with Enter, mirroring the raw onData path used by sendKey.
+  const injectText=(text:string,submit?:boolean)=>{
+    if(!text)return
+    termRef.current?.paste(text)
+    if(submit)sendKey('\r')
+    else if(!keyboardOffRef.current)focusTerminalInputRef.current()
+  }
+
+  // The rail region after the leading voice chips is data-driven so it can be
+  // reordered/extended from settings; built-in ids keep their exact dynamic
+  // markup (disabled states, tooltips), generic types render uniformly.
+  const railItems=resolveRail(loadRailItems(session.project_id),{platform:currentProfile(),backend:session.backend as RailBackend})
+  const renderRailItem=(item:RailItem)=>{
+    switch(item.id){
+      case 'relaunch':return isTask?<button key={item.id} class="term-relaunch" title="Relaunch this task terminal — stops it and re-runs the same command" onClick={()=>runCommand('session.relaunch')}>Relaunch</button>:null
+      case 'copyReply':return isTask?null:<button key={item.id} disabled={session.backend==='shell'} title={session.backend==='shell'?'Copy reply is available in Claude and Codex sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}>Copy reply</button>
+      case 'copyResume':return isTask?null:<button key={item.id} disabled={!resumeCmd} title={resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${session.backend==='claude'?` (run it from ${session.run_cwd||session.cwd})`:''}`:session.backend==='codex'?'Codex has not reported its session id yet':'Resume commands are available in Claude and Codex sessions'} onClick={()=>void copyResumeCommand()}>Copy resume</button>
+      case 'branch':{
+        if(!onBranch)return null
+        const ready=session.backend==='claude'||(session.backend==='codex'&&!!session.native_session_id&&session.native_session_id!==session.id)
+        return <button key={item.id} disabled={!ready} title={ready?'Fork this conversation into a sibling pane, keeping the original open':session.backend==='codex'?'Codex has not reported its session id yet — branch is available shortly':'Branching is available in Claude and Codex sessions'} onClick={()=>onBranch()}>Branch</button>
+      }
+      case 'paste':return <button key={item.id} onClick={()=>void paste()}>Paste</button>
+      case 'kbdToggle':return <button key={item.id} class={`term-key kbd-toggle ${keyboardOff?'active':''}`} aria-pressed={keyboardOff} title={keyboardOff?'Read mode: tap the terminal to select/scroll without the keyboard. Click to type again.':'Hide the on-screen keyboard so you can select, scroll, and paste'} onClick={toggleKeyboard}>⌨</button>
+    }
+    if(item.type==='key')return <button key={item.id} class={item.className||'term-key'} title={item.title||item.label} onClick={()=>sendKey(item.bytes||'')}>{item.label}</button>
+    if(item.type==='action')return null
+    const payload=railPayload(item,session.backend as RailBackend)
+    return <button key={item.id} class={item.className||''} title={item.title||payload} onClick={()=>injectText(payload,item.submit)}>{item.label}</button>
+  }
+
+  return <div class="terminal-surface"><div class="terminal-host" ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{voiceStrip}<div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions" onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{railLeading}{railItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }
@@ -918,7 +1015,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(image){event.preventDefault();void insertTerminalImage(termRef.current!,session,image).then(()=>{setManualPaste(false);showClipboardStatus('Pasted')}).catch(cause=>reportError(cause instanceof Error?cause.message:'Clipboard image paste failed.'));return}
     const text=data?.getData('text/plain')||''
     if(text){event.preventDefault();termRef.current?.paste(text);focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
-  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;termRef.current?.paste(text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{menu && <div class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
+  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;termRef.current?.paste(text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
     <button role="menuitem" disabled={!termRef.current?.hasSelection()} onClick={() => runCommand('terminal.copy')}>Copy</button>
     <button role="menuitem" onClick={() => runCommand('terminal.paste')}>Paste</button>
     <button role="menuitem" onClick={() => runCommand('terminal.selectAll')}>Select all</button>
@@ -944,6 +1041,11 @@ export const TerminalPane = memo(TerminalPaneImpl, (a, b) =>
   a.session.id === b.session.id &&
   a.session.backend === b.session.backend &&
   a.session.state === b.session.state &&
+  // Changes once per agent lifecycle (codex: placeholder → detected rollout id);
+  // the resume-command rail button must pick up the flip.
+  a.session.native_session_id === b.session.native_session_id &&
+  // Task shells set this once at spawn; comparing it keeps the leaner rail authoritative.
+  a.session.relaunchable === b.session.relaunchable &&
   a.broadcast === b.broadcast &&
   a.scrollback === b.scrollback &&
   a.keybindings === b.keybindings &&

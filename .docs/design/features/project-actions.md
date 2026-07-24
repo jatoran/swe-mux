@@ -29,6 +29,19 @@ ConPTY, exit code `0` ends as **completed**, and a nonzero root exit remains **c
 exit code retained. Interactive shells and agent terminals keep their separate long-lived
 lifecycle semantics.
 
+## Relaunch
+
+Task-launched terminals are marked **relaunchable** and carry a **Relaunch** action on their
+terminal rail (and the `session.relaunch` command). Relaunch is *from-record*: it replays the
+session's exact retained executable/argv — env is already baked into the Project Action payload —
+so no task file is re-read and no trust re-approval is required. `POST /api/sessions/{sid}/relaunch`
+spawns the fresh copy first (so a spawn failure leaves the original intact), then stops and removes
+the old session; the browser swaps the new session id into the old one's layout leaf, keeping the
+tab, split, and focus in place. It works on a still-running task (stop then restart) and on an
+already-completed/crashed one (restart in place). Agent and plain shell sessions are never
+relaunchable, so their rails are unaffected; editing the task definition itself still goes through
+the Run menu and its normal trust check.
+
 ## Trust boundary
 
 - Merely opening the Run menu never executes repository content.

@@ -9,6 +9,7 @@ from swe_mux.project_files import (
     effective_project_ignores,
     ignored_project_path,
     initialize_note,
+    list_project_directories,
     list_project_directory,
     note_exists,
     parse_project_config,
@@ -117,6 +118,28 @@ def test_project_file_tree_combines_global_and_project_ignore_patterns(tmp_path:
     assert ignored_project_path("nested/node_modules/pkg/index.js", patterns)
     assert ignored_project_path("nested/private/key.txt", patterns)
     assert not ignored_project_path("src/main.py", patterns)
+
+
+def test_batch_listing_returns_each_folder_and_omits_missing(tmp_path: Path) -> None:
+    (tmp_path / "src" / "swe_mux").mkdir(parents=True)
+    (tmp_path / "src" / "main.py").write_text("x", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+
+    # A saved tree references the root, two live folders, a folder that was
+    # deleted, and a path that is now a file. Only the live folders come back.
+    result = list_project_directories(
+        tmp_path,
+        ["", "src", "src/swe_mux", "gone", "src/main.py"],
+    )
+    directories = result["directories"]
+    assert set(directories) == {"", "src", "src/swe_mux"}
+    assert [item["name"] for item in directories["src"]["items"]] == ["swe_mux", "main.py"]
+
+
+def test_batch_listing_dedupes_repeated_paths(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    result = list_project_directories(tmp_path, ["src", "src", ""])
+    assert set(result["directories"]) == {"", "src"}
 
 
 def test_project_search_matches_names_contents_and_respects_ignores(tmp_path: Path) -> None:

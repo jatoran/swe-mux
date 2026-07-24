@@ -640,7 +640,7 @@ body {
 /* Project Run is a project-level launcher. Imported tasks never impose pane geometry. */
 .app-identity .project-run-header{width:auto;min-width:51px;margin-left:auto;padding:0 6px;border-left:1px solid var(--line);color:var(--accent);font-size:8px;white-space:nowrap}.workspace.sidebar-collapsed .project-run-header{display:none}.project-row{grid-template-columns:16px minmax(0,1fr) 25px!important}.project-row-run{display:grid!important;place-items:center;font-size:8px}
 .run-menu-scrim{position:fixed;inset:0;z-index:76;background:transparent}.project-run-menu{position:fixed;z-index:77;width:300px;max-height:min(560px,calc(100dvh - 12px));overflow:auto;border:1px solid var(--line);background:var(--panel);box-shadow:7px 9px #0009}.project-run-menu>header{position:sticky;top:0;z-index:1;min-height:42px;display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--line);background:var(--panel)}.project-run-menu>header>div{min-width:0;flex:1;display:grid;gap:2px}.project-run-menu>header span,.run-menu-section>small{color:var(--accent);font-size:8px;text-transform:uppercase}.project-run-menu>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-run-menu>header>button{width:29px;height:29px;border:0;background:transparent;color:var(--muted);cursor:pointer}.run-menu-section{display:grid;padding:5px;border-bottom:1px solid var(--line)}.run-menu-section>small{padding:4px 5px}.run-menu-section>button{min-height:34px;display:grid;grid-template-columns:24px minmax(0,1fr);align-items:center;gap:5px;border:0;background:transparent;color:var(--text);text-align:left;cursor:pointer}.run-menu-section>button:hover:not(:disabled){background:var(--panel2)}.run-menu-section>button:disabled{opacity:.5;cursor:not-allowed}.run-menu-section>button>span{color:var(--accent);text-align:center}.run-menu-section>button>div{min-width:0;display:flex;align-items:baseline;justify-content:space-between;gap:8px}.run-menu-section>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.run-menu-section>button em{flex:none;color:var(--muted);font-size:8px;font-style:normal}.project-run-menu>p,.project-run-menu details{margin:0;padding:9px;color:var(--muted);font-size:8px}.project-run-menu summary{cursor:pointer}.project-run-menu details p{margin:6px 0 0;line-height:1.4}.project-action-trust-layer{z-index:90}.project-action-trust{width:min(620px,calc(100vw - 24px))}.project-action-trust-body{padding:16px 20px;color:var(--muted);line-height:1.5}.project-action-trust-body strong{color:var(--text)}.project-action-trust-body ul{padding-left:20px}.project-action-trust-body pre{max-height:180px;overflow:auto;padding:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);white-space:pre-wrap}.mobile-run-trigger{display:none}
-@media(max-width:760px){.mobile-toolbar{grid-template-columns:minmax(44px,1fr) minmax(0,2fr) auto minmax(44px,1fr)!important}.mobile-run-trigger{display:block;min-width:58px;height:36px;border:1px solid var(--line);background:var(--panel2);color:var(--accent);font:9px 'Cascadia Mono',Consolas,monospace}.project-row{grid-template-columns:12px minmax(0,1fr)!important}.project-row-run{display:none!important}.project-run-menu{left:6px!important;right:6px;width:auto;max-height:calc(100dvh - 12px)}.run-menu-section>button{min-height:44px}.project-action-trust-layer{padding:0}.project-action-trust{width:100vw;height:100dvh;border:0;display:flex;flex-direction:column}.project-action-trust-body{flex:1;overflow:auto}}
+@media(max-width:760px){.mobile-toolbar{grid-template-columns:minmax(44px,1fr) minmax(0,2fr) auto minmax(44px,1fr)!important}.mobile-run-trigger{display:block;min-width:58px;height:36px;border:1px solid var(--line);background:var(--panel2);color:var(--accent);font:9px 'Cascadia Mono',Consolas,monospace}.project-row{grid-template-columns:12px minmax(0,1fr) 36px!important}.project-row-run{display:grid!important;place-items:center;font-size:10px;min-height:34px}.project-run-menu{left:6px!important;right:6px;width:auto;max-height:calc(100dvh - 12px)}.run-menu-section>button{min-height:44px}.project-action-trust-layer{padding:0}.project-action-trust{width:100vw;height:100dvh;border:0;display:flex;flex-direction:column}.project-action-trust-body{flex:1;overflow:auto}}
 
 /* Compact sidebar commands and project resource editing. */
 .sidebar-footer{justify-content:flex-start;gap:8px}.sidebar-footer .project-trigger{width:auto!important;height:28px;flex:0 0 auto;padding:0 5px!important;border:0;background:transparent;color:#6f9277;text-align:left;white-space:nowrap;font:9px 'Cascadia Mono',Consolas,monospace}.sidebar-footer .project-trigger:hover{border:0;background:transparent;color:#a8eab3}.sidebar-footer .project-trigger span{margin-right:6px;color:#8ee69a}
@@ -716,6 +716,13 @@ body {
 .sidebar-note-row .note-branch{align-self:start;padding-top:5px;color:var(--line);font-size:9px}.sidebar-note-row.active .note-branch{color:var(--blue)}
 .sidebar-note-row .note-copy{min-width:0;display:flex;gap:7px;align-items:center;overflow:hidden}.sidebar-note-row .note-copy strong{flex:none;color:inherit;font-size:9px;font-weight:500}.sidebar-note-row .note-copy small{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
 .sidebar-note-row.unattached{border-left:1px dotted var(--amber)}.project-note-list{margin:0 6px 2px 20px}.project-note-list .sidebar-note-row{margin-left:0;width:100%}
+/* Combined Note+Files row: the guideline stays row-level; hover/active live on the chips. */
+.sidebar-note-row.note-files-row{cursor:default;padding:0 5px}.sidebar-note-row.note-files-row:hover{background:transparent;color:var(--muted)}
+.note-resource-group{min-width:0;display:flex;align-items:center;gap:6px;overflow:hidden}
+.note-resource-chip{flex:none;min-width:0;display:flex;align-items:center;border:0;background:transparent;color:inherit;cursor:pointer;padding:2px 5px;border-radius:3px}
+.note-resource-chip strong{color:inherit;font-size:9px;font-weight:500;white-space:nowrap}
+.note-resource-chip:hover{background:var(--panel2);color:var(--text)}.note-resource-chip.active{color:var(--blue)}
+.note-resource-divider{flex:none;width:1px;height:12px;background:var(--line)}
 .layout-cluster .session-entry{position:relative;z-index:2}
 @media(max-width:760px){.sidebar-note-row{min-height:34px}.sidebar-note-row .note-copy{display:block}.sidebar-note-row .note-copy strong,.sidebar-note-row .note-copy small{display:block}}
 
@@ -857,13 +864,33 @@ body {
 /* The rail holds voice, terminal keys, and clipboard actions; it overflows on narrow panes
    and scrolls horizontally (touch drag, scrollbar, or wheel via the onWheel handler). Items
    keep their natural width so nothing collapses while scrolling. */
-.terminal-action-rail{grid-row:3;min-height:34px;display:flex;align-items:center;gap:5px;padding:3px 7px;border-top:1px solid var(--line);background:var(--panel);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin}
+.terminal-action-rail{grid-row:3;min-height:34px;display:flex;align-items:center;gap:5px;padding:3px 7px;border-top:1px solid var(--line);background:var(--panel);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;touch-action:pan-x;-webkit-overflow-scrolling:touch}
 .terminal-action-rail>*{flex:0 0 auto}
 .terminal-action-rail .term-key,.terminal-action-rail .voice-chip,.terminal-action-rail .voice-mic,.terminal-action-rail .conversation-chip{min-width:30px;padding:0 6px}
 .terminal-action-rail .mobile-voice-action{display:none}
 .terminal-action-rail .kbd-toggle{display:none}
 @media(pointer:coarse){.terminal-action-rail .kbd-toggle{display:inline-flex;align-items:center;justify-content:center}}
 .terminal-action-rail .kbd-toggle.active{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
+.terminal-action-rail .rail-config{margin-left:auto;min-width:30px!important;padding:0 6px;font-size:12px}
+.commandrail-settings .rail-scope{display:flex;align-items:center;gap:8px;margin:6px 0}
+.commandrail-settings .rail-scope select{flex:0 0 auto;min-width:200px}
+.commandrail-settings .rail-scope-note{margin:2px 0 0;color:var(--muted);font-size:9px}
+.commandrail-settings .rail-editor{display:flex;flex-direction:column;gap:4px;margin:8px 0}
+.commandrail-settings .rail-row{display:grid;grid-template-columns:minmax(120px,1.3fr) minmax(0,1.5fr) auto auto;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--line);background:var(--panel2)}
+.commandrail-settings .rail-row.off{opacity:.5}
+.commandrail-settings .rail-enable{display:flex;align-items:center;gap:6px;margin:0;min-width:0}
+.commandrail-settings .rail-enable span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.commandrail-settings .rail-meta{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px}
+.commandrail-settings .rail-tags{display:flex;align-items:center;gap:3px}
+.commandrail-settings .rail-tags i{width:6px;display:inline-block}
+.commandrail-settings .rail-tags button,.commandrail-settings .rail-order button{min-width:28px;height:22px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:9px;cursor:pointer}
+.commandrail-settings .rail-tags button.on{border-color:var(--green);color:var(--green)}
+.commandrail-settings .rail-tags button:disabled,.commandrail-settings .rail-order button:disabled{opacity:.35;cursor:not-allowed}
+.commandrail-settings .rail-order{display:flex;gap:3px}
+.commandrail-settings .rail-del{color:var(--error,#f07178)}
+.commandrail-settings .rail-add{display:flex;flex-wrap:wrap;align-items:end;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.commandrail-settings .rail-add h4{width:100%;margin:0}
+@media(max-width:760px){.commandrail-settings .rail-row{grid-template-columns:1fr auto}.commandrail-settings .rail-meta{grid-column:1/-1}.commandrail-settings .rail-tags{grid-column:1/-1;flex-wrap:wrap}}
 .terminal-action-rail button{min-width:74px;height:27px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.terminal-action-rail button:hover:not(:disabled){border-color:var(--green);color:var(--green)}.terminal-action-rail button:disabled{opacity:.38;cursor:not-allowed}.terminal-action-rail span{min-width:0;max-width:220px;margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 .terminal-image-drop{position:absolute;z-index:18;inset:10px;display:grid;place-items:center;border:2px dashed var(--green);background:color-mix(in srgb,var(--bg) 82%,transparent);color:var(--green);font-weight:700;letter-spacing:.06em;text-transform:uppercase;pointer-events:none}
 .terminal-connection{position:absolute;z-index:13;top:5px;left:50%;transform:translateX(-50%);padding:3px 7px;border:1px solid var(--line);background:var(--panel);color:var(--muted);pointer-events:none}

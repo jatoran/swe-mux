@@ -28,6 +28,8 @@ export interface Session {
   generated_title_annotation?:{id:string;provenance:string;resolved_model?:string;confidence?:number;cost_usd?:number;created_at:number}
   voice_mode?: VoiceMode | null
   voice_content?: VoiceContent | null
+  /** Task/Project-Action shell whose exact spawn argv can be relaunched in place. */
+  relaunchable?: boolean
   /** Client-only optimistic row/tab shown while POST /api/sessions is in flight. */
   pending?: boolean
 }

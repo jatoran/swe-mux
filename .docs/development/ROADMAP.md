@@ -55,18 +55,22 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
 Phase 1  Evidence replay + delivery-readiness contract
   -> Phase 2  Durable process/quota/session telemetry
     -> Phase 3  Daily-workflow UX, prompts, config, and notifications
-      -> Phase 4  Persistent manual prompt queue
-        -> Phase 5  Gated auto-delivery + mailbox + bounded agent communication
-          -> Phase 6  Portable instructions and skills
-            -> Phase 7  Windows maturity, CLI, doctor, and soak
-              -> Phase 8  Telegram control
-                -> Phase 9  SSH/native attach
-                  -> Phase 10  WSL bridge + Linux/macOS
-                    -> Phase 11  Public packaging and release
+      -> Phase 3.5  Agent status-detection hardening and regression defense
+        -> Phase 4  Persistent manual prompt queue
+          -> Phase 5  Gated auto-delivery + mailbox + bounded agent communication
+            -> Phase 6  Portable instructions and skills
+              -> Phase 7  Windows maturity, CLI, doctor, and soak
+                -> Phase 8  Telegram control
+                  -> Phase 9  SSH/native attach
+                    -> Phase 10  WSL bridge + Linux/macOS
+                      -> Phase 11  Public packaging and release
 ```
 
 Phase 3 interface work may proceed alongside Phase 2 when it does not depend on unfinished
-telemetry. No Phase 4 or 5 delivery automation bypasses Phase 1 acceptance gates.
+telemetry. No Phase 4 or 5 delivery automation bypasses Phase 1 acceptance gates. Phase 3.5
+hardens the lifecycle-state and readiness evidence those gates read from; it precedes any
+delivery automation because an inaccurate `working`/`idle`/`awaiting` status silently
+corrupts every downstream head-of-line, arming, and auto-delivery decision.
 Cross-cutting tests ship with each phase.
 
 ## Phase 1 — Evidence replay and delivery readiness
@@ -306,6 +310,125 @@ attribution.
 - [x] Project registry visibility, session-note recovery, searchable-history timestamps, and
   responsive workspace projection have regression coverage and current design/interface docs.
 
+## Phase 3.5 — Agent status-detection hardening and regression defense
+
+The user-visible session status (`starting | running | working | idle | awaiting | exited |
+crashed`) is derived from a layered pipeline: transcript-authoritative ordering with source
+priority `{pty:0, transcript:1, hook:2}`, a hook fallback while `watching`/`degraded`, the
+quiescence + PTY watchdog, notification-type mapping, and the sibling-transcript
+cross-attribution gate. It is correct on the common path but still shows residual
+inconsistency — sessions that blink `working` after a turn ended, races that reopen a closed
+turn, `awaiting` that misclassifies approval versus Q&A versus elicitation, and recoveries
+that depend on inference rather than proof.
+
+Phase 3.5 makes the user-visible status as reproducible and regression-guarded as Phase 1
+made `delivery_state`, without loosening any conservative fallback and without introducing
+PTY writes. It treats every inferred/watchdog recovery as a defect to be reproduced,
+fixtured, and measured — not as acceptable steady-state behavior. Detection, delivery
+readiness, and the UI indicator must agree, and that agreement must be provable from
+fixtures and held by CI over time.
+
+Reference material an agent picking this up must read first: the delivery-readiness contract
+(`design/features/delivery-readiness.md`, `src/swe_mux/delivery_readiness.py`), the session
+state machine and watchdog (`src/swe_mux/session.py`: `state_watchdog_loop`,
+`_watchdog_check_session`, `_transcript_authoritative`, the `closed_by_transcript` latch),
+the adapter/transcript observation path (`src/swe_mux/observation.py`:
+`transcript_tail_turn_state`, `_pty_appears_idle`, `tool_call_evidence`), the existing golden
+corpus (`tests/test_detection_replay.py` + `tests/fixtures/detection/v1/`), the live-agent
+conformance harness (`tests/test_live_agent_conformance.py`), and the `GET
+/api/sessions/{sid}/state-log` ring-buffer diagnostic.
+
+### Status contract and evidence ledger
+
+- [ ] Write down, per `SessionState` value, the exact positive evidence predicate that may
+  set it and which sources (`pty`/`transcript`/`hook`/`watchdog`/`notification`) are allowed
+  to, mirroring the `delivery_state` discipline. Ambiguous or absent evidence resolves to the
+  conservative prior, never a guessed active state.
+- [ ] Define and document the total mapping from `SessionState` (plus the `awaiting`
+  sub-reason: approval / Q&A / elicitation) to the single user-visible status shown per
+  session, and its relationship to `delivery_state` and attention. These three axes stay
+  separate; the UI renders one coherent status without collapsing them incorrectly.
+- [ ] Make the `state-log` ring buffer a complete, typed transition ledger: every transition
+  carries prior state, next state, source, the evidence that justified it, whether it was
+  inferred, and monotonic timing. No transition may occur without a ledger entry.
+- [ ] Classify each transition as `proven` (hook/transcript/notification evidence) or
+  `inferred` (watchdog/PTY backstop). Inferred transitions are recovery events, counted and
+  bounded, never the primary path for a healthy session.
+
+### Golden corpus extension to user-visible status
+
+- [ ] Extend the detection replay corpus to assert `SessionState` (and `awaiting` sub-reason)
+  at every checkpoint, not only `delivery_state`, `events`, and `parser`. The user-visible
+  status becomes a golden-stream output with the same no-drift protection.
+- [ ] Add deterministic fixtures for every documented failure mode, each with a root-cause
+  note and the guard that closes it: hook/transcript race reopening `working` (late
+  `PreToolUse`/`PostToolUse` landing after the transcript `end_turn`), the
+  `closed_by_transcript` latch refusing a hook-sourced re-begin, ESC-pause-without-marker,
+  observer stuck on a sibling transcript (cross-attribution), crash mid-turn, compaction,
+  resume, promotion/demotion, `idle_prompt` versus `permission_prompt` versus
+  `elicitation_dialog`, subagent-only stop, rate-limit abort, and daemon restart mid-turn.
+- [ ] Pin the watchdog recovery paths as golden behavior, not incidental timing: ENDED-stuck
+  force-idle at `STATE_WATCHDOG_ENDED_STUCK_SECONDS`, the PTY backstop force-idle at
+  `STATE_WATCHDOG_PTY_STUCK_SECONDS` for both `unknown` and `open` tails, and the
+  `_pty_appears_idle` true/false branches (a genuine long tool with "esc to interrupt" up
+  must never be cut short).
+- [ ] Make status-affecting parser, mapping, or watchdog changes fail CI when golden status
+  streams change without a reviewed fixture update, mirroring the Phase 1 safe-to-inject gate.
+
+### Edge-case inventory and closure
+
+- [ ] Maintain an explicit, tracked inventory of every known status edge case with: a
+  reproducing fixture, the guard that closes it, and a one-line root cause. Closing an edge
+  case means both exist; removing either fails CI.
+- [ ] Guarantee no session can remain in a non-terminal active state indefinitely: for every
+  `working`/`awaiting` path there is a proven or bounded-inferred exit, and the watchdog
+  bounds are covered by fixtures at their thresholds.
+- [ ] Prove the cross-attribution gate: an observer bound to the wrong sibling transcript
+  never sets this session's status from another session's evidence, and the PTY backstop (own
+  session's ground truth) still recovers it.
+- [ ] Prove notification semantics: `idle_prompt` maps to `idle` and never clobbers a real
+  pending approval; `permission_prompt`/`elicitation_dialog` map to `awaiting` with the
+  correct sub-reason.
+
+### Regression detection over time
+
+- [ ] Add a sanitized capture → golden-fixture pipeline: a real stuck or misclassified
+  session's `state-log` (and the minimal evidence stream that produced it) can be captured,
+  scrubbed of terminal bytes and prompt bodies, and promoted into the versioned corpus so it
+  becomes a permanent regression test.
+- [ ] Publish status-health metrics through test and runtime diagnostics: inferred-recovery
+  count by source (`watchdog-ended`, `watchdog-pty`), reopen-after-authoritative count,
+  unknown/open-tail durations, and time-to-terminal after a turn ends. A rise in inferred
+  recoveries is a tracked regression signal, not silent drift.
+- [ ] Extend the live-agent conformance harness to diff captured `state-log` transitions
+  against expected proven-transition shapes for scripted real-CLI runs, flagging any run that
+  reached a terminal status only via inference.
+- [ ] Bound and alarm on the health metrics in soak: define the acceptable inferred-recovery
+  rate for a healthy fleet and fail the soak matrix when it is exceeded.
+
+### UI reflection correctness
+
+- [ ] Add a frontend contract test that the `SessionState` → sidebar/pane indicator mapping is
+  total and unambiguous: no state renders blank or as a permanent blinking `working`, and a
+  terminal transition in the `state-log` always clears the working indicator.
+- [ ] Assert the `awaiting` indicator distinguishes approval, Q&A, and elicitation with the
+  correct affordance, and that `idle_prompt`-driven idle never renders as awaiting approval.
+- [ ] Verify the mobile unified-tab projection shows the same status as the desktop pane for
+  the same session, driven from the same evidence, with no independent heuristic.
+
+### Phase 3.5 exit criteria
+
+- [ ] Every `SessionState` transition (and `awaiting` sub-reason) is reproducible from
+  fixtures across hook/transcript/PTY races and is asserted in the golden corpus, not only
+  `delivery_state`.
+- [ ] Every documented stuck-`working`, reopened-turn, misclassified-`awaiting`, and
+  mis-attribution edge case has a named fixture and a guard; removing either fails CI.
+- [ ] Inferred/watchdog recoveries are measured, bounded, and alarmed; a healthy session
+  reaches terminal status by proven evidence, and a rise in inferred recoveries surfaces as a
+  regression.
+- [ ] Desktop and mobile UI reflect status through a total, tested mapping with no permanent
+  `working` on a completed turn and correct `awaiting` sub-reasons.
+
 ## Phase 4 — Persistent manual prompt queue
 
 Phase 4 introduces durable user intent but keeps delivery manual. The storage model is a
@@ -317,6 +440,12 @@ framework.
 - [ ] Add persistent messages keyed to stable target agent-run/history identity with
   Project/session provenance, sender kind/id, ordered position, body, revision, timestamps,
   delivery constraints, and audit metadata.
+- [ ] Make the sender/provenance model rich enough to carry a control-plane `queue_draft`
+  on day one, not just a local user. Persist originating rule/observer id, the source
+  Tier 0 fact(s)/fingerprint, and the annotation or fact snapshot that produced the draft,
+  so drafts remain auditable back to their cause without a later schema migration. The
+  queue-draft channel (`CONTROL_PLANE_ROADMAP.md` §13) is the first non-human sender and
+  writes only inert drafts a human must arm and send.
 - [ ] Use explicit states: `draft`, `armed`, `delivering`, `sent`, `blocked`, `failed`,
   `cancelled`, and `stranded`. State transitions are transactional and idempotent.
 - [ ] Enforce strict head-of-line delivery: later messages may be armed, but an earlier
@@ -399,6 +528,16 @@ auto-approval, arbitrary PTY writes, or uncontrolled relay chains.
   annotation output. Do not automatically lift arbitrary model output into another prompt.
 - [ ] Keep autonomous model-authored routing, worker spawning, approval decisions, command
   execution, and arbitrary network destinations outside this phase.
+
+Scope boundary (reconciling the `.swe-mux/notes/project.md` agent-to-agent request): the
+desire for "agent A finishes a task and notifies a specific agent B, and sometimes spawns a
+new session for B" splits across the trust line. **In scope for Phase 5:** user-authored or
+user-approved A→B messages into an existing target run through the same queue/readiness
+contract, carrying full provenance. **Not in scope — decision-gated:** an agent
+autonomously selecting a target and *spawning* a new session to receive the message; that is
+worker spawning behind the actuation gate (`CONTROL_PLANE_ROADMAP.md` §16) and requires a
+separate product decision (see "Decision-gated capabilities"). Phase 5 delivers bounded
+messaging between sessions that already exist; it does not let one agent create another.
 
 ### Phase 5 exit criteria
 

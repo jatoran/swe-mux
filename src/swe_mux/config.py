@@ -9,7 +9,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 15
+from .keybindings import is_command
+
+SCHEMA_VERSION = 16
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {"light", "dark", "system", "solarized-dark", "tokyo-night", "custom"}
 CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "accent", "error"}
@@ -111,6 +113,30 @@ def default_voice_commands() -> list[dict[str, Any]]:
     ]
 
 
+# Touch-gesture slots recognized on mobile. Edge- and top-anchored swipes are
+# deliberately absent: on Android those belong to the OS (back / home / notification
+# shade), so the mappable channels are mid-screen single-finger horizontal swipes and
+# two-finger gestures. Each slot maps to a command id (see keybindings.COMMAND_IDS) or
+# "" to disable it.
+MOBILE_GESTURE_SLOTS = (
+    "swipe_left",
+    "swipe_right",
+    "two_finger_swipe_left",
+    "two_finger_swipe_right",
+    "two_finger_tap",
+)
+
+
+def default_mobile_gestures() -> dict[str, str]:
+    return {
+        "swipe_left": "mobileTab.next",
+        "swipe_right": "mobileTab.previous",
+        "two_finger_swipe_left": "sidebar.toggle",
+        "two_finger_swipe_right": "sidebar.toggle",
+        "two_finger_tap": "palette.open",
+    }
+
+
 def default_ccusage_command(provider: str) -> list[str]:
     return ["ccusage", provider, "daily", "--json"]
 
@@ -193,6 +219,7 @@ class Config:
     mobile_scroll_direction: str = "natural"
     mobile_scroll_sensitivity: float = 1.0
     mobile_long_press: str = "context_menu"
+    mobile_gestures: dict[str, str] = field(default_factory=default_mobile_gestures)
     terminal_auto_copy_selection: bool = True
     notes_default_open: str = "dock"
     ccusage_enabled: bool = False
@@ -295,6 +322,24 @@ def _validate(config: Config) -> None:
         errors["mobile_scroll_sensitivity"] = "must be between 0.25 and 4"
     if config.mobile_long_press not in {"context_menu", "disabled"}:
         errors["mobile_long_press"] = "must be context_menu or disabled"
+    if not isinstance(config.mobile_gestures, dict):
+        errors["mobile_gestures"] = "must be a mapping of gesture slots to command ids"
+    else:
+        unknown_slots = set(config.mobile_gestures) - set(MOBILE_GESTURE_SLOTS)
+        if unknown_slots:
+            errors["mobile_gestures"] = (
+                "unknown gesture slots: " + ", ".join(sorted(unknown_slots))
+            )
+        else:
+            bad = sorted(
+                slot
+                for slot, command in config.mobile_gestures.items()
+                if command != "" and not is_command(command)
+            )
+            if bad:
+                errors["mobile_gestures"] = (
+                    "unknown command for gestures: " + ", ".join(bad)
+                )
     for field_name in (
         "claude_args",
         "codex_args",
@@ -578,6 +623,18 @@ def load_config(path: Path | None = None) -> Config:
             # Migrate only that untouched pair; explicit engine/model choices survive.
             cfg.stt_engine = "whisper"
             cfg.stt_whisper_model = "turbo"
+        if source_schema < 16:
+            # The two-finger sidebar gestures shipped as directional open/close, but a
+            # single toggle is what users expect. Upgrade only the untouched old defaults
+            # so any custom mapping the user chose is left intact.
+            gestures = dict(cfg.mobile_gestures)
+            if gestures.get("two_finger_swipe_right") == "sidebar.open":
+                gestures["two_finger_swipe_right"] = "sidebar.toggle"
+                migrated = True
+            if gestures.get("two_finger_swipe_left") == "sidebar.close":
+                gestures["two_finger_swipe_left"] = "sidebar.toggle"
+                migrated = True
+            cfg.mobile_gestures = gestures
     if not cfg.shell_profiles:
         if "shell_exe" not in raw and shutil.which("pwsh.exe"):
             cfg.shell_exe = "pwsh.exe"

@@ -1,9 +1,18 @@
+import { useCallback, useRef } from 'preact/hooks'
 import type {
   ContinuityChangeDetail,
+  ContinuityEditorElement,
   ContinuityRequestDetail,
+  ScrollState,
 } from '@continuity-editor/editor'
 import { ContinuityEditor } from '@continuity-editor/editor/react'
 import { noteQueueKey, noteSaveQueue } from './noteSaveQueue'
+
+// Tab switches unmount the whole resource view (only the active stack child renders), so the
+// editor instance is destroyed and a fresh one cannot know its previous viewport. Keep the
+// last-seen scroll per resource outside the component (like fileDrafts/browserStates) and
+// re-apply it when the same resource mounts again.
+const scrollStates = new Map<string, ScrollState>()
 
 type Props = {
   projectId: string
@@ -37,7 +46,18 @@ function routeRequest(detail: ContinuityRequestDetail): void {
     return
   }
   if (detail.kind === 'copyText') {
-    void navigator.clipboard?.writeText(detail.text).catch(() => {})
+    // The editor asks the host only after its own Clipboard API and selection
+    // fallbacks both failed (e.g. iOS Safari over plain-HTTP LAN), so a bare
+    // clipboard retry here will usually fail too. Surface the text for manual
+    // copy as the last resort.
+    const manualCopy = () => {
+      window.prompt('Copy the text below:', detail.text)
+    }
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(detail.text).catch(manualCopy)
+    } else {
+      manualCopy()
+    }
   }
   // contextMenu and filesDropped fall through to default browser/daemon behavior.
 }
@@ -65,15 +85,30 @@ export function ContinuityMarkdownEditor({
   initialText,
   label,
   spellcheck = false,
+  scrollKey,
   onCommit,
 }: {
   initialText: string
   label: string
   spellcheck?: boolean
+  /** Stable per-resource identity for viewport restoration across unmounts; omit to disable. */
+  scrollKey?: string
   onCommit: (text: string) => void
 }) {
+  const elementRef = useRef<ContinuityEditorElement | null>(null)
+  const scrollKeyRef = useRef(scrollKey)
+  scrollKeyRef.current = scrollKey
+  // Capture the viewport at ref detach: Preact nulls refs before removing the DOM node, so
+  // the textarea scroll offsets are still live here (they read 0 once detached).
+  const attachRef = useCallback((element: ContinuityEditorElement | null) => {
+    if (!element && elementRef.current && scrollKeyRef.current) {
+      scrollStates.set(scrollKeyRef.current, elementRef.current.getScrollState())
+    }
+    elementRef.current = element
+  }, [])
   return (
     <ContinuityEditor
+      ref={attachRef}
       aria-label={label}
       class="note-editor"
       style={{
@@ -96,6 +131,10 @@ export function ContinuityMarkdownEditor({
         // (`hostReplacement` cannot occur here since we issue no host replacements.)
         if (detail.source !== 'hostReplacement') onCommit(detail.snapshot.text)
       }}
+      onReady={() => {
+        const saved = scrollKeyRef.current && scrollStates.get(scrollKeyRef.current)
+        if (saved) elementRef.current?.restoreScrollState(saved)
+      }}
       onRequest={routeRequest}
     />
   )
@@ -109,6 +148,7 @@ export function ProjectNoteEditor({ projectId, resourceId, initialText, label = 
     <ContinuityMarkdownEditor
       initialText={initialText}
       label={label}
+      scrollKey={key}
       onCommit={text => noteSaveQueue.submit(key, text)}
     />
   )

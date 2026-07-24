@@ -265,6 +265,32 @@ def list_project_directory(
     }
 
 
+def list_project_directories(
+    root: str | Path,
+    relative_paths: Sequence[str],
+    *,
+    ignore_patterns: list[str] | None = None,
+) -> dict[str, Any]:
+    """List several folders in one call so a restored tree loads in one round trip.
+
+    A path that no longer resolves to a folder (deleted, renamed, or now a file)
+    is silently omitted rather than raising: the browser treats a missing entry
+    as "this folder is gone" and prunes it from the persisted expand state, which
+    is exactly the self-healing behaviour we want for a stale saved tree.
+    """
+
+    project_root = Path(root).resolve()
+    directories: dict[str, Any] = {}
+    for relative in dict.fromkeys(relative_paths):
+        try:
+            directories[relative] = list_project_directory(
+                project_root, relative, ignore_patterns=ignore_patterns
+            )
+        except ValueError:
+            continue
+    return {"directories": directories}
+
+
 def search_project_files(
     root: str | Path,
     query: str,

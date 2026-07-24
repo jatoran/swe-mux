@@ -5,9 +5,13 @@ import { displayChord } from './commands'
 import { keyChord } from './keys'
 import { AccountSettings } from './ProviderAccounts'
 import { NotificationSoundSettings } from './NotificationSoundSettings'
+import { NotificationPushSettings } from './NotificationPushSettings'
 import { comparableProjectDefaults, normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { enableMobileVoice } from './mobileVoice'
+import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
+import { clearProjectRail, loadRailItems, projectRailIsCustom, saveRailItems } from './deviceSettings'
+import { ALL_BACKENDS, ALL_PLATFORMS, isBuiltinRailId, railPayload, type RailBackend, type RailItem, type RailItemType, type RailPlatform } from './commandRail'
 import type { ShellProfile, Project } from './types'
 
 type Config = {
@@ -24,6 +28,7 @@ type Config = {
   mobile_vertical_drag:'smart'|'terminal'|'application'|'disabled'
   mobile_scroll_direction:'natural'|'wheel';mobile_scroll_sensitivity:number
   mobile_long_press:'context_menu'|'disabled'
+  mobile_gestures:Record<string,string>
   terminal_auto_copy_selection:boolean
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
   ccusage_claude_command:string[]; ccusage_codex_command:string[]
@@ -93,6 +98,7 @@ const settingsTabs = [
   {id:'agents',label:'Agents'},
   {id:'accounts',label:'Accounts'},
   {id:'input',label:'Input'},
+  {id:'commandrail',label:'Command rail'},
   {id:'usage',label:'Usage'},
   {id:'automation',label:'Automation'},
   {id:'notifications',label:'Notifications'},
@@ -103,7 +109,7 @@ const settingsTabs = [
 type SettingsTab = typeof settingsTabs[number]['id']
 const tabForSection = (section:string):SettingsTab => ({
   Terminals:'terminals','Project defaults':'workspace','Current project':'workspace',
-  Agents:'agents',Accounts:'accounts',Input:'input','Git and history':'workspace','Usage analytics':'usage',
+  Agents:'agents',Accounts:'accounts',Input:'input','Command rail':'commandrail','Git and history':'workspace','Usage analytics':'usage',
   Notes:'notes',
   Automation:'automation','Hooks and notifications':'notifications',Notifications:'notifications',Voice:'voice','Remote and security':'remote',Appearance:'appearance',
 }[section] as SettingsTab|undefined)||'general'
@@ -130,6 +136,58 @@ const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
 export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, cwd, initialSection='General' }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; cwd?:string; initialSection?:string }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
+  // Command-rail editor state. The rail is its own device-settings domain, so
+  // edits save immediately (like sounds/notifications) rather than via the
+  // config draft's Save button.
+  const [rail, setRail] = useState<RailItem[]>([])
+  const [railAdd, setRailAdd] = useState<{ type: RailItemType; name: string; label: string; submit: boolean }>({ type: 'skill', name: '', label: '', submit: true })
+  // '' = the shared global rail; a project id edits that project's override
+  // (seeded from the global rail on first change).
+  const [railScope, setRailScope] = useState('')
+  const [railProjects, setRailProjects] = useState<Project[]>([])
+  useEffect(() => {
+    const reload = () => setRail(loadRailItems(railScope || undefined))
+    reload()
+    window.addEventListener('mux:settings-changed', reload)
+    return () => window.removeEventListener('mux:settings-changed', reload)
+  }, [railScope])
+  useEffect(() => { void api<Project[]>('GET', '/api/projects').then(setRailProjects).catch(() => {}) }, [])
+  const scopeCustom = !!railScope && projectRailIsCustom(railScope)
+  const commitRail = (next: RailItem[]) => { setRail(next); void saveRailItems(next, railScope || undefined) }
+  const resetRailScope = () => {
+    if (railScope) { void clearProjectRail(railScope); setRail(loadRailItems(railScope)) }
+    else { void saveRailItems([]); setRail(loadRailItems()) }
+  }
+  const railToggle = (id: string) => commitRail(rail.map(item => item.id === id ? { ...item, enabled: item.enabled === false } : item))
+  const railMove = (index: number, delta: number) => {
+    const target = index + delta
+    if (target < 0 || target >= rail.length) return
+    const next = rail.slice()
+    ;[next[index], next[target]] = [next[target], next[index]]
+    commitRail(next)
+  }
+  const railToggleIn = <T extends string>(current: readonly T[] | undefined, all: readonly T[], value: T): T[] | undefined => {
+    const set = new Set(current ?? all)
+    if (set.has(value)) { if (set.size <= 1) return current ? [...current] : [...all]; set.delete(value) }
+    else set.add(value)
+    const next = all.filter(item => set.has(item))
+    return next.length === all.length ? undefined : next
+  }
+  const railPlatform = (id: string, platform: RailPlatform) => commitRail(rail.map(item => item.id === id ? { ...item, platforms: railToggleIn(item.platforms, ALL_PLATFORMS, platform) } : item))
+  const railBackend = (id: string, backend: RailBackend) => commitRail(rail.map(item => item.id === id ? { ...item, backends: railToggleIn(item.backends, ALL_BACKENDS, backend) } : item))
+  const railDelete = (id: string) => commitRail(rail.filter(item => item.id !== id))
+  const railAddItem = () => {
+    const name = railAdd.name.trim()
+    if (!name) return
+    const base = name.replace(/^[/$]/, '').trim() || name
+    const id = `custom:${railAdd.type}:${base}:${rail.length}`
+    const label = railAdd.label.trim() || (railAdd.type === 'text' ? base.slice(0, 12) : base)
+    const item: RailItem = railAdd.type === 'text'
+      ? { id, type: 'text', label, text: name, submit: railAdd.submit }
+      : { id, type: railAdd.type, label, text: base, submit: railAdd.submit }
+    commitRail([...rail, item])
+    setRailAdd({ type: railAdd.type, name: '', label: '', submit: true })
+  }
   const [rules, setRules] = useState('version = 1\n')
   const [automation,setAutomation]=useState<AutomationStatus|null>(null)
   const [provider,setProvider]=useState<ProviderStatus|null>(null)
@@ -497,6 +555,8 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <label>Scroll sensitivity<input type="number" min="0.25" max="4" step="0.25" value={draft.mobile_scroll_sensitivity} onInput={e=>change('mobile_scroll_sensitivity',Number(e.currentTarget.value))} /></label>
           <label>Long press<select value={draft.mobile_long_press} onChange={e=>change('mobile_long_press',e.currentTarget.value as Config['mobile_long_press'])}><option value="context_menu">Select terminal text</option><option value="disabled">Disabled</option></select></label>
           <label class="check"><span>Copy terminal selection automatically</span><input type="checkbox" checked={draft.terminal_auto_copy_selection} onChange={e=>change('terminal_auto_copy_selection',e.currentTarget.checked)}/></label>
+          <div class="keybinding-heading"><div><strong>TOUCH::GESTURES</strong><p>Map mobile swipe and multi-finger gestures to commands. Vertical single-finger drags stay reserved for scrolling; edge swipes are left to the OS (back / home).</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>Restore gesture defaults</button></div>
+          {GESTURE_SLOTS.map(slot=><label>{GESTURE_LABELS[slot]}<select value={draft.mobile_gestures?.[slot]??''} onChange={e=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:e.currentTarget.value})}><option value="">Disabled</option>{bindingCommands.map(command=><option value={command.id}>{command.label}</option>)}</select></label>)}
           <div class="keybinding-heading"><div><strong>KEYBOARD::SHORTCUTS</strong><p>Click a command, then press the new shortcut. Changes apply when Settings is saved.</p></div><button onClick={()=>{setBindings({...bindingDefaults});setCapturingCommand(null);setBindingError('')}}>Restore shortcut defaults</button></div>
           {capturingCommand&&<div class="keybinding-capture" role="status"><span>PRESS KEYS FOR</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label||capturingCommand}</strong><button onClick={()=>{setCapturingCommand(null);setBindingError('')}}>Cancel</button></div>}
           {bindingError&&<p class="keybinding-error" role="alert">{bindingError}</p>}
@@ -504,6 +564,45 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
             {[...new Set(bindingCommands.map(command=>command.category))].map(category=><section class="keybinding-group" aria-label={`${category} shortcuts`}><h4>{category}</h4>{bindingCommands.filter(command=>command.category===category).map(command=>{const chord=bindingForCommand(command.id);return <article class={capturingCommand===command.id?'capturing':''}><button class="keybinding-command" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} title={command.id}><span>{command.label}</span><small>{command.id}</small></button><button class="keybinding-chord" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} aria-label={`Set shortcut for ${command.label}`}><kbd>{chord?displayChord(chord):'not set'}</kbd></button><button class="keybinding-clear" disabled={!chord} onClick={()=>clearBinding(command.id)} aria-label={`Clear shortcut for ${command.label}`}>×</button></article>})}</section>)}
           </div>
           <details class="keybinding-policy"><summary>Reserved shortcut policy</summary><ul>{bindingPolicy.rules.map(rule=><li>{rule}</li>)}</ul><div><strong>BROWSER</strong>{bindingPolicy.browser_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>TERMINAL</strong>{bindingPolicy.terminal_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div></details>
+        </section>}
+
+        {activeTab==='commandrail'&&<section class="commandrail-settings"><h3>Command rail</h3>
+          <p>The buttons under each terminal. This configuration is shared across devices — use the <strong>D</strong>/<strong>M</strong> tags to limit an item to desktop or mobile, and the backend tags to limit it to Claude, Codex, or Shell sessions. Built-in items can be reordered, toggled, and filtered but not edited. Skills inject <code>/name</code> in Claude and <code>$name</code> in Codex; slash commands inject <code>/name</code> in both.</p>
+          <label class="rail-scope">Editing<select value={railScope} onChange={e=>setRailScope(e.currentTarget.value)}><option value="">Global (all projects)</option>{railProjects.map(project=><option value={project.id}>{project.name}{projectRailIsCustom(project.id)?' ✎':''}</option>)}</select></label>
+          {railScope&&<p class="rail-scope-note">{scopeCustom?'This project has its own rail. Editing changes only this project.':'This project inherits the global rail. Any change here creates a project-specific copy.'}</p>}
+          <div class="rail-editor">
+            {rail.map((item,index)=>{
+              const on=item.enabled!==false
+              const platforms=item.platforms??[...ALL_PLATFORMS]
+              const backends=item.backends??[...ALL_BACKENDS]
+              const builtin=isBuiltinRailId(item.id)
+              const preview=item.type==='skill'?`${railPayload(item,'claude')} · ${railPayload(item,'codex')}`:item.type==='slash'?railPayload(item,'claude'):item.type==='text'?`"${(item.text||'').slice(0,24)}"`:''
+              const platformLabel:Record<RailPlatform,string>={desktop:'D',mobile:'M'}
+              const backendLabel:Record<RailBackend,string>={claude:'cld',codex:'cdx',shell:'sh'}
+              return <article class={`rail-row ${on?'':'off'}`} key={item.id}>
+                <label class="check rail-enable"><input type="checkbox" checked={on} onChange={()=>railToggle(item.id)}/><span>{item.label||item.id}</span></label>
+                <small class="rail-meta">{builtin?item.type:`custom ${item.type}`}{preview?` · ${preview}`:''}{item.submit?' · ⏎':''}</small>
+                <div class="rail-tags">
+                  {ALL_PLATFORMS.map(p=><button type="button" class={platforms.includes(p)?'on':''} title={`Show on ${p}`} onClick={()=>railPlatform(item.id,p)}>{platformLabel[p]}</button>)}
+                  <i/>
+                  {ALL_BACKENDS.map(b=><button type="button" class={backends.includes(b)?'on':''} title={`Show for ${b}`} onClick={()=>railBackend(item.id,b)}>{backendLabel[b]}</button>)}
+                </div>
+                <div class="rail-order">
+                  <button type="button" disabled={index===0} title="Move up" onClick={()=>railMove(index,-1)}>↑</button>
+                  <button type="button" disabled={index===rail.length-1} title="Move down" onClick={()=>railMove(index,1)}>↓</button>
+                  {!builtin&&<button type="button" class="rail-del" title="Remove item" onClick={()=>railDelete(item.id)}>×</button>}
+                </div>
+              </article>
+            })}
+          </div>
+          <div class="rail-add"><h4>Add item</h4>
+            <label>Type<select value={railAdd.type} onChange={e=>setRailAdd({...railAdd,type:e.currentTarget.value as RailItemType})}><option value="skill">Skill</option><option value="slash">Slash command</option><option value="text">Text macro</option></select></label>
+            <label>{railAdd.type==='text'?'Text to insert':'Name'}<input value={railAdd.name} placeholder={railAdd.type==='skill'?'commit':railAdd.type==='slash'?'new':'literal text'} onInput={e=>setRailAdd({...railAdd,name:e.currentTarget.value})}/></label>
+            <label>Button label<input value={railAdd.label} placeholder="(auto)" onInput={e=>setRailAdd({...railAdd,label:e.currentTarget.value})}/></label>
+            <label class="check"><span>Submit with Enter</span><input type="checkbox" checked={railAdd.submit} onChange={e=>setRailAdd({...railAdd,submit:e.currentTarget.checked})}/></label>
+            <button class="primary" type="button" disabled={!railAdd.name.trim()} onClick={railAddItem}>Add to rail</button>
+          </div>
+          <button type="button" onClick={resetRailScope}>{railScope?(scopeCustom?'Reset this project to the global rail':'Already using the global rail'):'Restore default rail'}</button>
         </section>}
 
         {activeTab==='usage'&&<section><h3>Usage and operational telemetry</h3><p>The dashboard combines optional ccusage history with durable provider quota samples, reset evidence, probabilistic mux correlation, tools, explicit skills, and compactions.</p><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/></label><p>Turn-triggered refresh is globally rate limited, selected-account only, and never assumes provider data updates immediately. Unexpected-reset sounds are optional per device in the account switcher.</p><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? Object.entries(usage.states).map(([provider,state])=>`${provider}: ${state.status}${state.error?` (${state.error})`:''}`).join(' · ') : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><p>The `latest` tag is resolved when you install or update. Refreshes use the installed unified executable and never download code in the background.</p><details class="settings-advanced"><summary>Advanced command overrides</summary><label>Claude command<textarea value={draft.ccusage_claude_command.join('\n')} onInput={e=>change('ccusage_claude_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label><label>Codex command<textarea value={draft.ccusage_codex_command.join('\n')} onInput={e=>change('ccusage_codex_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label></details></section>}
@@ -539,7 +638,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <p aria-live="polite">engine::{automation?.diagnostic?'error':'ready'} · rules::{automation?.rules.length||0} · queue::{automation?.queue.size||0}/{automation?.queue.capacity||0} · dropped::{automation?.queue.dropped||0}{automation?.legacy.active?' · legacy hooks compatibility active':''}</p>
         </section>}
 
-        {activeTab==='notifications'&&<NotificationSoundSettings/>}
+        {activeTab==='notifications'&&<><NotificationPushSettings/><NotificationSoundSettings/></>}
 
         {activeTab==='voice'&&<section><h3>Read aloud (TTS)</h3>
           <p>Mark a Claude or Codex session with its pane <code>tts:</code> chip or context menu. On demand adds a speak button; auto generates audio when each reply completes. Playback and per-device autoplay live in the pane's player strip.</p>

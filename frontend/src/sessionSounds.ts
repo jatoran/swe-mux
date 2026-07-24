@@ -1,3 +1,4 @@
+import { currentProfile, rawDomain, saveDomain, type SettingsProfile } from './deviceSettings.ts'
 export type SoundEvent='complete'|'waiting'|'attention'|'failure'|'reset'
 export type SoundId='two-tone'|'bong'|'thump'|'blip'|'sonar'|'blop'|'ding'|'custom'
 export type SoundPreferences={enabled:boolean;volume:number;quietStart:string;quietEnd:string;events:Record<SoundEvent,boolean>;eventSounds:Record<SoundEvent,SoundId>;customSound?:string}
@@ -14,8 +15,6 @@ export const satisfyingSounds:SoundOption[]=[
   {id:'ding',label:'Gentle Ding',description:'light glassy note',glyph:'◇'},
 ]
 
-const KEY='swe-mux:session-sounds-v1'
-const LAST_KEY='swe-mux:last-session-sound-v1'
 const soundEvents:SoundEvent[]=['complete','waiting','attention','failure','reset']
 const defaultEvents:Record<SoundEvent,boolean>={complete:true,waiting:true,attention:true,failure:true,reset:true}
 const defaultEventSounds:Record<SoundEvent,SoundId>={complete:'two-tone',waiting:'two-tone',attention:'two-tone',failure:'two-tone',reset:'two-tone'}
@@ -50,13 +49,12 @@ export function normalizeSoundPreferences(value:unknown):SoundPreferences{
     ...(customSound?{customSound}:{}),
   }
 }
-export function soundPreferences():SoundPreferences{
-  try{
-    return normalizeSoundPreferences(JSON.parse(localStorage.getItem(KEY)||'{}'))
-  }catch{return normalizeSoundPreferences({})}
-}
-export function setSoundPreferences(value:SoundPreferences):void{try{localStorage.setItem(KEY,JSON.stringify(value))}catch{/* private mode */}window.dispatchEvent(new CustomEvent('mux:sound-preferences'))}
-export function lastSoundReason():string{try{return JSON.parse(localStorage.getItem(LAST_KEY)||'{}').reason||'No sound fired on this device yet.'}catch{return 'No sound fired on this device yet.'}}
+export function soundPreferencesFor(profile:SettingsProfile):SoundPreferences{return normalizeSoundPreferences(rawDomain(profile,'sounds'))}
+export function soundPreferences():SoundPreferences{return soundPreferencesFor(currentProfile())}
+export function setSoundPreferencesFor(profile:SettingsProfile,value:SoundPreferences):void{void saveDomain(profile,'sounds',value as unknown as Record<string,unknown>).catch(()=>{/* persisted on next edit; UI already updated optimistically */})}
+export function setSoundPreferences(value:SoundPreferences):void{setSoundPreferencesFor(currentProfile(),value)}
+let lastReason='No sound fired on this device yet.'
+export function lastSoundReason():string{return lastReason}
 
 function minutes(value:string):number|null{const match=/^(\d{2}):(\d{2})$/.exec(value);return match?Number(match[1])*60+Number(match[2]):null}
 export function isQuietTime(preferences:SoundPreferences,date=new Date()):boolean{
@@ -93,7 +91,7 @@ export function handleSessionSound(event:NormalizedMuxEvent,projectAllows=true):
   const now=Date.now();if((played.get(key)||0)>now-10_000)return
   played.set(key,now);for(const [id,at] of played)if(at<now-60_000)played.delete(id)
   void testSessionSound(preferences,preferences.eventSounds[match.event]).catch(()=>{/* automatic browser audio is best-effort */})
-  try{localStorage.setItem(LAST_KEY,JSON.stringify({...match,sessionId:event.session_id,at:now}))}catch{/* private mode */}
+  lastReason=match.reason
   window.dispatchEvent(new CustomEvent('mux:sound-fired',{detail:{...match,sessionId:event.session_id,at:now}}))
 }
 

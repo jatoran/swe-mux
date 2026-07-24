@@ -287,6 +287,67 @@ def test_mobile_input_defaults_are_hot_reloadable_and_validated(tmp_path: Path) 
         update_config(config, {"mobile_scroll_sensitivity": 10})
 
 
+def test_mobile_gestures_default_and_are_hot_reloadable_and_validated(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+
+    assert config.mobile_gestures == {
+        "swipe_left": "mobileTab.next",
+        "swipe_right": "mobileTab.previous",
+        "two_finger_swipe_left": "sidebar.toggle",
+        "two_finger_swipe_right": "sidebar.toggle",
+        "two_finger_tap": "palette.open",
+    }
+
+    hot, restart = update_config(
+        config,
+        {"mobile_gestures": {"swipe_left": "palette.open", "two_finger_tap": ""}},
+    )
+    assert hot == {"mobile_gestures"}
+    assert restart == set()
+    assert config.mobile_gestures == {"swipe_left": "palette.open", "two_finger_tap": ""}
+
+    with pytest.raises(ValueError, match="unknown command for gestures"):
+        update_config(config, {"mobile_gestures": {"swipe_left": "does.not.exist"}})
+    with pytest.raises(ValueError, match="unknown gesture slots"):
+        update_config(config, {"mobile_gestures": {"triple_tap": "palette.open"}})
+
+
+def test_legacy_sidebar_gestures_migrate_to_toggle(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "\n".join(
+            [
+                "schema_version = 15",
+                "[mobile_gestures]",
+                'two_finger_swipe_right = "sidebar.open"',
+                'two_finger_swipe_left = "sidebar.close"',
+                'two_finger_tap = "palette.open"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.mobile_gestures["two_finger_swipe_right"] == "sidebar.toggle"
+    assert config.mobile_gestures["two_finger_swipe_left"] == "sidebar.toggle"
+    # A custom, non-default binding is preserved rather than force-migrated.
+    path2 = tmp_path / "custom.toml"
+    path2.write_text(
+        "\n".join(
+            [
+                "schema_version = 15",
+                "[mobile_gestures]",
+                'two_finger_swipe_right = "palette.open"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    custom = load_config(path2)
+    assert custom.mobile_gestures["two_finger_swipe_right"] == "palette.open"
+
+
 def test_terminal_renderer_is_hot_reloadable_and_validated(tmp_path: Path) -> None:
     config = load_config(tmp_path / "config.toml")
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -526,6 +527,119 @@ def test_watchdog_recovers_proven_ended_turns_faster_than_pty_backstop() -> None
 
     assert STATE_WATCHDOG_ENDED_STUCK_SECONDS <= 8.0
     assert STATE_WATCHDOG_ENDED_STUCK_SECONDS < STATE_WATCHDOG_PTY_STUCK_SECONDS
+
+
+def _open_tail_transcript(path: Path) -> None:
+    # Tail is a tool_result with no closing marker -> transcript_tail_turn_state
+    # classifies it "open" (the model still "owes" a response by the record). This
+    # is what a turn interrupted/crashed before its marker lands looks like, and
+    # what an observer stuck on the wrong sibling transcript reads.
+    path.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}],
+                    "stop_reason": "tool_use",
+                },
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "user",
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "t1"}]},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _watchdog_session(path: Path, now: float, scrollback: bytes) -> Any:
+    session = SimpleNamespace(
+        record=record("claude"),
+        observation_replay=False,
+        last_state_change_ts=now - 100.0,  # stalled well past the PTY stuck window
+        transcript_path=path,
+        scrollback=SimpleNamespace(bytes=lambda: scrollback),
+        observation_state={"root_turn_active": False, "root_completion_seen": True},
+        note_watchdog_recovery=lambda _reason: None,
+    )
+    session.record.state = "working"
+    return session
+
+
+def _fake_manager() -> Any:
+    from swe_mux.session import SessionManager
+
+    async def noop_drain(_session: Any) -> None:
+        return None
+
+    mgr = SimpleNamespace(
+        hook_spool_dir=None,
+        events=SimpleNamespace(emit=lambda *_a, **_k: asyncio.sleep(0)),
+        _drain_hook_spool=noop_drain,
+    )
+    # Reuse the real PTY-idle heuristic so the test exercises it end to end.
+    mgr._pty_appears_idle = lambda s: SessionManager._pty_appears_idle(cast(Any, mgr), s)
+    return mgr
+
+
+async def test_watchdog_pty_backstop_idles_open_tail_at_idle_prompt(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # The core fix: a turn left with an "open" transcript tail (no terminal record,
+    # no Stop hook, or an observer on the wrong sibling file) must still recover
+    # once the CLI has provably sat at its idle prompt for the stall window.
+    from swe_mux.session import SessionManager
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake_finish(_session: Any, _events: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr("swe_mux.observation._finish_root_turn", fake_finish)
+
+    path = tmp_path / "native.jsonl"
+    _open_tail_transcript(path)
+    now = time.time() + 10.0  # ensure the transcript reads as quiet (mtime is old)
+    session = _watchdog_session(path, now, b"idle output\n? for shortcuts\n")
+    mgr = _fake_manager()
+
+    await SessionManager._watchdog_check_session(mgr, session, now)
+
+    assert len(calls) == 1
+    assert calls[0]["source"] == "watchdog-pty"
+    assert calls[0]["inferred"] is True
+    # Re-opened the turn so the forced close always lands.
+    assert session.observation_state["root_turn_active"] is True
+
+
+async def test_watchdog_pty_backstop_spares_open_tail_while_cli_busy(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # Safety: an "open" tail whose CLI still shows "esc to interrupt" is a genuine
+    # in-flight tool call and must never be cut short.
+    from swe_mux.session import SessionManager
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake_finish(_session: Any, _events: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr("swe_mux.observation._finish_root_turn", fake_finish)
+
+    path = tmp_path / "native.jsonl"
+    _open_tail_transcript(path)
+    now = time.time() + 10.0
+    session = _watchdog_session(path, now, b"running a tool...\nesc to interrupt\n")
+    mgr = _fake_manager()
+
+    await SessionManager._watchdog_check_session(mgr, session, now)
+
+    assert calls == []
+    assert session.record.state == "working"
 
 
 async def test_observe_transcript_suppresses_historical_replay_then_tracks_live(

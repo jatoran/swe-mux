@@ -75,6 +75,7 @@ from .project_files import (
     append_observation,
     effective_project_ignores,
     initialize_note,
+    list_project_directories,
     list_project_directory,
     note_exists,
     note_has_content,
@@ -97,6 +98,8 @@ from .project_files import (
 from .project_watcher import ProjectFileWatcher
 from .projects import ProjectManager
 from .prompt_library import PromptLibrary, PromptScope
+from .push import PushSender, PushStore
+from .settings_store import SettingsStore
 from .provider_accounts import ProviderAccountError, ProviderAccountManager
 from .reconcile import reconcile_external_history
 from .secret_store import PlatformSecretStore, SecretStoreError
@@ -279,6 +282,8 @@ def create_app(
     app.add_routes(
         [
             web.get("/", index),
+            web.get("/manifest.webmanifest", manifest),
+            web.get("/sw.js", service_worker),
             web.get("/api/health", health),
             web.post("/api/desktop/shutdown", desktop_shutdown),
             web.get("/api/remote/status", remote_status),
@@ -343,6 +348,7 @@ def create_app(
             web.get("/api/projects/{project_id}/session-notes/{note_id}", get_session_note),
             web.post("/api/projects/{project_id}/session-notes/{note_id}", initialize_session_note),
             web.put("/api/projects/{project_id}/session-notes/{note_id}", put_session_note),
+            web.get("/api/projects/{project_id}/files/tree", list_project_files_tree),
             web.get("/api/projects/{project_id}/files", list_project_files),
             web.get("/api/projects/{project_id}/search", search_project_files_route),
             web.get("/api/projects/{project_id}/file", get_project_file),
@@ -372,6 +378,8 @@ def create_app(
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
             web.patch("/api/sessions/{sid}", patch_session),
             web.delete("/api/sessions/{sid}", delete_session),
+            web.post("/api/sessions/{sid}/relaunch", relaunch_session),
+            web.post("/api/sessions/{sid}/branch", branch_session),
             web.post("/api/sessions/{sid}/input", session_input),
             web.post("/api/sessions/{sid}/startup-metrics", session_startup_metrics),
             web.post("/api/sessions/{sid}/broadcast-set", broadcast_set),
@@ -389,6 +397,12 @@ def create_app(
             web.post("/api/history/{sid}/resume", resume_history),
             web.delete("/api/history/{sid}", delete_history_entry),
             web.get("/api/events", list_events),
+            web.get("/api/settings", get_settings),
+            web.put("/api/settings/{profile}", put_settings),
+            web.get("/api/push/vapid-public-key", get_vapid_public_key),
+            web.post("/api/push/subscribe", push_subscribe),
+            web.post("/api/push/unsubscribe", push_unsubscribe),
+            web.post("/api/push/presence", push_presence),
             web.get("/api/notifications", list_notifications),
             web.get("/api/voice", voice_status),
             web.post("/api/sessions/{sid}/voice/transcribe", voice_transcribe),
@@ -433,12 +447,18 @@ def create_app(
     # for streaming compilation; Windows' registry often lacks this mapping and
     # nosniff would otherwise reject an application/octet-stream .wasm response.
     mimetypes.add_type("application/wasm", ".wasm")
+    # Windows' registry rarely maps .webmanifest; without this the manifest is
+    # served as octet-stream and Chrome refuses to treat the app as installable.
+    mimetypes.add_type("application/manifest+json", ".webmanifest")
     assets = app["frontend_dir"] / "assets"
     if assets.is_dir():
         app.router.add_static("/assets", assets)
     notification_sounds = app["frontend_dir"] / "notification-sounds"
     if notification_sounds.is_dir():
         app.router.add_static("/notification-sounds", notification_sounds)
+    icons = app["frontend_dir"] / "icons"
+    if icons.is_dir():
+        app.router.add_static("/icons", icons)
     return app
 
 
@@ -523,6 +543,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     voice_store = VoiceStore(config.database_path)
     voice = VoiceService(config, events, sessions, voice_store, automation_store, openrouter)
     prompt_library = PromptLibrary(config.data_dir)
+    settings_store = SettingsStore(config.data_dir)
+    push_store = PushStore(config.data_dir)
     project_actions = ProjectActionService(config.data_dir)
     project_watcher = ProjectFileWatcher(projects, events, config)
     telemetry.start(events, sessions=sessions, history=history)
@@ -571,6 +593,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     state_watchdog_task = asyncio.create_task(
         sessions.state_watchdog_loop(), name="state-watchdog"
     )
+    push_task = asyncio.create_task(
+        PushSender(push_store, settings_store, events).run(), name="push-sender"
+    )
     reconcile_task: asyncio.Task[int] | None = None
     if config.reconcile_external_history:
         reconcile_task = asyncio.create_task(
@@ -599,6 +624,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         voice=voice,
         voice_store=voice_store,
         prompt_library=prompt_library,
+        settings_store=settings_store,
+        push_store=push_store,
         project_actions=project_actions,
         project_watcher=project_watcher,
         automation_tasks=set(),
@@ -618,6 +645,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await asyncio.gather(media_cleanup_task, return_exceptions=True)
     state_watchdog_task.cancel()
     await asyncio.gather(state_watchdog_task, return_exceptions=True)
+    push_task.cancel()
+    await asyncio.gather(push_task, return_exceptions=True)
     await hooks.stop()
     await automation.stop()
     await voice.stop()
@@ -726,6 +755,21 @@ async def index(request: web.Request) -> web.StreamResponse:
             content_type="text/plain",
         )
     return web.FileResponse(path)
+
+
+async def manifest(request: web.Request) -> web.StreamResponse:
+    path: Path = request.app["frontend_dir"] / "manifest.webmanifest"
+    if not path.is_file():
+        raise web.HTTPNotFound()
+    return web.FileResponse(path)
+
+
+async def service_worker(request: web.Request) -> web.StreamResponse:
+    # Served from the origin root so its scope covers the whole app.
+    path: Path = request.app["frontend_dir"] / "sw.js"
+    if not path.is_file():
+        raise web.HTTPNotFound()
+    return web.FileResponse(path, headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
 
 
 async def health(request: web.Request) -> web.Response:
@@ -2437,6 +2481,117 @@ async def delete_session(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
+async def relaunch_session(request: web.Request) -> web.Response:
+    """Replay a task-launched shell in place: spawn a fresh copy, retire the old.
+
+    Relaunch-from-record — the replacement re-runs the exact retained executable/argv
+    (env is baked into the Project Action payload), so no task file is re-read and no
+    trust re-approval is needed. Only sessions the daemon marked relaunchable qualify;
+    agent and plain shell sessions are rejected so this never touches their lifecycle.
+    """
+    manager: SessionManager = request.app["sessions"]
+    old = manager.resolve(request.match_info["sid"])
+    if not old.record.relaunchable:
+        raise ValueError("session is not relaunchable")
+    body = {
+        "project_id": old.record.project_id,
+        "backend": "shell",
+        "name": old.record.name,
+        "executable": old.record.exe,
+        "argv": list(old.record.args),
+        "completion_mode": old.record.completion_mode,
+    }
+    # Spawn the replacement first: if it raises, the original is left fully intact.
+    session = await _spawn_from_body(request.app, body)
+    session.record.relaunchable = True
+    session.publish_update()
+    old_id = old.record.id
+    if old.record.state not in {"exited", "crashed"}:
+        await manager.stop(old_id)
+    manager.sessions.pop(old_id, None)
+    shutil.rmtree(
+        session_media_directory(request.app["config"].data_dir, old_id),
+        ignore_errors=True,
+    )
+    return json_response({"session": session.record.snapshot(), "replaced": old_id}, 201)
+
+
+async def _await_native_switch(record: Any, previous: str, timeout: float) -> bool:
+    """Wait for the daemon to observe an in-CLI conversation id switch."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        current = str(record.native_session_id or "")
+        if current and current != previous:
+            return True
+        await asyncio.sleep(0.25)
+    return False
+
+
+async def branch_session(request: web.Request) -> web.Response:
+    """Fork an agent conversation, keeping the original and the branch both open.
+
+    Claude has a native ``/branch`` that forks to a fresh session id in place, so
+    we inject it, wait for the daemon to see the id switch (which freezes the
+    original transcript), then reopen the original id in a sibling pane — the
+    source pane holds the new branch. Codex has no in-CLI branch, so we simulate
+    one: ``codex resume`` starts a child thread (``parent_thread_id`` set) that
+    diverges from the still-live original without sharing its rollout, so the
+    source pane keeps the original and the new pane holds the branch.
+    """
+    manager: SessionManager = request.app["sessions"]
+    source = manager.resolve(request.match_info["sid"])
+    record = source.record
+    if record.backend not in {"claude", "codex"}:
+        return json_response(
+            {"error": "only Claude and Codex sessions can branch", "code": "not_agent"}, 422
+        )
+    native_id = str(record.native_session_id or "")
+    if not native_id or native_id == record.id:
+        return json_response(
+            {"error": "no native session id to branch from yet", "code": "native_id_missing"}, 409
+        )
+    project = request.app["projects"].projects.get(record.project_id)
+    if project is None:
+        return json_response({"error": "project missing", "code": "project_missing"}, 422)
+    body = await request.json() if request.can_read_body else {}
+
+    if record.backend == "claude":
+        source.pty.write("/branch\r")
+        if not await _await_native_switch(record, native_id, timeout=15.0):
+            # The fork never registered; do not resume the (still-live) original —
+            # that would collide on its transcript. The source pane may already be
+            # branched; the original stays resumable from history.
+            return json_response(
+                {"error": "branch did not complete in time; try again", "code": "branch_timeout"},
+                504,
+            )
+    suffix = "original" if record.backend == "claude" else "branch"
+    session = await manager.spawn(
+        backend=record.backend,
+        name=body.get("name") or f"{record.name} {suffix}",
+        cwd=record.cwd,
+        project_id=record.project_id,
+        resume_native_id=native_id,
+        project_label=project.name,
+    )
+    next_layout = attach_terminal(
+        project.layout,
+        session.record.id,
+        target_id=body.get("target_session_id") or record.id,
+        direction=body.get("direction") or "after",
+    )
+    try:
+        await request.app["projects"].update(
+            record.project_id, layout=next_layout, layout_revision=project.layout_revision
+        )
+    except Exception:
+        await manager.stop(session.record.id)
+        manager.sessions.pop(session.record.id, None)
+        raise
+    return json_response({"session": session.record.snapshot(), "source": record.id}, 201)
+
+
 async def session_input(request: web.Request) -> web.Response:
     body = await request.json()
     session = request.app["sessions"].resolve(request.match_info["sid"])
@@ -2887,6 +3042,11 @@ async def run_project_action(request: web.Request) -> web.Response:
             if isinstance(result, BaseException):
                 errors.append({"step": step.name, "error": str(result)})
             else:
+                # Task shells retain their exact spawn argv, so their rail offers an
+                # in-place Relaunch. The flag is set post-spawn and republished so
+                # every attached client sees it, not only this action's caller.
+                result.record.relaunchable = True
+                result.publish_update()
                 sessions.append(result.record.snapshot())
     await request.app["events"].emit(
         "project_action_started",
@@ -2946,6 +3106,29 @@ async def list_project_files(request: web.Request) -> web.Response:
             ignore_patterns=patterns,
         )
     )
+
+
+async def list_project_files_tree(request: web.Request) -> web.Response:
+    """Batch-list the root plus every persisted-expanded folder in one round trip.
+
+    Restoring a saved tree otherwise costs one request per open folder, which
+    stacks up latency (and HTTP/1.1 connection limits) on a phone over Tailscale.
+    Listings are blocking filesystem walks, so run the whole batch off the loop.
+    """
+
+    project = _request_project(request)
+    patterns = effective_project_ignores(
+        project.root, request.app["config"].project_ignore_patterns
+    )
+    paths = request.query.getall("path", [])
+    # Always include the root, dedupe, and bound the fan-out so a hostile or
+    # runaway query cannot ask us to stat thousands of directories.
+    wanted = list(dict.fromkeys(["", *paths]))[:1000]
+    result = await asyncio.get_running_loop().run_in_executor(
+        None,
+        lambda: list_project_directories(project.root, wanted, ignore_patterns=patterns),
+    )
+    return json_response(result)
 
 
 async def search_project_files_route(request: web.Request) -> web.Response:
@@ -3226,6 +3409,49 @@ async def list_events(request: web.Request) -> web.Response:
             int(request.query.get("after_seq", 0)),
         )
     )
+
+
+async def get_settings(request: web.Request) -> web.Response:
+    return json_response(request.app["settings_store"].all())
+
+
+async def put_settings(request: web.Request) -> web.Response:
+    profile = request.match_info["profile"]
+    updated = request.app["settings_store"].update(profile, await request.json())
+    await request.app["events"].emit("settings_changed", source="user", profile=profile)
+    return json_response({"profile": profile, "settings": updated})
+
+
+async def get_vapid_public_key(request: web.Request) -> web.Response:
+    return json_response({"key": request.app["push_store"].application_server_key})
+
+
+async def push_subscribe(request: web.Request) -> web.Response:
+    body = await request.json()
+    profile = str(body.get("profile") or "mobile")
+    request.app["push_store"].add(body.get("subscription"), profile)
+    return json_response({"ok": True})
+
+
+async def push_unsubscribe(request: web.Request) -> web.Response:
+    body = await request.json()
+    endpoint = str(body.get("endpoint") or "")
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    request.app["push_store"].remove(endpoint)
+    return json_response({"ok": True})
+
+
+async def push_presence(request: web.Request) -> web.Response:
+    body = await request.json()
+    endpoint = str(body.get("endpoint") or "")
+    if not endpoint:
+        raise ValueError("endpoint is required")
+    ttl = body.get("ttl")
+    request.app["push_store"].set_presence(
+        endpoint, bool(body.get("focused")), float(ttl) if isinstance(ttl, (int, float)) else 90.0
+    )
+    return json_response({"ok": True})
 
 
 async def list_notifications(request: web.Request) -> web.Response:

@@ -1,14 +1,20 @@
 import { useEffect, useState } from 'preact/hooks'
-import { lastSoundReason, safeSoundFile, satisfyingSounds, setSoundPreferences, soundPreferences, testSessionSound, type SoundEvent, type SoundId } from './sessionSounds'
+import { lastSoundReason, safeSoundFile, satisfyingSounds, setSoundPreferencesFor, soundPreferencesFor, testSessionSound, type SoundEvent, type SoundId } from './sessionSounds'
+import { currentProfile, type SettingsProfile } from './deviceSettings'
 
 const labels:Record<SoundEvent,string>={complete:'Root turn complete',waiting:'Waiting for input',attention:'Approval or Q&A',failure:'Failure',reset:'Unexpected quota reset'}
+const profileLabels:Record<SettingsProfile,string>={desktop:'Desktop',mobile:'Mobile'}
 const customSoundOption={id:'custom' as const,label:'Custom',description:'your uploaded sound',glyph:'♪'}
 export function NotificationSoundSettings(){
-  const [prefs,setPrefs]=useState(soundPreferences)
+  const [profile,setProfile]=useState<SettingsProfile>(currentProfile)
+  const [prefs,setPrefs]=useState(()=>soundPreferencesFor(profile))
   const [lastReason,setLastReason]=useState(lastSoundReason)
   const [error,setError]=useState('')
+  // Re-read whenever the active profile changes or settings arrive/refresh from
+  // the daemon (initial load, or another device editing this same profile).
+  useEffect(()=>{const sync=()=>setPrefs(soundPreferencesFor(profile));sync();window.addEventListener('mux:settings-changed',sync);return()=>window.removeEventListener('mux:settings-changed',sync)},[profile])
   useEffect(()=>{const listener=(event:Event)=>setLastReason((event as CustomEvent).detail.reason);window.addEventListener('mux:sound-fired',listener);return()=>window.removeEventListener('mux:sound-fired',listener)},[])
-  const change=(next:typeof prefs)=>{setPrefs(next);setSoundPreferences(next)}
+  const change=(next:typeof prefs)=>{setPrefs(next);setSoundPreferencesFor(profile,next)}
   const preview=(next:typeof prefs,soundId:SoundId)=>void testSessionSound(next,soundId).then(()=>setError('')).catch(()=>setError('Could not play this sound. Check this site’s audio permission and try again.'))
   const sounds=prefs.customSound?[...satisfyingSounds,customSoundOption]:satisfyingSounds
   const choose=(event:SoundEvent,soundId:SoundId)=>{const next={...prefs,eventSounds:{...prefs.eventSounds,[event]:soundId}};change(next);preview(next,soundId)}
@@ -16,8 +22,9 @@ export function NotificationSoundSettings(){
     const eventSounds=Object.fromEntries(Object.entries(prefs.eventSounds).map(([event,soundId])=>[event,soundId==='custom'?'two-tone':soundId])) as Record<SoundEvent,SoundId>
     change({...prefs,customSound:undefined,eventSounds})
   }
-  return <section class="notification-sound-settings"><h3>Session notification sounds</h3><p>Device-only preferences. Root-agent events are normalized and deduplicated; subagent stops are excluded.</p>
-    <label class="check"><span>Enable sounds on this device</span><input type="checkbox" checked={prefs.enabled} onChange={event=>change({...prefs,enabled:event.currentTarget.checked})}/></label>
+  return <section class="notification-sound-settings"><h3>Session notification sounds</h3><p>Settings are saved on the server per device class, so you can configure the phone from your desktop. This device uses the <strong>{profileLabels[currentProfile()]}</strong> profile. Root-agent events are normalized and deduplicated; subagent stops are excluded.</p>
+    <div class="settings-profile-switch" role="group" aria-label="Editing profile">{(Object.keys(profileLabels) as SettingsProfile[]).map(id=><button type="button" key={id} aria-pressed={profile===id} class={profile===id?'is-active':''} onClick={()=>setProfile(id)}>{profileLabels[id]}{id===currentProfile()?' (this device)':''}</button>)}</div>
+    <label class="check"><span>Enable sounds for {profileLabels[profile]}</span><input type="checkbox" checked={prefs.enabled} onChange={event=>change({...prefs,enabled:event.currentTarget.checked})}/></label>
     <label>Volume<input type="range" min="0" max="1" step=".05" value={prefs.volume} onInput={event=>change({...prefs,volume:Number(event.currentTarget.value)})}/></label>
     <div class="sound-preset-heading"><strong>Available sounds</strong><span>Every choice is short and intentionally gentle. Click one to preview it.</span></div>
     <div class="sound-preset-grid" role="group" aria-label="Notification sound">

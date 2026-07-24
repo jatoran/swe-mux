@@ -86,6 +86,10 @@ class SessionRecord:
     client_startup_timing_ms: dict[str, float] = field(default_factory=dict)
     completion_mode: Literal["interactive", "one_shot"] = "interactive"
     exit_code: int | None = None
+    # True only for Project Action / task-launched shells, whose exact spawn argv
+    # is retained on this record and can be replayed in place. Agent and plain
+    # shell sessions leave this False so their rails never show Relaunch.
+    relaunchable: bool = False
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)

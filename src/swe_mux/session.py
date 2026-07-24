@@ -63,9 +63,11 @@ STATE_WATCHDOG_POLL_SECONDS = 5.0
 # already prevents (an in-flight tool reads "open").
 STATE_WATCHDOG_ENDED_STUCK_SECONDS = 6.0
 STATE_WATCHDOG_TRANSCRIPT_QUIET_SECONDS = 3.0
-# The PTY backstop is a last resort for when even the transcript carries no
-# terminal record (schema drift): only after a longer stall and only when the
-# tail is ambiguous rather than clearly mid-tool.
+# The PTY backstop is a last resort for when the transcript carries no terminal
+# record — schema drift ("unknown") or a tail left mid-tool with no closing
+# marker ("open", e.g. an interrupt/crash before its record landed, or an
+# observer stuck on the wrong sibling transcript). It fires only after a longer
+# stall and only when the CLI is provably sitting at its idle input prompt.
 STATE_WATCHDOG_PTY_STUCK_SECONDS = 60.0
 # Per-session ring buffer of recent state transitions and faults, surfaced by the
 # state-log debug endpoint so a frozen session is diagnosable after the fact.
@@ -1023,69 +1025,88 @@ class SessionManager:
         over, so a legitimately long tool call (whose tail reads as mid-tool) is
         never cut short.
         """
-        from .observation import _finish_root_turn, transcript_tail_turn_state
-
         while True:
             try:
                 await asyncio.sleep(STATE_WATCHDOG_POLL_SECONDS)
                 now = time.time()
                 for session in tuple(self.sessions.values()):
-                    record = session.record
-                    if record.backend not in {"claude", "codex"}:
-                        continue
-                    await self._drain_hook_spool(session)
-                    if record.state not in {"working", "awaiting"}:
-                        continue
-                    if session.observation_replay:
-                        continue
-                    stalled = now - session.last_state_change_ts
-                    if stalled < STATE_WATCHDOG_ENDED_STUCK_SECONDS:
-                        continue
-                    path = session.transcript_path
-                    if path is None:
-                        continue
-                    try:
-                        mtime = path.stat().st_mtime
-                    except OSError:
-                        continue
-                    if now - mtime < STATE_WATCHDOG_TRANSCRIPT_QUIET_SECONDS:
-                        # The transcript is still moving; the live observer owns it.
-                        continue
-                    verdict = await asyncio.to_thread(
-                        transcript_tail_turn_state, record.backend, path
-                    )
-                    pty_backstop = (
-                        verdict == "unknown"
-                        and stalled >= STATE_WATCHDOG_PTY_STUCK_SECONDS
-                        and self._pty_appears_idle(session)
-                    )
-                    if verdict != "ended" and not pty_backstop:
-                        continue
-                    # A completion recorded but never applied leaves the bookkeeping
-                    # "completion seen, turn inactive", which would make
-                    # _finish_root_turn a no-op. Re-open the turn so the forced close
-                    # always lands and re-emits the boundary.
-                    session.observation_state["root_turn_active"] = True
-                    session.observation_state["root_completion_seen"] = False
-                    if verdict == "ended":
-                        session.note_watchdog_recovery("transcript_tail_terminal")
-                        await _finish_root_turn(session, self.events, source="watchdog", force=True)
-                    else:
-                        # No terminal record exists (likely transcript schema drift),
-                        # but the PTY shows the idle prompt and no in-flight tool. This
-                        # is the last-resort backstop; mark it inferred for honesty.
-                        session.note_watchdog_recovery("pty_idle_prompt")
-                        await _finish_root_turn(
-                            session,
-                            self.events,
-                            source="watchdog-pty",
-                            force=True,
-                            inferred=True,
-                        )
+                    await self._watchdog_check_session(session, now)
             except asyncio.CancelledError:
                 raise
             except Exception:  # never let the safety net die silently
                 log.exception("state watchdog iteration failed")
+
+    async def _watchdog_check_session(self, session: Session, now: float) -> None:
+        """Re-derive one session's true state and force idle if its turn is over.
+
+        Force-idles only when the transcript tail *proves* the turn ended, or, as a
+        last resort, when the transcript gives no proof of an end ("unknown"/"open")
+        yet the PTY has provably sat at its idle prompt for the full stall window.
+        A legitimately long tool call keeps "esc to interrupt" on screen, so the PTY
+        check never cuts it short.
+        """
+        from .observation import _finish_root_turn, transcript_tail_turn_state
+
+        record = session.record
+        if record.backend not in {"claude", "codex"}:
+            return
+        await self._drain_hook_spool(session)
+        if record.state not in {"working", "awaiting"}:
+            return
+        if session.observation_replay:
+            return
+        stalled = now - session.last_state_change_ts
+        if stalled < STATE_WATCHDOG_ENDED_STUCK_SECONDS:
+            return
+        path = session.transcript_path
+        if path is None:
+            return
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return
+        if now - mtime < STATE_WATCHDOG_TRANSCRIPT_QUIET_SECONDS:
+            # The transcript is still moving; the live observer owns it.
+            return
+        verdict = await asyncio.to_thread(transcript_tail_turn_state, record.backend, path)
+        # PTY ground-truth backstop. The transcript may give no proof the turn
+        # ended: "unknown" (schema drift) or "open" (the tail is a tool_use/
+        # tool_result, so by the record the model still owes a response). Both
+        # happen when the true terminal signal is missing entirely — a Stop hook
+        # that never fired, a turn interrupted or crashed before its marker landed,
+        # an observer stuck on the wrong sibling transcript. In every such case the
+        # CLI sitting at its idle input prompt for the full stall window is
+        # decisive: the PTY belongs to *this* session (never mis-attributed like a
+        # transcript can be), and a live turn always shows "esc to interrupt", so
+        # _pty_appears_idle stays False through any genuine in-flight tool.
+        pty_backstop = (
+            verdict in {"unknown", "open"}
+            and stalled >= STATE_WATCHDOG_PTY_STUCK_SECONDS
+            and self._pty_appears_idle(session)
+        )
+        if verdict != "ended" and not pty_backstop:
+            return
+        # A completion recorded but never applied leaves the bookkeeping
+        # "completion seen, turn inactive", which would make _finish_root_turn a
+        # no-op. Re-open the turn so the forced close always lands and re-emits the
+        # boundary.
+        session.observation_state["root_turn_active"] = True
+        session.observation_state["root_completion_seen"] = False
+        if verdict == "ended":
+            session.note_watchdog_recovery("transcript_tail_terminal")
+            await _finish_root_turn(session, self.events, source="watchdog", force=True)
+        else:
+            # No terminal record exists (schema drift, or a turn cut off before its
+            # marker), but the PTY shows the idle prompt and no in-flight tool. This
+            # is the last-resort backstop; mark it inferred for honesty.
+            session.note_watchdog_recovery("pty_idle_prompt")
+            await _finish_root_turn(
+                session,
+                self.events,
+                source="watchdog-pty",
+                force=True,
+                inferred=True,
+            )
 
     async def _drain_hook_spool(self, session: Session) -> None:
         """Replay hook events the shim spooled to disk after a failed POST.

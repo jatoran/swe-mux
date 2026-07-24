@@ -63,6 +63,11 @@ KEYBINDING_COMMANDS = (
     ("pane.zoom", "Toggle focused pane zoom", "pane"),
     ("pane.next", "Focus next pane", "pane"),
     ("pane.previous", "Focus previous pane", "pane"),
+    ("mobileTab.next", "Focus next tab (mobile)", "pane"),
+    ("mobileTab.previous", "Focus previous tab (mobile)", "pane"),
+    ("sidebar.open", "Open navigation sidebar", "view"),
+    ("sidebar.close", "Close navigation sidebar", "view"),
+    ("sidebar.toggle", "Toggle navigation sidebar", "view"),
     ("pane.swapNext", "Swap focused pane with next", "pane"),
     ("session.groupStack", "Stack selected and focused sessions", "pane"),
     ("session.openSplitHorizontal", "Open selected session in split right", "pane"),
@@ -86,6 +91,14 @@ KEYBINDING_COMMANDS = (
 COMMAND_IDS = {command_id for command_id, _, _ in KEYBINDING_COMMANDS}
 
 _PROJECT_COMMAND = re.compile(r"project\.activate\(([1-9])\)\Z")
+
+
+def is_command(command_id: object) -> bool:
+    """True when the id names a registered command (including project.activate(n))."""
+    text = str(command_id)
+    return text in COMMAND_IDS or bool(_PROJECT_COMMAND.fullmatch(text))
+
+
 _MODIFIERS = {"ctrl", "shift", "alt", "meta"}
 _INTERCEPT_MODIFIERS = {"ctrl", "alt", "meta"}
 _BROWSER_RESERVED = {

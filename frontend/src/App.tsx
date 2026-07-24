@@ -25,6 +25,8 @@ import { VoicePlayer } from './VoicePlayer'
 import { ConversationControl } from './ConversationControl'
 import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, unlockPlayback } from './voice'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
+import { loadSettings, refreshSettings } from './deviceSettings'
+import { initPush } from './push'
 import type { Project, ProjectGroup, Session, ShellProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
 import { keyChord } from './keys'
 import { Settings } from './Settings'
@@ -32,10 +34,11 @@ import { GuidedTutorial, type TutorialStepId } from './GuidedTutorial'
 import { completeTutorial, emitTutorialAction, resetTutorial, shouldStartTutorial } from './tutorial'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command } from './commands'
-import { clampContextMenuLeft } from './menuPosition'
+import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
-import { focusMemoryWith, parseFocusMemory, parseViewPreference, resolveInitialFocus, viewUrl } from './viewState'
+import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, type MobileGestureSettings } from './mobileGestures'
+import { focusMemoryWith, parseFocusMemory, parseViewPreference, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import { reorderForHover, reorderTargetFromContainer, type DropSide } from './dragReorder'
 import {
   COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
@@ -222,6 +225,7 @@ export function App() {
     return Number.isFinite(stored)&&stored>=190&&stored<=480?stored:254
   })
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
+  const renameInput = useRef<HTMLInputElement>(null)
   const [renameValue, setRenameValue] = useState('')
   const [projectCreate,setProjectCreate]=useState<{name:string;root:string;group_id:string}>({name:'',root:'',group_id:''})
   const [projectCreateOpen,setProjectCreateOpen]=useState(false)
@@ -264,6 +268,7 @@ export function App() {
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [terminalRenderer, setTerminalRenderer] = useState<TerminalRendererPreference>('auto')
   const [mobileInput, setMobileInput] = useState<MobileInputSettings>(defaultMobileInputSettings)
+  const [mobileGestures, setMobileGestures] = useState<MobileGestureSettings>(defaultMobileGestureSettings)
   const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
   const [voiceUiRevision,setVoiceUiRevision]=useState(0)
@@ -336,6 +341,7 @@ export function App() {
   const startupOrigins=useRef<Record<string,number>>({})
   const pendingSpawns=useRef<Record<string,PendingSpawnPlacement>>({})
   const spawning = useRef(false)
+  const relaunching = useRef(false)
   const longPressTimer = useRef<number | null>(null)
   const notificationIds = useRef<Set<string>>(new Set())
   const paletteInput = useRef<HTMLInputElement>(null)
@@ -454,7 +460,7 @@ export function App() {
 
   useEffect(() => {
     void refresh()
-    void api<{theme:ThemeName;custom_theme:CustomTheme;xterm_scrollback_lines:number;terminal_renderer:TerminalRendererPreference}&Record<string,unknown>>('GET','/api/config').then(config => { configureCustomTheme(config.custom_theme); applyTheme(config.theme); setXtermScrollback(config.xterm_scrollback_lines);setTerminalRenderer(config.terminal_renderer);setMobileInput(mobileInputSettings(config)) })
+    void api<{theme:ThemeName;custom_theme:CustomTheme;xterm_scrollback_lines:number;terminal_renderer:TerminalRendererPreference}&Record<string,unknown>>('GET','/api/config').then(config => { configureCustomTheme(config.custom_theme); applyTheme(config.theme); setXtermScrollback(config.xterm_scrollback_lines);setTerminalRenderer(config.terminal_renderer);setMobileInput(mobileInputSettings(config));setMobileGestures(mobileGestureSettings(config)) })
     void loadProfiles()
     void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>setVoiceStatus(null))
     void loadNotifications()
@@ -535,6 +541,8 @@ export function App() {
     }
   }, [])
 
+  useEffect(() => { void loadSettings(); void initPush() }, [])
+
   useEffect(() => {
     let socket: WebSocket | null = null
     let retry: number | undefined
@@ -575,6 +583,7 @@ export function App() {
             } }))
             if (!isReplay && event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoplayEnabled()) enqueueAutoplay(clipId,String(event.payload?.stream_id||'')||null)
           }
+          if (event.type === 'settings_changed') refreshSettings()
           if (event.type === 'configuration_changed') void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>{})
           if(event.type==='project_files_changed')window.dispatchEvent(new CustomEvent('mux:project-files-changed',{detail:{projectId:event.payload?.project_id,paths:event.payload?.paths||[]}}))
           if(event.type==='project_note_changed'||event.type==='session_note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{projectId:String(event.payload?.project_id||''),kind:event.type==='session_note_changed'?'session-note':'note',noteId:event.type==='session_note_changed'?String(event.payload?.note_id||''):null,revision:String(event.payload?.revision||'')}}))
@@ -659,18 +668,25 @@ export function App() {
     const selected=resolveInitialFocus(sessions,projects.map(project=>project.id),visibleByProject,requestedView.current,focusMemory.current)
     setProjectId(selected.projectId)
     setActiveId(selected.sessionId)
-    setFocusedViewId(selected.sessionId)
+    // Restore the last focused view (which may be a note or file) when it still
+    // exists in the project's layout; otherwise fall back to the resolved session.
+    const layout=layoutMap[selected.projectId]||parseLayout(projects.find(project=>project.id===selected.projectId)?.layout)
+    const remembered=rememberedView(focusMemory.current,selected.projectId)
+    setFocusedViewId(remembered&&leaves(layout).some(leaf=>leaf.id===remembered)?remembered:selected.sessionId)
     setFocusHydrated(true)
   },[focusHydrated,sessions,projects,layoutMap])
 
   useEffect(() => {
     if(!focusHydrated)return
     const session=sessions.find(item=>item.id===activeId&&item.project_id===projectId&&!isEndedSession(item))
-    focusMemory.current=focusMemoryWith(focusMemory.current,projectId,session?.id||null)
+    // Persist the focused view (note/file/terminal) alongside the active session so a
+    // later return to this project reopens exactly what was last looked at here.
+    const focusView=leaves(activeLayout).some(leaf=>leaf.id===focusedViewId)?focusedViewId:null
+    focusMemory.current=focusMemoryWith(focusMemory.current,projectId,session?.id||null,focusView)
     localStorage.setItem('mux.focus.v1',JSON.stringify(focusMemory.current))
     const next=viewUrl(location.href,projectId,session?.id||null)
     if(`${location.pathname}${location.search}${location.hash}`!==next)window.history.replaceState(window.history.state,'',next)
-  },[focusHydrated,projectId,activeId,sessions])
+  },[focusHydrated,projectId,activeId,focusedViewId,sessions,layoutMap])
 
   useEffect(() => {
     if(!focusHydrated)return
@@ -684,14 +700,17 @@ export function App() {
       ?? null
     if (nextId === activeId) return
     setActiveId(nextId)
-    if(nextId)setFocusedViewId(nextId)
+    // Follow the active terminal with focus only when the current focus is stale (its
+    // view is gone from this layout). A deliberately focused note/file that still exists
+    // stays focused — otherwise switching projects would yank focus onto a live session.
+    if(nextId&&!leaves(activeLayout).some(leaf=>leaf.id===focusedViewId))setFocusedViewId(nextId)
     if (nextId && terminalIds(activeLayout).includes(nextId)) {
       setLayoutMap(current => ({
         ...current,
         [projectId]: activateContainingStack(current[projectId] ?? activeLayout, nextId),
       }))
     }
-  }, [focusHydrated,sessions, projectId, activeId, zoomedId, layoutMap])
+  }, [focusHydrated,sessions, projectId, activeId, focusedViewId, zoomedId, layoutMap])
   const openSettings = (section='General',cwdOverride?:string) => { setSettingsSection(section);setSettingsCwd(cwdOverride||null); setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null) }
   const projectNoteTarget=(value:Project|Session):NoteTarget=>{
     const project='root' in value?value:projects.find(item=>item.id===value.project_id)
@@ -1014,6 +1033,20 @@ export function App() {
     setRenameValue(target.kind === 'session' ? sessionName(target.session) : target.project.name)
   }
 
+  // On open, place the caret in the name field with the current name selected so typing
+  // replaces it. On touch, focus() also raises the on-screen keyboard. rAF waits for the
+  // modal to paint so the focus lands (and Android shows Gboard) reliably.
+  useEffect(() => {
+    if (!renameTarget) return
+    const frame = requestAnimationFrame(() => {
+      const input = renameInput.current
+      if (!input) return
+      input.focus()
+      input.select()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [renameTarget])
+
   const submitRename = async () => {
     if (!renameTarget) return
     const name = renameValue.trim()
@@ -1110,6 +1143,40 @@ export function App() {
     if (zoomedId === session.id) setZoomedId(null)
     await updateLayout(session.project_id, nextLayout)
     await refresh()
+  }
+
+  // Relaunch a task-launched terminal in place: the daemon spawns a fresh copy of the
+  // exact retained argv and retires the old session, and we swap the new id into the old
+  // one's layout leaf so the tab, split, and focus stay put. Only offered for sessions the
+  // daemon marked relaunchable, so agent/plain-shell lifecycles are never touched.
+  const relaunchSession = async (session: Session) => {
+    if (relaunching.current) return
+    relaunching.current = true
+    try {
+      const { session: next } = await api<{ session: Session; replaced: string }>('POST', `/api/sessions/${session.id}/relaunch`, {})
+      startupOrigins.current[next.id] = performance.now()
+      const currentLayout = resolveLayout(
+        layoutMap[session.project_id],
+        projects.find(project => project.id === session.project_id)?.layout,
+      )
+      const nextLayout = terminalIds(currentLayout).includes(session.id)
+        ? activateContainingStack(replaceTerminal(currentLayout, session.id, next.id), next.id)
+        : currentLayout
+      setSessions(items => [...items.filter(item => item.id !== session.id && item.id !== next.id), next])
+      delete startupOrigins.current[session.id]
+      delete clientStartupTimingValues.current[session.id]
+      setClientStartupTimings(current => { const copy = { ...current }; delete copy[session.id]; return copy })
+      setProjectId(session.project_id)
+      if (activeId === session.id) setActiveId(next.id)
+      if (focusedViewId === session.id) setFocusedViewId(next.id)
+      if (zoomedId === session.id) setZoomedId(next.id)
+      await updateLayout(session.project_id, nextLayout)
+      await refresh()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      relaunching.current = false
+    }
   }
 
   const requestKill = (session: Session) => {
@@ -1228,6 +1295,20 @@ export function App() {
     await updateLayout(targetProject,removeLeaf(current,'note',resourceId))
   }
 
+  // Selecting a project (its row/rail button, not a specific resource) restores the
+  // view that was last focused there — a note, file, or terminal — rather than letting
+  // the mobile projection default to whichever tab happens to sort first. Falls back to
+  // a plain project switch when nothing valid is remembered.
+  const selectProject = (id:string) => {
+    setProjectId(id)
+    const current = resolveLayout(layoutMap[id],projects.find(item=>item.id===id)?.layout)
+    const remembered = rememberedView(focusMemory.current,id)
+    if(!remembered||!leaves(current).some(leaf=>leaf.id===remembered))return
+    setFocusedViewId(remembered)
+    if(terminalIds(current).includes(remembered))setActiveId(remembered)
+    const pane=stackForView(current,remembered)
+    if(pane&&pane.active_child_id!==remembered)void updateLayout(id,activateStackChild(current,pane.id,remembered))
+  }
   const selectSession = async (session: Session) => {
     const current = resolveLayout(layoutMap[session.project_id],projects.find(item=>item.id===session.project_id)?.layout)
     const isPaned=terminalIds(current).includes(session.id)
@@ -1318,9 +1399,21 @@ export function App() {
 
   const resumeHistoryEntry = async (entry: HistoryEntry) => {
     try {
-      const resumed = await api<Session>('POST', `/api/history/${entry.id}/resume`, { project_id: projectId, target_session_id: activeId })
-      setSessions(items => [...items, resumed]); setActiveId(resumed.id)
+      const targetProject = entry.project_id || projectId
+      const resumed = await api<Session>('POST', `/api/history/${entry.id}/resume`, { project_id: targetProject, target_session_id: targetProject === projectId ? activeId : undefined })
+      setSessions(items => [...items, resumed]); setProjectId(resumed.project_id); setActiveId(resumed.id)
       setHistoryOpen(false)
+      await refresh()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+  }
+
+  // Fork an agent conversation into a sibling pane. The daemon injects Claude's
+  // native /branch (or a Codex resume child-thread), attaches the new pane, and
+  // returns the new session; refresh() re-syncs the server-updated layout.
+  const branchSession = async (session: Session) => {
+    try {
+      const result = await api<{ session: Session; source: string }>('POST', `/api/sessions/${session.id}/branch`, { target_session_id: session.id, direction: 'after' })
+      setSessions(items => [...items, result.session]); setActiveId(result.session.id); setFocusedViewId(result.session.id)
       await refresh()
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
@@ -1357,8 +1450,28 @@ export function App() {
 
   const commandSession = contextMenu?.session || active
   const commandProject = projectMenu?.project || activeProject
+  // Cycle the mobile unified tab strip. Recomputes the projection from live layout
+  // state so it works when invoked from a gesture, outside the render-time `mobileProjection`.
+  const navigateMobileTab = (offset: number) => {
+    const layout = layoutValues.current[projectId] || activeLayout
+    const projection = mobileWorkspaceProjection(layout, focusedViewId, activeId)
+    const tabs = projection.tabs
+    if (tabs.length < 2) return
+    const index = projection.selected ? tabs.findIndex(tab => tab.id === projection.selected!.id) : -1
+    const next = tabs[((index < 0 ? 0 : index) + offset + tabs.length) % tabs.length]
+    if (!next) return
+    setFocusedViewId(next.id)
+    if (next.kind === 'terminal') setActiveId(next.id)
+    const pane = stackForView(layout, next.id)
+    if (pane && pane.active_child_id !== next.id) void updateLayout(projectId, activateStackChild(layout, pane.id, next.id))
+  }
   const commands: Command[] = [
     { id: 'palette.open', label: 'Open command palette', category: 'view', available: true, run: () => setPaletteOpen(true) },
+    { id: 'mobileTab.next', label: 'Focus next tab (mobile)', category: 'pane', available: mobileWorkspace, disabledReason: 'Available on the mobile workspace', run: () => navigateMobileTab(1) },
+    { id: 'mobileTab.previous', label: 'Focus previous tab (mobile)', category: 'pane', available: mobileWorkspace, disabledReason: 'Available on the mobile workspace', run: () => navigateMobileTab(-1) },
+    { id: 'sidebar.open', label: 'Open navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(true) },
+    { id: 'sidebar.close', label: 'Close navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(false) },
+    { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(value => !value) },
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
     { id:'observations.open',label:'Open observation inbox',category:'input',available:!!activeProject,disabledReason:'No active project',run:()=>{setObservationsOpen(true);setMainMenuOpen(false)} },
@@ -1392,6 +1505,7 @@ export function App() {
     })),
     { id: 'session.kill', label: active && isEndedSession(active) ? 'Remove focused session from sidebar' : 'Kill focused session', category: 'session', available: !!active, disabledReason: 'No focused session', run: () => active && requestKill(active) },
     { id: 'session.killImmediate', label: commandSession && isEndedSession(commandSession) ? 'Remove selected session from sidebar' : 'Kill selected session immediately', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void killNow(commandSession) },
+    { id: 'session.relaunch', label: 'Relaunch focused task terminal', category: 'session', available: !!active && !!active.relaunchable, disabledReason: 'Relaunch is available for task-launched terminals', run: () => active && void relaunchSession(active) },
     { id: 'session.pinAttention', label: active?.pinned_attention ? 'Unpin focused session attention' : 'Pin focused session attention', category: 'session', available: !!active && isAgent(active), disabledReason: 'Attention pinning requires a focused agent', run: () => active && void api<Session>('PATCH', `/api/sessions/${active.id}`, { pin: !active.pinned_attention }).then(updateSession) },
     { id: 'voice.cycleMode', label: `Read aloud: cycle focused session mode${active && isAgent(active) ? ` (now ${voiceModeLabel(effectiveVoiceMode(active))})` : ''}`, category: 'voice', available: !!active && isAgent(active) && !!voiceStatus?.enabled, disabledReason: 'Read aloud requires a focused agent and TTS enabled in Settings', run: () => { if (active) cycleVoiceMode(active); setContextMenu(null) } },
     { id: 'voice.speak', label: 'Read aloud: speak focused session’s last reply', category: 'voice', available: !!active && isAgent(active) && !!voiceStatus?.enabled, disabledReason: 'Read aloud requires a focused agent and TTS enabled in Settings', run: () => { if (active) void speakLastReply(active); setContextMenu(null) } },
@@ -1495,6 +1609,72 @@ export function App() {
       document.removeEventListener('pointerdown', onPointerDown)
     }
   })
+
+  // Mobile touch gestures. Handled at the shell level so the terminal's own pointer
+  // pipeline (scroll, long-press selection, tap-to-focus) is untouched: terminals
+  // ignore horizontal drags and second fingers, so we only claim what they discard.
+  // Gestures dispatch through the shared `mux:command` bus, keeping this effect
+  // decoupled from the per-render `commands` array.
+  useEffect(() => {
+    if (!mobileWorkspace) return
+    let state: { startX:number; startY:number; lastX:number; lastY:number; maxPointers:number; start:number; axis:'?'|'h'|'v' } | null = null
+    const centroid = (touches: TouchList) => {
+      let x = 0, y = 0
+      for (let i = 0; i < touches.length; i++) { x += touches[i].clientX; y += touches[i].clientY }
+      return { x: x / touches.length, y: y / touches.length }
+    }
+    // Horizontal swipe nav must yield to elements that own horizontal scrolling — the
+    // command rail, tab strips, etc. — or their native scroll gets hijacked into a tab
+    // switch. Named strips plus a generic overflow-x scan cover current and future ones.
+    const startsInHorizontalScroller = (element: Element | null) => {
+      for (let node = element; node && node !== document.body; node = node.parentElement) {
+        if (node.matches('.terminal-action-rail, .stack-tabs, .voice-strip')) return true
+        const overflowX = getComputedStyle(node).overflowX
+        if ((overflowX === 'auto' || overflowX === 'scroll') && node.scrollWidth > node.clientWidth + 1) return true
+      }
+      return false
+    }
+    const onStart = (event: TouchEvent) => {
+      const target = event.target
+      // Act over the workspace, the sidebar, or its scrim (so a swipe over the dimmed
+      // area toggles the open sidebar shut). Taps inside modals/menus/palette match none
+      // of these, so open overlays stay immune to gesture hijacking.
+      if (!(target instanceof Element) || !target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim') || startsInHorizontalScroller(target)) { state = null; return }
+      const point = centroid(event.touches)
+      if (!state) state = { startX: point.x, startY: point.y, lastX: point.x, lastY: point.y, maxPointers: event.touches.length, start: Date.now(), axis: '?' }
+      else state.maxPointers = Math.max(state.maxPointers, event.touches.length)
+    }
+    const onMove = (event: TouchEvent) => {
+      if (!state) return
+      const point = centroid(event.touches)
+      state.lastX = point.x; state.lastY = point.y
+      state.maxPointers = Math.max(state.maxPointers, event.touches.length)
+      const dx = point.x - state.startX, dy = point.y - state.startY
+      if (state.axis === '?' && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) state.axis = Math.abs(dx) >= Math.abs(dy) ? 'h' : 'v'
+      // Suppress native pinch/scroll only for gestures we own: any two-finger move, or
+      // a single-finger horizontal swipe. Vertical single-finger stays with the terminal.
+      if ((state.maxPointers >= 2 || (state.maxPointers === 1 && state.axis === 'h')) && event.cancelable) event.preventDefault()
+    }
+    const onEnd = (event: TouchEvent) => {
+      if (!state) return
+      if (event.touches.length > 0) return // wait until every finger lifts
+      const slot = classifyGesture({ pointerCount: state.maxPointers, dx: state.lastX - state.startX, dy: state.lastY - state.startY, durationMs: Date.now() - state.start })
+      state = null
+      if (!slot) return
+      const command = mobileGestures[slot]
+      if (command) window.dispatchEvent(new CustomEvent('mux:command', { detail: command }))
+    }
+    window.addEventListener('touchstart', onStart, { passive: false })
+    window.addEventListener('touchmove', onMove, { passive: false })
+    window.addEventListener('touchend', onEnd, { passive: false })
+    window.addEventListener('touchcancel', onEnd, { passive: false })
+    return () => {
+      window.removeEventListener('touchstart', onStart)
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('touchend', onEnd)
+      window.removeEventListener('touchcancel', onEnd)
+    }
+  }, [mobileWorkspace, mobileGestures])
 
   const updateSession = (next: Session) => setSessions(items => items.map(item => item.id === next.id ? next : item))
   const recordClientStartupTiming=(sessionId:string,milestone:StartupMilestone,elapsedMs:number)=>{
@@ -1754,7 +1934,7 @@ export function App() {
         <button class={`mobile-voice-action voice-content ${voiceContent}`} title={`Spoken replies: ${voiceContent} · tap to switch`} onClick={toggleVoiceContent}>{voiceContent}</button>
         <button class={`mobile-voice-action voice-autoplay ${autoplayEnabled()?'active':''}`} aria-pressed={autoplayEnabled()} title={`${autoplayEnabled()?'Disable':'Enable'} automatic reply playback on this device`} onClick={()=>{setAutoplayEnabled(!autoplayEnabled());setVoiceUiRevision(value=>value+1)}}>{autoplayEnabled()?'audio:auto':'audio:tap'}</button>
       </>}
-      <button class="mobile-voice-action voice-settings" title="Open all Voice settings" onClick={()=>openSettings('Voice')}>audio…</button>
+      {(voiceAvailable||conversationAvailable)&&<button class="mobile-voice-action voice-settings" title="Open all Voice settings" onClick={()=>openSettings('Voice')}>audio…</button>}
     </>:null
     const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} onSession={updateSession} />:null
     const voiceKey=`${voiceStatus?.enabled?1:0}${voiceStatus?.stt_enabled?1:0}${voiceStatus?.stt_available?1:0}|${voiceMode}|${voiceStripVisible?1:0}|${session.voice_content||''}|${session.name}|${voiceUiRevision}`
@@ -1764,7 +1944,7 @@ export function App() {
         <div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>
         <div class="pane-tools"><button class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button><button class="pane-tool-label" aria-label={`Inspect processes for ${sessionName(session)}`} title="Processes and previews" onClick={() => {setActiveId(session.id);openProcessViewer(session)}}>proc</button><button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} mobileInput={mobileInput} voiceStrip={voiceStripNode} railLeading={railLeading} voiceKey={voiceKey} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} mobileInput={mobileInput} voiceStrip={voiceStripNode} railLeading={railLeading} voiceKey={voiceKey} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Terminal tabs">
@@ -1799,6 +1979,22 @@ export function App() {
     return <button data-tutorial={identity.kind==='note'?'project-note':undefined} class={`sidebar-note-row ${selected?'active':''} ${workspaceOpen?'open':''}`} title={`${label} · opens in the focused pane`} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openNoteContext(resourceId,targetProject,event.clientX,event.clientY)}} onClick={event=>{event.stopPropagation();showNoteResource(resourceId,targetProject);setSidebarOpen(false)}}>
       <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>{label}</strong></span>
     </button>
+  }
+  // Project note and Files share one nested row (single guideline, divider between them)
+  // so each project costs one line instead of two in the sidebar. Each chip keeps its own
+  // selected/open state, click target, and context menu.
+  const sidebarProjectResourceRow=(targetProject:string)=>{
+    const noteLayout=resolveLayout(layoutMap[targetProject],projects.find(item=>item.id===targetProject)?.layout)
+    const chip=(kind:'note'|'files',label:string)=>{
+      const resourceId=noteResourceId(kind,targetProject)
+      const workspaceOpen=workspaceNoteIds(targetProject).includes(resourceId)
+      const selected=targetProject===projectId&&stackForView(noteLayout,resourceId)?.active_child_id===resourceId
+      return <button data-tutorial={kind==='note'?'project-note':undefined} class={`note-resource-chip ${selected?'active':''} ${workspaceOpen?'open':''}`} title={`${label} · opens in the focused pane`} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openNoteContext(resourceId,targetProject,event.clientX,event.clientY)}} onClick={event=>{event.stopPropagation();showNoteResource(resourceId,targetProject);setSidebarOpen(false)}}><strong>{label}</strong></button>
+    }
+    return <div class="sidebar-note-row note-files-row">
+      <span class="note-branch" aria-hidden="true">└</span>
+      <span class="note-resource-group">{chip('note','Note')}<span class="note-resource-divider" aria-hidden="true"></span>{chip('files','Files')}</span>
+    </div>
   }
   // A server a session spawned lives beside it: nested under its sidebar row and
   // activated as a tab in the same region, so it is always one click away.
@@ -1933,7 +2129,7 @@ export function App() {
     <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{attention ? `${attention} agent${attention === 1 ? '' : 's'} awaiting attention` : 'No agents awaiting attention'}</div>
     <div class="mobile-toolbar">
       <button class="nav-toggle mobile-nav-toggle" onClick={() => setSidebarOpen(value => !value)}>:nav</button>
-      <strong class="mobile-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>
+      <strong class="mobile-project-name" title={activeProject?.name||'No Project selected'} onContextMenu={event=>{if(!activeProject)return;event.preventDefault();setProjectMenu({project:activeProject,x:event.clientX,y:event.clientY})}}>{activeProject?.name||'No Project'}</strong>
       <button data-tutorial="run" class="mobile-run-trigger" disabled={!activeProject} onClick={event=>activeProject&&openRunMenu(activeProject,event.currentTarget)}>▶ Run</button>
       <AccountSwitcher variant="compact" onManage={()=>openSettings('Accounts')}/>
     </div>
@@ -1959,10 +2155,10 @@ export function App() {
             const collapsed=collapsedProjects.has(project.id)
             const liveCount=children.filter(session=>!session.pending&&!['exited','crashed'].includes(session.state)).length
             return <section key={project.id} data-reorder-id={project.id} style={{order:projectPreviewIds.indexOf(project.id)}} class={`project-group ${project.id === projectId ? 'active' : ''} ${collapsed?'collapsed':''} ${dropClass}`}>
-              <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title="Drag to reorder Project" onPointerDown={event=>{beginLongPress(event,(x,y)=>setProjectMenu({project,x,y}));beginProjectPointerDrag(event,project,peerIds)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setProjectMenu({ project, x: event.clientX, y: event.clientY }) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}setProjectId(project.id)}}>
+              <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title="Drag to reorder Project" onPointerDown={event=>{beginLongPress(event,(x,y)=>setProjectMenu({project,x,y}));beginProjectPointerDrag(event,project,peerIds)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setProjectMenu({ project, x: event.clientX, y: event.clientY }) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id)}}>
                 <button class="project-chevron project-collapse-toggle" aria-expanded={!collapsed} aria-label={`${collapsed?'Expand':'Collapse'} ${project.name}`} title={collapsed?'Expand project':'Collapse project'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();toggleProjectCollapsed(project.id)}}>{collapsed?'▸':'▾'}</button><strong class="project-name-cell"><span class="project-name-text">{project.name}</span>{collapsed&&liveCount>0&&<span class="project-collapsed-badge" title={`${liveCount} active session${liveCount===1?'':'s'}`}>{liveCount}</span>}</strong><button data-tutorial="project-run" class="project-row-run" title={`Run in ${project.name}`} aria-label={`Run in ${project.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
               </div>
-              {!collapsed&&<div data-tutorial="project-resources" class="project-note-list">{sidebarNoteRow(noteResourceId('note',project.id),project.id)}{sidebarNoteRow(noteResourceId('files',project.id),project.id)}</div>}
+              {!collapsed&&<div data-tutorial="project-resources" class="project-note-list">{sidebarProjectResourceRow(project.id)}</div>}
               {!collapsed&&<div class="session-list">
                 {sidebarNode(projectLayout.root)}
                 {unpanedChildren.map(session=>sessionRow(session))}
@@ -1988,7 +2184,7 @@ export function App() {
             aria-current={selected?'page':undefined}
             title={`${project.name} · ${projectRailActivityLabel[status.activity]}${readLabel}${countLabel}`}
             onContextMenu={event=>{event.preventDefault();setProjectMenu({project,x:event.clientX,y:event.clientY})}}
-            onClick={()=>setProjectId(project.id)}
+            onClick={()=>selectProject(project.id)}
           ><span>{projectInitials(project.name)}</span><i aria-hidden="true" /></button>})}
         </div>
         {/* Status above, actions at the very bottom, mirroring the expanded
@@ -2040,7 +2236,7 @@ export function App() {
       </div>
     </div>}
 
-    {contextMenu && <div class="context-menu" role="menu" aria-label={`Session actions for ${sessionName(contextMenu.session)}`} style={{ left: clampContextMenuLeft(contextMenu.x, innerWidth), top: Math.max(4, Math.min(contextMenu.y, innerHeight - 520)) }}>
+    {contextMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Session actions for ${sessionName(contextMenu.session)}`} style={{ left: clampContextMenuLeft(contextMenu.x, innerWidth), top: Math.max(4, Math.min(contextMenu.y, innerHeight - 520)) }}>
       <div class="context-title"><span class={`state-dot ${contextMenu.session.state}`} /><strong>{sessionName(contextMenu.session)}</strong></div>
       <div class="context-session-info">
         <span title="Process ID of the session's root process">PID {contextMenu.session.pid}</span>
@@ -2072,7 +2268,7 @@ export function App() {
       <button class="danger" onClick={() => runNamedCommand('session.killImmediate')}>{isEndedSession(contextMenu.session) ? 'Remove from sidebar' : 'Kill session'}</button>
     </div>}
 
-    {projectMenu && <div class="context-menu" role="menu" aria-label={`Project actions for ${projectMenu.project.name}`} style={{ left: clampContextMenuLeft(projectMenu.x, innerWidth), top: Math.max(4, Math.min(projectMenu.y, innerHeight - 470)) }}>
+    {projectMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Project actions for ${projectMenu.project.name}`} style={{ left: clampContextMenuLeft(projectMenu.x, innerWidth), top: Math.max(4, Math.min(projectMenu.y, innerHeight - 470)) }}>
       <div class="context-title"><strong>{projectMenu.project.name}</strong></div>
       <button onClick={() => runNamedCommand('project.newTerminal')}>New terminal</button>
       <button onClick={() => runNamedCommand('project.newTerminalCustom')}>New terminal custom…</button>
@@ -2106,7 +2302,7 @@ export function App() {
       </>}
     </div>}
 
-    {sidebarMenu&&<div class="context-menu" role="menu" aria-label="Sidebar actions" style={{left:clampContextMenuLeft(sidebarMenu.x,innerWidth),top:Math.max(4,Math.min(sidebarMenu.y,innerHeight-300))}}>
+    {sidebarMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Sidebar actions" style={{left:clampContextMenuLeft(sidebarMenu.x,innerWidth),top:Math.max(4,Math.min(sidebarMenu.y,innerHeight-300))}}>
       <div class="context-title"><strong>PROJECTS</strong></div>
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('project.add')}}>Add project…</button>
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('project.create')}}>Manage projects…</button>
@@ -2118,14 +2314,14 @@ export function App() {
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('settings.open')}}>All Settings…</button>
     </div>}
 
-    {noteMenu&&<div class="context-menu" role="menu" aria-label="Resource view actions" style={{left:clampContextMenuLeft(noteMenu.x,innerWidth),top:Math.max(4,Math.min(noteMenu.y,innerHeight-220))}}>
+    {noteMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Resource view actions" style={{left:clampContextMenuLeft(noteMenu.x,innerWidth),top:Math.max(4,Math.min(noteMenu.y,innerHeight-220))}}>
       <div class="context-title"><strong>{noteTabLabel(noteMenu.resourceId)}</strong></div>
       <button onClick={()=>void placeNoteResourceInFocusedPane(noteMenu.resourceId,noteMenu.projectId)}>{mobileWorkspace?'Open tab':'Open in focused pane'}</button>
       {!mobileWorkspace&&directionRow('Open in split:',option=>void splitNoteResource(noteMenu.resourceId,noteMenu.projectId,option.direction,option.position))}
       {workspaceNoteIds(noteMenu.projectId).includes(noteMenu.resourceId)&&<><div class="context-rule"/><button onClick={()=>{const target=noteMenu;setNoteMenu(null);void removeWorkspaceNote(target.projectId,target.resourceId)}}>Close resource tab</button></>}
     </div>}
 
-    {tabMenu&&<div class="context-menu tab-context-menu" role="menu" aria-label={`Tab actions for ${tabMenu.label}`} style={{left:clampContextMenuLeft(tabMenu.x,innerWidth),top:Math.max(4,Math.min(tabMenu.y,innerHeight-300))}}>
+    {tabMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu tab-context-menu" role="menu" aria-label={`Tab actions for ${tabMenu.label}`} style={{left:clampContextMenuLeft(tabMenu.x,innerWidth),top:Math.max(4,Math.min(tabMenu.y,innerHeight-300))}}>
       <div class="context-title"><strong>{tabMenu.label}</strong></div>
       {tabMenu.source==='tab'&&directionRow('Open in split:',option=>void splitExistingLeaf(tabMenu.leaf,tabMenu.projectId,option.direction,option.position),()=>{const current=resolveLayout(layoutMap[tabMenu.projectId],projects.find(project=>project.id===tabMenu.projectId)?.layout);return (stackForView(current,tabMenu.leaf.id)?.children.length||0)>1})}
       {tabMenu.source==='tab'&&directionRow('New terminal in split:',option=>{const target=tabMenu;setTabMenu(null);void spawnTerminal(target.projectId,option.direction,undefined,target.leaf.id,option.position)})}
@@ -2134,7 +2330,7 @@ export function App() {
       <div class="context-rule"/><button onClick={()=>{const target=tabMenu;setTabMenu(null);const current=resolveLayout(layoutMap[target.projectId],projects.find(project=>project.id===target.projectId)?.layout);void updateLayout(target.projectId,removeLeaf(current,target.leaf.kind,target.leaf.id))}}>Close tab</button>
     </div>}
 
-    {emptyMenu && <div class="context-menu" role="menu" style={{ left: clampContextMenuLeft(emptyMenu.x, innerWidth), top: Math.min(emptyMenu.y, innerHeight - 280) }}>
+    {emptyMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" style={{ left: clampContextMenuLeft(emptyMenu.x, innerWidth), top: Math.min(emptyMenu.y, innerHeight - 280) }}>
       <div class="context-title"><strong>EMPTY PANE</strong></div>
       <button role="menuitem" onClick={() => { setEmptyMenu(null); void spawnTerminal() }}>New terminal</button>
       <button role="menuitem" onClick={() => { setEmptyMenu(null); openLauncher() }}>New terminal custom…</button>
@@ -2173,7 +2369,7 @@ export function App() {
     {renameTarget && <div class="modal-layer" onMouseDown={event => event.target === event.currentTarget && setRenameTarget(null)}>
       <form class="modal rename-modal" onSubmit={event => { event.preventDefault(); void submitRename() }}>
         <div class="modal-heading"><div><span>RENAME::{renameTarget.kind.toUpperCase()}</span><h2>{renameTarget.kind === 'session' ? sessionName(renameTarget.session) : renameTarget.project.name}</h2></div><button type="button" aria-label="Close rename" onClick={() => setRenameTarget(null)}>×</button></div>
-        <label>name<input value={renameValue} onInput={event => setRenameValue(event.currentTarget.value)} autofocus /></label>
+        <label>name<input ref={renameInput} value={renameValue} onInput={event => setRenameValue(event.currentTarget.value)} autofocus /></label>
         <div class="modal-footer"><span>enter::save · esc::cancel</span><button type="button" onClick={() => setRenameTarget(null)}>Cancel</button><button class="primary" type="submit" disabled={!renameValue.trim()}>Rename</button></div>
       </form>
     </div>}

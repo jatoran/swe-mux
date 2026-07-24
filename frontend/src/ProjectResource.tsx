@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { api } from './api'
 import { insertEditorTab } from './editorText'
-import { clampContextMenuLeft } from './menuPosition'
+import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
 import { fileSaveTarget, noteQueueKey, noteSaveQueue, noteSaveTarget, type NoteSaveState, type ResourceSaveTarget } from './noteSaveQueue'
+import { loadExpandedFolders, saveExpandedFolders } from './deviceSettings'
 import type { Project } from './types'
 
 export type ProjectResourceIdentity={kind:'note'|'session-note'|'files'|'file';id:string}
@@ -37,6 +38,20 @@ type Props={
 
 const parentPath=(path:string)=>path.includes('/')?path.slice(0,path.lastIndexOf('/')):''
 const watchIdentity=()=>`resource-${Date.now()}-${Math.random().toString(36).slice(2)}`
+const treeKey=(paths:Iterable<string>)=>[...paths].sort().join('\n')
+
+// Expand state persists to the shared server settings blob. Debounce the write at
+// module scope (keyed by project) so a rapid burst of toggles collapses to one PUT
+// and a save that is still pending survives the file tab unmounting mid-debounce.
+const treeSaveTimers=new Map<string,number>()
+function scheduleTreeSave(projectId:string,paths:string[]){
+  const pending=treeSaveTimers.get(projectId)
+  if(pending)clearTimeout(pending)
+  treeSaveTimers.set(projectId,window.setTimeout(()=>{
+    treeSaveTimers.delete(projectId)
+    void saveExpandedFolders(projectId,paths)
+  },400))
+}
 
 export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Props){
   const isNote=resource.kind==='note'||resource.kind==='session-note'
@@ -61,7 +76,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
   const [saveState,setSaveState]=useState<'idle'|'modified'|'saving'|'saved'|'error'>(cachedFile?.saveState||'idle')
   const [error,setError]=useState(cachedFile?.error||'')
   const [directories,setDirectories]=useState<Record<string,DirectoryPayload>>(cachedBrowser?.directories||{})
-  const [expanded,setExpanded]=useState<Set<string>>(cachedBrowser?.expanded||new Set())
+  // Seed from the in-memory cache first (survives tab reparent); otherwise from
+  // the shared server-persisted set so a refresh or a different device restores it.
+  const [expanded,setExpanded]=useState<Set<string>>(()=>cachedBrowser?.expanded||new Set(resource.kind==='files'?loadExpandedFolders(project.id):[]))
   const [treeMenu,setTreeMenu]=useState<TreeMenu|null>(null)
   const [query,setQuery]=useState('')
   const [searchMode,setSearchMode]=useState<SearchMode>('names')
@@ -75,6 +92,11 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
   const [noteSave,setNoteSave]=useState<NoteSaveState>({status:'idle',storageRevision:'missing',banner:null})
   const noteKey=noteQueueKey(project.id,`${resource.kind}:${resource.id}`)
   const watchId=useRef(watchIdentity())
+  // Baseline of what expand state is already persisted, so only genuine changes
+  // write back; `interacted` stops a remote/late settings load from clobbering a
+  // tree the user has started opening by hand.
+  const lastSavedTree=useRef<string|undefined>(undefined)
+  const interacted=useRef(false)
   const treeMenuPanel=useRef<HTMLDivElement>(null)
   const noteLoadGeneration=useRef(0)
   const textRef=useRef(text)
@@ -85,6 +107,22 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
     try{
       const payload=await api<DirectoryPayload>('GET',`/api/projects/${project.id}/files?path=${encodeURIComponent(folder)}`)
       setDirectories(current=>({...current,[folder]:payload}));setError('')
+    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+  }
+
+  // Restore a saved tree in one round trip: the root plus every expanded folder.
+  // Folders that come back missing (deleted/renamed) are pruned so a stale saved
+  // set self-heals; folders expanded while the request was in flight are kept.
+  const loadTree=async(want:string[])=>{
+    try{
+      const params=new URLSearchParams()
+      for(const folder of ['',...want])params.append('path',folder)
+      const payload=await api<{directories:Record<string,DirectoryPayload>}>('GET',`/api/projects/${project.id}/files/tree?${params.toString()}`)
+      const loaded=payload.directories||{}
+      setDirectories(current=>({...current,...loaded}))
+      const requested=new Set(['',...want])
+      setExpanded(current=>new Set([...current].filter(folder=>!requested.has(folder)||folder in loaded)))
+      setError('')
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
 
@@ -111,7 +149,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
 
   useEffect(()=>{
     setTreeMenu(null)
-    if(resource.kind==='files')void loadDirectory('')
+    if(resource.kind==='files')void loadTree([...expanded])
     else if(resource.kind==='file'&&cachedFile&&cachedFile.text!==cachedFile.baseline){
       setError(cachedFile.error)
     }else void loadText()
@@ -124,6 +162,36 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
   useEffect(()=>{
     if(resource.kind==='files')browserStates.set(resourceKey,{directories,expanded:new Set(expanded)})
   },[resource.kind,resourceKey,directories,expanded])
+
+  // Persist expand changes to the shared server blob. The first pass only records
+  // the seeded/restored baseline; after that, user toggles and the self-healing
+  // prune write back through the module-level debounce.
+  useEffect(()=>{
+    if(resource.kind!=='files')return
+    const key=treeKey(expanded)
+    if(lastSavedTree.current===undefined){lastSavedTree.current=key;return}
+    if(key===lastSavedTree.current)return
+    lastSavedTree.current=key
+    scheduleTreeSave(project.id,[...expanded])
+  },[resource.kind,project.id,expanded])
+
+  // The settings cache loads asynchronously at boot and refreshes when another
+  // device edits it. Adopt the persisted set whenever it arrives, unless the user
+  // has already started opening folders here (then their in-progress tree wins).
+  useEffect(()=>{
+    if(resource.kind!=='files')return
+    const adopt=()=>{
+      if(interacted.current)return
+      const persisted=loadExpandedFolders(project.id)
+      const key=treeKey(persisted)
+      if(key===lastSavedTree.current)return
+      lastSavedTree.current=key
+      setExpanded(new Set(persisted))
+      void loadTree(persisted)
+    }
+    window.addEventListener('mux:settings-changed',adopt)
+    return()=>window.removeEventListener('mux:settings-changed',adopt)
+  },[resource.kind,project.id])
 
   useEffect(()=>{
     if(!treeMenu)return
@@ -270,6 +338,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
   }
 
   const toggleDirectory=(path:string)=>{
+    interacted.current=true
     if(expanded.has(path)){
       setExpanded(current=>new Set([...current].filter(item=>item!==path&&!item.startsWith(`${path}/`))))
       return
@@ -342,7 +411,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
         </div>
         :<div class="file-tree" role="tree">{tree('')}</div>}
     </div>
-    {treeMenu&&<div class="context-menu project-file-menu" ref={treeMenuPanel} role="menu" aria-label={`File actions for ${treeMenu.item.name}`} style={{left:clampContextMenuLeft(treeMenu.x,window.innerWidth),top:Math.max(4,Math.min(treeMenu.y,window.innerHeight-140))}} onMouseDown={event=>event.stopPropagation()}>
+    {treeMenu&&<div class="context-menu project-file-menu" ref={el=>{treeMenuPanel.current=el;fitMenuInViewport(el)}} role="menu" aria-label={`File actions for ${treeMenu.item.name}`} style={{left:clampContextMenuLeft(treeMenu.x,window.innerWidth),top:Math.max(4,Math.min(treeMenu.y,window.innerHeight-140))}} onMouseDown={event=>event.stopPropagation()}>
       <div class="context-title"><strong>{treeMenu.item.name}</strong></div>
       <button role="menuitem" onClick={()=>void revealResource(treeMenu.item)}>Open in default explorer</button>
       <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'global')}>Add pattern to global ignores</button>
