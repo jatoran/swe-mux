@@ -43,6 +43,21 @@ def test_normal_ui_flows_do_not_use_browser_native_dialogs() -> None:
     assert "Create worktree + terminal" not in source
 
 
+def test_daemon_and_ui_reload_controls_are_wired() -> None:
+    root = Path(__file__).parents[1] / "frontend" / "src"
+    app = (root / "App.tsx").read_text(encoding="utf-8")
+    css = (root / "style.css").read_text(encoding="utf-8")
+
+    # Session-preserving reload surfaces: palette commands, main-menu entries,
+    # the restart endpoint, and the blocking wait overlay.
+    assert "id: 'daemon.reload'" in app and "id: 'ui.reload'" in app
+    assert app.count("Reload daemon (keep sessions)") >= 2  # main menu + sidebar menu
+    assert "'/api/daemon/restart'" in app
+    assert "location.reload()" in app
+    assert "daemonReloading" in app and "daemon-reload-layer" in app
+    assert ".daemon-reload-modal" in css
+
+
 def test_terminal_find_is_inline_and_feature_complete() -> None:
     root = Path(__file__).parents[1]
     pane = (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")

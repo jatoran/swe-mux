@@ -193,6 +193,9 @@ export function App() {
   const [paletteQuery, setPaletteQuery] = useState('')
   const [paletteIndex, setPaletteIndex] = useState(0)
   const [error, setError] = useState('')
+  // True while a session-preserving daemon restart is in flight; the page
+  // reloads itself once the successor daemon answers /api/health.
+  const [daemonReloading, setDaemonReloading] = useState(false)
   // '' browses every Project; a Project id prefilters the archive to it.
   const [historyScope,setHistoryScope]=useState('')
   const [historyOpen,setHistoryOpen]=useState(false)
@@ -1401,7 +1404,7 @@ export function App() {
     try {
       const targetProject = entry.project_id || projectId
       const resumed = await api<Session>('POST', `/api/history/${entry.id}/resume`, { project_id: targetProject, target_session_id: targetProject === projectId ? activeId : undefined })
-      setSessions(items => [...items, resumed]); setProjectId(resumed.project_id); setActiveId(resumed.id)
+      setSessions(items => [...items, resumed]); setProjectId(resumed.project_id); setActiveId(resumed.id); setFocusedViewId(resumed.id)
       setHistoryOpen(false)
       await refresh()
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
@@ -1465,8 +1468,50 @@ export function App() {
     const pane = stackForView(layout, next.id)
     if (pane && pane.active_child_id !== next.id) void updateLayout(projectId, activateStackChild(layout, pane.id, next.id))
   }
+  async function reloadDaemon() {
+    setMainMenuOpen(false)
+    setPaletteOpen(false)
+    // Direct fetch (not api()): the 409 body carries a human-readable
+    // `message` explaining why a restart would kill sessions.
+    let accepted = false
+    try {
+      const response = await fetch('/api/daemon/restart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+      if (response.status === 202) accepted = true
+      else {
+        const detail = await response.json().catch(() => ({}))
+        setError(detail.message || detail.error || 'Daemon reload failed.')
+      }
+    } catch {
+      setError('Daemon reload request failed.')
+    }
+    if (!accepted) return
+    setDaemonReloading(true)
+    // Let the old daemon actually exit before treating a healthy response as
+    // the successor; the first ~second could still be the predecessor.
+    await new Promise(resolve => setTimeout(resolve, 1500))
+    const deadline = Date.now() + 90_000
+    while (Date.now() < deadline) {
+      try {
+        const health = await fetch('/api/health', { cache: 'no-store' })
+        if (health.ok) { location.reload(); return }
+      } catch { /* daemon still restarting */ }
+      await new Promise(resolve => setTimeout(resolve, 750))
+    }
+    setDaemonReloading(false)
+    setError('The daemon did not come back within 90s. Check daemon-relaunch.log in the data directory.')
+  }
+
   const commands: Command[] = [
     { id: 'palette.open', label: 'Open command palette', category: 'view', available: true, run: () => setPaletteOpen(true) },
+    // Session-preserving daemon restart (PTY supervisor); refused server-side
+    // when a restart would kill sessions. Reload UI is the browser-half of a
+    // frontend update: fetch the freshly built assets, keep everything else.
+    { id: 'daemon.reload', label: 'Reload daemon (keep sessions)', category: 'view', available: true, run: () => void reloadDaemon() },
+    { id: 'ui.reload', label: 'Reload UI', category: 'view', available: true, run: () => location.reload() },
     { id: 'mobileTab.next', label: 'Focus next tab (mobile)', category: 'pane', available: mobileWorkspace, disabledReason: 'Available on the mobile workspace', run: () => navigateMobileTab(1) },
     { id: 'mobileTab.previous', label: 'Focus previous tab (mobile)', category: 'pane', available: mobileWorkspace, disabledReason: 'Available on the mobile workspace', run: () => navigateMobileTab(-1) },
     { id: 'sidebar.open', label: 'Open navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(true) },
@@ -2312,6 +2357,7 @@ export function App() {
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('processes.all')}}>Process fleet…</button>
       <div class="context-rule" />
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('settings.open')}}>All Settings…</button>
+      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('daemon.reload')}}>Reload daemon (keep sessions)</button>
     </div>}
 
     {noteMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Resource view actions" style={{left:clampContextMenuLeft(noteMenu.x,innerWidth),top:Math.max(4,Math.min(noteMenu.y,innerHeight-220))}}>
@@ -2360,6 +2406,9 @@ export function App() {
       <button onClick={() => runNamedCommand('project.create')}>Manage projects…</button>
       <button onClick={() => runNamedCommand('hooks.open')}>Automation…</button>
       <button onClick={() => runNamedCommand('settings.open')}>All Settings…</button>
+      <div class="context-subtitle">MAINTENANCE</div>
+      <button onClick={() => runNamedCommand('daemon.reload')}>Reload daemon (keep sessions)</button>
+      <button onClick={() => runNamedCommand('ui.reload')}>Reload UI</button>
       <div class="context-subtitle">SHORTCUTS</div>
       <button onClick={() => { setMainMenuOpen(false); runNamedCommand('palette.open') }}>Command palette <span class="menu-hint">ctrl alt p</span></button>
     </div>}
@@ -2373,6 +2422,8 @@ export function App() {
         <div class="modal-footer"><span>enter::save · esc::cancel</span><button type="button" onClick={() => setRenameTarget(null)}>Cancel</button><button class="primary" type="submit" disabled={!renameValue.trim()}>Rename</button></div>
       </form>
     </div>}
+
+    {daemonReloading&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Daemon reloading"><div class="modal daemon-reload-modal"><h2>Reloading daemon…</h2><p>Live sessions are preserved by the PTY supervisor. This page reloads automatically once the daemon is back.</p></div></div>}
 
     {sessionNotesScope!==null&&<SessionNotesBrowser projects={orderedProjects} initialProjectId={sessionNotesScope||null} onClose={()=>setSessionNotesScope(null)} onOpen={openBrowsedSessionNote}/>}
 

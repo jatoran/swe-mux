@@ -162,6 +162,59 @@ async def test_only_latest_claiming_browser_can_write_input() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_codex_drops_late_default_color_responses_from_current_and_stale_clients() -> None:
+    writes: list[str] = []
+    record = SessionRecord(
+        "mux-id",
+        "codex",
+        "default",
+        "codex",
+        "native-id",
+        ".",
+        "codex.exe",
+        [],
+        state="idle",
+    )
+    pty = cast(
+        Any,
+        SimpleNamespace(
+            write=writes.append,
+            resize=lambda cols, rows: None,
+            isalive=lambda: True,
+        ),
+    )
+    session = Session(record, pty, cast(Any, SimpleNamespace()), 32, "secret")
+    manager = SimpleNamespace(resolve=lambda identity: session, sessions={record.id: session})
+    app = web.Application()
+    app["sessions"] = manager
+    app["events"] = EventBus()
+    app.router.add_get("/pty/{sid}", pty_ws)
+
+    foreground = "\x1b]10;rgb:c0c0/caca/f5f5\x1b\\"
+    background = "\x1b]11;rgb:1a1a/1b1b/2626\x1b\\"
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/mux-id")
+        assert (await ws.receive_json())["type"] == "state"
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert (await ws.receive_json())["type"] == "replay_end"
+        await ws.send_json({"type": "claim_input"})
+        assert await ws.receive_json() == {"type": "input_owner", "active": True}
+
+        await ws.send_json(
+            {"type": "input", "kind": "terminal_response", "data": foreground}
+        )
+        # Older cached browser builds mislabeled OSC color replies as user input.
+        await ws.send_json({"type": "input", "kind": "user", "data": foreground + background})
+        await ws.send_json({"type": "input", "kind": "user", "data": "hello"})
+        await asyncio.sleep(0.01)
+        await ws.close()
+
+    assert writes == ["hello"]
+    assert session.input_revision == 1
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
 async def test_pty_replay_does_not_wait_for_event_persistence() -> None:
     sink_started = asyncio.Event()
     release_sink = asyncio.Event()

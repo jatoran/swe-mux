@@ -51,8 +51,11 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
 - Session-preserving daemon reload (`pty_supervisor_enabled`, default off): an out-of-process
   PTY supervisor owns ConPTYs/scrollback/reaper Job so a daemon restart leaves agents running
   and the next daemon reattaches; intent-signaled shutdown (desktop Quit/Restart, terminal
-  detach + `muxd --shutdown`) keeps explicit quit reaping cleanly. Design and completion
-  checklist: `SESSION_PRESERVING_RELOAD.md`.
+  detach + `muxd --shutdown`) keeps explicit quit reaping cleanly. Reload triggers everywhere:
+  UI menu/palette (`daemon.reload`/`ui.reload` via `POST /api/daemon/restart`),
+  `mux reload-daemon`, and the frozen redeploy script `packaging/redeploy_desktop.py`, backed
+  by the dedicated `dist/swe-mux-supervisor` bundle so app rebuilds never collide with a
+  running supervisor. Design and completion checklist: `SESSION_PRESERVING_RELOAD.md`.
 
 ## Delivery order
 

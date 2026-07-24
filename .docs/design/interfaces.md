@@ -19,6 +19,24 @@ in constant time, and returns `202 {status: "shutting_down", mode}`. An optional
 next daemon to reattach. The token lives under the daemon data directory and never enters
 browser state or the tailnet API. Standalone `muxd` returns 404.
 
+## Daemon self-restart
+
+```text
+POST /api/daemon/restart   {force?: bool}
+```
+
+The session-preserving "reload daemon" trigger for the UI (menu/palette), `mux
+reload-daemon`, and agents. The daemon spawns a successor process (which waits
+for the port with `--relaunch-wait`), signals its own shutdown with detach
+intent, and exits; the successor reattaches to the PTY supervisor's live
+sessions. Returns `202 {status: "restarting", sessions_preserved}`. Without an
+attached supervisor a restart would kill every session, so it returns
+`409 supervisor_not_attached` unless `force=true` (the same authority level as
+killing sessions); daemons started without a relaunchable entry point return
+`409 restart_unavailable`. This carries browser authority like the session
+APIs — it is not gated on the desktop control token because a preserved
+restart is no more destructive than the existing kill-session surface.
+
 ## PTY supervisor IPC (local only)
 
 With `pty_supervisor_enabled`, the daemon talks to the standalone PTY supervisor over a
@@ -201,7 +219,11 @@ Each row also exposes its stable terminal `note_id` and whether its lazily creat
 currently exists.
 PTY WebSocket owners may send `{type:"terminal_state", mode:"normal|alternate"}`. Input
 frames label xterm device replies with `kind:"terminal_response"`; every other input frame,
-including bracketed paste, advances the human-input boundary.
+including bracketed paste, advances the human-input boundary. OSC 10/11 default-color replies
+are recognized as device replies but are not delivered to Codex: its bounded native-Windows
+startup probe can expire during the browser/WebSocket round trip and would then treat the late
+reply as composer text. Codex falls back to the console palette. The daemon also rejects exact
+Codex OSC 10/11 reply payloads from older cached browser builds that labeled them as user input.
 On initial attach, the daemon sends `state` and waits up to 250 ms for
 `{type:"attach_ready", cols, rows, renderer}`. It applies those dimensions before
 `replay_start`; an old-style `resize` frame also releases replay, and timeout preserves

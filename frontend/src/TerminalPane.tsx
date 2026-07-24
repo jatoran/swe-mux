@@ -14,7 +14,7 @@ import type { Session } from './types'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
 import { AGENT_NEWLINE, terminalKeyDecision } from './terminalKeys'
-import { isTerminalProtocolResponse } from './terminalProtocol'
+import { isTerminalProtocolResponse, shouldSuppressTerminalProtocolResponse } from './terminalProtocol'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import {
   mobileDragTarget,
@@ -155,6 +155,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const clipboardStatusTimerRef=useRef<number|null>(null)
   const stateRef=useRef(session.state)
   stateRef.current=session.state
+  const backendRef=useRef(session.backend)
+  backendRef.current=session.backend
   const broadcastRef = useRef(broadcast)
   broadcastRef.current = broadcast
 
@@ -529,8 +531,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       connect(true)
     }
     const input = term.onData(data => {
+      if (shouldSuppressTerminalProtocolResponse(data, backendRef.current)) return
       const protocolResponse = isTerminalProtocolResponse(data)
-      const replayResponse = replaying && replayAllowsTerminalResponses && isTerminalProtocolResponse(data)
+      const replayResponse = replaying && replayAllowsTerminalResponses && protocolResponse
       if ((!replaying || replayResponse) && socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'input', data, kind: protocolResponse ? 'terminal_response' : 'user', broadcast: protocolResponse ? false : broadcastRef.current }))
       }

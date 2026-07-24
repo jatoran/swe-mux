@@ -38,6 +38,15 @@ def main() -> None:
     send.add_argument("--all-broadcast", action="store_true")
     kill = sub.add_parser("kill")
     kill.add_argument("session")
+    reload_daemon = sub.add_parser(
+        "reload-daemon",
+        help="restart the daemon in place; sessions survive when the PTY supervisor is attached",
+    )
+    reload_daemon.add_argument(
+        "--force",
+        action="store_true",
+        help="restart even without the PTY supervisor (kills every session)",
+    )
     sub.add_parser("history")
     sub.add_parser("projects")
     sub.add_parser("profiles")
@@ -70,6 +79,8 @@ def main() -> None:
             result = request("POST", f"/api/sessions/{args.session}/input", {"data": args.text})
     elif args.command == "kill":
         result = request("DELETE", f"/api/sessions/{args.session}")
+    elif args.command == "reload-daemon":
+        result = request("POST", "/api/daemon/restart", {"force": args.force})
     elif args.command == "history":
         result = request("GET", "/api/history")
     elif args.command == "projects":

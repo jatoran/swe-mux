@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -33,6 +34,11 @@ def parser() -> argparse.ArgumentParser:
             "it, then exit (with pty_supervisor_enabled, Ctrl-C only detaches)"
         ),
     )
+    parser.add_argument(
+        "--relaunch-wait",
+        action="store_true",
+        help=argparse.SUPPRESS,  # successor of a self-restart: wait for the port to free
+    )
     return parser
 
 
@@ -59,7 +65,12 @@ def load_daemon_config(
     return config, args
 
 
-async def serve(config: Config, *, desktop_control_token: str | None = None) -> None:
+async def serve(
+    config: Config,
+    *,
+    desktop_control_token: str | None = None,
+    relaunch_command: list[str] | None = None,
+) -> None:
     hosts = await listener_hosts(config.host, config.tailnet_enabled)
     if config.tailnet_enabled and len(hosts) == 1:
         logging.getLogger(__name__).warning(
@@ -70,7 +81,8 @@ async def serve(config: Config, *, desktop_control_token: str | None = None) -> 
     app = create_app(
         config,
         desktop_control_token=desktop_control_token,
-        desktop_shutdown_event=shutdown_event if desktop_control_token else None,
+        desktop_shutdown_event=shutdown_event,
+        relaunch_command=relaunch_command,
     )
     runner = web.AppRunner(app)
     await runner.setup()
@@ -116,6 +128,39 @@ async def _auto_enable_mobile_voice(port: int) -> None:
         log.info("mobile-voice HTTPS not configured: %s", result.get("diagnostic"))
 
 
+def relaunch_command_for(config: Config, args: argparse.Namespace) -> list[str]:
+    """The exact command a self-restarting daemon uses to start its successor."""
+    from .desktop import daemon_command
+
+    command = daemon_command(config.config_path or config.data_dir / "config.toml")
+    if args.dev:
+        command.append("--dev")
+    if args.local_only:
+        command.append("--local-only")
+    command.append("--relaunch-wait")
+    return command
+
+
+def wait_for_port_free(host: str, port: int, timeout_seconds: float = 90.0) -> None:
+    """Successor start gate: the predecessor still holds the listener while it
+    unwinds; binding would fail, so wait for the port to actually free up."""
+    import socket
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                pass
+        except OSError:
+            return
+        time.sleep(0.25)
+    logging.getLogger(__name__).warning(
+        "predecessor daemon still holds port %d after %.0fs; attempting startup anyway",
+        port,
+        timeout_seconds,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     config, args = load_daemon_config(argv)
     logging.basicConfig(
@@ -132,9 +177,17 @@ def main(argv: Sequence[str] | None = None) -> None:
             else "No PTY supervisor is running for this config."
         )
         return
+    if args.relaunch_wait:
+        wait_for_port_free(config.host, config.port)
     token = os.environ.get("SWE_MUX_DESKTOP_CONTROL_TOKEN") or None
     try:
-        asyncio.run(serve(config, desktop_control_token=token))
+        asyncio.run(
+            serve(
+                config,
+                desktop_control_token=token,
+                relaunch_command=relaunch_command_for(config, args),
+            )
+        )
     except KeyboardInterrupt:
         pass
 

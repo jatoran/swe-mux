@@ -5,7 +5,10 @@ id = "29a044bb-a06b-4216-95e4-39c5e91d48fb"
 ---
 # swe-mux project notes
 
-git commit. been a while
+in session history cant scroll down transcript of selected past sessions
+
+
+i wonder if i could make it so that the agent command rail is a right sidebar you can swipe out on mobile? so its a vertical column or a grid of commands? hmmmmmm 
 
 make it easy to copy path to clipboard from the file tab when long press the file or via hover-over on desktop showing a copy icon floating above the file
 
@@ -13,18 +16,16 @@ agent to agent communication in swe-mux. will be nice when i can have an agent d
 
 swe-mux mcp would also make it easy for agents to see previous sessions, and concurrent sessions, and that adds utility
 
-
-
 - [ ] the remaining roadmap updates starting with phase 3.5
 
-- [ ] the session preserving reload update
+- [x] the session preserving reload update
 
 - [ ] control plane updates
 
 allow making command rail be multiple rows? on mobile maybe? and configuring what is on each row?
 
 
-cleaning up ui of tts/speak functionality
+cleaning up ui of tts/speak functionality - the toggles and settings
 
 ability to tap, on mobile, to a specific part of your chat input (this doesn't work on native codex on desktop, but it works on claude code.. hmm). i wonder if we can just make it work foe both? to move the carat to wherever you tap or click in your currently being typed message in these agent cli sessions?
 
@@ -32,24 +33,6 @@ ability to tap, on mobile, to a specific part of your chat input (this doesn't w
 on mobile agent sessions:
 	want to fix tap and hold and drag highlighting not allowing you to drag if content is off of the current screen (somehow triggeting scroll while also highlighting)
 		pretty hard problem probably. evaluate and discuss if this is reasonably feasible
-
-
-- command rail functionality expansion
-	- at end of command rail for agent sessions - a settings gear icon for configuring the rail options and ordering - probably in settings UI? since this would have to be configureble to be different for mobile vs desktop and also codex vs claude?
-
-	- save project skills to the project's command rail defaults. basically configurable command rails. globally and per-project. and also per-platform (desktop or mobile). logical defaults so if you add a skill to the rail, or a command, it adds to both desktop/mobile. id want to add /new, and thrn any slash command i want .  this also needs to have toggles for claude vs codex, and inject them properly. on codex it has some slash commands, but skills are invoked with $.   so all this should be cleanly handled.
-		- note: some command rail options are already specific to mobile, so make sure that stuff is maintained and extended into this new system's setup/defaults 
-
-
-	- adding /branch to command rail, But also: handling it smarter. it should open the new session too when you do it. so youll have the original and branched convos open now. clsude is /branch. does codex have branch? if not, could we simulate our own branch functionality for it?
-
-	- adding home/end and ctrl+home/ctrl+end to command rail
-
-	- adding newline to commsnd rail. and button to clear current input. and button to clear AND copy current input
-
-	- commands: revert to last reply (no code changes)
-
-
 
 
 

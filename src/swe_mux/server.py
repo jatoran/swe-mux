@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
 import threading
 import time
 import tomllib
@@ -105,6 +106,7 @@ from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import Session, SessionManager
 from .settings_store import SettingsStore
 from .spawn_contract import SpawnRequest
+from .subprocess_flags import background_creation_flags
 from .supervisor_client import SupervisorClient
 from .tailscale import (
     enable_mobile_voice_serve,
@@ -130,6 +132,13 @@ SESSION_MEDIA_TTL_SECONDS = 24 * 60 * 60
 PTY_ATTACH_READY_TIMEOUT_SECONDS = 0.25
 HOOK_RATE_WINDOW_SECONDS = 10.0
 HOOK_RATE_LIMIT = 500
+_OSC_DEFAULT_COLOR_RESPONSE = re.compile(
+    r"(?:\x1b\](?:10|11);"
+    r"(?:rgb:[0-9a-f]{1,4}(?:/[0-9a-f]{1,4}){2}"
+    r"|rgba:[0-9a-f]{1,4}(?:/[0-9a-f]{1,4}){3})"
+    r"(?:\x07|\x1b\\))+",
+    re.IGNORECASE,
+)
 
 
 def hook_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -139,6 +148,11 @@ def hook_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
         for key, value in payload.items()
         if key not in {"session_id", "source", "event_type", "scope"}
     }
+
+
+def _is_codex_default_color_response(backend: str, data: str) -> bool:
+    """Reject late OSC 10/11 replies before Codex mistakes them for prompt input."""
+    return backend == "codex" and _OSC_DEFAULT_COLOR_RESPONSE.fullmatch(data) is not None
 
 
 def json_response(data: Any, status: int = 200) -> web.Response:
@@ -265,9 +279,10 @@ def create_app(
     frontend_dir: Path | None = None,
     desktop_control_token: str | None = None,
     desktop_shutdown_event: asyncio.Event | None = None,
+    relaunch_command: list[str] | None = None,
 ) -> web.Application:
-    if (desktop_control_token is None) != (desktop_shutdown_event is None):
-        raise ValueError("desktop control requires both a token and shutdown event")
+    if desktop_control_token is not None and desktop_shutdown_event is None:
+        raise ValueError("desktop control requires a shutdown event")
     app = web.Application(
         middlewares=[error_middleware, security_middleware], client_max_size=12 * 1024 * 1024
     )
@@ -282,6 +297,12 @@ def create_app(
     if desktop_control_token is not None and desktop_shutdown_event is not None:
         app["desktop_control_token"] = desktop_control_token
         app["desktop_shutdown_event"] = desktop_shutdown_event
+    # Self-restart needs a stop trigger and relaunch command in every mode,
+    # independent of desktop-control authority.
+    if desktop_shutdown_event is not None:
+        app["daemon_stop_event"] = desktop_shutdown_event
+    if relaunch_command:
+        app["daemon_relaunch_command"] = list(relaunch_command)
     app.cleanup_ctx.append(runtime_context)
     app.add_routes(
         [
@@ -290,6 +311,7 @@ def create_app(
             web.get("/sw.js", service_worker),
             web.get("/api/health", health),
             web.post("/api/desktop/shutdown", desktop_shutdown),
+            web.post("/api/daemon/restart", daemon_restart),
             web.get("/api/remote/status", remote_status),
             web.post("/api/remote/mobile-voice/enable", enable_mobile_voice),
             web.get("/api/config", get_config),
@@ -860,6 +882,70 @@ async def desktop_shutdown(request: web.Request) -> web.Response:
     request.app["shutdown_state"]["intent"] = "quit" if mode == "quit" else "detach"
     shutdown_event.set()
     response = json_response({"status": "shutting_down", "mode": mode}, 202)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _spawn_daemon_successor(command: list[str], log_path: Path) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("ab", buffering=0) as log_file:
+        # Returns immediately; the successor runs --relaunch-wait and starts
+        # once this daemon has released its listeners. Detached from this
+        # process group so our exit never signals it.
+        subprocess.Popen(  # noqa: ASYNC220 - non-blocking Popen from a sync helper
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            cwd=str(log_path.parent),
+            creationflags=background_creation_flags()
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+        )
+
+
+async def daemon_restart(request: web.Request) -> web.Response:
+    """Session-preserving daemon self-restart (the UI/agent "reload daemon").
+
+    Spawns a successor daemon (which waits for the port), signals this daemon
+    to shut down with detach intent, and lets the successor reattach to the
+    PTY supervisor's live sessions. Without an attached supervisor a restart
+    would kill every session, so it is refused unless the caller passes
+    ``{"force": true}`` — the same authority level as killing sessions.
+    """
+    stop_event: asyncio.Event | None = request.app.get("daemon_stop_event")
+    relaunch: list[str] | None = request.app.get("daemon_relaunch_command")
+    if stop_event is None or not relaunch:
+        return json_response(
+            {
+                "error": "restart_unavailable",
+                "message": "this daemon was not started with a relaunchable entry point",
+            },
+            409,
+        )
+    supervisor = request.app.get("supervisor")
+    attached = bool(supervisor is not None and supervisor.connected)
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        body = {}
+    force = bool(body.get("force")) if isinstance(body, dict) else False
+    if not attached and not force:
+        return json_response(
+            {
+                "error": "supervisor_not_attached",
+                "message": (
+                    "the PTY supervisor is not attached, so a daemon restart would "
+                    "kill every session; enable pty_supervisor_enabled or pass "
+                    "force=true"
+                ),
+            },
+            409,
+        )
+    config: Config = request.app["config"]
+    request.app["shutdown_state"]["intent"] = "detach" if attached else "quit"
+    _spawn_daemon_successor(list(relaunch), config.data_dir / "daemon-relaunch.log")
+    stop_event.set()
+    response = json_response({"status": "restarting", "sessions_preserved": attached}, 202)
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -2584,15 +2670,50 @@ async def relaunch_session(request: web.Request) -> web.Response:
     return json_response({"session": session.record.snapshot(), "replaced": old_id}, 201)
 
 
-async def _await_native_switch(record: Any, previous: str, timeout_seconds: float) -> bool:
-    """Wait for the daemon to observe an in-CLI conversation id switch."""
+def _branch_source_id(source: Any) -> str | None:
+    """The canonical conversation id to fork from.
+
+    Deliberately NOT ``record.native_session_id``: the transcript observer
+    rewrites that field from whatever file it is following, and with sibling
+    agents in one cwd it can latch onto a sibling's transcript (see the
+    transcript-switch cross-attribution fix), so branching off it would fork the
+    wrong conversation. ``agent_lifecycle_id`` is the lifecycle anchor the
+    observer never overwrites. For Claude the mux id is itself a valid transcript
+    stem (spawned via ``--session-id``), so an unchanged native id is fine; for
+    Codex only a detected rollout id is meaningful — the mux id is a placeholder.
+    """
+    record = source.record
+    lifecycle = getattr(source, "agent_lifecycle_id", None)
+    if record.backend == "claude":
+        return str(lifecycle or record.native_session_id or record.id)
+    candidate = str(lifecycle or record.native_session_id or "")
+    return candidate if candidate and candidate != record.id else None
+
+
+def _claude_transcript_stems(adapter: Any, cwd: str) -> set[str]:
+    """Existing Claude transcript ids (file stems) for a working directory."""
+    try:
+        directory = adapter.transcript_path("probe", Path(cwd)).parent
+        return {path.stem for path in directory.glob("*.jsonl")} if directory.exists() else set()
+    except OSError:
+        return set()
+
+
+async def _await_claude_fork(
+    adapter: Any, cwd: str, original: str, before: set[str], timeout_seconds: float
+) -> bool:
+    """Wait for ``/branch`` to write a brand-new transcript in ``cwd``.
+
+    Watching the filesystem directly (rather than ``record.native_session_id``)
+    sidesteps the sibling-cwd switch gate, which intentionally suppresses the
+    daemon's own id update when other agents share the directory.
+    """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_seconds
     while loop.time() < deadline:
-        current = str(record.native_session_id or "")
-        if current and current != previous:
+        await asyncio.sleep(0.3)
+        if _claude_transcript_stems(adapter, cwd) - before - {original}:
             return True
-        await asyncio.sleep(0.25)
     return False
 
 
@@ -2600,8 +2721,8 @@ async def branch_session(request: web.Request) -> web.Response:
     """Fork an agent conversation, keeping the original and the branch both open.
 
     Claude has a native ``/branch`` that forks to a fresh session id in place, so
-    we inject it, wait for the daemon to see the id switch (which freezes the
-    original transcript), then reopen the original id in a sibling pane — the
+    we inject it, wait for the new transcript to appear (confirming the fork
+    froze the original), then reopen the original id in a sibling pane — the
     source pane holds the new branch. Codex has no in-CLI branch, so we simulate
     one: ``codex resume`` starts a child thread (``parent_thread_id`` set) that
     diverges from the still-live original without sharing its rollout, so the
@@ -2614,19 +2735,26 @@ async def branch_session(request: web.Request) -> web.Response:
         return json_response(
             {"error": "only Claude and Codex sessions can branch", "code": "not_agent"}, 422
         )
-    native_id = str(record.native_session_id or "")
-    if not native_id or native_id == record.id:
+    original = _branch_source_id(source)
+    if not original:
         return json_response(
-            {"error": "no native session id to branch from yet", "code": "native_id_missing"}, 409
+            {"error": "no conversation id to branch from yet", "code": "native_id_missing"}, 409
         )
     project = request.app["projects"].projects.get(record.project_id)
     if project is None:
         return json_response({"error": "project missing", "code": "project_missing"}, 422)
     body = await request.json() if request.can_read_body else {}
+    # Claude resolves transcripts by working directory, so the fork and the
+    # resumed copy must run in the same cwd the conversation was recorded under.
+    branch_cwd = record.run_cwd or record.cwd
 
     if record.backend == "claude":
+        adapter = manager.adapters.get("claude")
+        before = _claude_transcript_stems(adapter, branch_cwd) if adapter else set()
         source.pty.write("/branch\r")
-        if not await _await_native_switch(record, native_id, timeout_seconds=15.0):
+        if not adapter or not await _await_claude_fork(
+            adapter, branch_cwd, original, before, timeout_seconds=15.0
+        ):
             # The fork never registered; do not resume the (still-live) original —
             # that would collide on its transcript. The source pane may already be
             # branched; the original stays resumable from history.
@@ -2638,9 +2766,9 @@ async def branch_session(request: web.Request) -> web.Response:
     session = await manager.spawn(
         backend=record.backend,
         name=body.get("name") or f"{record.name} {suffix}",
-        cwd=record.cwd,
+        cwd=branch_cwd,
         project_id=record.project_id,
-        resume_native_id=native_id,
+        resume_native_id=original,
         project_label=project.name,
     )
     next_layout = attach_terminal(
@@ -4625,6 +4753,8 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
                 await ws.send_json({"type": "input_owner", "active": True})
             elif frame.get("type") == "input" and session.input_owner == connection_id:
                 data = str(frame.get("data", ""))
+                if _is_codex_default_color_response(session.record.backend, data):
+                    return
                 session.pty.write(data)
                 is_terminal_response = frame.get("kind") == "terminal_response"
                 now = time.monotonic()

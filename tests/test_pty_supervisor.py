@@ -316,6 +316,11 @@ async def test_supervisor_process_outlives_client_and_reaps_on_command(
 
         import psutil
 
+        # The supervisor must anchor its cwd in the data dir: a cwd inherited
+        # from the spawner (e.g. inside dist/) locks that directory on Windows
+        # and blocks session-preserving app rebuilds.
+        assert Path(psutil.Process(process.pid).cwd()).resolve() == tmp_path.resolve()
+
         assert psutil.pid_exists(child_pid), "agent process must outlive the client"
 
         second = await _connect_with_retries(tmp_path)

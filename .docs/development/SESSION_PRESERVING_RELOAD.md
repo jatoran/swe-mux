@@ -274,6 +274,38 @@ implementation + tests + docs must agree.
 
 ---
 
+## 7.5+ Addendum: dedicated supervisor bundle and reload triggers (implemented)
+
+Follow-up shipped after the core split, closing the frozen-build gap and adding the
+user/agent-facing triggers:
+
+- **Dedicated supervisor artifact.** `packaging/swe_mux_supervisor.spec` builds
+  `dist/swe-mux-supervisor/swe-mux-supervisor.exe` — its own bundle in its own directory, so
+  rebuilding `dist/swe-mux` can never collide with a running supervisor's file image (the
+  Orca-style relocation problem solved by construction instead of a runtime copy).
+  `build_desktop.py` gates the supervisor rebuild on a hash of its source closure
+  (`supervisor.py`, `pty_host.py`, `scrollback.py`, `win_jobobj.py`, `subprocess_flags.py`,
+  entry, spec + pywinpty/psutil/pyinstaller versions): it only rebuilds when the supervisor
+  itself changed, which is exactly the §8 case that requires reaping first. Resolution order
+  in `supervisor_command()`: `SWE_MUX_SUPERVISOR_EXE` override → frozen sibling bundle →
+  frozen `--supervisor-child` fallback → source `python -m swe_mux.supervisor` (source mode
+  deliberately never picks the frozen bundle, so iterated code is the code that runs).
+- **Daemon self-restart** (`POST /api/daemon/restart`): the daemon spawns a successor with
+  `--relaunch-wait` (waits for the port), sets detach intent, and exits; the successor
+  reattaches. Refused with 409 when no supervisor is attached unless `force=true`. Triggers:
+  UI app menu / sidebar menu / command palette ("Reload daemon (keep sessions)",
+  `daemon.reload`) with a blocking overlay + auto page reload; `mux reload-daemon [--force]`;
+  plain HTTP for agents (`curl -X POST http://127.0.0.1:<port>/api/daemon/restart`). "Reload
+  UI" (`ui.reload`) is the frontend half: rebuild assets (`npm run build`), reload the page.
+- **Frozen redeploy** (`uv run python packaging/redeploy_desktop.py [--hidden|--no-launch|
+  --skip-build|--force]`): preflights that a supervisor is running *outside* `dist/swe-mux`
+  and that no `swe-mux-action.exe` task terminals hold the dist tree, detach-stops the daemon
+  (control token) and kills the shell, rebuilds, relaunches, and reports reattached sessions.
+  Safe to run from an agent session inside swe-mux: the agent's PTY lives in the supervisor
+  and survives the whole cycle. Refreshing the supervisor bundle itself still requires
+  `muxd --shutdown` first (§8), and the redeploy script keeps the old bundle with a warning
+  when supervisor sources changed while sessions are live.
+
 ## 8. Residual limitation (accept it)
 
 You can update the **daemon** freely with agents untouched. You **cannot** hot-update the

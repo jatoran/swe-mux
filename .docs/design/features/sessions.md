@@ -34,6 +34,10 @@ and reattachable browser viewports.
   depend on the history row wait for this registration internally.
 - PTY attach replay and input handling never await attachment/input telemetry persistence.
   Startup metrics separate interactive `server_ready` from `durable_registration` latency.
+- xterm device replies are classified separately from human input. Codex OSC 10/11 color
+  replies are suppressed in both browser and daemon because its short native-Windows startup
+  probe may time out across the browser/WebSocket hop; Codex uses its console-palette fallback
+  instead of receiving stale reply bytes as composer input.
 - A browser fits xterm after selecting its renderer, then sends `attach_ready` with the active
   columns and rows. The daemon resizes ConPTY before sending replay bytes; older clients may use
   their first `resize` frame or the bounded compatibility timeout. Messages received while

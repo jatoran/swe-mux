@@ -60,6 +60,17 @@ continues to own every terminal.
 - `packaging/swe_mux.spec` emits windowed `dist/swe-mux/swe-mux.exe`, console-subsystem
   `dist/swe-mux/swe-mux-action.exe`, and `_internal/`. The complete `onedir` folder is the
   distributable unit; neither executable is standalone.
+- `packaging/swe_mux_supervisor.spec` emits the dedicated PTY supervisor bundle
+  `dist/swe-mux-supervisor/` — a separate artifact precisely so rebuilding `dist/swe-mux`
+  never collides with a running supervisor's file image (Windows locks running
+  executables). `build_desktop.py` rebuilds it only when the supervisor's small source
+  closure changes (hash gate: a supervisor rebuild requires reaping sessions first anyway).
+  Frozen daemons prefer this bundle; `--supervisor-child` remains the fallback when the
+  bundle is absent, and `SWE_MUX_SUPERVISOR_EXE` overrides resolution in any mode.
+- `packaging/redeploy_desktop.py` is the frozen update workflow (usable by an agent from
+  inside a supervised session): preflight (dedicated supervisor running, no live
+  `swe-mux-action.exe` task terminals), detach-stop the daemon and shell, rebuild, relaunch;
+  the fresh daemon reattaches every live session.
 - Packaged `--daemon-child` re-enters the daemon entry inside a separate process; source mode
   uses `python -m swe_mux`. Packaged `--supervisor-child` mirrors the same split for the PTY
   supervisor; source mode uses `python -m swe_mux.supervisor`. The daemon discovers-or-spawns

@@ -236,12 +236,16 @@ class DesktopRuntime:
         log_path = self.config.data_dir / "desktop-daemon.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("ab", buffering=0) as log:
+            # cwd anchors in the data dir: an Explorer launch inherits
+            # cwd=dist/swe-mux, and any long-lived process anchored there locks
+            # the dist tree against session-preserving rebuilds.
             self.child = subprocess.Popen(
                 daemon_command(self.config.config_path),
                 env=environment,
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
+                cwd=str(self.config.data_dir),
                 creationflags=flags,
             )
         deadline = time.monotonic() + 30

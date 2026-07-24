@@ -13,7 +13,7 @@ rendering and local interaction; pure helpers own transformations that need dete
 | Workspace composition | `App.tsx` | fetch/coordinate Projects, sessions, layouts, menus, overlays |
 | Layout algebra | `layout.ts` | parse/migrate and pure stack/split/leaf transforms |
 | Mobile projection | `mobileWorkspace.ts` | pure flatten/select/adjacent-close rules; no persistence |
-| Terminal viewport | `TerminalPane.tsx`, `terminalProtocol.ts`, `terminalViewport.ts`, `terminalRenderer.ts`, `terminalRenderDiagnostics.ts` | xterm/WS lifecycle, pre-replay attach sizing, renderer policy/fallback, replay, input, responsive fitting, dev-only render diagnostics |
+| Terminal viewport | `TerminalPane.tsx`, `terminalProtocol.ts`, `terminalViewport.ts`, `terminalRenderer.ts`, `terminalRenderDiagnostics.ts` | xterm/WS lifecycle, pre-replay attach sizing, renderer policy/fallback, replay, device-response classification/Codex late-color suppression, input, responsive fitting, dev-only render diagnostics |
 | Project resources | `ProjectResource.tsx`, `ProjectNoteEditor.tsx`, `noteSaveQueue.ts` | file tree/editors and note-specific save isolation |
 | History | `HistoryBrowser.tsx` | filters, transcript review, backfill progress/actions |
 | Projects | `ProjectsManager.tsx` | configured catalog UI, not workspace placement |

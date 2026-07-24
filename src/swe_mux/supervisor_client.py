@@ -15,9 +15,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -45,17 +47,59 @@ class SupervisorUnavailable(RuntimeError):
     """No healthy supervisor could be reached (and, if requested, spawned)."""
 
 
+SUPERVISOR_EXE_ENV = "SWE_MUX_SUPERVISOR_EXE"
+SUPERVISOR_BUNDLE_DIR = "swe-mux-supervisor"
+SUPERVISOR_BUNDLE_EXE = "swe-mux-supervisor.exe"
+
+
+def dedicated_supervisor_exe(
+    *,
+    executable: str | None = None,
+    frozen: bool | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path | None:
+    """Locate the standalone supervisor bundle, when one applies.
+
+    The dedicated bundle exists so rebuilding ``dist/swe-mux`` never collides
+    with a running supervisor's file image. Resolution order:
+
+    - ``SWE_MUX_SUPERVISOR_EXE`` env override (any mode).
+    - Frozen: the ``swe-mux-supervisor`` sibling of the app's dist folder.
+    - Source: none — source daemons launch the supervisor from source so the
+      code being iterated on is the code that runs, never a stale frozen copy.
+    """
+    env = os.environ if environ is None else environ
+    override = env.get(SUPERVISOR_EXE_ENV)
+    if override:
+        path = Path(override)
+        return path if path.is_file() else None
+    frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
+    if not frozen:
+        return None
+    executable = executable or sys.executable
+    candidate = (
+        Path(executable).resolve().parent.parent / SUPERVISOR_BUNDLE_DIR / SUPERVISOR_BUNDLE_EXE
+    )
+    return candidate if candidate.is_file() else None
+
+
 def supervisor_command(
     config_path: Path,
     *,
     executable: str | None = None,
     frozen: bool | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> list[str]:
-    """Mirror ``daemon_command``'s frozen/source handling for the supervisor."""
+    """Resolve how to launch the supervisor: dedicated bundle, frozen child, or source."""
+    dedicated = dedicated_supervisor_exe(executable=executable, frozen=frozen, environ=environ)
+    config_args = ["--config", str(config_path)]
+    if dedicated is not None:
+        return [str(dedicated), *config_args]
     executable = executable or sys.executable
     frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
-    config_args = ["--config", str(config_path)]
     if frozen:
+        # Fallback for a dist tree without the dedicated bundle: the supervisor
+        # then shares the app image, so app rebuilds require reaping first.
         return [executable, "--supervisor-child", *config_args]
     return [executable, "-m", "swe_mux.supervisor", *config_args]
 
@@ -268,12 +312,16 @@ class SupervisorClient:
         )
         with log_path.open("ab", buffering=0) as log_file:
             # Popen returns immediately (the supervisor is a long-lived sibling,
-            # never waited on here), so it does not block the loop.
+            # never waited on here), so it does not block the loop. cwd is the
+            # data dir (the supervisor also chdirs itself): inheriting a cwd
+            # inside dist/ would lock the app tree against rebuilds for as long
+            # as the supervisor lives.
             process = subprocess.Popen(  # noqa: ASYNC220
                 command,
                 stdin=subprocess.DEVNULL,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
+                cwd=str(config.data_dir),
                 creationflags=creationflags,
             )
         deadline = time.monotonic() + SPAWN_DEADLINE_SECONDS

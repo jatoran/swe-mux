@@ -552,6 +552,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     config_path = args.config
     data_dir = resolve_data_dir(config_path)
+    # A process's cwd locks that directory on Windows. Anchor in the data dir
+    # so a supervisor spawned from (or inside) dist/ never blocks an app
+    # rebuild, and so a deleted spawn directory cannot break relative resolution.
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        os.chdir(data_dir)
+    except OSError:
+        log.warning("could not anchor supervisor cwd in %s", data_dir, exc_info=True)
     mutex = SingleInstanceMutex(instance_key(config_path))
     if mutex.already_running:
         log.info("another supervisor already owns this config; exiting")

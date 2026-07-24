@@ -95,6 +95,18 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   assign a supervised PID to a daemon-held Job handle (that would reap agents on daemon exit);
   nested per-session Jobs are created supervisor-side. Shutdown intent comes from outside the
   daemon: quit reaps through `reap_all_and_exit`, detach only flushes mirrored session metadata.
+- The frozen supervisor ships as its own bundle (`dist/swe-mux-supervisor`), never inside
+  `dist/swe-mux`, so app rebuilds cannot collide with a running supervisor's image. Keep the
+  supervisor's import closure inside the hash-gated source list in `packaging/build_desktop.py`;
+  adding an import to `supervisor.py`/`pty_host.py` without updating that list ships a stale
+  bundle. Daemon self-restart (`/api/daemon/restart`) must spawn the successor with
+  `--relaunch-wait` and detach intent; it is refused without an attached supervisor unless
+  forced, because an unpreserved restart is a session-killing action.
+- A Windows process's working directory locks that directory against deletion. Every
+  long-lived swe-mux process (shell-spawned daemon, self-restart successor, supervisor) must
+  anchor its cwd in the data dir, and the supervisor chdirs itself defensively at startup — a
+  supervisor whose cwd landed inside `dist/` would silently block every session-preserving
+  rebuild even though its own image lives elsewhere.
 - Windowed builds must route only allowlisted internal module entrypoints through `desktop.py`;
   daemon-owned maintenance subprocesses use `subprocess_flags.py`, while interactive commands
   remain under ConPTY so suppressing console flashes never suppresses terminal output.

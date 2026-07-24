@@ -73,6 +73,13 @@ responsive controls.
 - Backdrop clicks close Settings. Dirty settings first open an in-app Save/Discard decision;
   interaction with that confirmation is inside the modal boundary and cannot also trigger the
   Settings backdrop.
+- The app menu's `MAINTENANCE` section (mirrored in the sidebar context menu and command
+  palette as `daemon.reload`/`ui.reload`) exposes the session-preserving reloads on every
+  device, including mobile. "Reload daemon (keep sessions)" posts `/api/daemon/restart`, shows
+  a blocking wait overlay while the daemon is down, and reloads the page when the successor
+  answers health; the server refuses (409, surfaced as a toast) when no PTY supervisor is
+  attached so the action can never silently kill sessions. "Reload UI" is a plain page reload
+  for picking up freshly built frontend assets.
 
 ## Settings contract
 
