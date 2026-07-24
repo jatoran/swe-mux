@@ -35,19 +35,25 @@ def test_usage_dashboard_exposes_phase2_evidence_without_identity_overclaim() ->
     assert "Token drops alone remain unknown" in dashboard
 
 
-def test_reset_indicator_is_purple_deduplicated_and_sound_is_device_local() -> None:
+def test_reset_indicator_is_purple_deduplicated_and_sound_is_per_device_profile() -> None:
     accounts = source("ProviderAccounts.tsx")
     sounds = source("sessionSounds.ts")
     sound_settings = source("NotificationSoundSettings.tsx")
+    device_settings = source("deviceSettings.ts")
     styles = source("style.css")
     assert "quota-reset-indicator" in accounts
     assert "swe-mux:last-seen-reset" in accounts
-    assert "swe-mux:session-sounds-v1" in sounds
+    # Sound preferences moved from per-browser localStorage to server-persisted
+    # desktop/mobile device-class profiles; the old local blob is imported once.
+    assert "soundPreferencesFor" in sounds and "rawDomain" in sounds
+    assert "'swe-mux:session-sounds-v1'" in device_settings
+    assert "migrateLegacySounds" in device_settings
     assert "unexpected_quota_reset" in sounds
     assert "/api/telemetry/quota-resets/" in accounts
     assert "manual Codex usage" in accounts
     assert "discard as error" in accounts
-    assert "Enable sounds on this device" in sound_settings
+    assert "Enable sounds for" in sound_settings
+    assert "settings-profile-switch" in sound_settings
     assert "#a855f7" in styles
 
 

@@ -145,6 +145,7 @@ def test_desktop_control_accepts_only_ip_loopback_peers() -> None:
 def control_app(token: str | None = None) -> tuple[web.Application, asyncio.Event]:
     app = web.Application()
     event = asyncio.Event()
+    app["shutdown_state"] = {"intent": None}
     if token is not None:
         app["desktop_control_token"] = token
         app["desktop_shutdown_event"] = event
@@ -168,8 +169,23 @@ async def test_desktop_shutdown_requires_the_exact_secret() -> None:
             "/api/desktop/shutdown", headers={"Authorization": "Bearer secret-token"}
         )
         assert accepted.status == 202
-        assert await accepted.json() == {"status": "shutting_down"}
+        assert await accepted.json() == {"status": "shutting_down", "mode": "quit"}
         assert event.is_set()
+        assert app["shutdown_state"]["intent"] == "quit"
+        restart = await client.post(
+            "/api/desktop/shutdown",
+            headers={"Authorization": "Bearer secret-token"},
+            json={"mode": "restart"},
+        )
+        assert restart.status == 202
+        assert await restart.json() == {"status": "shutting_down", "mode": "restart"}
+        assert app["shutdown_state"]["intent"] == "detach"
+        rejected = await client.post(
+            "/api/desktop/shutdown",
+            headers={"Authorization": "Bearer secret-token"},
+            json={"mode": "explode"},
+        )
+        assert rejected.status == 400
     finally:
         await client.close()
 

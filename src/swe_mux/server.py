@@ -98,13 +98,14 @@ from .project_files import (
 from .project_watcher import ProjectFileWatcher
 from .projects import ProjectManager
 from .prompt_library import PromptLibrary, PromptScope
-from .push import PushSender, PushStore
-from .settings_store import SettingsStore
 from .provider_accounts import ProviderAccountError, ProviderAccountManager
+from .push import PushSender, PushStore
 from .reconcile import reconcile_external_history
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import Session, SessionManager
+from .settings_store import SettingsStore
 from .spawn_contract import SpawnRequest
+from .supervisor_client import SupervisorClient
 from .tailscale import (
     enable_mobile_voice_serve,
     is_tailscale_ip,
@@ -275,6 +276,9 @@ def create_app(
     app["preview_http_semaphore"] = asyncio.Semaphore(PREVIEW_HTTP_CONCURRENCY)
     app["preview_ws_semaphore"] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
     app["hook_ingress_windows"] = {}
+    # Mutable holder because aiohttp freezes app keys once started; carries the
+    # externally-signaled shutdown intent (quit vs restart/detach) to cleanup.
+    app["shutdown_state"] = {"intent": None}
     if desktop_control_token is not None and desktop_shutdown_event is not None:
         app["desktop_control_token"] = desktop_control_token
         app["desktop_shutdown_event"] = desktop_shutdown_event
@@ -480,6 +484,21 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await projects.start()
     history_backfills = HistoryBackfillManager(history, projects)
     reaper = ReaperJob()
+    supervisor_client: SupervisorClient | None = None
+    if config.pty_supervisor_enabled:
+        try:
+            connected_client = await SupervisorClient.connect_or_spawn(config)
+            supervisor_client = connected_client
+            log.info(
+                "PTY supervisor connected (pid %d, %d existing session(s))",
+                connected_client.supervisor_pid,
+                len(connected_client.initial_sessions),
+            )
+        except Exception:
+            log.exception(
+                "PTY supervisor unavailable; sessions will run in-process and "
+                "will not survive a daemon restart"
+            )
     adapters: dict[str, BackendAdapter] = {
         "shell": ShellAdapter(config.shell_exe),
         "claude": ClaudeAdapter(config.claude_exe, config.data_dir, config.claude_args),
@@ -500,7 +519,15 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         f"http://127.0.0.1:{config.port}",
         child_env,
         hook_spool_dir=config.data_dir / "hook-spool",
+        supervisor=supervisor_client,
     )
+    if supervisor_client is not None:
+        try:
+            adopted = await sessions.adopt_supervisor_sessions()
+            if adopted:
+                log.info("reattached %d live session(s) from the PTY supervisor", adopted)
+        except Exception:
+            log.exception("supervisor session adoption failed")
     git_monitor = GitMonitor(sessions, events, config.git_poll_seconds)
     hooks = MetaHookEngine(config.data_dir / "hooks.toml", events, sessions)
     automation_store = AutomationStore(config.database_path)
@@ -608,6 +635,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         history_backfills=history_backfills,
         sessions=sessions,
         reaper=reaper,
+        supervisor=supervisor_client,
         git_monitor=git_monitor,
         hooks=hooks,
         automation=automation,
@@ -656,7 +684,23 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await fleet.stop()
     await process_inspector.stop()
     await git_monitor.stop()
-    await sessions.shutdown()
+    # Shutdown intent (SESSION_PRESERVING_RELOAD §5.3): "quit" reaps everything
+    # (today's behavior, and always the case without a supervisor); "detach"
+    # leaves supervisor-owned sessions running so the next daemon reattaches.
+    # The intent comes from outside the daemon (desktop shutdown endpoint);
+    # with a supervisor attached, an unqualified exit (Ctrl-C, crash-adjacent
+    # teardown) defaults to detach — the tmux model.
+    intent = app["shutdown_state"]["intent"] or ("detach" if supervisor_client else "quit")
+    await sessions.shutdown(intent=intent)
+    if supervisor_client is not None:
+        if intent == "quit":
+            await supervisor_client.reap_all_and_exit()
+        else:
+            log.info(
+                "detaching from PTY supervisor; live sessions keep running "
+                "(muxd --shutdown stops everything)"
+            )
+        await supervisor_client.close()
     await telemetry.stop()
     await tier0.stop()
     history.close()
@@ -769,17 +813,33 @@ async def service_worker(request: web.Request) -> web.StreamResponse:
     path: Path = request.app["frontend_dir"] / "sw.js"
     if not path.is_file():
         raise web.HTTPNotFound()
-    return web.FileResponse(path, headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
+    return web.FileResponse(
+        path, headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"}
+    )
 
 
 async def health(request: web.Request) -> web.Response:
     sessions: SessionManager = request.app.get("sessions")
     live = sum(s.pty.isalive() for s in sessions.sessions.values()) if sessions else 0
-    return json_response({"ok": True, "live_sessions": live, "version": "0.1.0"})
+    supervisor = request.app.get("supervisor")
+    return json_response(
+        {
+            "ok": True,
+            "live_sessions": live,
+            "version": "0.1.0",
+            "supervisor": bool(supervisor is not None and supervisor.connected),
+        }
+    )
 
 
 async def desktop_shutdown(request: web.Request) -> web.Response:
-    """Stop a desktop-managed daemon without exposing network shutdown authority."""
+    """Stop a desktop-managed daemon without exposing network shutdown authority.
+
+    ``mode`` carries the shutdown intent one level down (session-preserving
+    reload): "quit" (default) reaps every session including supervisor-owned
+    ones; "restart" detaches, leaving supervisor-owned sessions running for the
+    next daemon to reattach.
+    """
     expected: str | None = request.app.get("desktop_control_token")
     shutdown_event: asyncio.Event | None = request.app.get("desktop_shutdown_event")
     if expected is None or shutdown_event is None:
@@ -790,8 +850,16 @@ async def desktop_shutdown(request: web.Request) -> web.Response:
     supplied = authorization[7:].strip() if authorization.startswith("Bearer ") else ""
     if not supplied or not secrets.compare_digest(supplied, expected):
         raise web.HTTPForbidden(text="invalid desktop control token")
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        body = {}
+    mode = str(body.get("mode", "quit")) if isinstance(body, dict) else "quit"
+    if mode not in {"quit", "restart"}:
+        raise web.HTTPBadRequest(text="mode must be quit or restart")
+    request.app["shutdown_state"]["intent"] = "quit" if mode == "quit" else "detach"
     shutdown_event.set()
-    response = json_response({"status": "shutting_down"}, 202)
+    response = json_response({"status": "shutting_down", "mode": mode}, 202)
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -2516,10 +2584,10 @@ async def relaunch_session(request: web.Request) -> web.Response:
     return json_response({"session": session.record.snapshot(), "replaced": old_id}, 201)
 
 
-async def _await_native_switch(record: Any, previous: str, timeout: float) -> bool:
+async def _await_native_switch(record: Any, previous: str, timeout_seconds: float) -> bool:
     """Wait for the daemon to observe an in-CLI conversation id switch."""
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
+    deadline = loop.time() + timeout_seconds
     while loop.time() < deadline:
         current = str(record.native_session_id or "")
         if current and current != previous:
@@ -2558,7 +2626,7 @@ async def branch_session(request: web.Request) -> web.Response:
 
     if record.backend == "claude":
         source.pty.write("/branch\r")
-        if not await _await_native_switch(record, native_id, timeout=15.0):
+        if not await _await_native_switch(record, native_id, timeout_seconds=15.0):
             # The fork never registered; do not resume the (still-live) original —
             # that would collide on its transcript. The source pane may already be
             # branched; the original stays resumable from history.

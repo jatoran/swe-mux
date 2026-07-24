@@ -12,8 +12,11 @@ It should call domain packages rather than acquire their storage or process resp
 |---|---|---|
 | `desktop.py` | Windows tray/WebView lifecycle, single instance, login startup, daemon child supervision | PTYs, HTTP composition, Project/session state |
 | `__main__.py` | daemon argument/config resolution and reusable aiohttp site lifecycle | desktop window/tray state |
-| `session.py` | live session registry, spawn/stop, PTY fanout, bounded replay, interactive vs one-shot exit lifecycle | provider transcript parsing, Project mutation |
+| `session.py` | live session registry, spawn/stop, PTY fanout, bounded replay, interactive vs one-shot exit lifecycle, supervisor-session adoption | provider transcript parsing, Project mutation |
 | `pty_host.py` | ConPTY/process creation, resize, low-level I/O, root exit status, dead-host release | HTTP, SQLite, layout |
+| `supervisor.py` | standalone PTY supervisor process: ConPTY + read-loop + authoritative scrollback ownership, reaper Job, loopback IPC server, discovery file, single-instance mutex, reap-all teardown | HTTP composition, SQLite, orchestration, observation — anything volatile |
+| `supervisor_client.py` | daemon-side supervisor connection (framing/RPC/output dispatch), `RemotePtyHost` PtyHost facade, discover-or-spawn, metadata mirroring, `kill_server` | ConPTY creation, session registry |
+| `scrollback.py` | byte-exact scrollback ring (append/seed/replay cursoring) shared by daemon sessions and the supervisor | subscribers, persistence |
 | `subprocess_flags.py` | consoleless flags for daemon-owned Windows background commands | interactive ConPTY children |
 | `build_support.py` | lock-safe staged frontend publication for desktop packaging | Vite compilation, runtime asset serving |
 | `projects.py` | Project/Group validation and lifecycle | Git-derived identity, file content |
@@ -86,6 +89,12 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
 - Desktop presentation and daemon lifetime remain separate processes. Close/minimize hides the
   WebView; only authenticated loopback Quit stops the daemon. Never expose shutdown through the
   ordinary remote-control authority.
+- The PTY supervisor (`supervisor.py`) must stay small and near-frozen: it cannot be hot-updated
+  without killing every live session, so volatile code belongs in the daemon. It imports only
+  `pty_host.py`, `scrollback.py`, and `win_jobobj.py`. In supervisor mode the daemon must never
+  assign a supervised PID to a daemon-held Job handle (that would reap agents on daemon exit);
+  nested per-session Jobs are created supervisor-side. Shutdown intent comes from outside the
+  daemon: quit reaps through `reap_all_and_exit`, detach only flushes mirrored session metadata.
 - Windowed builds must route only allowlisted internal module entrypoints through `desktop.py`;
   daemon-owned maintenance subprocesses use `subprocess_flags.py`, while interactive commands
   remain under ConPTY so suppressing console flashes never suppresses terminal output.

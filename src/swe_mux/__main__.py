@@ -25,6 +25,14 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="disable the direct Tailscale listener for this run",
     )
+    parser.add_argument(
+        "--shutdown",
+        action="store_true",
+        help=(
+            "kill-server: reap every session owned by the PTY supervisor and stop "
+            "it, then exit (with pty_supervisor_enabled, Ctrl-C only detaches)"
+        ),
+    )
     return parser
 
 
@@ -114,6 +122,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         level=logging.DEBUG if args.dev else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if args.shutdown:
+        from .supervisor_client import kill_server
+
+        stopped = asyncio.run(kill_server(config))
+        print(
+            "PTY supervisor stopped; all supervised sessions were reaped."
+            if stopped
+            else "No PTY supervisor is running for this config."
+        )
+        return
     token = os.environ.get("SWE_MUX_DESKTOP_CONTROL_TOKEN") or None
     try:
         asyncio.run(serve(config, desktop_control_token=token))

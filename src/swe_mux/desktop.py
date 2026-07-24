@@ -72,10 +72,14 @@ def health_snapshot(url: str, *, timeout: float = 1.0) -> dict[str, object] | No
     return payload if isinstance(payload, dict) and payload.get("ok") is True else None
 
 
-def request_daemon_shutdown(url: str, token: str, *, timeout: float = 5.0) -> bool:
+def request_daemon_shutdown(
+    url: str, token: str, *, timeout: float = 5.0, mode: str = "quit"
+) -> bool:
+    """Intent-signaled daemon shutdown: "quit" reaps sessions, "restart" preserves
+    supervisor-owned sessions for the next daemon to reattach."""
     request = urllib.request.Request(
         f"{url}/api/desktop/shutdown",
-        data=b"{}",
+        data=json.dumps({"mode": mode}).encode("utf-8"),
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         method="POST",
     )
@@ -302,10 +306,41 @@ class DesktopRuntime:
         if not self.exiting:
             self.window.hide()
 
+    def restart_daemon(self, *_: object) -> None:
+        """Replace the daemon process while supervisor-owned sessions keep running.
+
+        The session-preserving half of "reload with my changes": the daemon is
+        asked to detach (mode=restart), then a fresh daemon is spawned and
+        reattaches to the supervisor's live sessions.
+        """
+        if self.exiting:
+            return
+        if health_snapshot(self.url) is not None:
+            if not request_daemon_shutdown(self.url, self.token, mode="restart"):
+                show_desktop_warning(
+                    "Restart failed",
+                    "The daemon did not accept the restart request. It may not have "
+                    "been started with desktop control.",
+                )
+                return
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline and health_snapshot(self.url, timeout=0.25):
+                time.sleep(0.1)
+            if self.child is not None and self.child.poll() is None:
+                try:
+                    self.child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.child.terminate()
+            self.child = None
+        try:
+            self.ensure_daemon()
+        except RuntimeError as exc:
+            show_desktop_warning("Restart failed", str(exc))
+
     def quit(self, *_: object) -> None:
         if self.exiting:
             return
-        stopped = request_daemon_shutdown(self.url, self.token)
+        stopped = request_daemon_shutdown(self.url, self.token, mode="quit")
         if stopped:
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline and health_snapshot(
@@ -361,20 +396,31 @@ class DesktopRuntime:
         )
         self.window.events.closing += self.close_to_tray
         self.window.events.minimized += self.hide_minimized
+        menu_items = [
+            pystray.MenuItem("Open swe-mux", self.show, default=True),
+            pystray.MenuItem("Open in browser", self.open_external),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "Start with Windows", self.toggle_startup, checked=self.startup_enabled
+            ),
+        ]
+        if self.config.pty_supervisor_enabled:
+            # Only meaningful with the PTY supervisor: without it a daemon
+            # restart kills every session, so the item would be a footgun.
+            menu_items.append(
+                pystray.MenuItem("Restart daemon (keep sessions)", self.restart_daemon)
+            )
+        menu_items.extend(
+            [
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Quit swe-mux", self.quit),
+            ]
+        )
         self.icon = pystray.Icon(
             "swe-mux",
             create_tray_image(),
             "swe-mux",
-            menu=pystray.Menu(
-                pystray.MenuItem("Open swe-mux", self.show, default=True),
-                pystray.MenuItem("Open in browser", self.open_external),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem(
-                    "Start with Windows", self.toggle_startup, checked=self.startup_enabled
-                ),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Quit swe-mux", self.quit),
-            ),
+            menu=pystray.Menu(*menu_items),
         )
         threading.Thread(target=self.icon.run, name="swe-mux-tray", daemon=True).start()
         threading.Thread(
@@ -449,6 +495,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         from .__main__ import main as daemon_main
 
         daemon_main(arguments[1:])
+        return
+    if arguments[:1] == ["--supervisor-child"]:
+        from .supervisor import main as supervisor_main
+
+        supervisor_main(arguments[1:])
         return
     args = desktop_parser().parse_args(arguments)
     try:

@@ -24,6 +24,7 @@ RESTART_FIELDS = {
     "automation_concurrency",
     "automation_queue_size",
     "openrouter_request_timeout_seconds",
+    "pty_supervisor_enabled",
 }
 BUILTIN_THEME_PAIRS = {
     "dark": ("#090a0c", "#d9dde2"),
@@ -189,6 +190,10 @@ class Config:
     claude_args: list[str] = field(default_factory=list)
     codex_args: list[str] = field(default_factory=list)
     scrollback_bytes: int = 5 * 1024 * 1024
+    # Session-preserving reload: spawn PTYs in the out-of-process supervisor so
+    # live sessions survive a daemon restart. Off by default while the split
+    # proves itself; in-process spawning remains the automatic fallback.
+    pty_supervisor_enabled: bool = False
     terminal_renderer: str = "auto"
     git_poll_seconds: float = 5.0
     process_poll_seconds: float = 5.0

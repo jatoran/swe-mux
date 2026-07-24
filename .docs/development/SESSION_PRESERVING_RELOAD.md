@@ -1,12 +1,16 @@
 # Session-preserving daemon reload (PTY supervisor split)
 
-Status: design + implementation plan, **not yet started**. Goal: update daemon and UI code
-and restart the daemon without killing live agent sessions, so agents keep running
-uninterrupted (even mid-work) across a reload. §7 is the implementation checklist; the rest
-is the design reference it points into.
+Status: **implemented** (2026-07-23), shipped behind `pty_supervisor_enabled` (default off,
+per §7.5). Goal: update daemon and UI code and restart the daemon without killing live agent
+sessions, so agents keep running uninterrupted (even mid-work) across a reload. §7 is the
+implementation checklist; the rest is the design reference it points into.
 
-This is unscheduled work — it is not in `ROADMAP.md` or `CONTROL_PLANE_ROADMAP.md`. Promote
-it into one of those if/when it is picked up.
+Implementation map: `supervisor.py` (supervisor process), `supervisor_client.py`
+(daemon-side client + `RemotePtyHost`), `scrollback.py` (shared ring buffer),
+`session.py` (remote spawn/fallback, adoption, intent-aware shutdown), `server.py`
+(wiring + shutdown-intent endpoint), `desktop.py` (tray Restart daemon, `--supervisor-child`),
+`__main__.py` (`muxd --shutdown`), tests in `tests/test_pty_supervisor.py`.
+Promoted into `ROADMAP.md` under "Implemented baseline".
 
 Routing note (per `.docs/CLAUDE.md`): implementing this touches process/session lifecycle,
 package boundaries, and daemon shutdown, so it will require updates to
@@ -228,30 +232,43 @@ even if they'd been working." Ship §5 for the real property.
 Ordered to never ship a broken state. Do not check a box from code presence alone —
 implementation + tests + docs must agree.
 
-- [ ] **7.1 Pin the `PtyHost` contract with tests.** Behavioral tests for the current
+- [x] **7.1 Pin the `PtyHost` contract with tests.** Behavioral tests for the current
   in-process `PtyHost` (spawn/write/read/resize/exit/release, console-host reaping). The
   out-of-process implementation must pass the same suite. The interface becomes the thing that
-  cannot silently break.
-- [ ] **7.2 Extract the supervisor process.** Move `PtyHost` + read loop + scrollback + reaper
+  cannot silently break. *(`tests/test_pty_supervisor.py` — the contract tests are
+  parameterized over `PtyHost` and `RemotePtyHost`; console-host reaping remains covered by
+  `test_windows_reaper.py` plus the supervisor reap test.)*
+- [x] **7.2 Extract the supervisor process.** Move `PtyHost` + read loop + scrollback + reaper
   Job behind a standalone entry point (mirror `daemon_command`'s frozen/source handling). It
-  owns the ConPTYs and the Job.
-- [ ] **7.3 Define the IPC protocol.** Local named pipe/socket. Messages:
-  `spawn / write / resize / subscribe / detach / snapshot / reap_all_and_exit`. Include a
-  **protocol-version handshake** on attach.
-- [ ] **7.4 Make `SessionManager` a supervisor client.** Discover-or-spawn via named
-  pipe/mutex keyed on config path; on daemon boot, reattach and pull per-session snapshots
-  (reuse the `_attach_locked` shape). Scrollback now lives supervisor-side.
-- [ ] **7.5 Ship behind a flag with in-process fallback.** If IPC to the supervisor fails,
-  fall back to today's in-process spawn. Flip the default only once the flagged path is solid.
-- [ ] **7.6 Wire intent-signaled shutdown.** Desktop: keep Quit = `reap_all_and_exit`, add
-  "Restart daemon". Terminal: Ctrl-C detaches, add explicit `kill-server`/`--shutdown`. Add
-  single-instance re-discovery and a "force quit everything" action; consider a linger timeout.
-- [ ] **7.7 Move scrollback-tail detection to the subscription stream** (`session.py:1173`).
-- [ ] **7.8 Docs.** Update `design/architecture.md`, `design/features/sessions.md`,
-  `design/features/desktop-shell.md`, `design/interfaces.md`, `technical/backend/packages.md`
-  per the routing table. Promote this item into `ROADMAP.md`/`CONTROL_PLANE_ROADMAP.md`.
-- [ ] **7.9 (optional) Interim auto-resume-on-restart** (§6) if a stopgap is wanted before
-  the split lands.
+  owns the ConPTYs and the Job. *(`supervisor.py`; frozen entry `--supervisor-child` in
+  `desktop.py`, source entry `python -m swe_mux.supervisor`.)*
+- [x] **7.3 Define the IPC protocol.** Local socket (loopback TCP + random token in the
+  discovery file). Messages: `spawn / write / resize / set_graceful_exit / subscribe /
+  unsubscribe / set_meta / stop / release / remove / list / ping / reap_all_and_exit`, with a
+  protocol-version handshake in `hello`.
+- [x] **7.4 Make `SessionManager` a supervisor client.** Discover-or-spawn via discovery file
+  + supervisor-side single-instance mutex keyed on config path; on daemon boot,
+  `adopt_supervisor_sessions()` reattaches and pulls per-session snapshots (subscribe replay,
+  the `_attach_locked` shape one level down). Authoritative scrollback lives supervisor-side;
+  the daemon seeds and maintains a mirror from the subscription stream.
+- [x] **7.5 Ship behind a flag with in-process fallback.** `pty_supervisor_enabled` (default
+  off). If IPC to the supervisor fails, spawning falls back to today's in-process path. Flip
+  the default only once the flagged path is solid.
+- [x] **7.6 Wire intent-signaled shutdown.** Desktop: Quit = mode `quit` → sessions stopped +
+  `reap_all_and_exit`; new tray "Restart daemon (keep sessions)" = mode `restart` → detach.
+  Terminal: Ctrl-C detaches; explicit `muxd --shutdown` is kill-server (also the
+  "force quit everything" action). Single-instance re-discovery on next launch; linger
+  timeout implemented as supervisor self-exit after 15 idle minutes with no clients **and**
+  no live sessions (never while agents are alive).
+- [x] **7.7 Scrollback-tail detection over the subscription stream.** The daemon-side mirror
+  (`Session.scrollback`) is fed exclusively by the supervisor subscription in remote mode and
+  seeded from the snapshot on reattach; `_pty_appears_idle` and nested-agent detection read
+  that mirror unchanged.
+- [x] **7.8 Docs.** Updated `design/architecture.md`, `design/features/sessions.md`,
+  `design/features/desktop-shell.md`, `design/interfaces.md`, `technical/backend/packages.md`;
+  promoted into `ROADMAP.md` (Implemented baseline).
+- [ ] **7.9 (optional) Interim auto-resume-on-restart** (§6) — not needed; the split shipped
+  directly.
 - [ ] **7.10 (optional) UI dev ergonomics:** auto-reconnect-with-backoff, build-version
   banner, Vite dev proxy for WS.
 
@@ -274,3 +291,10 @@ Before committing to the full split, validate the load-bearing claim in isolatio
 spawned by a standalone supervisor process survives that supervisor's client dying and can be
 re-subscribed.** If that prototype holds on the target Windows build (including the frozen
 pywinpty path), the rest is mechanical. If it doesn't, revisit §6 as the ceiling.
+
+**Validated.** `test_supervisor_process_outlives_client_and_reaps_on_command` runs the
+supervisor as a real subprocess, aborts the client connection uncleanly, verifies the agent
+process and its output survive, re-subscribes from a second client with scrollback intact,
+and confirms `reap_all_and_exit` kills the tree and removes the discovery file. The frozen
+path is verified too: the packaged `swe-mux.exe --supervisor-child` was driven directly
+through the same spawn → I/O → client-abort → re-subscribe → reap sequence (2026-07-23).

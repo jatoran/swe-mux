@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import builtins
 import json
 import logging
+import os
 import secrets
 import sqlite3
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -18,8 +19,10 @@ from .event_bus import EventBus
 from .git_projects import ProjectIdentity, resolve_project
 from .history import HistoryIndex
 from .models import GitState, SessionRecord, SessionState
-from .pty_host import PtyHost
+from .pty_host import PtyHost, merge_environment
 from .runtime_cwd import Osc7Parser, local_directory_from_osc7
+from .scrollback import ScrollbackBuffer
+from .supervisor_client import RemotePtyHost, SupervisorClient, host_for_adoption
 from .win_jobobj import ReaperJob
 
 log = logging.getLogger(__name__)
@@ -100,55 +103,6 @@ def terminal_exit_outcome(
     return state, final_reason, detail
 
 
-class ScrollbackBuffer:
-    def __init__(self, max_bytes: int) -> None:
-        self.max_bytes = max_bytes
-        self._chunks: deque[bytes] = deque()
-        self._size = 0
-        self._written = 0
-
-    def append(self, data: bytes) -> None:
-        self._written += len(data)
-        if self.max_bytes <= 0:
-            self._chunks.clear()
-            self._size = 0
-            return
-        if len(data) >= self.max_bytes:
-            self._chunks.clear()
-            self._chunks.append(data[-self.max_bytes :])
-            self._size = self.max_bytes
-            return
-        self._chunks.append(data)
-        self._size += len(data)
-        excess = self._size - self.max_bytes
-        while excess > 0 and self._chunks:
-            first = self._chunks[0]
-            if len(first) <= excess:
-                self._chunks.popleft()
-                self._size -= len(first)
-                excess -= len(first)
-            else:
-                self._chunks[0] = first[excess:]
-                self._size -= excess
-                excess = 0
-
-    def bytes(self) -> bytes:
-        return b"".join(self._chunks)
-
-    @property
-    def position(self) -> int:
-        return self._written
-
-    def bytes_since(self, position: int) -> builtins.bytes:
-        retained = self.bytes()
-        retained_start = self._written - len(retained)
-        if position >= self._written:
-            return b""
-        if position <= retained_start:
-            return retained
-        return retained[position - retained_start :]
-
-
 @dataclass(eq=False, slots=True)
 class PtySubscriber:
     queue: asyncio.Queue[bytes | dict[str, Any]]
@@ -162,7 +116,7 @@ class Session:
     def __init__(
         self,
         record: SessionRecord,
-        pty: PtyHost,
+        pty: PtyHost | RemotePtyHost,
         adapter: BackendAdapter,
         max_scrollback: int,
         hook_secret: str,
@@ -237,6 +191,10 @@ class Session:
         # this correlation in memory only; normalized events expose the stable
         # tool name without persisting backend-specific transcript identifiers.
         self.tool_names: dict[str, str] = {}
+        # Supervisor-backed sessions mirror their metadata (record snapshot,
+        # hook secret, transcript path) into the supervisor so a future daemon
+        # can rebuild this Session after a restart. None for in-process PTYs.
+        self.meta_sink: Callable[[], None] | None = None
 
     def subscribe(self, maxsize: int = 1024) -> PtySubscriber:
         subscriber = PtySubscriber(asyncio.Queue(maxsize=maxsize))
@@ -293,6 +251,14 @@ class Session:
                 subscriber.queue.put_nowait(frame)
             except asyncio.QueueFull:
                 self._schedule_resync(subscriber)
+        # getattr-guarded so publish_update stays callable from lightweight
+        # stubs that exercise transition() as a pure arbitration contract.
+        meta_sink = getattr(self, "meta_sink", None)
+        if meta_sink is not None:
+            try:
+                meta_sink()
+            except Exception:
+                log.debug("session meta sink failed", exc_info=True)
 
     def publish_exit(self, reason: str) -> None:
         self.revision += 1
@@ -400,6 +366,7 @@ class SessionManager:
         ingress_url: str,
         child_env: dict[str, str] | None = None,
         hook_spool_dir: Path | None = None,
+        supervisor: SupervisorClient | None = None,
     ) -> None:
         self.adapters, self.reaper, self.history, self.events = adapters, reaper, history, events
         self.max_scrollback = max_scrollback
@@ -408,6 +375,10 @@ class SessionManager:
         self.hook_spool_dir = hook_spool_dir
         if hook_spool_dir is not None:
             hook_spool_dir.mkdir(parents=True, exist_ok=True)
+        # When set, PTYs are spawned in the out-of-process supervisor so live
+        # sessions survive a daemon restart; in-process spawning remains the
+        # fallback whenever the supervisor is unreachable.
+        self.supervisor = supervisor
         self.sessions: dict[str, Session] = {}
 
     async def spawn(
@@ -487,46 +458,77 @@ class SessionManager:
             record.run_project_scope_id = project.id
             record.run_repo_group_id = project.repo_group_id
         hook_secret = secrets.token_urlsafe(24)
-        pty = PtyHost(
-            spawn_spec.executable,
-            spawn_spec.argv,
-            str(resolved_cwd),
-            reaper=self.reaper,
-            graceful_exit=adapter.graceful_exit_keys(),
-            env_extra={
-                **self.child_env,
-                **{
-                    key: value
-                    for candidate in self.adapters.values()
-                    for key, value in candidate.session_env(sid).items()
-                },
-                **spawn_spec.env,
-                **(profile_env or {}),
-                "MUX_SESSION_ID": sid,
-                "MUX_HOOK_URL": f"{self.ingress_url}/api/hooks/{sid}",
-                "MUX_PROMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/promote",
-                "MUX_DEMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/demote",
-                "MUX_HOOK_SECRET": hook_secret,
-                **(
-                    {"MUX_HOOK_SPOOL": str(self.hook_spool_dir / f"{sid}.jsonl")}
-                    if self.hook_spool_dir is not None
-                    else {}
-                ),
+        env_extra = {
+            **self.child_env,
+            **{
+                key: value
+                for candidate in self.adapters.values()
+                for key, value in candidate.session_env(sid).items()
             },
-        )
+            **spawn_spec.env,
+            **(profile_env or {}),
+            "MUX_SESSION_ID": sid,
+            "MUX_HOOK_URL": f"{self.ingress_url}/api/hooks/{sid}",
+            "MUX_PROMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/promote",
+            "MUX_DEMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/demote",
+            "MUX_HOOK_SECRET": hook_secret,
+            **(
+                {"MUX_HOOK_SPOOL": str(self.hook_spool_dir / f"{sid}.jsonl")}
+                if self.hook_spool_dir is not None
+                else {}
+            ),
+        }
         pty_started_at = time.perf_counter()
-        # winpty/ConPTY process creation is synchronous and can be slow when Windows
-        # security scanning or a shell profile is busy. Keep it off the aiohttp loop
-        # so the UI, event stream, and other terminals stay responsive meanwhile.
-        pty.prepare()
-        await asyncio.to_thread(pty.spawn)
+        pty: PtyHost | RemotePtyHost | None = None
+        if self.supervisor is not None and self.supervisor.connected:
+            remote = RemotePtyHost(
+                self.supervisor,
+                sid,
+                appname=spawn_spec.executable,
+                argv=tuple(spawn_spec.argv),
+                cwd=str(resolved_cwd),
+                # The supervisor spawns children with exactly this daemon-built
+                # environment; its own (potentially stale) environ is excluded.
+                env=merge_environment(os.environ, env_extra),
+                graceful_exit=adapter.graceful_exit_keys(),
+                max_scrollback=self.max_scrollback,
+            )
+            remote.prepare()
+            try:
+                await asyncio.to_thread(remote.spawn)
+                pty = remote
+            except Exception:
+                log.exception(
+                    "supervisor spawn failed for %s; falling back to in-process PTY", sid
+                )
+                self.supervisor.unregister_host(remote)
+        if pty is None:
+            pty = PtyHost(
+                spawn_spec.executable,
+                spawn_spec.argv,
+                str(resolved_cwd),
+                reaper=self.reaper,
+                graceful_exit=adapter.graceful_exit_keys(),
+                env_extra=env_extra,
+            )
+            # winpty/ConPTY process creation is synchronous and can be slow when
+            # Windows security scanning or a shell profile is busy. Keep it off the
+            # aiohttp loop so the UI, event stream, and other terminals stay
+            # responsive meanwhile.
+            pty.prepare()
+            await asyncio.to_thread(pty.spawn)
         startup_timing_ms["pty_spawn"] = round((time.perf_counter() - pty_started_at) * 1000, 1)
         record.pid = pty.pid
         record.process_job_assignment = pty.reaper_assignment
         registration_started_at = time.perf_counter()
         ownership_job: ReaperJob | None = None
         ownership_error: str | None = None
-        create_child = getattr(self.reaper, "create_child", None)
+        # Supervisor-owned PTYs get their nested per-session job supervisor-side;
+        # a daemon-held job handle would kill the tree on daemon exit and defeat
+        # the whole survival property.
+        create_child = (
+            None if isinstance(pty, RemotePtyHost) else getattr(self.reaper, "create_child", None)
+        )
         if create_child:
             try:
                 ownership_job = create_child()
@@ -548,6 +550,8 @@ class SessionManager:
             startup_started_at,
         )
         self.sessions[sid] = session
+        if isinstance(pty, RemotePtyHost):
+            self._attach_meta_sink(session)
         transcript = adapter.transcript_path(native_id, resolved_cwd)
         # The PTY is usable now. Durable history/event registration shares SQLite
         # with transcript reconciliation and can occasionally queue behind a large
@@ -626,6 +630,105 @@ class SessionManager:
         task = getattr(session, "registration_task", None)
         if task is not None and task is not asyncio.current_task() and not task.done():
             await asyncio.shield(task)
+
+    def _attach_meta_sink(self, session: Session) -> None:
+        client = self.supervisor
+        if client is None:
+            return
+
+        def push() -> None:
+            client.queue_meta(session.record.id, self._session_meta(session))
+
+        session.meta_sink = push
+        push()
+
+    @staticmethod
+    def _session_meta(session: Session) -> dict[str, Any]:
+        return {
+            "record": session.record.snapshot(),
+            "hook_secret": session.hook_secret,
+            "transcript_path": (
+                str(session.transcript_path) if session.transcript_path else None
+            ),
+            "agent_lifecycle_id": session.agent_lifecycle_id,
+        }
+
+    async def adopt_supervisor_sessions(self) -> int:
+        """Rebuild live sessions announced by the supervisor at daemon boot.
+
+        This is the reattach half of the session-preserving reload: the
+        supervisor kept the ConPTYs and authoritative scrollback while the
+        daemon was gone; each entry's mirrored metadata rebuilds the record,
+        the scrollback snapshot seeds the local mirror, and the normal fanout/
+        observer/detection machinery resumes from there.
+        """
+        client = self.supervisor
+        if client is None:
+            return 0
+        adopted = 0
+        for info in client.initial_sessions:
+            sid = str(info.get("sid") or "")
+            if not sid or sid in self.sessions:
+                continue
+            raw_meta = info.get("meta")
+            meta: dict[str, Any] = raw_meta if isinstance(raw_meta, dict) else {}
+            record_snapshot = meta.get("record")
+            if not isinstance(record_snapshot, dict):
+                # Nothing to rebuild from. Leave the entry untouched: killing it
+                # would violate the survival contract, and a daemon that does
+                # know it may still come back.
+                log.warning("supervised session %s has no metadata; not adopting", sid)
+                continue
+            try:
+                record = SessionRecord.from_snapshot(record_snapshot)
+            except (TypeError, ValueError):
+                log.exception("could not rebuild session record for %s", sid)
+                continue
+            if record.state in {"exited", "crashed"}:
+                # Fully ended and already persisted by a previous daemon; the
+                # supervisor entry is a leftover.
+                client.notify({"t": "remove", "sid": sid})
+                continue
+            host = host_for_adoption(client, info)
+            host.prepare()
+            try:
+                response, replay = await client.subscribe(host)
+            except Exception:
+                log.exception("could not subscribe to supervised session %s", sid)
+                client.unregister_host(host)
+                continue
+            adapter = self.adapters.get(record.backend) or self.adapters["shell"]
+            hook_secret = str(meta.get("hook_secret") or "") or secrets.token_urlsafe(24)
+            session = Session(record, host, adapter, self.max_scrollback, hook_secret)
+            session.scrollback.seed(replay, int(response.get("position", len(replay))))
+            transcript = meta.get("transcript_path")
+            session.transcript_path = (
+                Path(transcript) if isinstance(transcript, str) and transcript else None
+            )
+            lifecycle = meta.get("agent_lifecycle_id")
+            session.agent_lifecycle_id = lifecycle if isinstance(lifecycle, str) else None
+            if record.backend in {"claude", "codex"}:
+                session.agent_promoted_at = time.time()
+            self.sessions[sid] = session
+            self._attach_meta_sink(session)
+            session.tasks.add(asyncio.create_task(self._fanout(session), name=f"fanout-{sid}"))
+            session.tasks.add(asyncio.create_task(self._ticker(session), name=f"ticker-{sid}"))
+            if host.isalive():
+                if record.backend in {"claude", "codex"}:
+                    self._start_observer(session, session.transcript_path)
+                elif record.backend == "shell":
+                    self._start_detection(session)
+            else:
+                await self._mark_ended(session, "process_exit")
+            adopted += 1
+            await self.events.emit(
+                "session_reattached",
+                session_id=sid,
+                source="daemon",
+                backend=record.backend,
+                pid=record.pid,
+            )
+        return adopted
 
     def _start_observer(self, session: Session, transcript: Path | None) -> None:
         if session.observer_task and not session.observer_task.done():
@@ -1417,6 +1520,14 @@ class SessionManager:
             if not session.pty.isalive():
                 await self._mark_ended(session, "process_exit")
                 return
+            if session.meta_sink is not None:
+                # Catches metadata changes that never pass through
+                # publish_update (e.g. an observer retargeting the transcript
+                # path); the client dedupes, so unchanged state costs nothing.
+                try:
+                    session.meta_sink()
+                except Exception:
+                    log.debug("session meta sink failed", exc_info=True)
 
     async def _mark_ended(self, session: Session, reason: str) -> None:
         if session.record.state in {"exited", "crashed"}:
@@ -1487,15 +1598,25 @@ class SessionManager:
         await asyncio.to_thread(session.pty.stop)
         await self._mark_ended(session, "killed")
 
-    async def shutdown(self) -> None:
-        await asyncio.gather(
-            *(
-                self.stop(sid)
-                for sid, s in self.sessions.items()
-                if s.record.state not in {"exited", "crashed"}
-            ),
-            return_exceptions=True,
-        )
+    async def shutdown(self, *, intent: str = "quit") -> None:
+        """Stop sessions for daemon shutdown.
+
+        ``intent="quit"`` is today's behavior: every live session is stopped
+        and its end persisted. ``intent="detach"`` is the session-preserving
+        reload path: supervisor-owned sessions are left running untouched
+        (their metadata is flushed so the next daemon can reattach) and only
+        in-process fallback sessions — which die with this process regardless —
+        are stopped cleanly.
+        """
+        targets = [
+            sid
+            for sid, session in self.sessions.items()
+            if session.record.state not in {"exited", "crashed"}
+            and not (intent == "detach" and isinstance(session.pty, RemotePtyHost))
+        ]
+        await asyncio.gather(*(self.stop(sid) for sid in targets), return_exceptions=True)
+        if intent == "detach" and self.supervisor is not None:
+            await self.supervisor.flush_meta()
 
     def resolve(self, identity: str) -> Session:
         if identity in self.sessions:

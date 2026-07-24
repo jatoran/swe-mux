@@ -11,7 +11,13 @@ continues to own every terminal.
 - Desktop supervisor: `swe-mux`; window/tray/login-startup owner.
 - Managed daemon: separate `muxd` child launched with a desktop control secret.
 - Hide: close/minimize removes the window from desktop presentation without daemon mutation.
-- Quit: explicit tray action that confirms live terminals and stops the managed daemon.
+- Quit: explicit tray action that confirms live terminals and stops the managed daemon
+  (shutdown `mode=quit`; with the PTY supervisor this also reaps every supervised session, so
+  the end state matches the in-process mode).
+- Restart daemon (keep sessions): tray action shown only when `pty_supervisor_enabled`. Sends
+  shutdown `mode=restart` (the daemon detaches from the PTY supervisor without reaping), waits
+  for the old daemon to exit, and starts a fresh one, which reattaches to the still-running
+  sessions. This is the session-preserving "reload with my changes" path.
 
 ## Operations
 
@@ -55,7 +61,9 @@ continues to own every terminal.
   `dist/swe-mux/swe-mux-action.exe`, and `_internal/`. The complete `onedir` folder is the
   distributable unit; neither executable is standalone.
 - Packaged `--daemon-child` re-enters the daemon entry inside a separate process; source mode
-  uses `python -m swe_mux`.
+  uses `python -m swe_mux`. Packaged `--supervisor-child` mirrors the same split for the PTY
+  supervisor; source mode uses `python -m swe_mux.supervisor`. The daemon discovers-or-spawns
+  the supervisor itself, so the desktop shell never needs to know it exists.
 - Frozen Project Actions use the sibling console executable as their ConPTY root. It shares the
   package but inherits the pseudoconsole correctly, so build tools cannot detach into a visible
   external CMD window. Source mode uses `python -m swe_mux.action_runner`.

@@ -48,6 +48,11 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
   system-wide provider-account selection.
 - Universal rules, normalized events, read-only OpenRouter observers, annotations,
   budgets, composite attention, fleet intelligence, and compatibility hooks.
+- Session-preserving daemon reload (`pty_supervisor_enabled`, default off): an out-of-process
+  PTY supervisor owns ConPTYs/scrollback/reaper Job so a daemon restart leaves agents running
+  and the next daemon reattaches; intent-signaled shutdown (desktop Quit/Restart, terminal
+  detach + `muxd --shutdown`) keeps explicit quit reaping cleanly. Design and completion
+  checklist: `SESSION_PRESERVING_RELOAD.md`.
 
 ## Delivery order
 

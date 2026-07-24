@@ -94,6 +94,24 @@ class SessionRecord:
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)
 
+    @classmethod
+    def from_snapshot(cls, data: dict[str, Any]) -> SessionRecord:
+        """Rebuild a record from a ``snapshot()`` dict persisted by another daemon.
+
+        Tolerant of schema drift in both directions: unknown keys from a newer
+        daemon are dropped, and keys a newer daemon added keep their defaults
+        when adopting metadata written by an older one.
+        """
+        known = set(cls.__dataclass_fields__)
+        kwargs = {key: value for key, value in data.items() if key in known and key != "git"}
+        record = cls(**kwargs)
+        git = data.get("git")
+        if isinstance(git, dict):
+            record.git = GitState(
+                **{k: v for k, v in git.items() if k in GitState.__dataclass_fields__}
+            )
+        return record
+
     @property
     def trusted_scope_id(self) -> str | None:
         if self.agent_run_id:

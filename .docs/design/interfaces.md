@@ -10,10 +10,27 @@ GET  /health
 POST /desktop/shutdown   Authorization: Bearer DESKTOP_CONTROL_TOKEN
 ```
 
-`GET /health` remains ordinary local/tailnet diagnostics. Shutdown exists only when the daemon
+`GET /health` remains ordinary local/tailnet diagnostics; it also reports `supervisor: bool`
+(whether the daemon is attached to the PTY supervisor). Shutdown exists only when the daemon
 was launched with desktop control, accepts IP-loopback peers only, compares the generated token
-in constant time, and returns `202 {status: "shutting_down"}`. The token lives under the daemon
-data directory and never enters browser state or the tailnet API. Standalone `muxd` returns 404.
+in constant time, and returns `202 {status: "shutting_down", mode}`. An optional JSON body
+`{mode: "quit"|"restart"}` (default `quit`) carries shutdown intent: `quit` reaps every session
+(including PTY-supervisor sessions); `restart` detaches so supervised sessions survive for the
+next daemon to reattach. The token lives under the daemon data directory and never enters
+browser state or the tailnet API. Standalone `muxd` returns 404.
+
+## PTY supervisor IPC (local only)
+
+With `pty_supervisor_enabled`, the daemon talks to the standalone PTY supervisor over a
+loopback TCP socket discovered through `<data_dir>/supervisor.json` (pid, port, random token,
+protocol version). Frames are length-prefixed JSON headers with optional binary payloads;
+`hello` performs a constant-time token check plus a protocol-version handshake and announces
+existing sessions. Messages: `spawn / write / resize / set_graceful_exit / subscribe /
+unsubscribe / set_meta / stop / release / remove / list / ping / reap_all_and_exit`. This
+surface is process-local plumbing, not a public API: it is bound to 127.0.0.1, authenticated
+by a token readable only from the local data directory, and versioned so a mismatched daemon
+refuses to attach (falling back to in-process PTYs). `muxd --shutdown` is the explicit
+kill-server command: it reaps all supervised sessions and stops the supervisor.
 
 ## Canonical Projects and Groups
 

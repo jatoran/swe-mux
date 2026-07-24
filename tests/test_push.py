@@ -12,7 +12,9 @@ from swe_mux.settings_store import SettingsStore
 
 
 def _event(event_type: str, **payload: object) -> MuxEvent:
-    return MuxEvent(ts=0.0, session_id="s1", source="daemon", type=event_type, payload=dict(payload))
+    return MuxEvent(
+        ts=0.0, session_id="s1", source="daemon", type=event_type, payload=dict(payload)
+    )
 
 
 def test_application_server_key_is_stable_and_valid(tmp_path: Path) -> None:
@@ -50,7 +52,9 @@ def test_subscription_add_rejects_invalid(tmp_path: Path, bad: object) -> None:
 
 def test_add_rejects_unknown_profile(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
-        PushStore(tmp_path).add({"endpoint": "https://ok/x", "keys": {"p256dh": "p", "auth": "a"}}, "tablet")
+        PushStore(tmp_path).add(
+            {"endpoint": "https://ok/x", "keys": {"p256dh": "p", "auth": "a"}}, "tablet"
+        )
 
 
 def test_presence_expires_with_clock(tmp_path: Path) -> None:
@@ -99,8 +103,10 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
 async def _make_sender(tmp_path: Path, clock, *, profile: str = "mobile"):
     store = PushStore(tmp_path, clock=clock)
     store.add({"endpoint": "https://push/e1", "keys": {"p256dh": "p", "auth": "a"}}, profile)
+    from swe_mux.event_bus import EventBus
+
     settings = SettingsStore(tmp_path)
-    return store, settings, PushSender(store, settings, __import__("swe_mux.event_bus", fromlist=["EventBus"]).EventBus(), clock=clock)
+    return store, settings, PushSender(store, settings, EventBus(), clock=clock)
 
 
 async def test_sender_delivers_enabled_category(tmp_path: Path, recorder: _Recorder) -> None:

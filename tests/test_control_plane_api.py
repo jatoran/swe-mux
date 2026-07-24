@@ -94,7 +94,9 @@ async def test_relaunch_replays_task_shell_and_retires_the_old_session(
         relaunchable=True,
     )
     old = SimpleNamespace(record=old_record)
-    new_record = SimpleNamespace(id="new-task", relaunchable=False, snapshot=lambda: {"id": "new-task"})
+    new_record = SimpleNamespace(
+        id="new-task", relaunchable=False, snapshot=lambda: {"id": "new-task"}
+    )
     published: list[bool] = []
     new = SimpleNamespace(record=new_record, publish_update=lambda: published.append(True))
     stopped: list[str] = []

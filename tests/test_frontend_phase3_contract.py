@@ -24,7 +24,12 @@ def test_normal_ui_flows_do_not_use_browser_native_dialogs() -> None:
 
     assert "alert(" not in source
     assert "confirm(" not in source
-    assert "prompt(" not in source
+    # One deliberate exception: the note editor's manual-copy fallback fires only
+    # after the Clipboard API and selection fallbacks have both failed (insecure
+    # mobile contexts), where a native prompt is the last remaining surface.
+    assert source.count("prompt(") == 1
+    editor = (root / "ProjectNoteEditor.tsx").read_text(encoding="utf-8")
+    assert "window.prompt('Copy the text below:'" in editor
     assert "Access token required" not in source
     assert "mux.token" not in source
     assert "Create project" in source
@@ -52,6 +57,7 @@ def test_terminal_find_is_inline_and_feature_complete() -> None:
 def test_terminal_clipboard_rail_and_selection_autocopy_are_wired() -> None:
     root = Path(__file__).parents[1]
     pane = (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
+    rail = (root / "frontend" / "src" / "commandRail.ts").read_text(encoding="utf-8")
     css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 
     assert 'class="terminal-action-rail"' in pane
@@ -60,9 +66,11 @@ def test_terminal_clipboard_rail_and_selection_autocopy_are_wired() -> None:
     assert "autoCopySelection" in pane and "requestAnimationFrame(autoCopySelection)" in pane
     assert ".terminal-action-rail" in css
     # The rail also sends terminal keys and toggles the on-screen keyboard for read/select
-    # mode; it overflows and scrolls horizontally rather than wrapping.
+    # mode; it overflows and scrolls horizontally rather than wrapping. The key/item
+    # definitions themselves live in commandRail.ts (user-configurable rail).
     assert "sendKey" in pane and "toggleKeyboard" in pane
-    assert "\\x03" in pane and "\\x1b[A" in pane and "kbd-toggle" in pane
+    assert "\\x03" in rail and "\\x1b[A" in rail and "kbd-toggle" in rail
+    assert "kbd-toggle" in pane
     assert "overflow-x:auto" in css and ".terminal-action-rail .kbd-toggle" in css
 
 

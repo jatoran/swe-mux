@@ -81,7 +81,10 @@ def test_scan_cancels_and_reports_progress(tmp_path: Path) -> None:
     write_claude_transcript(home, root, "one")
     write_claude_transcript(home, root, "two")
 
-    assert scan_external_transcripts(home, limit=None, roots=[root], should_cancel=lambda: True) == []
+    assert (
+        scan_external_transcripts(home, limit=None, roots=[root], should_cancel=lambda: True)
+        == []
+    )
 
     seen: list[int] = []
     scan_external_transcripts(

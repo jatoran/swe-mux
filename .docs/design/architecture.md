@@ -2,7 +2,12 @@
 
 ## Vocabulary
 
-- Daemon: `muxd`; owns PTYs, persistence, HTTP, WebSockets, and background workers.
+- Daemon: `muxd`; owns persistence, HTTP, WebSockets, and background workers. Owns PTYs
+  in-process by default; with the PTY supervisor enabled it is a supervisor client instead.
+- PTY supervisor: optional standalone `swe_mux.supervisor` process (flag:
+  `pty_supervisor_enabled`). Owns ConPTYs, their read loops, authoritative scrollback, and the
+  kill-on-close reaper Job so live sessions survive a daemon restart. Deliberately small and
+  near-frozen; volatile code stays in the daemon.
 - Desktop supervisor: optional Windows `swe-mux` process; owns WebView2 window, tray, login
   startup, and a separately running managed daemon.
 - Project: explicit canonical folder and the only session/layout/resource container.
@@ -29,6 +34,16 @@ WebView2/browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ─�
                                └── global + per-session Win32 jobs
 ```
 
+With `pty_supervisor_enabled` the PTY column moves one process out (session-preserving
+reload): the daemon becomes a client of a token-authenticated loopback IPC socket, and the
+supervisor owns the ConPTYs, their read loops, authoritative scrollback, and the reaper Job.
+Restarting the daemon then leaves agents running; the next daemon discovers the supervisor
+via `<data_dir>/supervisor.json`, reattaches, and rebuilds each live session from mirrored
+metadata plus a scrollback snapshot. Shutdown intent is signaled from outside the daemon:
+"quit" reaps everything through the supervisor (identical end state to the in-process mode),
+while "restart"/detach leaves supervised sessions alive. In-process spawning remains the
+automatic fallback whenever the supervisor is unreachable.
+
 ## Package boundaries
 
 - `server.py`: transport composition and Project-bound session operations.
@@ -42,7 +57,12 @@ WebView2/browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ─�
   resource tabs.
 - `project_actions.py`: trusted discovery and normalization of VS Code, package, and native
   Project Actions; `action_runner.py` executes one normalized step beneath a session root.
-- `session.py`: live registry, spawn/stop, scrollback, PTY fanout.
+- `session.py`: live registry, spawn/stop, scrollback, PTY fanout, supervisor-session adoption.
+- `supervisor.py`: standalone PTY supervisor process — ConPTY ownership, IPC server,
+  authoritative scrollback, reaper Job, discovery file, single-instance mutex. Near-frozen.
+- `supervisor_client.py`: daemon-side supervisor connection, `RemotePtyHost` (PtyHost-shaped
+  facade), discover-or-spawn, session-metadata mirroring, `kill_server`.
+- `scrollback.py`: byte-exact scrollback ring shared by sessions and the supervisor.
 - `history.py`: SQLite schema, agent history/search index, Project layout persistence, and
   serialized durable access.
 - `history_backfill.py`: cancellable daemon-local Project scans over complete provider-native
@@ -102,7 +122,12 @@ WebView2/browser SPA ── HTTP + WS ──> aiohttp daemon ──> ConPTY ─�
 
 ## Failure modes
 
-- Daemon crash closes the global job and terminates owned child processes.
+- Daemon crash closes the global job and terminates owned child processes — in-process PTY
+  mode only. With the PTY supervisor, a daemon crash or restart leaves agents running; the
+  next daemon reattaches. Only a supervisor crash/kill (its Job closes) or an explicit quit /
+  `muxd --shutdown` takes agents down. The supervisor itself cannot be hot-updated without
+  killing sessions; it self-exits after a bounded idle window with no clients and no live
+  sessions.
 - Browser disconnect removes subscribers while PTYs and bounded scrollback remain live.
 - Desktop/tray crash removes only the local desktop viewport. A new supervisor reconnects to a
   healthy daemon; an unmanaged daemon cannot be terminated through desktop control.

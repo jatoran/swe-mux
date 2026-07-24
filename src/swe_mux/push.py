@@ -24,8 +24,9 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from cryptography.hazmat.primitives import serialization
 from py_vapid import Vapid01
@@ -71,16 +72,32 @@ def classify_notification(event: MuxEvent) -> dict[str, str] | None:
         return {"category": "reset", "title": "swe-mux", "body": "Unexpected quota reset."}
     if kind == "approval_needed":
         if payload.get("kind") == "input":
-            return {"category": "attention", "title": "swe-mux — question", "body": "The agent is waiting for your answer."}
-        return {"category": "attention", "title": "swe-mux — approval", "body": "The agent needs your approval."}
+            return {
+                "category": "attention",
+                "title": "swe-mux — question",
+                "body": "The agent is waiting for your answer.",
+            }
+        return {
+            "category": "attention",
+            "title": "swe-mux — approval",
+            "body": "The agent needs your approval.",
+        }
     if kind in ("turn_failed", "turn_aborted", "session_crashed") or (
         kind == "state_changed" and payload.get("state") == "crashed"
     ):
-        return {"category": "failure", "title": "swe-mux — failed", "body": "The agent run failed."}
+        return {
+            "category": "failure",
+            "title": "swe-mux — failed",
+            "body": "The agent run failed.",
+        }
     if kind == "turn_ended":
         return {"category": "complete", "title": "swe-mux", "body": "The agent finished a turn."}
     if kind == "state_changed" and payload.get("state") == "idle":
-        return {"category": "waiting", "title": "swe-mux — ready", "body": "The agent is waiting for your input."}
+        return {
+            "category": "waiting",
+            "title": "swe-mux — ready",
+            "body": "The agent is waiting for your input.",
+        }
     return None
 
 
@@ -99,7 +116,10 @@ class PushStore:
             try:
                 return Vapid01.from_pem(self._pem_path.read_bytes())
             except Exception:
-                log.exception("stored VAPID key unreadable; regenerating (existing subscriptions will be dropped)")
+                log.exception(
+                    "stored VAPID key unreadable; regenerating "
+                    "(existing subscriptions will be dropped)"
+                )
         vapid = Vapid01()
         vapid.generate_keys()
         _atomic_write(self._pem_path, vapid.private_pem())
@@ -139,7 +159,11 @@ class PushStore:
         keys = subscription.get("keys")
         if not isinstance(endpoint, str) or not endpoint.startswith("https://"):
             raise ValueError("subscription endpoint must be an https URL")
-        if not isinstance(keys, dict) or not isinstance(keys.get("p256dh"), str) or not isinstance(keys.get("auth"), str):
+        if (
+            not isinstance(keys, dict)
+            or not isinstance(keys.get("p256dh"), str)
+            or not isinstance(keys.get("auth"), str)
+        ):
             raise ValueError("subscription is missing p256dh/auth keys")
         if profile not in ("desktop", "mobile"):
             raise ValueError("profile must be desktop or mobile")
@@ -223,7 +247,9 @@ class PushSender:
                 continue
             if in_quiet_time(settings):
                 continue
-            if settings.get("suppressWhenFocused") and self._store.is_present(str(sub["endpoint"]), now):
+            if settings.get("suppressWhenFocused") and self._store.is_present(
+                str(sub["endpoint"]), now
+            ):
                 continue
             await self._send(sub, note)
             delivered = True
@@ -232,7 +258,13 @@ class PushSender:
 
     async def _send(self, sub: dict[str, Any], note: dict[str, str]) -> None:
         payload = json.dumps(
-            {"title": note["title"], "body": note["body"], "type": note["category"], "tag": note["category"], "url": "/"}
+            {
+                "title": note["title"],
+                "body": note["body"],
+                "type": note["category"],
+                "tag": note["category"],
+                "url": "/",
+            }
         )
         try:
             await asyncio.to_thread(

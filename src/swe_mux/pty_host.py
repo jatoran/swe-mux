@@ -89,6 +89,11 @@ class PtyHost:
     rows: int = 30
     reaper: ReaperJob | None = None
     env_extra: Mapping[str, str] | None = None
+    # When provided, the child environment is built from this mapping instead of
+    # this process's os.environ. The out-of-process supervisor passes {} plus a
+    # fully merged env_extra so children see the daemon's environment, not the
+    # (potentially stale) supervisor's.
+    env_base: Mapping[str, str] | None = None
     graceful_exit: str = "exit\r"
     _pty: winpty.PTY | None = field(default=None, init=False)
     _queue: asyncio.Queue[bytes] | None = field(default=None, init=False)
@@ -133,7 +138,8 @@ class PtyHost:
             self._pty = create_pty(self.cols, self.rows)
             env = None
             if self.env_extra:
-                merged = merge_environment(os.environ, self.env_extra)
+                base = os.environ if self.env_base is None else self.env_base
+                merged = merge_environment(base, self.env_extra)
                 env = "\0".join(f"{k}={v}" for k, v in merged.items()) + "\0\0"
             # ConPTY is the Windows process boundary and therefore owns Windows argv
             # quoting. Backend adapters keep arguments structured and platform-neutral.

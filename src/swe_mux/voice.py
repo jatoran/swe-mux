@@ -1008,7 +1008,10 @@ class VoiceService:
             "stt_whisper_model": self.config.stt_whisper_model,
             "wake_words": list(self.config.voice_wake_words),
             "commands": [
-                {"action": str(command.get("action")), "phrases": list(command.get("phrases") or [])}
+                {
+                    "action": str(command.get("action")),
+                    "phrases": list(command.get("phrases") or []),
+                }
                 for command in self.config.voice_commands
                 if isinstance(command, dict)
             ],

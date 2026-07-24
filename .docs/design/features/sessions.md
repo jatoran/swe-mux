@@ -60,11 +60,26 @@ and reattachable browser viewports.
   agent History retains the terminal note identity so it can be reopened later.
 - Resume requires a target Project and a valid native identity/transcript. The new process
   starts at the selected Project root and receives a new mux identity.
+- Session-preserving reload (`pty_supervisor_enabled`): PTYs spawn inside the standalone PTY
+  supervisor through a `RemotePtyHost` with the same host contract (spawn/write/resize/
+  isalive/exit_status/release/stop). The supervisor keeps the authoritative scrollback and the
+  per-session/global reaper Jobs; the daemon mirrors scrollback from the subscription stream
+  (attach replay, nested-agent detection, and the PTY-idle watchdog all read the mirror). Each
+  session's record snapshot, hook secret, and transcript path are mirrored into the supervisor
+  (debounced, deduplicated) so a restarted daemon can rebuild the `Session`, reseed scrollback
+  from the supervisor snapshot, and restart its observer/detection tasks — agents mid-turn are
+  never touched. Shutdown intent decides the sessions' fate: quit stops and reaps everything as
+  before; detach (daemon restart) leaves supervised sessions running. If the supervisor is
+  unreachable at spawn time the daemon falls back to today's in-process ConPTY, whose lifetime
+  is daemon-bound as before.
 
 ## Key files
 
 - `src/swe_mux/session.py`
 - `src/swe_mux/pty_host.py`
+- `src/swe_mux/supervisor.py`
+- `src/swe_mux/supervisor_client.py`
+- `src/swe_mux/scrollback.py`
 - `src/swe_mux/git_projects.py`
 - `src/swe_mux/spawn_contract.py`
 - `src/swe_mux/adapters/`
