@@ -14,6 +14,12 @@
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
   `design/features/ui.md`, `technical/frontend/packages.md`
+- Changing the utility drawer (tabs, desktop dock/icon rail), command-rail placement, or where
+  inserted text lands: `design/features/ui.md`, `technical/frontend/packages.md`
+- Changing clipboard capture, the clipboard-history ring/panel, or where inserted text lands:
+  `design/features/ui.md`, `design/interfaces.md`, `design/data-model.md`,
+  `technical/frontend/packages.md`, `technical/backend/packages.md`,
+  `technical/backend/sqlite.md`, `design/features/remote-access.md`
 - Changing Windows desktop packaging, WebView, tray, login startup, or daemon shutdown:
   `design/features/desktop-shell.md`, `design/architecture.md`, `design/interfaces.md`,
   `design/features/remote-access.md`, `technical/backend/packages.md`
@@ -29,6 +35,9 @@
 - Changing automation, observers, attention, or legacy hooks:
   `design/features/automation.md`, `design/features/fleet-intelligence.md`,
   `design/features/meta-hooks.md`, `design/features/delivery-readiness.md`
+- Changing session status detection, the transition ledger, the state watchdog,
+  awaiting sub-reasons, the detection golden corpus, or status-health diagnostics:
+  `design/features/status-detection.md`, `design/features/delivery-readiness.md`
 - Changing per-project automation opt-in or the enablement dependency graph:
   `design/features/automation-enablement.md`, `design/features/project-resources.md`,
   `design/data-model.md`, `design/interfaces.md`

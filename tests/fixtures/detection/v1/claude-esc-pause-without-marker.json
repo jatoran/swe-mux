@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "esc_pause_without_marker",
+  "description": "ESC pause that writes no interrupt marker leaves an open tool tail; only the PTY idle-prompt backstop may recover it, and only after the full stall window.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "test"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Bash", "input": {}}], "stop_reason": "tool_use"}}},
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "partial", "is_error": false}]}}},
+    {"kind": "pty_tail", "data": "\u276f  ? for shortcuts"},
+    {"kind": "timer", "seconds": 30},
+    {"kind": "watchdog", "expect_state": "working"},
+    {"kind": "timer", "seconds": 31},
+    {"kind": "watchdog", "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "Bash"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "Bash", "success": true},
+      {"type": "turn_ended", "source": "watchdog-pty", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "watchdog-pty", "proof": "inferred"}
+    ],
+    "parser": {"status": "ready", "recognized": 3, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "terminal_mode_unknown_or_stale"
+  }
+}

@@ -11,6 +11,8 @@ export type GestureSlot =
   | 'swipe_right'
   | 'two_finger_swipe_left'
   | 'two_finger_swipe_right'
+  | 'two_finger_swipe_up'
+  | 'two_finger_swipe_down'
   | 'two_finger_tap'
 
 export const GESTURE_SLOTS: GestureSlot[] = [
@@ -18,6 +20,8 @@ export const GESTURE_SLOTS: GestureSlot[] = [
   'swipe_right',
   'two_finger_swipe_left',
   'two_finger_swipe_right',
+  'two_finger_swipe_up',
+  'two_finger_swipe_down',
   'two_finger_tap',
 ]
 
@@ -26,6 +30,8 @@ export const GESTURE_LABELS: Record<GestureSlot, string> = {
   swipe_right: 'Swipe right',
   two_finger_swipe_left: 'Two-finger swipe left',
   two_finger_swipe_right: 'Two-finger swipe right',
+  two_finger_swipe_up: 'Two-finger swipe up',
+  two_finger_swipe_down: 'Two-finger swipe down',
   two_finger_tap: 'Two-finger tap',
 }
 
@@ -35,8 +41,18 @@ export type MobileGestureSettings = Record<GestureSlot, string>
 export const defaultMobileGestureSettings: MobileGestureSettings = {
   swipe_left: 'mobileTab.next',
   swipe_right: 'mobileTab.previous',
-  two_finger_swipe_left: 'sidebar.toggle',
+  // Directional, matching where each panel lives: swiping right drags the
+  // left-edge sidebar in, swiping left (starting from the right edge) drags the
+  // right-edge utility drawer in. Both were sidebar.toggle before that drawer
+  // existed; config.py migrates the redundant default (schema 17).
+  two_finger_swipe_left: 'drawer.toggle',
   two_finger_swipe_right: 'sidebar.toggle',
+  // Vertical two-finger swipes were dead input before these slots existed. Down
+  // = push the on-screen keyboard away (read/select mode), which is the control
+  // touch users reach for most; up = the focused session's note. Both are
+  // rebindable to any command from Settings like every other slot.
+  two_finger_swipe_up: 'session.note',
+  two_finger_swipe_down: 'terminal.keyboardToggle',
   two_finger_tap: 'palette.open',
 }
 
@@ -67,6 +83,10 @@ export function classifyGesture(sample: GestureSample): GestureSlot | null {
   const absY = Math.abs(dy)
   const horizontalSwipe =
     absX >= GESTURE_THRESHOLDS.swipeMinDistance && absX >= absY * GESTURE_THRESHOLDS.swipeAxisRatio
+  // Vertical only ever resolves for two fingers: a single-finger vertical drag
+  // belongs to the terminal (scrollback / application wheel) and is never claimed.
+  const verticalSwipe =
+    absY >= GESTURE_THRESHOLDS.swipeMinDistance && absY >= absX * GESTURE_THRESHOLDS.swipeAxisRatio
 
   if (pointerCount >= 2) {
     if (
@@ -77,6 +97,7 @@ export function classifyGesture(sample: GestureSample): GestureSlot | null {
       return 'two_finger_tap'
     }
     if (horizontalSwipe) return dx < 0 ? 'two_finger_swipe_left' : 'two_finger_swipe_right'
+    if (verticalSwipe) return dy < 0 ? 'two_finger_swipe_up' : 'two_finger_swipe_down'
     return null
   }
 

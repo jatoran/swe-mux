@@ -2,8 +2,8 @@
 
 ## Why this exists
 
-History, Automation, Operational Telemetry, and Voice use separate connections and serialized
-executors against one WAL database. SQLite still has one writer slot. A transaction left open on
+History, Automation, Operational Telemetry, Voice, Tier 0, and Clipboard history use separate
+connections and serialized executors against one WAL database. SQLite still has one writer slot. A transaction left open on
 one connection can otherwise make unrelated session spawn or PTY event writes fail with
 `database is locked`.
 
@@ -85,4 +85,8 @@ regression is valuable because these user-visible paths historically exposed lea
 - `src/swe_mux/automation_store.py`
 - `src/swe_mux/operational_telemetry.py`
 - `src/swe_mux/voice.py`
+- `src/swe_mux/clipboard_store.py` — mirror-only participant: reads never touch SQLite (the ring
+  is in memory) and writes happen only while persistence is enabled, but every write it does make
+  goes through the same wrapper. It does **not** set `PRAGMA user_version`, which is per-file and
+  already claimed by another store.
 - `tests/test_automation_phase6.py`

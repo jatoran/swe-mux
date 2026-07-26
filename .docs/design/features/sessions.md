@@ -64,6 +64,12 @@ and reattachable browser viewports.
   agent History retains the terminal note identity so it can be reopened later.
 - Resume requires a target Project and a valid native identity/transcript. The new process
   starts at the selected Project root and receives a new mux identity.
+- Terminal environments are built from a scrubbed base: parent-Claude session markers
+  (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, session id/entrypoint/pid/effort) are dropped at
+  spawn (`spawn_contract.scrub_claude_session_markers`) because a daemon relaunched from inside
+  an agent session would otherwise mark every nested `claude` as a child session — disabling
+  its transcript saving and with it swe-mux's observation. Deliberate user configuration
+  (feature flags, `ANTHROPIC_*`) passes through untouched.
 - Session-preserving reload (`pty_supervisor_enabled`): PTYs spawn inside the standalone PTY
   supervisor through a `RemotePtyHost` with the same host contract (spawn/write/resize/
   isalive/exit_status/release/stop). The supervisor keeps the authoritative scrollback and the

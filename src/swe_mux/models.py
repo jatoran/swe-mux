@@ -6,6 +6,11 @@ from typing import Any, Literal
 
 SessionState = Literal["starting", "running", "working", "idle", "awaiting", "exited", "crashed"]
 
+# Typed sub-reason for the "awaiting" state: a blocking permission approval, a
+# question the agent asked (Q&A), an MCP/elicitation dialog, or a provider rate
+# limit. Free-text state_detail stays display-only; this field is the contract.
+AwaitingReason = Literal["approval", "question", "elicitation", "rate_limit"]
+
 
 @dataclass(slots=True)
 class GitState:
@@ -32,6 +37,8 @@ class SessionRecord:
     created_at: float = field(default_factory=time.time)
     state: SessionState = "starting"
     state_detail: str | None = None
+    # Set whenever state == "awaiting"; cleared by every transition elsewhere.
+    awaiting_reason: str | None = None
     tokens_in: int = 0
     tokens_out: int = 0
     context_window: int = 0

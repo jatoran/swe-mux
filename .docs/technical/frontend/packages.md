@@ -14,7 +14,7 @@ rendering and local interaction; pure helpers own transformations that need dete
 | Layout algebra | `layout.ts` | parse/migrate and pure stack/split/leaf transforms |
 | Mobile projection | `mobileWorkspace.ts` | pure flatten/select/adjacent-close rules; no persistence |
 | Terminal viewport | `TerminalPane.tsx`, `terminalProtocol.ts`, `terminalViewport.ts`, `terminalRenderer.ts`, `terminalRenderDiagnostics.ts` | xterm/WS lifecycle, pre-replay attach sizing, renderer policy/fallback, replay, device-response classification/Codex late-color suppression, input, responsive fitting, dev-only render diagnostics |
-| Project resources | `ProjectResource.tsx`, `ProjectNoteEditor.tsx`, `noteSaveQueue.ts` | file tree/editors and note-specific save isolation |
+| Project resources | `ProjectResource.tsx`, `ProjectNoteEditor.tsx`, `noteSaveQueue.ts`, `fileClipboard.ts` | file tree/editors, note-specific save isolation, and the pure path-joining/clipboard-truncation rules behind the tree's copy actions |
 | History | `HistoryBrowser.tsx` | filters, transcript review, backfill progress/actions |
 | Projects | `ProjectsManager.tsx` | configured catalog UI, not workspace placement |
 | Project actions | `ProjectRunMenu.tsx` | Run catalog, trust, and launch interaction |
@@ -24,6 +24,8 @@ rendering and local interaction; pure helpers own transformations that need dete
 | Guided onboarding | `GuidedTutorial.tsx`, `tutorial.ts` | action gates, coach-mark geometry, product-event matching, and device-local completion |
 | Voice conversation | `ConversationControl.tsx`, `conversation.ts`, `VoicePlayer.tsx`, `voice.ts`, `mobileVoice.ts` | one-device capture ownership, VAD/WAV encoding, wake commands, playback queue/barge-in, direct private-HTTPS redirect |
 | Automation/usage/processes | feature-named panels | feature-local navigation and presentation |
+| Utility drawer | `UtilityDrawer.tsx`, `drawerTabs.ts`, `ClipboardPanel.tsx`, `CommandsTab.tsx`, `PromptsTab.tsx`, `Notifications.tsx` | one host, two renderings (mobile overlay / desktop docked column + icon rail); tab registry, width/tab persistence, and per-tab bodies. Tab bodies own their own data and never place the host |
+| Clipboard capture | `clipboardHistory.ts`, `insertTarget.ts` | boot-installed copy capture (writeText wrapper + capture-phase copy/cut) with client-side dedupe, and pure last-focused-surface insert routing shared by every injecting surface |
 | Shared interaction | `dragReorder.ts`, `menuPosition.ts`, `modalFocus.ts`, `keys.ts`, `sidebarProjects.ts`, `sessionAttention.ts` | pure or narrowly stateful reusable behavior, including collapsed-Project labels and live/read aggregation |
 
 ## Extraction rule

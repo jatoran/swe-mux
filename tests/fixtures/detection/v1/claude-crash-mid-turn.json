@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "crash_mid_turn",
+  "description": "A process crash mid-turn maps to crashed through PTY ground truth and permanently blocks delivery; the open turn never resolves to idle.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "test"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Bash", "input": {}}], "stop_reason": "tool_use"}}},
+    {"kind": "exit", "exit_code": 1, "reason": "process_exit", "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "crashed"},
+    {"kind": "timer", "seconds": 5, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "crashed"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "Bash"},
+      {"type": "session_crashed", "source": "pty"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "crashed", "source": "pty", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 2, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "blocked",
+    "delivery_reason": "session_ended"
+  }
+}

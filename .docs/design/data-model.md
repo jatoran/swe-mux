@@ -35,6 +35,13 @@
   with `content_hash`, canonical `fingerprint`, and a `source_seq` pointer into the event log.
   Command text is never stored beyond bounded detail. Per-project opt-in and gated; see
   `features/tier0-facts.md`.
+- `clipboard_entries`: the clipboard-history ring — copied text with a unique `content_hash`
+  (re-copying promotes rather than duplicates), character/line counts, provenance
+  (`source`, `session_id`, `project_id`, `device`), and `pinned`. **Unlike every other table here
+  it is normally empty**: the ring is authoritative in memory and this table is written only while
+  `clipboard_history_persist` is on. Turning that setting off — or turning history off entirely —
+  deletes the rows. Secret-shaped and oversized copies never become rows at all; see
+  `features/ui.md`.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
 - Automation, notification, lineage, experience, batch, and voice tables retain their
@@ -84,3 +91,8 @@ OpenRouter key are never stored in SQLite or project files. Raw operational tele
 quota samples roll into daily summaries before deletion. Process and operational retention
 are independently configurable. Quota history contains account IDs and utilization, never
 credentials; process history contains command hashes, never command text.
+
+Clipboard history is the one store that holds arbitrary user text verbatim, so it is the one
+store that defaults to keeping nothing durable: memory-only unless persistence is opted into,
+count- and time-bounded (pins exempt), secret-shaped copies refused before an entry exists, and
+no copied text in the `clipboard_changed` events that announce ring changes.

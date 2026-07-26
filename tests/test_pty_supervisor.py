@@ -382,6 +382,10 @@ async def test_session_manager_reattaches_after_daemon_restart(
 
     first_client = await harness.connect()
     manager_one = make_manager(first_client)
+    # A daemon relaunched from inside an agent session carries these; they must
+    # never reach a terminal's environment (nested `claude` would disable
+    # transcript saving and break observation).
+    os.environ["CLAUDE_CODE_CHILD_SESSION"] = "1"
     try:
         session = await manager_one.spawn(
             backend="shell", name="reload-me", cwd=str(workdir), project_id="default"
@@ -389,6 +393,10 @@ async def test_session_manager_reattaches_after_daemon_restart(
         sid = session.record.id
         assert isinstance(session.pty, RemotePtyHost)
         assert "nested_session_job_assigned" in session.record.process_job_assignment
+        assert harness.server is not None
+        spawned_env = harness.server.sessions[sid].host.env_extra or {}
+        assert "CLAUDE_CODE_CHILD_SESSION" not in spawned_env
+        assert "MUX_SESSION_ID" in spawned_env
         if session.registration_task is not None:
             await session.registration_task
         session.pty.write("echo daemon_one_marker\r")
@@ -424,5 +432,6 @@ async def test_session_manager_reattaches_after_daemon_restart(
         await manager_two.stop(sid)
         assert revived.record.state in {"exited", "crashed"}
     finally:
+        os.environ.pop("CLAUDE_CODE_CHILD_SESSION", None)
         history.close()
         reaper.close()

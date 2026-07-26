@@ -40,8 +40,18 @@ PaneLeaf = terminal | note | preview | history
   a Files-focused open, and companion-note reuse all skip Files panes and prefer the first
   non-Files pane. An explicit drop or drag target is still honored exactly. Files is used as a
   last resort only when it is the sole pane.
-- Every pane has its own tab strip, active tab, and add action. There is no global tab strip,
-  dock/pop-out mode, detached layout, or separate resource workspace.
+- Every pane has its own tab strip and active tab. There is no global tab strip, dock/pop-out
+  mode, detached layout, or separate resource workspace.
+- The active tab carries an accent outline, a thick accent underline, and a tinted fill. A bare
+  background swap is not enough: the previous treatment moved only `--panel` to `--bg`, a few
+  RGB points that vanish on a phone screen in daylight and is easy to miss on desktop too. The
+  active fill is published as `--tab-active-bg` so the close button's fade overlay tracks the
+  same colour instead of blending toward a background the tab no longer uses.
+- Tab strips carry no new-tab button on any platform. The Project Run menu is the single
+  launcher (desktop top bar, collapsed-rail `▶`, mobile toolbar, sidebar project row); an
+  unsplit launch lands as a tab in the focused pane, which is what the old `+` did minus the
+  backend choice. Per-pane and per-tab placement stays on the tab/pane context menus. A tab
+  strip with nothing in it is not rendered, so an empty workspace shows only its stage.
 - Layout changes update the local `layoutValues` ref and rendered map immediately, then serialize
   per-Project PATCH requests behind an optimistic `layout_revision`. Later writes cannot be
   overwritten by an earlier response. A stale revision refreshes authoritative Project state.
@@ -56,6 +66,13 @@ PaneLeaf = terminal | note | preview | history
   reattaches the same stable leaf beside the actual listener owner.
   Closing a terminal is an inline two-click confirmation: fixed-width `×` becomes `✓` without
   shifting the tab, then kills/removes the session.
+- The per-tab close control is a hover-only overlay on hover-capable pointers: it is absolutely
+  positioned over the tab's right edge, so tab width is identical whether or not it is showing,
+  and it masks the label under it with a gradient in the tab's own background. Confirming and
+  keyboard-focused states stay visible without hover.
+- Touch tab strips (including the mobile projection) render no close control at all. Closing
+  and killing there go through the tab's long-press menu — the session menu for terminals, the
+  tab menu for resources — which is also where the kill confirmation already lives.
 
 ## Pointer drag contract
 
@@ -82,8 +99,18 @@ PaneLeaf = terminal | note | preview | history
   pane when no selection exists. Activating it also updates that pane's active child.
 - Mobile never rewrites split geometry, pane membership, or tab order merely because it is
   narrow. Returning to desktop restores the saved pane tree.
-- Mobile menus omit split, directional move, dissolve, and zoom controls. Touch scrolling never
-  initiates tab reorder. Terminals always use xterm's built-in DOM renderer—even when desktop is
+- The rail can still be rearranged *on the device*. A mobile tab's long-press menu (the session
+  menu for terminals, the tab menu for resources) carries a left/right **Move tab** row that
+  permutes a device-local order overlay stored per Project in local storage. It is a permutation
+  only: the layout remains authoritative for membership, no layout revision is written, and no
+  request is issued, so a phone's rail order can never reach the desktop pane tree or another
+  client. Ordering is per device by design, not synced.
+- A tab the saved order predates is merged in beside its layout predecessor rather than appended,
+  so a session launched from a given tab still appears next to it. Once a device has its own
+  order, later desktop reordering no longer moves those tabs on that device.
+- Mobile menus omit split, cross-pane directional move, dissolve, and zoom controls: the mobile
+  Move tab row permutes the flat rail rather than moving a leaf between panes. Touch scrolling
+  never initiates tab reorder. Terminals always use xterm's built-in DOM renderer—even when desktop is
   configured to prefer WebGL—because responsive pixel-ratio changes can strand WebGL canvases.
 - Terminal long-press is an xterm selection gesture, not a pane/session context-menu gesture.
   Dragging before the hold threshold scrolls; dragging after selection extends the selected

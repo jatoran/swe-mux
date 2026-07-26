@@ -22,6 +22,7 @@ from .models import GitState, SessionRecord, SessionState
 from .pty_host import PtyHost, merge_environment
 from .runtime_cwd import Osc7Parser, local_directory_from_osc7
 from .scrollback import ScrollbackBuffer
+from .spawn_contract import scrub_claude_session_markers
 from .supervisor_client import RemotePtyHost, SupervisorClient, host_for_adoption
 from .win_jobobj import ReaperJob
 
@@ -72,9 +73,284 @@ STATE_WATCHDOG_TRANSCRIPT_QUIET_SECONDS = 3.0
 # observer stuck on the wrong sibling transcript). It fires only after a longer
 # stall and only when the CLI is provably sitting at its idle input prompt.
 STATE_WATCHDOG_PTY_STUCK_SECONDS = 60.0
+# An "awaiting" that the user has already answered is invisible to the hook that
+# raised it: nothing fires when a permission dialog is dismissed. The PTY is this
+# session's own ground truth for that — once the CLI is back to its working
+# spinner the block is provably gone. The short guard only lets the dialog finish
+# painting after the notification, so a real prompt is never cleared.
+STATE_WATCHDOG_AWAITING_RESUME_SECONDS = 5.0
 # Per-session ring buffer of recent state transitions and faults, surfaced by the
 # state-log debug endpoint so a frozen session is diagnosable after the fact.
 STATE_TRANSITION_LOG_LIMIT = 64
+# Real state changes get their own ring: one busy turn emits dozens of same-state
+# detail updates ("working · Read" → "working · Bash"), which would otherwise
+# evict the transitions that actually explain how a session reached its state.
+STATE_CHANGE_LOG_LIMIT = 64
+
+# Status contract: which observation sources may set each user-visible state.
+# Positive evidence only — ambiguity resolves to the conservative prior, never a
+# guessed active state. A transition from a source outside its state's set is a
+# contract violation: it is still applied (conservatively refusing could strand a
+# session) but ledgered and counted so the corpus can assert zero occurrences.
+STATE_EVIDENCE_SOURCES: dict[str, frozenset[str]] = {
+    # Lifecycle bookkeeping the daemon itself owns (spawn/promotion/demotion).
+    "starting": frozenset({"daemon"}),
+    "running": frozenset({"daemon"}),
+    # Active states require provider evidence; the PTY may never invent work.
+    # "watchdog-pty" is admitted for `working` under one narrow rule enforced by
+    # watchdog_decision: it may only resolve an already-answered `awaiting` back
+    # into the turn that is still running, never start a turn from `idle`.
+    "working": frozenset({"transcript", "hook", "watchdog-pty"}),
+    "awaiting": frozenset({"transcript", "hook"}),
+    # Idle may be proven (transcript/hook boundary) or a bounded inferred
+    # recovery (startup-quiet PTY fallback, quiescence watchdog, PTY backstop).
+    "idle": frozenset({"transcript", "hook", "pty", "watchdog", "watchdog-pty", "daemon"}),
+    # Terminal states come from the PTY (process ground truth) or the daemon.
+    "exited": frozenset({"pty", "daemon"}),
+    "crashed": frozenset({"pty", "daemon"}),
+}
+
+# Sources whose transitions are recovery inferences, never the primary path for a
+# healthy session. Everything else is proven evidence (hook/transcript/
+# notification/process). The startup-quiet PTY fallback passes inferred=True
+# explicitly because "pty" is also the proven source for process exits.
+INFERRED_TRANSITION_SOURCES = frozenset({"watchdog", "watchdog-pty"})
+
+# Bound on the inferred share of turn terminals before status health alarms.
+# A healthy fleet reaches terminal status by proven evidence; inferred
+# recoveries are defects being absorbed, and a rising rate is a regression.
+STATUS_HEALTH_MAX_INFERRED_TERMINAL_RATIO = 0.05
+STATUS_HEALTH_MIN_TERMINALS_FOR_RATIO_ALARM = 20
+# Stuck-active alarm. Time in state alone does NOT mean stuck — a single agent
+# turn legitimately stays "working" for many minutes while tools run, and an
+# elapsed-time-only bound alarms on every healthy long turn (observed live).
+# The signal is the absence of *evidence*: no ledger entry at all — not even a
+# tool detail change — for this long while the session claims to be active.
+STATUS_HEALTH_STUCK_ACTIVE_SECONDS = 900.0
+
+
+def session_status_health(session: Any, *, now: float | None = None) -> dict[str, Any]:
+    """Per-session status-health metrics; shared by Session and the replay harness."""
+    now = time.time() if now is None else now
+    counters = dict(session.status_health_counters)
+    return {
+        "counters": counters,
+        "watchdog_recoveries": session.watchdog_recoveries,
+        "watchdog_recovery_actions": dict(session.watchdog_recovery_actions),
+        "observer_restarts": getattr(session, "observer_restart_count", 0),
+        "reopen_blocked": counters.get("reopen_blocked", 0),
+        "contract_violations": counters.get("contract_violations", 0),
+        "terminals": {
+            "proven": counters.get("terminal_proven", 0),
+            "inferred": counters.get("terminal_inferred", 0),
+        },
+        "terminal_latencies": list(session.terminal_latencies),
+        "seconds_in_state": round(max(0.0, now - session.last_state_change_ts), 3),
+        # Time since ANY observation landed (including same-state tool detail
+        # updates). Long time-in-state is normal for a working turn; long
+        # time-since-evidence is what indicates a stuck session.
+        "seconds_since_evidence": round(
+            max(0.0, now - getattr(session, "last_evidence_ts", session.last_state_change_ts)), 3
+        ),
+    }
+
+
+def fleet_status_health(sessions: Any, *, now: float | None = None) -> dict[str, Any]:
+    """Aggregate per-session status health into the fleet soak signal.
+
+    The alarm fires when inferred recoveries exceed the healthy bound, when the
+    status contract was violated, or when a session has sat in an active state
+    past the stuck bound. This is the boundary the soak matrix asserts on.
+    """
+    now = time.time() if now is None else now
+    per_session: list[dict[str, Any]] = []
+    proven_terminals = 0
+    inferred_terminals = 0
+    watchdog_recoveries = 0
+    recovery_actions: dict[str, int] = {}
+    reopen_blocked = 0
+    contract_violations = 0
+    observer_restarts = 0
+    stuck_sessions: list[str] = []
+    for session in sessions:
+        record = session.record
+        if record.backend not in {"claude", "codex"}:
+            continue
+        health = session.status_health()
+        per_session.append(
+            {
+                "id": record.id,
+                "backend": record.backend,
+                "state": record.state,
+                "awaiting_reason": getattr(record, "awaiting_reason", None),
+                **health,
+            }
+        )
+        proven_terminals += health["terminals"]["proven"]
+        inferred_terminals += health["terminals"]["inferred"]
+        watchdog_recoveries += health["watchdog_recoveries"]
+        for action, count in health["watchdog_recovery_actions"].items():
+            recovery_actions[action] = recovery_actions.get(action, 0) + count
+        reopen_blocked += health["reopen_blocked"]
+        contract_violations += health["contract_violations"]
+        observer_restarts += health["observer_restarts"]
+        if (
+            record.state in {"working", "awaiting"}
+            and health["seconds_since_evidence"] > STATUS_HEALTH_STUCK_ACTIVE_SECONDS
+        ):
+            stuck_sessions.append(record.id)
+    terminals = proven_terminals + inferred_terminals
+    inferred_ratio = inferred_terminals / terminals if terminals else 0.0
+    alarm_reasons: list[str] = []
+    if (
+        terminals >= STATUS_HEALTH_MIN_TERMINALS_FOR_RATIO_ALARM
+        and inferred_ratio > STATUS_HEALTH_MAX_INFERRED_TERMINAL_RATIO
+    ):
+        alarm_reasons.append("inferred_terminal_ratio_exceeded")
+    if contract_violations:
+        alarm_reasons.append("status_contract_violation")
+    if stuck_sessions:
+        alarm_reasons.append("session_stuck_active")
+    return {
+        "terminals": {
+            "proven": proven_terminals,
+            "inferred": inferred_terminals,
+            "inferred_ratio": round(inferred_ratio, 4),
+        },
+        "watchdog_recoveries": watchdog_recoveries,
+        "watchdog_recovery_actions": recovery_actions,
+        "reopen_blocked": reopen_blocked,
+        "contract_violations": contract_violations,
+        "observer_restarts": observer_restarts,
+        "stuck_sessions": stuck_sessions,
+        "bounds": {
+            "max_inferred_terminal_ratio": STATUS_HEALTH_MAX_INFERRED_TERMINAL_RATIO,
+            "min_terminals_for_ratio_alarm": STATUS_HEALTH_MIN_TERMINALS_FOR_RATIO_ALARM,
+            "stuck_active_seconds": STATUS_HEALTH_STUCK_ACTIVE_SECONDS,
+        },
+        "alarm": bool(alarm_reasons),
+        "alarm_reasons": alarm_reasons,
+        "sessions": per_session,
+    }
+
+
+def transition_proof(source: str, inferred: bool | None = None) -> str:
+    """Classify a transition as proven evidence or a recovery inference."""
+    if inferred is None:
+        inferred = source in INFERRED_TRANSITION_SOURCES
+    return "inferred" if inferred else "proven"
+
+
+def apply_state_transition(
+    session: Any,
+    state: SessionState,
+    detail: str | None,
+    *,
+    source: str,
+    evidence: str | None = None,
+    inferred: bool | None = None,
+    awaiting_reason: str | None = None,
+    force: bool = False,
+    now: float | None = None,
+    monotonic_now: float | None = None,
+) -> bool:
+    """Single implementation of the status-transition contract.
+
+    Both the live Session and the deterministic replay harness apply transitions
+    through this function, so arbitration, the typed ledger entry, and the
+    proven/inferred health counters cannot drift between production and the
+    golden corpus. Returns True when the visible state actually changed.
+    """
+    now = time.time() if now is None else now
+    monotonic_now = time.monotonic() if monotonic_now is None else monotonic_now
+    if force:
+        # Authoritative evidence (interrupt/abort markers, process exit,
+        # lifecycle ownership changes) reclaims arbitration from any source.
+        session.state_source_priority = -1
+    priority = {"pty": 0, "transcript": 1, "hook": 2}.get(source, 0)
+    if priority < session.state_source_priority:
+        return False
+    record = session.record
+    if state != "awaiting":
+        awaiting_reason = None
+    previous = record.state
+    previous_awaiting = getattr(record, "awaiting_reason", None)
+    changed = (
+        previous != state
+        or record.state_detail != detail
+        or previous_awaiting != awaiting_reason
+    )
+    session.state_source_priority = priority
+    if not changed:
+        return False
+    proof = transition_proof(source, inferred)
+    seconds_in_previous: float | None = None
+    if previous != state:
+        previous_change_monotonic = getattr(session, "last_state_change_monotonic", None)
+        if previous_change_monotonic is not None:
+            seconds_in_previous = max(0.0, monotonic_now - previous_change_monotonic)
+        session.last_state_change_ts = now
+        session.last_state_change_monotonic = monotonic_now
+    # Any accepted transition — including a same-state detail update while tools
+    # run — is evidence the session is being observed. Absence of this, not time
+    # in state, is what makes a session stuck.
+    session.last_evidence_ts = now
+    # When a block is raised, remember when: only evidence provably newer than
+    # this may clear it (the ordered transcript lags the hook side channel, so a
+    # record written just before the prompt can arrive just after it).
+    observation_state = getattr(session, "observation_state", None)
+    if isinstance(observation_state, dict):
+        if state == "awaiting":
+            observation_state["awaiting_since"] = now
+        elif previous == "awaiting":
+            observation_state.pop("awaiting_since", None)
+    # Guarded so this stays callable as a pure arbitration contract by
+    # lightweight stubs that carry no diagnostics buffer.
+    entry = {
+        "ts": now,
+        "monotonic": monotonic_now,
+        "kind": "transition",
+        "previous": previous,
+        "state": state,
+        "detail": detail,
+        "awaiting_reason": awaiting_reason,
+        "source": source,
+        "priority": priority,
+        "evidence": evidence,
+        "proof": proof,
+        "allowed_source": source in STATE_EVIDENCE_SOURCES.get(state, frozenset()),
+        "seconds_in_previous": (
+            round(seconds_in_previous, 3) if seconds_in_previous is not None else None
+        ),
+    }
+    ledger = getattr(session, "state_transitions", None)
+    if ledger is not None:
+        ledger.append(entry)
+    # Real state changes also go to their own ring so a busy turn's detail churn
+    # cannot evict the history that explains how the session got here.
+    if previous != state:
+        changes = getattr(session, "state_changes", None)
+        if changes is not None:
+            changes.append(entry)
+    counters = getattr(session, "status_health_counters", None)
+    if counters is not None and previous != state:
+        counters["transitions"] = counters.get("transitions", 0) + 1
+        counters[proof] = counters.get(proof, 0) + 1
+        if proof == "inferred":
+            key = f"inferred:{source}"
+            counters[key] = counters.get(key, 0) + 1
+        if source not in STATE_EVIDENCE_SOURCES.get(state, frozenset()):
+            counters["contract_violations"] = counters.get("contract_violations", 0) + 1
+        if previous in {"working", "awaiting"} and state in {"idle", "exited", "crashed"}:
+            counters[f"terminal_{proof}"] = counters.get(f"terminal_{proof}", 0) + 1
+            latencies = getattr(session, "terminal_latencies", None)
+            if latencies is not None and seconds_in_previous is not None:
+                latencies.append({"proof": proof, "seconds": round(seconds_in_previous, 3)})
+    record.state = state
+    record.state_detail = detail
+    if hasattr(record, "awaiting_reason"):
+        record.awaiting_reason = awaiting_reason
+    return True
 
 
 # Exit codes that signal a clean or intentionally-interrupted shutdown rather
@@ -101,6 +377,167 @@ def terminal_exit_outcome(
         else None
     )
     return state, final_reason, detail
+
+
+WatchdogAction = Literal["none", "force_idle_ended", "force_idle_pty", "resume_working"]
+
+# What the CLI is showing right now, read from the scrollback tail. The tail
+# holds redraw history, so presence alone is not enough: the marker that appears
+# *last* is the live frame. An unrecognized TUI reads "unknown" and every caller
+# treats that as "no evidence", never as a licence to change state.
+PtyTailState = Literal["working", "approval", "idle", "unknown"]
+PTY_WORKING_MARKERS = ("esc to interrupt",)
+# Deliberately narrow: a false "approval" only ever makes the daemon *more*
+# conservative (it vetoes clearing an awaiting and blocks the idle backstop).
+PTY_APPROVAL_MARKERS = (
+    "do you want to",
+    "allow this command",
+    "allow codex to",
+)
+PTY_IDLE_MARKERS = ("? for shortcuts",)
+
+
+def pty_tail_state(tail: str) -> PtyTailState:
+    """Classify the CLI's current screen from its scrollback tail.
+
+    Ordering-aware by construction: a session that showed a permission dialog
+    and then resumed still has the dialog text in the retained tail, so only the
+    last marker describes the live frame.
+    """
+    lowered = tail.lower()
+    positions: list[tuple[int, PtyTailState]] = []
+    for markers, name in (
+        (PTY_WORKING_MARKERS, "working"),
+        (PTY_APPROVAL_MARKERS, "approval"),
+        (PTY_IDLE_MARKERS, "idle"),
+    ):
+        found = max((lowered.rfind(marker) for marker in markers), default=-1)
+        if found >= 0:
+            positions.append((found, name))  # type: ignore[arg-type]
+    if not positions:
+        return "unknown"
+    return max(positions)[1]
+
+
+def pty_tail_appears_idle(tail: str) -> bool:
+    """True only when the CLI's latest frame is its idle input prompt."""
+    return pty_tail_state(tail) == "idle"
+
+
+def watchdog_decision(
+    state: SessionState,
+    *,
+    stalled_seconds: float,
+    tail_verdict: str | None,
+    pty_state: PtyTailState,
+) -> WatchdogAction:
+    """Pure quiescence-watchdog decision, shared with the replay harness.
+
+    ``resume_working`` closes the one gap the transcript cannot: an `awaiting`
+    the user already answered. Nothing fires when a permission dialog is
+    dismissed, and an approved long-running tool writes no transcript record
+    until it finishes, so the CLI's own working spinner is the only timely
+    proof the block is gone. It may only ever move `awaiting` → `working`
+    inside a turn that is already running — never start a turn from `idle`.
+
+    ``force_idle_ended`` only when the transcript tail proves the turn ended;
+    ``force_idle_pty`` only when the tail carries no proof ("unknown"/"open")
+    yet the CLI has provably sat at its idle prompt for the full stall window.
+    A genuine long tool call keeps "esc to interrupt" on screen, and a real
+    pending dialog reads "approval", so neither is ever cut short.
+
+    ``tail_verdict=None`` means the transcript tail has not been read: the
+    caller is doing the cheap pass that can only resume an awaiting session.
+    """
+    if state not in {"working", "awaiting"}:
+        return "none"
+    if (
+        state == "awaiting"
+        and pty_state == "working"
+        and stalled_seconds >= STATE_WATCHDOG_AWAITING_RESUME_SECONDS
+    ):
+        return "resume_working"
+    if tail_verdict is None:
+        return "none"
+    if stalled_seconds < STATE_WATCHDOG_ENDED_STUCK_SECONDS:
+        return "none"
+    if tail_verdict == "ended":
+        return "force_idle_ended"
+    if (
+        tail_verdict in {"unknown", "open"}
+        and stalled_seconds >= STATE_WATCHDOG_PTY_STUCK_SECONDS
+        and pty_state == "idle"
+    ):
+        return "force_idle_pty"
+    return "none"
+
+
+async def apply_watchdog_recovery(
+    session: Any,
+    events: EventBus,
+    action: WatchdogAction,
+    *,
+    stalled_seconds: float | None = None,
+    tail_verdict: str | None = None,
+) -> None:
+    """Apply a non-"none" watchdog decision; shared with the replay harness.
+
+    A completion recorded but never applied leaves the bookkeeping "completion
+    seen, turn inactive", which would make _finish_root_turn a no-op. Re-open
+    the turn so the forced close always lands and re-emits the boundary.
+    """
+    from .observation import _finish_root_turn, _transition
+
+    session.observation_state["root_turn_active"] = True
+    session.observation_state["root_completion_seen"] = False
+    if action == "resume_working":
+        # The block is gone but the turn is not: reclaim arbitration from the
+        # hook that raised the awaiting and let the run finish normally. The
+        # turn bookkeeping above guarantees the eventual close still lands.
+        session.note_watchdog_recovery(
+            "pty_working_after_awaiting",
+            stalled_seconds=stalled_seconds,
+            tail_verdict=tail_verdict,
+        )
+        await _transition(
+            session,
+            events,
+            "working",
+            source="watchdog-pty",
+            force=True,
+            inferred=True,
+            evidence="pty_working_spinner_after_awaiting",
+        )
+    elif action == "force_idle_ended":
+        session.note_watchdog_recovery(
+            "transcript_tail_terminal",
+            stalled_seconds=stalled_seconds,
+            tail_verdict=tail_verdict,
+        )
+        await _finish_root_turn(
+            session,
+            events,
+            source="watchdog",
+            force=True,
+            evidence="transcript_tail=ended",
+        )
+    elif action == "force_idle_pty":
+        # No terminal record exists (schema drift, or a turn cut off before its
+        # marker), but the PTY shows the idle prompt and no in-flight tool. This
+        # is the last-resort backstop; mark it inferred for honesty.
+        session.note_watchdog_recovery(
+            "pty_idle_prompt",
+            stalled_seconds=stalled_seconds,
+            tail_verdict=tail_verdict,
+        )
+        await _finish_root_turn(
+            session,
+            events,
+            source="watchdog-pty",
+            force=True,
+            inferred=True,
+            evidence=f"pty_idle_prompt,tail={tail_verdict}",
+        )
 
 
 @dataclass(eq=False, slots=True)
@@ -146,11 +583,21 @@ class Session:
         # supervision counters.  These feed the state-log debug endpoint and the
         # quiescence watchdog; none are serialized into the frequent record snapshot.
         self.last_state_change_ts = time.time()
+        self.last_state_change_monotonic = time.monotonic()
+        self.last_evidence_ts = time.time()
         self.last_hook_ts = 0.0
         self.state_transitions: deque[dict[str, Any]] = deque(maxlen=STATE_TRANSITION_LOG_LIMIT)
+        self.state_changes: deque[dict[str, Any]] = deque(maxlen=STATE_CHANGE_LOG_LIMIT)
         self.observer_restart_count = 0
         self.observer_last_fault: dict[str, Any] | None = None
         self.watchdog_recoveries = 0
+        # Status-health metrics: proven/inferred transition counts, per-source
+        # inferred recoveries, contract violations, terminal outcomes, blocked
+        # reopen attempts, and recent working→terminal latencies. These feed the
+        # state-log endpoint and the fleet status-health diagnostic.
+        self.status_health_counters: dict[str, int] = {}
+        self.watchdog_recovery_actions: dict[str, int] = {}
+        self.terminal_latencies: deque[dict[str, Any]] = deque(maxlen=32)
         self.agent_stop_event = asyncio.Event()
         self.observer_task: asyncio.Task[Any] | None = None
         self.transcript_path: Path | None = None
@@ -278,37 +725,36 @@ class Session:
                 self._schedule_resync(subscriber)
                 subscriber.exit_pending = frame
 
-    def transition(self, state: SessionState, detail: str | None, *, source: str) -> bool:
-        """Apply a state transition only when its observation source is authoritative."""
-        priority = {"pty": 0, "transcript": 1, "hook": 2}.get(source, 0)
-        if priority < self.state_source_priority:
-            return False
-        changed = self.record.state != state or self.record.state_detail != detail
-        previous = self.record.state
-        self.state_source_priority = priority
-        if not changed:
-            return False
-        if previous != state:
-            self.last_state_change_ts = time.time()
-        # Guarded so transition() stays callable as a pure priority-arbitration
-        # contract by lightweight stubs that carry no diagnostics buffer.
-        log_buffer = getattr(self, "state_transitions", None)
-        if log_buffer is not None:
-            log_buffer.append(
-                {
-                    "ts": time.time(),
-                    "kind": "transition",
-                    "previous": previous,
-                    "state": state,
-                    "detail": detail,
-                    "source": source,
-                    "priority": priority,
-                }
-            )
-        self.record.state = state
-        self.record.state_detail = detail
-        self.publish_update()
-        return True
+    def transition(
+        self,
+        state: SessionState,
+        detail: str | None,
+        *,
+        source: str,
+        evidence: str | None = None,
+        inferred: bool | None = None,
+        awaiting_reason: str | None = None,
+        force: bool = False,
+    ) -> bool:
+        """Apply a state transition only when its observation source is authoritative.
+
+        Every applied transition lands in the typed ledger with the evidence
+        that justified it and its proven/inferred classification; see
+        apply_state_transition for the shared contract.
+        """
+        changed = apply_state_transition(
+            self,
+            state,
+            detail,
+            source=source,
+            evidence=evidence,
+            inferred=inferred,
+            awaiting_reason=awaiting_reason,
+            force=force,
+        )
+        if changed:
+            self.publish_update()
+        return changed
 
     def note_observer_fault(self, error: str, path: Path | None) -> None:
         """Record that the transcript observer crashed and is being restarted."""
@@ -323,17 +769,50 @@ class Session:
         self.observer_last_fault = fault
         self.state_transitions.append(fault)
 
-    def note_watchdog_recovery(self, action: str, detail: str | None = None) -> None:
+    def note_watchdog_recovery(
+        self,
+        action: str,
+        detail: str | None = None,
+        *,
+        stalled_seconds: float | None = None,
+        tail_verdict: str | None = None,
+    ) -> None:
         """Record that the quiescence watchdog resolved a stuck state."""
         self.watchdog_recoveries += 1
+        self.watchdog_recovery_actions[action] = self.watchdog_recovery_actions.get(action, 0) + 1
         self.state_transitions.append(
             {
                 "ts": time.time(),
                 "kind": "watchdog_recovery",
                 "action": action,
                 "detail": detail,
+                "stalled_seconds": (
+                    round(stalled_seconds, 3) if stalled_seconds is not None else None
+                ),
+                "tail_verdict": tail_verdict,
             }
         )
+
+    def note_reopen_blocked(self, source: str) -> None:
+        """Record a late, unordered begin refused by the closed_by_transcript latch.
+
+        Each occurrence is a hook/transcript race that would have reopened
+        "working" on a finished session; the count is a regression signal.
+        """
+        counters = self.status_health_counters
+        counters["reopen_blocked"] = counters.get("reopen_blocked", 0) + 1
+        self.state_transitions.append(
+            {
+                "ts": time.time(),
+                "kind": "reopen_blocked",
+                "source": source,
+                "state": self.record.state,
+            }
+        )
+
+    def status_health(self, now: float | None = None) -> dict[str, Any]:
+        """Per-session status-health metrics for diagnostics and soak bounds."""
+        return session_status_health(self, now=now)
 
     def take_resync(
         self, subscriber: PtySubscriber
@@ -479,6 +958,9 @@ class SessionManager:
             ),
         }
         pty_started_at = time.perf_counter()
+        # Scrubbed base environment: a daemon (re)launched from inside an agent
+        # session must not pass parent-Claude session markers to terminals.
+        env_base = scrub_claude_session_markers(os.environ)
         pty: PtyHost | RemotePtyHost | None = None
         if self.supervisor is not None and self.supervisor.connected:
             remote = RemotePtyHost(
@@ -489,7 +971,7 @@ class SessionManager:
                 cwd=str(resolved_cwd),
                 # The supervisor spawns children with exactly this daemon-built
                 # environment; its own (potentially stale) environ is excluded.
-                env=merge_environment(os.environ, env_extra),
+                env=merge_environment(env_base, env_extra),
                 graceful_exit=adapter.graceful_exit_keys(),
                 max_scrollback=self.max_scrollback,
             )
@@ -510,6 +992,7 @@ class SessionManager:
                 reaper=self.reaper,
                 graceful_exit=adapter.graceful_exit_keys(),
                 env_extra=env_extra,
+                env_base=env_base,
             )
             # winpty/ConPTY process creation is synchronous and can be slow when
             # Windows security scanning or a shell profile is busy. Keep it off the
@@ -804,7 +1287,9 @@ class SessionManager:
                 session.pty.graceful_exit = session.adapter.graceful_exit_keys()
                 session.record.backend = backend
                 session.record.native_session_id = native_id
-                session.record.state = "starting"
+                session.transition(
+                    "starting", None, source="daemon", evidence="backend_detected", force=True
+                )
                 session.record.parser_status = "waiting"
                 session.record.parser_diagnostic = None
                 session.record.parser_events_seen = 0
@@ -851,7 +1336,7 @@ class SessionManager:
         session.pty.graceful_exit = adapter.graceful_exit_keys()
         session.record.backend = backend
         session.record.native_session_id = native_id
-        session.record.state = "starting"
+        session.transition("starting", None, source="daemon", evidence="promotion", force=True)
         session.record.parser_status = "waiting"
         session.record.parser_diagnostic = None
         session.record.parser_events_seen = 0
@@ -906,8 +1391,7 @@ class SessionManager:
         session.pty.graceful_exit = session.adapter.graceful_exit_keys()
         session.record.backend = "shell"
         session.record.native_session_id = session.record.id
-        session.record.state = "running"
-        session.record.state_detail = None
+        session.transition("running", None, source="daemon", evidence="demotion", force=True)
         session.record.context_window = 0
         session.record.context_pct = 0
         session.record.parser_status = "not_applicable"
@@ -1148,7 +1632,7 @@ class SessionManager:
         A legitimately long tool call keeps "esc to interrupt" on screen, so the PTY
         check never cuts it short.
         """
-        from .observation import _finish_root_turn, transcript_tail_turn_state
+        from .observation import transcript_tail_turn_state
 
         record = session.record
         if record.backend not in {"claude", "codex"}:
@@ -1159,6 +1643,27 @@ class SessionManager:
         if session.observation_replay:
             return
         stalled = now - session.last_state_change_ts
+        pty_state = self._pty_tail_state(session)
+        # An answered permission prompt is resolved from the PTY alone and must
+        # be checked before the transcript-quiet gate below: after approval the
+        # transcript is usually *busy*, which would skip this pass entirely.
+        if (
+            watchdog_decision(
+                record.state,
+                stalled_seconds=stalled,
+                tail_verdict=None,
+                pty_state=pty_state,
+            )
+            == "resume_working"
+        ):
+            await apply_watchdog_recovery(
+                session,
+                self.events,
+                "resume_working",
+                stalled_seconds=stalled,
+                tail_verdict=None,
+            )
+            return
         if stalled < STATE_WATCHDOG_ENDED_STUCK_SECONDS:
             return
         path = session.transcript_path
@@ -1182,34 +1687,21 @@ class SessionManager:
         # decisive: the PTY belongs to *this* session (never mis-attributed like a
         # transcript can be), and a live turn always shows "esc to interrupt", so
         # _pty_appears_idle stays False through any genuine in-flight tool.
-        pty_backstop = (
-            verdict in {"unknown", "open"}
-            and stalled >= STATE_WATCHDOG_PTY_STUCK_SECONDS
-            and self._pty_appears_idle(session)
+        action = watchdog_decision(
+            record.state,
+            stalled_seconds=stalled,
+            tail_verdict=verdict,
+            pty_state=pty_state,
         )
-        if verdict != "ended" and not pty_backstop:
+        if action == "none":
             return
-        # A completion recorded but never applied leaves the bookkeeping
-        # "completion seen, turn inactive", which would make _finish_root_turn a
-        # no-op. Re-open the turn so the forced close always lands and re-emits the
-        # boundary.
-        session.observation_state["root_turn_active"] = True
-        session.observation_state["root_completion_seen"] = False
-        if verdict == "ended":
-            session.note_watchdog_recovery("transcript_tail_terminal")
-            await _finish_root_turn(session, self.events, source="watchdog", force=True)
-        else:
-            # No terminal record exists (schema drift, or a turn cut off before its
-            # marker), but the PTY shows the idle prompt and no in-flight tool. This
-            # is the last-resort backstop; mark it inferred for honesty.
-            session.note_watchdog_recovery("pty_idle_prompt")
-            await _finish_root_turn(
-                session,
-                self.events,
-                source="watchdog-pty",
-                force=True,
-                inferred=True,
-            )
+        await apply_watchdog_recovery(
+            session,
+            self.events,
+            action,
+            stalled_seconds=stalled,
+            tail_verdict=verdict,
+        )
 
     async def _drain_hook_spool(self, session: Session) -> None:
         """Replay hook events the shim spooled to disk after a failed POST.
@@ -1267,16 +1759,21 @@ class SessionManager:
             except Exception:
                 log.exception("failed to replay spooled hook %s", event_type)
 
-    def _pty_appears_idle(self, session: Session) -> bool:
-        """Heuristic: the CLI is showing its input prompt, not a working spinner.
+    @staticmethod
+    def _pty_tail_state(session: Session) -> PtyTailState:
+        """Classify what this session's CLI is showing right now."""
+        scrollback = getattr(session, "scrollback", None)
+        if scrollback is None:
+            return "unknown"
+        try:
+            tail = scrollback.bytes()[-8192:].decode("utf-8", "replace")
+        except (OSError, ValueError):
+            return "unknown"
+        return pty_tail_state(tail)
 
-        Deliberately conservative and fail-safe — an unrecognized TUI simply reads
-        as not-idle, leaving the (current) stuck behavior rather than a false idle.
-        """
-        tail = session.scrollback.bytes()[-8192:].decode("utf-8", "replace").lower()
-        if "esc to interrupt" in tail:
-            return False
-        return "? for shortcuts" in tail
+    def _pty_appears_idle(self, session: Session) -> bool:
+        """Apply the shared idle-prompt heuristic to this session's scrollback tail."""
+        return self._pty_tail_state(session) == "idle"
 
     async def _fanout(self, session: Session) -> None:
         while True:
@@ -1340,7 +1837,13 @@ class SessionManager:
                 await asyncio.sleep(remaining)
                 continue
             previous = session.record.state
-            if session.transition("idle", None, source="pty"):
+            if session.transition(
+                "idle",
+                None,
+                source="pty",
+                evidence="startup_quiet_fallback",
+                inferred=True,
+            ):
                 await self.events.emit(
                     "state_changed",
                     session_id=session.record.id,
@@ -1541,9 +2044,16 @@ class SessionManager:
             exit_code=exit_code,
             reason=reason,
         )
-        session.record.state = state
-        if detail is not None:
-            session.record.state_detail = detail
+        # Ledger the terminal transition without an update frame: publish_exit
+        # below already carries the final snapshot to every subscriber.
+        apply_state_transition(
+            session,
+            state,
+            detail if detail is not None else session.record.state_detail,
+            source="pty",
+            evidence=f"process_exit:{final_reason}",
+            force=True,
+        )
         release_pty = getattr(session.pty, "release", None)
         if callable(release_pty):
             # Session scrollback is independent of ConPTY. Detach the ended

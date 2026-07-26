@@ -37,6 +37,7 @@ It should call domain packages rather than acquire their storage or process resp
 | `automation_registry.py` | control-plane enablement DAG: substrate/consumer deps, cycle-checked resolution | storage, execution |
 | `tier0_store.py` | deterministic no-model fact capture (Tier 0 substrate), gated per-project, source pointers | model calls, actuation |
 | `preview_capture.py` | optional headless preview screenshot (Playwright), typed-unavailable | proxy transport, PTY writes |
+| `clipboard_store.py` | in-memory clipboard-history ring (dedupe by content hash, pins, count/time bounds, secret-shape refusal) plus its opt-in SQLite mirror | reading or polling the OS clipboard, deciding where inserted text goes |
 
 Feature stores sharing `mux.db` use their own single-worker executor/connection and the common
 operation coordinator described in `sqlite.md`.
@@ -101,7 +102,11 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   adding an import to `supervisor.py`/`pty_host.py` without updating that list ships a stale
   bundle. Daemon self-restart (`/api/daemon/restart`) must spawn the successor with
   `--relaunch-wait` and detach intent; it is refused without an attached supervisor unless
-  forced, because an unpreserved restart is a session-killing action.
+  forced, because an unpreserved restart is a session-killing action. The frozen-app redeploy
+  (`/api/daemon/redeploy`) follows the same authority rule and must spawn
+  `packaging/redeploy_desktop.py` detached from the daemon's process group and lifetime (the
+  script stops this very daemon mid-run), with cwd at the source root — never inside `dist/`
+  — and the child env scrubbed of parent-Claude session markers.
 - A Windows process's working directory locks that directory against deletion. Every
   long-lived swe-mux process (shell-spawned daemon, self-restart successor, supervisor) must
   anchor its cwd in the data dir, and the supervisor chdirs itself defensively at startup — a

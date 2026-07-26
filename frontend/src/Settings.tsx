@@ -11,7 +11,9 @@ import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } fr
 import { enableMobileVoice } from './mobileVoice'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { clearProjectRail, loadRailItems, projectRailIsCustom, saveRailItems } from './deviceSettings'
-import { ALL_BACKENDS, ALL_PLATFORMS, isBuiltinRailId, railPayload, type RailBackend, type RailItem, type RailItemType, type RailPlatform } from './commandRail'
+import { ALL_BACKENDS, ALL_PLATFORMS, DEFAULT_CUSTOM_PLACEMENT, isBuiltinRailId, railItemPlacement, railPayload, type RailBackend, type RailItem, type RailItemType, type RailPlacement, type RailPlacementSetting, type RailPlatform } from './commandRail'
+import { fetchPromptTemplates, promptItemSummary } from './promptRail'
+import type { PromptTemplate } from './PromptLibrary'
 import type { ShellProfile, Project } from './types'
 
 type Config = {
@@ -30,6 +32,9 @@ type Config = {
   mobile_long_press:'context_menu'|'disabled'
   mobile_gestures:Record<string,string>
   terminal_auto_copy_selection:boolean
+  clipboard_history_enabled:boolean;clipboard_history_persist:boolean
+  clipboard_history_limit:number;clipboard_history_entry_max_chars:number
+  clipboard_history_retention_hours:number;clipboard_history_redact_secrets:boolean
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
   ccusage_claude_command:string[]; ccusage_codex_command:string[]
   custom_theme:CustomTheme
@@ -140,7 +145,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   // edits save immediately (like sounds/notifications) rather than via the
   // config draft's Save button.
   const [rail, setRail] = useState<RailItem[]>([])
-  const [railAdd, setRailAdd] = useState<{ type: RailItemType; name: string; label: string; submit: boolean }>({ type: 'skill', name: '', label: '', submit: true })
+  const [railAdd, setRailAdd] = useState<{ type: RailItemType; name: string; label: string; submit: boolean; place: RailPlacementSetting }>({ type: 'skill', name: '', label: '', submit: true, place: DEFAULT_CUSTOM_PLACEMENT })
   // '' = the shared global rail; a project id edits that project's override
   // (seeded from the global rail on first change).
   const [railScope, setRailScope] = useState('')
@@ -152,13 +157,36 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
     return () => window.removeEventListener('mux:settings-changed', reload)
   }, [railScope])
   useEffect(() => { void api<Project[]>('GET', '/api/projects').then(setRailProjects).catch(() => {}) }, [])
+  // Prompt templates the rail can point at. Scoped like the rail being edited, so a
+  // project's rail can carry that project's own templates as well as the global ones.
+  const [railPrompts, setRailPrompts] = useState<PromptTemplate[]>([])
+  useEffect(() => {
+    void fetchPromptTemplates(railScope || undefined).then(setRailPrompts).catch(() => setRailPrompts([]))
+  }, [railScope])
   const scopeCustom = !!railScope && projectRailIsCustom(railScope)
   const commitRail = (next: RailItem[]) => { setRail(next); void saveRailItems(next, railScope || undefined) }
   const resetRailScope = () => {
     if (railScope) { void clearProjectRail(railScope); setRail(loadRailItems(railScope)) }
     else { void saveRailItems([]); setRail(loadRailItems()) }
   }
-  const railToggle = (id: string) => commitRail(rail.map(item => item.id === id ? { ...item, enabled: item.enabled === false } : item))
+  // Placement replaced the old enabled/disabled toggle: an item shows on the strip
+  // under the terminal, in the drawer's Commands tab, in both, or in neither. "Off"
+  // used to be the only way to get something out of a full strip, which is why
+  // several useful built-ins shipped hidden. The two regions are independent
+  // surfaces rather than one slot, so they are edited as two toggles: clearing
+  // both is what hides the item (`enabled: false`).
+  const railRegions = (item: RailItem): Record<RailPlacement, boolean> => {
+    if (item.enabled === false) return { strip: false, drawer: false }
+    const placement = railItemPlacement(item)
+    return { strip: placement !== 'drawer', drawer: placement !== 'strip' }
+  }
+  const railToggleRegion = (id: string, region: RailPlacement) => commitRail(rail.map(item => {
+    if (item.id !== id) return item
+    const next = { ...railRegions(item), [region]: !railRegions(item)[region] }
+    if (!next.strip && !next.drawer) return { ...item, enabled: false }
+    const placement: RailPlacementSetting = next.strip && next.drawer ? 'both' : next.strip ? 'strip' : 'drawer'
+    return { ...item, enabled: undefined, placement }
+  }))
   const railMove = (index: number, delta: number) => {
     const target = index + delta
     if (target < 0 || target >= rail.length) return
@@ -179,14 +207,27 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   const railAddItem = () => {
     const name = railAdd.name.trim()
     if (!name) return
+    // A prompt item stores the library key, never the body: the template stays the
+    // source of truth, so editing it updates every button pointing at it.
+    if (railAdd.type === 'prompt') {
+      const template = railPrompts.find(entry => entry.key === name)
+      if (!template) return
+      const id = `custom:prompt:${template.id}:${rail.length}`
+      // Templates declare their compatible backends; carry that through instead of
+      // making the user re-pick it, but only when it is actually a restriction.
+      const backends = template.backends.length === ALL_BACKENDS.length ? undefined : [...template.backends] as RailBackend[]
+      commitRail([...rail, { id, type: 'prompt', label: railAdd.label.trim() || template.title, promptKey: template.key, placement: railAdd.place, backends }])
+      setRailAdd({ ...railAdd, name: '', label: '' })
+      return
+    }
     const base = name.replace(/^[/$]/, '').trim() || name
     const id = `custom:${railAdd.type}:${base}:${rail.length}`
     const label = railAdd.label.trim() || (railAdd.type === 'text' ? base.slice(0, 12) : base)
     const item: RailItem = railAdd.type === 'text'
-      ? { id, type: 'text', label, text: name, submit: railAdd.submit }
-      : { id, type: railAdd.type, label, text: base, submit: railAdd.submit }
+      ? { id, type: 'text', label, text: name, submit: railAdd.submit, placement: railAdd.place }
+      : { id, type: railAdd.type, label, text: base, submit: railAdd.submit, placement: railAdd.place }
     commitRail([...rail, item])
-    setRailAdd({ type: railAdd.type, name: '', label: '', submit: true })
+    setRailAdd({ type: railAdd.type, name: '', label: '', submit: true, place: railAdd.place })
   }
   const [rules, setRules] = useState('version = 1\n')
   const [automation,setAutomation]=useState<AutomationStatus|null>(null)
@@ -555,7 +596,15 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <label>Scroll sensitivity<input type="number" min="0.25" max="4" step="0.25" value={draft.mobile_scroll_sensitivity} onInput={e=>change('mobile_scroll_sensitivity',Number(e.currentTarget.value))} /></label>
           <label>Long press<select value={draft.mobile_long_press} onChange={e=>change('mobile_long_press',e.currentTarget.value as Config['mobile_long_press'])}><option value="context_menu">Select terminal text</option><option value="disabled">Disabled</option></select></label>
           <label class="check"><span>Copy terminal selection automatically</span><input type="checkbox" checked={draft.terminal_auto_copy_selection} onChange={e=>change('terminal_auto_copy_selection',e.currentTarget.checked)}/></label>
-          <div class="keybinding-heading"><div><strong>TOUCH::GESTURES</strong><p>Map mobile swipe and multi-finger gestures to commands. Vertical single-finger drags stay reserved for scrolling; edge swipes are left to the OS (back / home).</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>Restore gesture defaults</button></div>
+          <div class="keybinding-heading"><div><strong>CLIPBOARD::HISTORY</strong><p>Every copy made <em>inside</em> swe-mux is kept in a shared ring you can insert from on any device (panel: <code>clipboard.open</code>, by default a two-finger swipe left on touch). The OS clipboard is never read or polled, so copies from other applications do not appear. The ring lives in memory only unless you save it to disk — a durable list of copied text accumulates credentials, and it is readable by anyone who can reach this daemon.</p></div></div>
+          <label class="check"><span>Keep clipboard history</span><input type="checkbox" checked={draft.clipboard_history_enabled} onChange={e=>change('clipboard_history_enabled',e.currentTarget.checked)}/></label>
+          <label class="check"><span>Save history to disk (survives daemon restarts)</span><input type="checkbox" checked={draft.clipboard_history_persist} onChange={e=>change('clipboard_history_persist',e.currentTarget.checked)}/></label>
+          <label class="check"><span>Skip secret-shaped copies (API keys, tokens, JWTs, private keys)</span><input type="checkbox" checked={draft.clipboard_history_redact_secrets} onChange={e=>change('clipboard_history_redact_secrets',e.currentTarget.checked)}/></label>
+          <label>Entries kept<input type="number" min="1" max="2000" value={draft.clipboard_history_limit} onInput={e=>change('clipboard_history_limit',Number(e.currentTarget.value))}/></label>
+          <label>Retention hours (0 keeps until evicted)<input type="number" min="0" max="8760" value={draft.clipboard_history_retention_hours} onInput={e=>change('clipboard_history_retention_hours',Number(e.currentTarget.value))}/></label>
+          <label>Maximum characters per entry<input type="number" min="256" max="1000000" value={draft.clipboard_history_entry_max_chars} onInput={e=>change('clipboard_history_entry_max_chars',Number(e.currentTarget.value))}/></label>
+          <p>Longer copies are skipped rather than stored truncated, so a history entry never pastes a silently partial payload. Turning history off clears the ring; turning saving off deletes what was already written. Pinned entries survive eviction, retention, and Clear.</p>
+          <div class="keybinding-heading"><div><strong>TOUCH::GESTURES</strong><p>Map mobile swipe and multi-finger gestures to commands. Vertical <em>single</em>-finger drags stay reserved for terminal scrolling, but two-finger vertical swipes are mappable; edge swipes are left to the OS (back / home).</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>Restore gesture defaults</button></div>
           {GESTURE_SLOTS.map(slot=><label>{GESTURE_LABELS[slot]}<select value={draft.mobile_gestures?.[slot]??''} onChange={e=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:e.currentTarget.value})}><option value="">Disabled</option>{bindingCommands.map(command=><option value={command.id}>{command.label}</option>)}</select></label>)}
           <div class="keybinding-heading"><div><strong>KEYBOARD::SHORTCUTS</strong><p>Click a command, then press the new shortcut. Changes apply when Settings is saved.</p></div><button onClick={()=>{setBindings({...bindingDefaults});setCapturingCommand(null);setBindingError('')}}>Restore shortcut defaults</button></div>
           {capturingCommand&&<div class="keybinding-capture" role="status"><span>PRESS KEYS FOR</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label||capturingCommand}</strong><button onClick={()=>{setCapturingCommand(null);setBindingError('')}}>Cancel</button></div>}
@@ -567,25 +616,36 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         </section>}
 
         {activeTab==='commandrail'&&<section class="commandrail-settings"><h3>Command rail</h3>
-          <p>The buttons under each terminal. This configuration is shared across devices — use the <strong>D</strong>/<strong>M</strong> tags to limit an item to desktop or mobile, and the backend tags to limit it to Claude, Codex, or Shell sessions. Built-in items can be reordered, toggled, and filtered but not edited. Skills inject <code>/name</code> in Claude and <code>$name</code> in Codex; slash commands inject <code>/name</code> in both.</p>
-          <label class="rail-scope">Editing<select value={railScope} onChange={e=>setRailScope(e.currentTarget.value)}><option value="">Global (all projects)</option>{railProjects.map(project=><option value={project.id}>{project.name}{projectRailIsCustom(project.id)?' ✎':''}</option>)}</select></label>
+          <p class="rail-intro">Buttons for each terminal, shared across devices. <b>Rail</b> is the strip under the terminal, <b>Panel</b> is the side panel's Commands tab; an item can be in both, or in neither to hide it. <b>D</b>/<b>M</b> limit it to desktop or mobile, <b>cld</b>/<b>cdx</b>/<b>sh</b> to Claude, Codex, or Shell sessions.</p>
+          <div class="rail-toolbar">
+            <label class="rail-scope">Editing<select value={railScope} onChange={e=>setRailScope(e.currentTarget.value)}><option value="">Global (all projects)</option>{railProjects.map(project=><option value={project.id}>{project.name}{projectRailIsCustom(project.id)?' ✎':''}</option>)}</select></label>
+            <button type="button" onClick={resetRailScope} disabled={!!railScope&&!scopeCustom} title={railScope?(scopeCustom?'Drop this project’s copy and inherit the global rail':'This project already uses the global rail'):'Restore the built-in rail and drop custom items'}>{railScope?'Reset to global rail':'Restore defaults'}</button>
+          </div>
           {railScope&&<p class="rail-scope-note">{scopeCustom?'This project has its own rail. Editing changes only this project.':'This project inherits the global rail. Any change here creates a project-specific copy.'}</p>}
           <div class="rail-editor">
             {rail.map((item,index)=>{
-              const on=item.enabled!==false
+              const regions=railRegions(item)
+              const on=regions.strip||regions.drawer
               const platforms=item.platforms??[...ALL_PLATFORMS]
               const backends=item.backends??[...ALL_BACKENDS]
               const builtin=isBuiltinRailId(item.id)
-              const preview=item.type==='skill'?`${railPayload(item,'claude')} · ${railPayload(item,'codex')}`:item.type==='slash'?railPayload(item,'claude'):item.type==='text'?`"${(item.text||'').slice(0,24)}"`:''
+              const preview=item.type==='skill'?`${railPayload(item,'claude')} · ${railPayload(item,'codex')}`:item.type==='slash'?railPayload(item,'claude'):item.type==='text'?`"${(item.text||'').slice(0,24)}"`:item.type==='prompt'?promptItemSummary(item,railPrompts):''
+              const meta=`${builtin?item.type:`custom ${item.type}`}${preview?` · ${preview}`:''}${item.submit&&item.type!=='prompt'?' · ⏎':''}`
               const platformLabel:Record<RailPlatform,string>={desktop:'D',mobile:'M'}
               const backendLabel:Record<RailBackend,string>={claude:'cld',codex:'cdx',shell:'sh'}
+              const regionLabel:Record<RailPlacement,string>={strip:'Rail',drawer:'Panel'}
+              const regionTitle:Record<RailPlacement,string>={strip:'Show on the strip under the terminal',drawer:"Show in the side panel's Commands tab"}
               return <article class={`rail-row ${on?'':'off'}`} key={item.id}>
-                <label class="check rail-enable"><input type="checkbox" checked={on} onChange={()=>railToggle(item.id)}/><span>{item.label||item.id}</span></label>
-                <small class="rail-meta">{builtin?item.type:`custom ${item.type}`}{preview?` · ${preview}`:''}{item.submit?' · ⏎':''}</small>
-                <div class="rail-tags">
-                  {ALL_PLATFORMS.map(p=><button type="button" class={platforms.includes(p)?'on':''} title={`Show on ${p}`} onClick={()=>railPlatform(item.id,p)}>{platformLabel[p]}</button>)}
-                  <i/>
-                  {ALL_BACKENDS.map(b=><button type="button" class={backends.includes(b)?'on':''} title={`Show for ${b}`} onClick={()=>railBackend(item.id,b)}>{backendLabel[b]}</button>)}
+                <div class="rail-id"><span class="rail-name">{item.label||item.id}</span><small class="rail-meta" title={meta}>{meta}</small></div>
+                <div class="rail-controls">
+                  <div class="rail-where" role="group" aria-label={`Where ${item.label||item.id} appears`}>
+                    {(['strip','drawer'] as RailPlacement[]).map(region=><button type="button" class={regions[region]?'on':''} aria-pressed={regions[region]} title={regionTitle[region]} onClick={()=>railToggleRegion(item.id,region)}>{regionLabel[region]}</button>)}
+                  </div>
+                  <div class="rail-tags" role="group" aria-label={`Where ${item.label||item.id} is available`}>
+                    {ALL_PLATFORMS.map(p=><button type="button" class={platforms.includes(p)?'on':''} aria-pressed={platforms.includes(p)} title={`Show on ${p}`} onClick={()=>railPlatform(item.id,p)}>{platformLabel[p]}</button>)}
+                    <i/>
+                    {ALL_BACKENDS.map(b=><button type="button" class={backends.includes(b)?'on':''} aria-pressed={backends.includes(b)} title={`Show for ${b}`} onClick={()=>railBackend(item.id,b)}>{backendLabel[b]}</button>)}
+                  </div>
                 </div>
                 <div class="rail-order">
                   <button type="button" disabled={index===0} title="Move up" onClick={()=>railMove(index,-1)}>↑</button>
@@ -595,14 +655,23 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
               </article>
             })}
           </div>
-          <div class="rail-add"><h4>Add item</h4>
-            <label>Type<select value={railAdd.type} onChange={e=>setRailAdd({...railAdd,type:e.currentTarget.value as RailItemType})}><option value="skill">Skill</option><option value="slash">Slash command</option><option value="text">Text macro</option></select></label>
-            <label>{railAdd.type==='text'?'Text to insert':'Name'}<input value={railAdd.name} placeholder={railAdd.type==='skill'?'commit':railAdd.type==='slash'?'new':'literal text'} onInput={e=>setRailAdd({...railAdd,name:e.currentTarget.value})}/></label>
-            <label>Button label<input value={railAdd.label} placeholder="(auto)" onInput={e=>setRailAdd({...railAdd,label:e.currentTarget.value})}/></label>
-            <label class="check"><span>Submit with Enter</span><input type="checkbox" checked={railAdd.submit} onChange={e=>setRailAdd({...railAdd,submit:e.currentTarget.checked})}/></label>
-            <button class="primary" type="button" disabled={!railAdd.name.trim()} onClick={railAddItem}>Add to rail</button>
-          </div>
-          <button type="button" onClick={resetRailScope}>{railScope?(scopeCustom?'Reset this project to the global rail':'Already using the global rail'):'Restore default rail'}</button>
+          <details class="rail-add" open>
+            <summary>Add item</summary>
+            <div class="rail-add-form">
+              <label>Type<select value={railAdd.type} onChange={e=>setRailAdd({...railAdd,type:e.currentTarget.value as RailItemType})}><option value="skill">Skill</option><option value="slash">Slash command</option><option value="text">Text macro</option><option value="prompt">Prompt template</option></select></label>
+              {railAdd.type==='prompt'
+                ? <label>Template<select value={railAdd.name} onChange={e=>setRailAdd({...railAdd,name:e.currentTarget.value})}><option value="">Choose a template…</option>{railPrompts.map(template=><option value={template.key}>{template.favorite?'★ ':''}{template.title}{template.scope==='project'?' (project)':''}{template.variables.length?` · ${template.variables.length} field${template.variables.length===1?'':'s'}`:''}</option>)}</select></label>
+                : <label>{railAdd.type==='text'?'Text to insert':'Name'}<input value={railAdd.name} placeholder={railAdd.type==='skill'?'commit':railAdd.type==='slash'?'new':'literal text'} onInput={e=>setRailAdd({...railAdd,name:e.currentTarget.value})}/></label>}
+              <label>Button label<input value={railAdd.label} placeholder="(auto)" onInput={e=>setRailAdd({...railAdd,label:e.currentTarget.value})}/></label>
+              <label>Show in<select value={railAdd.place} onChange={e=>setRailAdd({...railAdd,place:e.currentTarget.value as RailPlacementSetting})}><option value="drawer">Panel</option><option value="strip">Rail</option><option value="both">Rail and panel</option></select></label>
+              {railAdd.type!=='prompt'&&<label class="check"><span>Submit with Enter</span><input type="checkbox" checked={railAdd.submit} onChange={e=>setRailAdd({...railAdd,submit:e.currentTarget.checked})}/></label>}
+              <button class="primary" type="button" disabled={!railAdd.name.trim()} onClick={railAddItem}>Add to rail</button>
+            </div>
+            {railAdd.type==='prompt'&&<p class="rail-add-note">{railPrompts.length
+              ?'A prompt button points at the template, so editing the template updates the button. It inserts without sending — templates with {{fields}} open the Prompts panel to be filled in first.'
+              :'No prompt templates yet. Create one in the prompt library (side panel → Prompts → Manage templates), then it appears here.'}</p>}
+            <p class="rail-add-note">Skills inject <code>/name</code> in Claude and <code>$name</code> in Codex; slash commands inject <code>/name</code> in both. Built-in items can be moved, filtered, and hidden, but not edited.</p>
+          </details>
         </section>}
 
         {activeTab==='usage'&&<section><h3>Usage and operational telemetry</h3><p>The dashboard combines optional ccusage history with durable provider quota samples, reset evidence, probabilistic mux correlation, tools, explicit skills, and compactions.</p><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/></label><p>Turn-triggered refresh is globally rate limited, selected-account only, and never assumes provider data updates immediately. Unexpected-reset sounds are optional per device in the account switcher.</p><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? Object.entries(usage.states).map(([provider,state])=>`${provider}: ${state.status}${state.error?` (${state.error})`:''}`).join(' · ') : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><p>The `latest` tag is resolved when you install or update. Refreshes use the installed unified executable and never download code in the background.</p><details class="settings-advanced"><summary>Advanced command overrides</summary><label>Claude command<textarea value={draft.ccusage_claude_command.join('\n')} onInput={e=>change('ccusage_claude_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label><label>Codex command<textarea value={draft.ccusage_codex_command.join('\n')} onInput={e=>change('ccusage_codex_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label></details></section>}

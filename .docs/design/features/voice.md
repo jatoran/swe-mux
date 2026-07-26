@@ -154,17 +154,24 @@ into mobile-voice setup instead.
 
 ## Browser surface
 
-- Agent panes lead the terminal's bottom rail with the `tts:` chip (off / tap / auto) and
-  `talk:` Conversation toggle before terminal keys, Copy reply, and Paste. When TTS is active,
-  a one-row player strip (play/pause, seek bar, clip navigation, on-demand generate,
-  verbatim/summary switch, device autoplay toggle) sits directly above that rail, inside the
-  pane below the terminal, so enabling read aloud shortens the terminal rather than overlaying
-  it. The session context menu and command palette expose the same playback operations;
-  Settings → Voice owns engines, voice, language/model, content, budget, and cache config.
-- On mobile agent panes the horizontally scrollable bottom rail also exposes `speak`,
-  summary/verbatim selection, per-device autoplay, and `audio…` Settings. `tts:setup` and
-  `talk:setup` remain visible when their global feature is disabled, so an unavailable feature
-  is not undiscoverable on devices without a desktop context menu.
+- Every voice affordance lives at the **top** of an agent pane. The pane header carries a
+  `.pane-voice` group — the `tts:` chip (off / tap / auto) and the `talk:` Conversation toggle
+  — between the cwd and the note/proc/⋯ tools. When TTS is active, the one-row player strip
+  (play/pause, seek bar, clip navigation, on-demand generate, verbatim/summary switch, device
+  autoplay toggle) expands as its own row *directly beneath* that header, so enabling read
+  aloud shortens the terminal rather than overlaying it. The session context menu and command
+  palette expose the same playback operations; Settings → Voice owns engines, voice,
+  language/model, content, budget, and cache config.
+- The chips are in the header and not the bottom command rail because that rail is a
+  horizontal scroller the user pages through to reach terminal keys: voice chips both occupied
+  its most valuable leading slots and scrolled out of reach. The header group is itself a
+  scroller, which is what keeps a long chip set (or a live transcript readout) from pushing the
+  pane tools out of a bar that must never wrap — see `ui.md`.
+- On touch, the group additionally exposes `audio…` Settings, since a phone has no desktop
+  context menu. It does **not** repeat `speak`, summary/verbatim, or autoplay: those render
+  only when the player strip renders, and the strip is now the very next row. `tts:setup` and
+  `talk:setup` replace their chips when the global feature is disabled, so an unavailable
+  feature stays discoverable.
 - Browser/PWA background survival is not guaranteed; capture stops if the tab is suspended.
 
 ## Session sounds (unrelated audio path)

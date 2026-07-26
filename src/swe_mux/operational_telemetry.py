@@ -382,6 +382,12 @@ class OperationalTelemetryStore:
             self._db.execute("ALTER TABLE quota_samples ADD COLUMN fable_used REAL")
         if "fable_reset_at" not in sample_columns:
             self._db.execute("ALTER TABLE quota_samples ADD COLUMN fable_reset_at REAL")
+        if "provider_account_uuid" not in sample_columns:
+            # Samples used to be keyed only by the local account slot, so a slot
+            # that changed owner silently changed what its history described.
+            # Recording the verified provider account makes a sample
+            # self-describing and detectable in the data.
+            self._db.execute("ALTER TABLE quota_samples ADD COLUMN provider_account_uuid TEXT")
 
     def _repair_legacy_reset_classifications(self) -> None:
         """Re-evaluate old unexpected rows under the hardened high-precision policy."""
@@ -922,6 +928,7 @@ class OperationalTelemetryStore:
         sampled_at: float,
         account_active: bool,
         auth_state: str,
+        provider_account_uuid: str | None = None,
     ) -> dict[str, Any]:
         session_value = quota.get("session")
         weekly_value = quota.get("weekly")
@@ -940,8 +947,8 @@ class OperationalTelemetryStore:
                 "INSERT OR IGNORE INTO quota_samples"
                 "(provider,account_id,sampled_at,status,session_used,weekly_used,session_reset_at,"
                 "weekly_reset_at,fable_used,fable_reset_at,source,freshness,raw_precision,error,"
-                "account_active,auth_state) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "account_active,auth_state,provider_account_uuid) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     provider,
                     account_id,
@@ -959,6 +966,7 @@ class OperationalTelemetryStore:
                     quota.get("error"),
                     int(account_active),
                     auth_state,
+                    provider_account_uuid,
                 ),
             )
             if cursor.rowcount == 0:
@@ -995,10 +1003,16 @@ class OperationalTelemetryStore:
         ).fetchone()
         if not current:
             return []
+        # A slot whose credentials were replaced describes a different provider
+        # account from that point on. Comparing across that boundary manufactures
+        # quota movements that never happened, so the predecessor must be the same
+        # verified account whenever the current sample knows which one it is.
+        owner = current["provider_account_uuid"]
         previous = self._db.execute(
-            "SELECT * FROM quota_samples WHERE provider=? AND account_id=? AND id<? "
-            "ORDER BY sampled_at DESC,id DESC LIMIT 1",
-            (current["provider"], current["account_id"], sample_id),
+            "SELECT * FROM quota_samples WHERE provider=? AND account_id=? AND id<?"
+            + (" AND provider_account_uuid=?" if owner else "")
+            + " ORDER BY sampled_at DESC,id DESC LIMIT 1",
+            (current["provider"], current["account_id"], sample_id, *((owner,) if owner else ())),
         ).fetchone()
         if not previous or float(current["sampled_at"]) <= float(previous["sampled_at"]):
             return []
@@ -1226,6 +1240,46 @@ class OperationalTelemetryStore:
                 json.dumps(caveats),
             ),
         )
+
+    async def purge_account(
+        self, provider: str, account_id: str, *, since: float | None = None
+    ) -> dict[str, int]:
+        """Drop durable observations filed under one account slot.
+
+        A slot that turned out to hold another account's credentials recorded
+        that other account's quota under its own ID; those rows are not evidence
+        about anything and must not survive the slot. ``since`` bounds the purge
+        to the period after the credentials changed hands, so a slot's genuine
+        earlier history survives.
+        """
+        # Each table's own time column, so a bounded purge cuts at the right axis.
+        tables = (
+            ("quota_samples", "sampled_at"),
+            ("quota_reset_events", "observed_at"),
+            ("quota_attributions", "interval_end"),
+            ("quota_sample_rollups", None),
+        )
+
+        def op() -> dict[str, int]:
+            removed: dict[str, int] = {}
+            for table, column in tables:
+                if since is not None and column is None:
+                    # Daily rollups have no instant to cut on; a bounded purge
+                    # leaves them rather than deleting whole days of good data.
+                    removed[table] = 0
+                    continue
+                clause = f" AND {column}>=?" if since is not None else ""
+                arguments: tuple[Any, ...] = (
+                    (provider, account_id, since) if since is not None else (provider, account_id)
+                )
+                removed[table] = self._db.execute(
+                    f"DELETE FROM {table} WHERE provider=? AND account_id=?{clause}",  # noqa: S608
+                    arguments,
+                ).rowcount
+            self._db.commit()
+            return removed
+
+        return await self._run(op)
 
     async def latest_quota_by_account(self) -> dict[str, dict[str, Any]]:
         def op() -> dict[str, dict[str, Any]]:
@@ -1674,6 +1728,9 @@ def _quota_public(row: dict[str, Any]) -> dict[str, Any]:
         "id": row.get("id"),
         "provider": row.get("provider"),
         "account_id": row.get("account_id"),
+        # Which provider account the sample describes, independent of the local
+        # slot it was filed under.
+        "provider_account_uuid": row.get("provider_account_uuid"),
         "sampled_at": row.get("sampled_at"),
         "status": row.get("status"),
         "session": (

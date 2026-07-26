@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "long_tool_esc_interrupt",
+  "description": "A genuine long tool call keeps 'esc to interrupt' on screen: the PTY backstop must never cut it short no matter how long it stalls, and the turn closes on proven evidence.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "test"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Bash", "input": {}}], "stop_reason": "tool_use"}}},
+    {"kind": "pty_tail", "data": "running tests... esc to interrupt"},
+    {"kind": "timer", "seconds": 120},
+    {"kind": "watchdog", "expect_state": "working"},
+    {"kind": "timer", "seconds": 120},
+    {"kind": "watchdog", "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "ok", "is_error": false}]}}},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "Bash"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "Bash", "success": true},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 4, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "terminal_mode_unknown_or_stale"
+  }
+}

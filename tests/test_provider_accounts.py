@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from types import MethodType
+from types import MethodType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -34,14 +35,42 @@ def identityless_claude_auth(token: str) -> dict[str, Any]:
     }
 
 
-async def no_status(self: ProviderAccountManager, provider: str) -> dict[str, str | None]:
-    return {"email": None, "provider_account_id": None, "organization": None}
+async def no_status(self: ProviderAccountManager, provider: str) -> dict[str, Any]:
+    return {"email": None, "provider_account_id": None, "organization": None, "source": None}
 
 
 async def fake_refresh(
-    self: ProviderAccountManager, account_id: str | None = None
+    self: ProviderAccountManager, account_id: str | None = None, **kwargs: Any
 ) -> dict[str, Any]:
     return self.snapshot()
+
+
+def token_identity(email: str, account_uuid: str) -> dict[str, Any]:
+    return {
+        "email": email,
+        "provider_account_id": account_uuid,
+        "organization": "Test Org",
+        "source": "token",
+    }
+
+
+def offline(
+    manager: ProviderAccountManager,
+    identity: dict[str, Any] | Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+) -> ProviderAccountManager:
+    """Keep identity verification deterministic and off the network."""
+
+    async def verify(
+        self: ProviderAccountManager, provider: str, auth: dict[str, Any]
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        if provider == "codex":
+            resolved = self._identity("codex", auth)
+            return (resolved if resolved.get("provider_account_id") else None), None
+        resolved = identity(auth) if callable(identity) else identity
+        return (resolved if isinstance(resolved, dict) else None), None
+
+    manager._verify_token_identity = MethodType(verify, manager)  # type: ignore[method-assign]
+    return manager
 
 
 @pytest.mark.asyncio
@@ -51,7 +80,7 @@ async def test_capture_and_switch_copy_auth_only_and_keep_shared_config(tmp_path
     config = home / ".claude" / "settings.json"
     system_auth.parent.mkdir(parents=True)
     config.write_text('{"theme":"shared"}', encoding="utf-8")
-    manager = ProviderAccountManager(tmp_path / "mux", EventBus(), home=home)
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home))
     manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
     manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
 
@@ -78,7 +107,7 @@ async def test_capture_deduplicates_provider_identity(tmp_path: Path) -> None:
     home = tmp_path / "home"
     auth_path = home / ".codex" / "auth.json"
     auth_path.parent.mkdir(parents=True)
-    manager = ProviderAccountManager(tmp_path / "mux", EventBus(), home=home)
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home))
     manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
     first = {"tokens": {"access_token": "first", "account_id": "account-1"}}
     second = {"tokens": {"access_token": "rotated", "account_id": "account-1"}}
@@ -100,7 +129,7 @@ async def test_startup_follows_system_auth_instead_of_remembered_selection(
     system_auth = home / ".claude" / ".credentials.json"
     system_auth.parent.mkdir(parents=True)
     data_dir = tmp_path / "mux"
-    manager = ProviderAccountManager(data_dir, EventBus(), home=home)
+    manager = offline(ProviderAccountManager(data_dir, EventBus(), home=home))
     manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
     manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
 
@@ -132,7 +161,7 @@ async def test_startup_reports_unmatched_system_auth_as_external(tmp_path: Path)
     system_auth = home / ".claude" / ".credentials.json"
     system_auth.parent.mkdir(parents=True)
     data_dir = tmp_path / "mux"
-    manager = ProviderAccountManager(data_dir, EventBus(), home=home)
+    manager = offline(ProviderAccountManager(data_dir, EventBus(), home=home))
     manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
     manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
     system_auth.write_text(
@@ -153,6 +182,8 @@ async def test_startup_reports_unmatched_system_auth_as_external(tmp_path: Path)
         "email": "external@example.com",
         "provider_account_id": None,
         "organization": None,
+        "identity_source": "file",
+        "match_hint": None,
     }
 
 
@@ -164,7 +195,7 @@ async def test_startup_clears_selection_for_missing_or_unreadable_auth(
     system_auth = home / ".claude" / ".credentials.json"
     system_auth.parent.mkdir(parents=True)
     data_dir = tmp_path / "mux"
-    manager = ProviderAccountManager(data_dir, EventBus(), home=home)
+    manager = offline(ProviderAccountManager(data_dir, EventBus(), home=home))
     manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
     manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
     system_auth.write_text(
@@ -212,56 +243,66 @@ async def test_startup_syncs_rotated_credentials_for_matching_identity(
 
 
 @pytest.mark.asyncio
-async def test_startup_uses_claude_status_to_match_identityless_rotated_auth(
+async def test_claude_cli_status_email_never_relinks_rotated_credentials(
+    tmp_path: Path,
+) -> None:
+    """The regression that mirrored one account's usage onto another.
+
+    `claude auth status` reports machine-global cached profile state, not the
+    credential, so it can name a different account than the token actually in
+    `.credentials.json`. Acting on it copied the live token into the wrong saved
+    slot. It may now only offer a relink hint.
+    """
+    home = tmp_path / "home"
+    system_auth = home / ".claude" / ".credentials.json"
+    system_auth.parent.mkdir(parents=True)
+    data_dir = tmp_path / "mux"
+    manager = offline(ProviderAccountManager(data_dir, EventBus(), home=home))
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+    saved = json.dumps(claude_auth("saved", "first@example.com")).encode()
+    system_auth.write_bytes(saved)
+    account_id = (await manager.capture_current("claude"))["selected"]["claude"]
+
+    # A different account's login lands in the shared credential file while the
+    # CLI's cached profile still names the saved one.
+    rotated = json.dumps(identityless_claude_auth("other-account-token")).encode()
+    system_auth.write_bytes(rotated)
+    restarted = offline(ProviderAccountManager(data_dir, EventBus(), home=home))
+
+    async def stale_status(self: ProviderAccountManager, provider: str) -> dict[str, Any]:
+        return {
+            "email": "first@example.com",
+            "provider_account_id": None,
+            "organization": None,
+            "source": "cli",
+        }
+
+    restarted._status_identity = MethodType(stale_status, restarted)  # type: ignore[method-assign]
+    snapshot = await restarted.reconcile_startup()
+
+    assert snapshot["current"]["claude"]["state"] == "external"
+    assert snapshot["selected"]["claude"] is None
+    assert snapshot["current"]["claude"]["match_hint"] == {
+        "account_id": account_id,
+        "label": "first@example.com",
+        "reason": "email",
+    }
+    assert restarted._managed_auth_path("claude", account_id).read_bytes() == saved
+
+
+@pytest.mark.asyncio
+async def test_token_verified_identity_relinks_an_externally_rotated_login(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
     system_auth = home / ".claude" / ".credentials.json"
     system_auth.parent.mkdir(parents=True)
     data_dir = tmp_path / "mux"
-    manager = ProviderAccountManager(data_dir, EventBus(), home=home)
+    identity = token_identity("saved@example.com", "acct-1")
+    manager = offline(ProviderAccountManager(data_dir, EventBus(), home=home), identity)
     manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
     manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
-    system_auth.write_text(
-        json.dumps(claude_auth("saved", "adamtbandel@gmail.com")), encoding="utf-8"
-    )
-    account_id = (await manager.capture_current("claude"))["selected"]["claude"]
-
-    rotated = json.dumps(identityless_claude_auth("rotated")).encode()
-    system_auth.write_bytes(rotated)
-    restarted = ProviderAccountManager(data_dir, EventBus(), home=home)
-    assert restarted.snapshot()["current"]["claude"]["state"] == "external"
-    assert restarted.snapshot()["current"]["claude"]["email"] is None
-
-    async def adam_status(
-        self: ProviderAccountManager, provider: str
-    ) -> dict[str, str | None]:
-        assert provider == "claude"
-        return {
-            "email": "adamtbandel@gmail.com",
-            "provider_account_id": None,
-            "organization": None,
-        }
-
-    restarted._status_identity = MethodType(adam_status, restarted)  # type: ignore[method-assign]
-    snapshot = await restarted.reconcile_startup()
-
-    assert system_auth.read_bytes() == rotated
-    assert restarted._managed_auth_path("claude", account_id).read_bytes() == rotated
-    assert snapshot["selected"]["claude"] == account_id
-    assert snapshot["current"]["claude"]["state"] == "saved"
-    assert snapshot["current"]["claude"]["email"] == "adamtbandel@gmail.com"
-
-
-@pytest.mark.asyncio
-async def test_refresh_reconciles_identityless_external_login_to_saved_account(
-    tmp_path: Path,
-) -> None:
-    home = tmp_path / "home"
-    system_auth = home / ".claude" / ".credentials.json"
-    system_auth.parent.mkdir(parents=True)
-    manager = ProviderAccountManager(tmp_path / "mux", EventBus(), home=home)
-    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
     system_auth.write_text(
         json.dumps(claude_auth("saved", "saved@example.com")), encoding="utf-8"
     )
@@ -269,69 +310,59 @@ async def test_refresh_reconciles_identityless_external_login_to_saved_account(
 
     rotated = json.dumps(identityless_claude_auth("rotated")).encode()
     system_auth.write_bytes(rotated)
-
-    async def saved_status(
-        self: ProviderAccountManager, provider: str
-    ) -> dict[str, str | None]:
-        assert provider == "claude"
-        return {
-            "email": "saved@example.com",
-            "provider_account_id": None,
-            "organization": None,
-        }
-
-    async def skip_quota(self: ProviderAccountManager, account: dict[str, Any]) -> None:
-        return None
-
-    manager._status_identity = MethodType(saved_status, manager)  # type: ignore[method-assign]
-    manager._refresh_one = MethodType(skip_quota, manager)  # type: ignore[method-assign]
-    snapshot = await manager.refresh()
+    restarted = offline(ProviderAccountManager(data_dir, EventBus(), home=home), identity)
+    restarted._status_identity = MethodType(no_status, restarted)  # type: ignore[method-assign]
+    restarted.refresh = MethodType(fake_refresh, restarted)  # type: ignore[method-assign]
+    snapshot = await restarted.reconcile_startup()
 
     assert snapshot["selected"]["claude"] == account_id
     assert snapshot["current"]["claude"]["state"] == "saved"
-    assert manager._managed_auth_path("claude", account_id).read_bytes() == rotated
+    assert snapshot["current"]["claude"]["identity_source"] == "token"
+    assert system_auth.read_bytes() == rotated
+    assert restarted._managed_auth_path("claude", account_id).read_bytes() == rotated
 
 
 @pytest.mark.asyncio
-async def test_startup_status_identity_is_retried_if_live_auth_changes(
+async def test_identity_probe_is_retried_if_live_auth_changes_during_the_probe(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
     system_auth = home / ".claude" / ".credentials.json"
     system_auth.parent.mkdir(parents=True)
     data_dir = tmp_path / "mux"
-    manager = ProviderAccountManager(data_dir, EventBus(), home=home)
+    manager = offline(ProviderAccountManager(data_dir, EventBus(), home=home))
     manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
     manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
     system_auth.write_text(
-        json.dumps(claude_auth("saved", "adamtbandel@gmail.com")), encoding="utf-8"
+        json.dumps(claude_auth("saved", "first@example.com")), encoding="utf-8"
     )
     await manager.capture_current("claude")
 
     system_auth.write_text(json.dumps(identityless_claude_auth("first")), encoding="utf-8")
     restarted = ProviderAccountManager(data_dir, EventBus(), home=home)
+    restarted._status_identity = MethodType(no_status, restarted)  # type: ignore[method-assign]
+    restarted.refresh = MethodType(fake_refresh, restarted)  # type: ignore[method-assign]
     calls = 0
 
-    async def changing_status(
-        self: ProviderAccountManager, provider: str
-    ) -> dict[str, str | None]:
+    async def changing_verify(
+        self: ProviderAccountManager, provider: str, auth: dict[str, Any]
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         nonlocal calls
         calls += 1
         if calls == 1:
             system_auth.write_text(
                 json.dumps(identityless_claude_auth("second")), encoding="utf-8"
             )
-            email = "adamtbandel@gmail.com"
-        else:
-            email = "someone-else@example.com"
-        return {"email": email, "provider_account_id": None, "organization": None}
+            return token_identity("first@example.com", "acct-1"), None
+        return token_identity("someone-else@example.com", "acct-2"), None
 
-    restarted._status_identity = MethodType(  # type: ignore[method-assign]
-        changing_status, restarted
+    restarted._verify_token_identity = MethodType(  # type: ignore[method-assign]
+        changing_verify, restarted
     )
     snapshot = await restarted.reconcile_startup()
 
     assert calls == 2
+    # The stale reading is discarded rather than cached against the new digest.
     assert snapshot["selected"]["claude"] is None
     assert snapshot["current"]["claude"]["state"] == "external"
     assert snapshot["current"]["claude"]["email"] == "someone-else@example.com"
@@ -344,7 +375,8 @@ async def test_refresh_rotation_does_not_overwrite_changed_system_login(
     home = tmp_path / "home"
     system_auth = home / ".claude" / ".credentials.json"
     system_auth.parent.mkdir(parents=True)
-    manager = ProviderAccountManager(tmp_path / "mux", EventBus(), home=home)
+    identity = token_identity("saved@example.com", "acct-1")
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home), identity)
     manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
     manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
     system_auth.write_text(
@@ -369,8 +401,7 @@ async def test_refresh_rotation_does_not_overwrite_changed_system_login(
     await manager._refresh_one(account)
 
     assert system_auth.read_bytes() == concurrently_rotated
-    assert manager.snapshot()["selected"]["claude"] == account_id
-    assert manager.snapshot()["current"]["claude"]["state"] == "saved"
+    assert manager._account(account_id)["provider_account_id"] == "acct-1"
 
 
 @pytest.mark.asyncio
@@ -379,7 +410,7 @@ async def test_quota_failure_retains_last_success_as_stale(tmp_path: Path) -> No
     auth_path = home / ".claude" / ".credentials.json"
     auth_path.parent.mkdir(parents=True)
     auth_path.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
-    manager = ProviderAccountManager(tmp_path / "mux", EventBus(), home=home)
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home))
     manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
     manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
     snapshot = await manager.capture_current("claude")
@@ -573,6 +604,260 @@ async def test_claude_quota_fable_absent_is_none(tmp_path: Path) -> None:
     quota, _ = await manager._fetch_claude({"claudeAiOauth": {"accessToken": "secret"}})
 
     assert quota["fable"] is None
+
+
+@pytest.mark.asyncio
+async def test_two_slots_holding_one_account_are_flagged_and_not_double_polled(
+    tmp_path: Path,
+) -> None:
+    """The reported symptom: two saved accounts reporting identical usage.
+
+    Once identity is token-derived the duplicate is detectable, so the second
+    slot is marked instead of quietly polling the same account twice.
+    """
+    home = tmp_path / "home"
+    system_auth = home / ".claude" / ".credentials.json"
+    system_auth.parent.mkdir(parents=True)
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home))
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+    system_auth.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
+    first = (await manager.capture_current("claude", label="first"))["selected"]["claude"]
+    system_auth.write_text(json.dumps(claude_auth("two", "two@example.com")), encoding="utf-8")
+    second = (await manager.capture_current("claude", label="second"))["selected"]["claude"]
+    assert first != second
+
+    # Both slots turn out to hold credentials for one and the same account.
+    offline(manager, token_identity("one@example.com", "acct-1"))
+    polled: list[str] = []
+
+    async def record_poll(self: ProviderAccountManager, account: dict[str, Any]) -> None:
+        polled.append(str(account["id"]))
+
+    manager.refresh = ProviderAccountManager.refresh.__get__(manager)  # type: ignore[method-assign]
+    manager._refresh_one = MethodType(record_poll, manager)  # type: ignore[method-assign]
+    await manager.verify_identities()
+    snapshot = await manager.refresh()
+
+    conflicts = {
+        account["id"]: account["conflict"]
+        for account in snapshot["accounts"]
+        if account["conflict"]
+    }
+    assert set(conflicts) == {first, second}
+    assert {entry["primary_id"] for entry in conflicts.values()} == {second}
+    assert polled == [second]
+    quota = next(item for item in snapshot["accounts"] if item["id"] == first)["quota"]
+    assert quota["status"] == "conflict"
+
+
+@pytest.mark.asyncio
+async def test_switching_is_blocked_while_live_sessions_hold_the_current_login(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    system_auth = home / ".claude" / ".credentials.json"
+    system_auth.parent.mkdir(parents=True)
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home))
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+    system_auth.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
+    first = (await manager.capture_current("claude", label="first"))["selected"]["claude"]
+    system_auth.write_text(json.dumps(claude_auth("two", "two@example.com")), encoding="utf-8")
+    await manager.capture_current("claude", label="second")
+
+    manager.sessions = SimpleNamespace(
+        sessions={"s1": SimpleNamespace(record=SimpleNamespace(backend="claude", state="working"))}
+    )
+
+    with pytest.raises(ProviderAccountError, match="live claude session"):
+        await manager.select("claude", first)
+    assert json.loads(system_auth.read_text(encoding="utf-8"))["claudeAiOauth"]["accessToken"] == (
+        "two"
+    )
+
+    await manager.select("claude", first, force=True)
+    assert json.loads(system_auth.read_text(encoding="utf-8"))["claudeAiOauth"]["accessToken"] == (
+        "one"
+    )
+
+
+@pytest.mark.asyncio
+async def test_adopt_refuses_credentials_owned_by_another_saved_account(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    system_auth = home / ".claude" / ".credentials.json"
+    system_auth.parent.mkdir(parents=True)
+    manager = offline(
+        ProviderAccountManager(tmp_path / "mux", EventBus(), home=home),
+        lambda auth: token_identity(
+            f"{auth['claudeAiOauth']['accessToken']}@example.com",
+            f"acct-{auth['claudeAiOauth']['accessToken']}",
+        ),
+    )
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+    system_auth.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
+    first = (await manager.capture_current("claude", label="first"))["selected"]["claude"]
+    first_snapshot = manager._managed_auth_path("claude", first).read_bytes()
+    system_auth.write_text(json.dumps(claude_auth("two", "two@example.com")), encoding="utf-8")
+    await manager.capture_current("claude", label="second")
+
+    with pytest.raises(ProviderAccountError, match="belongs to the saved account"):
+        await manager.adopt("claude", first)
+    assert manager._managed_auth_path("claude", first).read_bytes() == first_snapshot
+
+
+@pytest.mark.asyncio
+async def test_credential_writes_are_audited_and_the_previous_snapshot_is_kept(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    system_auth = home / ".claude" / ".credentials.json"
+    system_auth.parent.mkdir(parents=True)
+    identity = token_identity("one@example.com", "acct-1")
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home), identity)
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+    original = json.dumps(claude_auth("one", "one@example.com")).encode()
+    system_auth.write_bytes(original)
+    account_id = (await manager.capture_current("claude"))["selected"]["claude"]
+
+    rotated = json.dumps(identityless_claude_auth("rotated")).encode()
+    system_auth.write_bytes(rotated)
+    await manager.reconcile_current(force_identity_probe=True)
+
+    managed = manager._managed_auth_path("claude", account_id)
+    assert managed.read_bytes() == rotated
+    assert managed.with_name(managed.name + ".prev").read_bytes() == original
+    actions = [entry["action"] for entry in manager.audit_entries()]
+    assert "captured" in actions
+    assert "managed_auth_written" in actions
+    written = next(
+        entry for entry in manager.audit_entries() if entry["action"] == "managed_auth_written"
+    )
+    assert written["matched_by"] == "verified_identity"
+    assert written["account_id"] == account_id
+
+
+@pytest.mark.asyncio
+async def test_quota_samples_record_the_account_they_describe(tmp_path: Path) -> None:
+    """A slot that changes hands must not silently re-attribute its history."""
+    from swe_mux.operational_telemetry import OperationalTelemetryStore
+
+    store = OperationalTelemetryStore(tmp_path / "mux.db")
+    quota = {"session": {"used_percent": 40.0}, "weekly": {"used_percent": 10.0}, "status": "ready"}
+    await store.record_quota_sample(
+        provider="claude",
+        account_id="slot",
+        provider_account_uuid="acct-1",
+        quota=quota,
+        sampled_at=1000.0,
+        account_active=True,
+        auth_state="saved",
+    )
+    # The slot now holds a different account's credentials. Its lower usage must
+    # not read as a quota reset against the previous owner's sample.
+    result = await store.record_quota_sample(
+        provider="claude",
+        account_id="slot",
+        provider_account_uuid="acct-2",
+        quota={
+            "session": {"used_percent": 2.0},
+            "weekly": {"used_percent": 1.0},
+            "status": "ready",
+        },
+        sampled_at=2000.0,
+        account_active=True,
+        auth_state="saved",
+    )
+    assert result["reset_events"] == []
+
+    removed = await store.purge_account("claude", "slot", since=1500.0)
+    assert removed["quota_samples"] == 1
+    remaining = await store.snapshot(account_id="slot")
+    store.close()
+    assert removed["quota_sample_rollups"] == 0
+    assert [row["provider_account_uuid"] for row in remaining["quota"]["samples"]] == ["acct-1"]
+
+
+def test_v1_manifest_migration_drops_organization_scoped_claude_ids(tmp_path: Path) -> None:
+    """v1 keyed Claude accounts on an organization UUID, which two logins can share."""
+    data_dir = tmp_path / "mux"
+    data_dir.mkdir()
+    (data_dir / "provider-accounts.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "selected": {"claude": "a", "codex": "b"},
+                "accounts": [
+                    {
+                        "id": "a",
+                        "provider": "claude",
+                        "label": "claude",
+                        "email": "one@example.com",
+                        "provider_account_id": "org-uuid",
+                        "auth_digest": "deadbeef",
+                    },
+                    {
+                        "id": "b",
+                        "provider": "codex",
+                        "label": "codex",
+                        "provider_account_id": "chatgpt-account",
+                        "auth_digest": "cafe",
+                    },
+                ],
+                "quota": {"a": {"status": "ready"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = ProviderAccountManager(data_dir, EventBus(), home=tmp_path / "home")
+
+    accounts = {account["id"]: account for account in manager.snapshot()["accounts"]}
+    assert set(accounts) == {"a", "b"}
+    assert accounts["a"]["provider_account_id"] is None
+    assert accounts["a"]["identity_source"] == "file"
+    assert accounts["b"]["provider_account_id"] == "chatgpt-account"
+    assert accounts["b"]["identity_source"] == "token"
+
+
+async def test_claude_identity_is_derived_from_the_token_not_the_machine(
+    tmp_path: Path,
+) -> None:
+    manager = ProviderAccountManager(tmp_path, EventBus(), home=tmp_path / "home")
+    seen: list[str] = []
+
+    async def request(
+        self: ProviderAccountManager,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        data: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        seen.append(url)
+        assert headers and headers["Authorization"] == "Bearer secret"
+        return 200, {
+            "account": {"uuid": "account-uuid", "email": "person@example.com"},
+            "organization": {"uuid": "org-uuid", "name": "Person"},
+        }
+
+    manager._json_request = MethodType(request, manager)  # type: ignore[method-assign]
+    identity, rotated = await manager._verify_token_identity(
+        "claude", {"claudeAiOauth": {"accessToken": "secret"}}
+    )
+
+    assert rotated is None
+    assert identity == {
+        "email": "person@example.com",
+        # The account UUID, not the organization UUID: two logins can share an org.
+        "provider_account_id": "account-uuid",
+        "organization": "Person",
+        "source": "token",
+    }
+    assert seen == ["https://api.anthropic.com/api/oauth/profile"]
 
 
 def test_provider_account_routes_are_registered(tmp_path: Path) -> None:

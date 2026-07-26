@@ -7,13 +7,13 @@
     {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-1"}}},
     {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "rate_limit"}}},
     {"kind": "terminal", "mode": "normal"},
-    {"kind": "timer", "seconds": 3.0, "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "timer", "seconds": 3.0, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "awaiting", "expect_awaiting": "rate_limit"},
     {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "turn_aborted", "reason": "interrupted", "turn_id": "turn-1"}}},
-    {"kind": "timer", "seconds": 3.0, "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "timer", "seconds": 3.0, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "idle"},
     {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-2"}}},
     {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-2"}}},
     {"kind": "terminal", "mode": "normal"},
-    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true}
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"}
   ],
   "expected": {
     "events": [
@@ -22,6 +22,13 @@
       {"type": "turn_aborted", "source": "transcript", "scope": "root", "outcome": "interrupted"},
       {"type": "turn_started", "source": "transcript", "scope": "root"},
       {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "awaiting", "source": "transcript", "proof": "proven", "awaiting_reason": "rate_limit"},
+      {"previous": "awaiting", "state": "idle", "source": "transcript", "proof": "proven"},
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
     ],
     "parser": {"status": "ready", "recognized": 6, "unknown": 0, "unknown_signatures": {}},
     "delivery_state": "safe",

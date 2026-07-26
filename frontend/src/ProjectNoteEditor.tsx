@@ -7,6 +7,8 @@ import type {
 } from '@continuity-editor/editor'
 import { ContinuityEditor } from '@continuity-editor/editor/react'
 import { noteQueueKey, noteSaveQueue } from './noteSaveQueue'
+import { forgetEditorFocus, noteEditorFocus } from './insertTarget'
+import { captureCopy } from './clipboardHistory'
 
 // Tab switches unmount the whole resource view (only the active stack child renders), so the
 // editor instance is destroyed and a fresh one cannot know its previous viewport. Keep the
@@ -53,6 +55,9 @@ function routeRequest(detail: ContinuityRequestDetail): void {
     const manualCopy = () => {
       window.prompt('Copy the text below:', detail.text)
     }
+    // Clipboard history still records it: this is exactly the case (insecure
+    // context, denied policy) where the ring is the only way to get the text back.
+    captureCopy(detail.text, 'note')
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(detail.text).catch(manualCopy)
     } else {
@@ -60,6 +65,29 @@ function routeRequest(detail: ContinuityRequestDetail): void {
     }
   }
   // contextMenu and filesDropped fall through to default browser/daemon behavior.
+}
+
+/**
+ * Answer the editor's `pasteText` request. The editor emits it only after its
+ * own clipboard-read was refused (insecure context, or a webview/permission
+ * policy that denies `clipboard-read`), so we read from the host and splice the
+ * text via the editor's public `insertText`. When the host read is also blocked
+ * we prompt for manual paste, mirroring the `copyText` fallback above, so
+ * cross-application paste still works. In-editor copy/paste never reaches here
+ * (the engine remembers its own last copy).
+ */
+async function handlePasteRequest(element: ContinuityEditorElement | null): Promise<void> {
+  if (!element) return
+  let text: string | null = null
+  if (navigator.clipboard?.readText) {
+    try {
+      text = await navigator.clipboard.readText()
+    } catch {
+      text = null
+    }
+  }
+  if (text === null) text = window.prompt('Paste text:')
+  if (text) element.insertText(text)
 }
 
 /**
@@ -101,10 +129,17 @@ export function ContinuityMarkdownEditor({
   // Capture the viewport at ref detach: Preact nulls refs before removing the DOM node, so
   // the textarea scroll offsets are still live here (they read 0 once detached).
   const attachRef = useCallback((element: ContinuityEditorElement | null) => {
-    if (!element && elementRef.current && scrollKeyRef.current) {
-      scrollStates.set(scrollKeyRef.current, elementRef.current.getScrollState())
+    if (!element && elementRef.current) {
+      if (scrollKeyRef.current) {
+        scrollStates.set(scrollKeyRef.current, elementRef.current.getScrollState())
+      }
+      // Detached editors must not keep winning the insert routing.
+      forgetEditorFocus(elementRef.current)
     }
     elementRef.current = element
+    // Focus inside the editor makes it the target for inserted text (clipboard
+    // history, terminal selections) even after an overlay takes DOM focus.
+    if (element) element.addEventListener('focusin', () => noteEditorFocus(element))
   }, [])
   return (
     <ContinuityEditor
@@ -135,7 +170,13 @@ export function ContinuityMarkdownEditor({
         const saved = scrollKeyRef.current && scrollStates.get(scrollKeyRef.current)
         if (saved) elementRef.current?.restoreScrollState(saved)
       }}
-      onRequest={routeRequest}
+      onRequest={detail => {
+        if (detail.kind === 'pasteText') {
+          void handlePasteRequest(elementRef.current)
+          return
+        }
+        routeRequest(detail)
+      }}
     />
   )
 }

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "ended_stuck_force_idle",
+  "description": "A lost Stop hook leaves the session working while the unobserved transcript tail proves the turn ended; the watchdog force-idles at the ENDED-stuck threshold.",
+  "steps": [
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "transcript_tail", "records": [{"type": "user", "isSidechain": false, "message": {"content": "test"}}, {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}}, {"type": "system", "subtype": "turn_duration", "durationMs": 1200}]},
+    {"kind": "timer", "seconds": 5.9},
+    {"kind": "watchdog", "expect_state": "working"},
+    {"kind": "timer", "seconds": 0.2},
+    {"kind": "watchdog", "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "turn_ended", "source": "watchdog", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "watchdog", "proof": "inferred"}
+    ],
+    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "observation_capability_unknown"
+  }
+}

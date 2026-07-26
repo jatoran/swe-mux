@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "compaction_mid_turn",
+  "description": "A compaction boundary mid-turn emits context_compacted without disturbing the working status; the turn still closes on its own proven evidence.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "test"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "system", "subtype": "compact_boundary"}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "context_compacted", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 3, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "terminal_mode_unknown_or_stale"
+  }
+}

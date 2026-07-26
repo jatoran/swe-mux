@@ -1,5 +1,6 @@
-import { useRef } from 'preact/hooks'
-import { useModalFocus } from './modalFocus'
+// Notifications live in the utility drawer, not a modal: they are something you
+// glance at while working, and the modal made "check what fired" a full-screen
+// interruption. The list is unchanged; only its host moved.
 
 export type UiNotification = {
   ts:number;channel:string;delivery_id:string;session_id?:string
@@ -15,26 +16,22 @@ export type Delivery = {
 export type AutomationNotification={id:string;session_id?:string;kind:string;title:string;message:string;severity:string;created_at:number;read_at?:number}
 export type NotificationData = {notifications:UiNotification[];deliveries:Delivery[];automation?:AutomationNotification[]}
 
-export function Notifications({data,onClose,onOpenSession}:{
-  data:NotificationData;onClose:()=>void;onOpenSession:(sessionId:string)=>void
+export function NotificationsTab({data,onOpenSession}:{
+  data:NotificationData;onOpenSession:(sessionId:string)=>void
 }) {
-  const panel = useRef<HTMLElement>(null)
-  useModalFocus(panel,onClose)
   const deliveries = new Map(data.deliveries.map(delivery=>[delivery.id,delivery]))
   const items = [...data.notifications].reverse()
   const automation=[...(data.automation||[])]
-  return <div class="notifications-layer" onPointerDown={event=>{if(event.target===event.currentTarget)onClose()}}>
-    <section ref={panel} class="notifications-panel" role="dialog" aria-modal="true" aria-label="Notifications">
-      <header><div><span>EVENTS::NOTIFICATIONS</span><strong>{items.length+automation.length} retained attention records</strong></div><button aria-label="Close notifications" onClick={onClose}>×</button></header>
-      <div class="notification-list">
-        {items.length===0&&automation.length===0&&<p class="notification-empty">No UI notifications yet. Universal hook notifications and attention records appear here.</p>}
-        {automation.map(item=><article><span class={`state-dot ${item.severity==='warning'?'awaiting':'idle'}`}/><div><strong>{item.title}</strong><span>{item.message}</span><small>{new Date(item.created_at*1000).toLocaleString()} · automation::{item.kind}</small></div>{item.session_id&&<button onClick={()=>onOpenSession(item.session_id!)}>Open session</button>}</article>)}
-        {items.map(item=>{const delivery=deliveries.get(item.delivery_id);return <article>
-          <span class="state-dot idle" />
-          <div><strong>{item.session_name||'daemon'} · {item.type.replaceAll('_',' ')}</strong><span>{new Date(item.ts*1000).toLocaleString()} · {item.channel}</span><small>delivery::{delivery?.status||'delivered'} · attempts::{delivery?.attempts??1} · correlation::{delivery?.correlation_id||item.seq||'—'}</small></div>
-          {item.session_id&&<button onClick={()=>onOpenSession(item.session_id!)}>Open session</button>}
-        </article>})}
-      </div>
-    </section>
-  </div>
+  return <>
+    <p class="drawer-status">{items.length+automation.length} retained attention records</p>
+    <div class="notification-list">
+      {items.length===0&&automation.length===0&&<p class="notification-empty">No UI notifications yet. Universal hook notifications and attention records appear here.</p>}
+      {automation.map(item=><article><span class={`state-dot ${item.severity==='warning'?'awaiting':'idle'}`}/><div><strong>{item.title}</strong><span>{item.message}</span><small>{new Date(item.created_at*1000).toLocaleString()} · automation::{item.kind}</small></div>{item.session_id&&<button onClick={()=>onOpenSession(item.session_id!)}>Open session</button>}</article>)}
+      {items.map(item=>{const delivery=deliveries.get(item.delivery_id);return <article>
+        <span class="state-dot idle" />
+        <div><strong>{item.session_name||'daemon'} · {item.type.replaceAll('_',' ')}</strong><span>{new Date(item.ts*1000).toLocaleString()} · {item.channel}</span><small>delivery::{delivery?.status||'delivered'} · attempts::{delivery?.attempts??1} · correlation::{delivery?.correlation_id||item.seq||'—'}</small></div>
+        {item.session_id&&<button onClick={()=>onOpenSession(item.session_id!)}>Open session</button>}
+      </article>})}
+    </div>
+  </>
 }

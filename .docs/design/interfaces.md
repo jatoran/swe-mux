@@ -37,6 +37,27 @@ killing sessions); daemons started without a relaunchable entry point return
 APIs — it is not gated on the desktop control token because a preserved
 restart is no more destructive than the existing kill-session surface.
 
+## Frozen-app redeploy
+
+```text
+POST /api/daemon/redeploy  {force?: bool}
+GET  /api/daemon/redeploy
+```
+
+The staged frozen-app rebuild trigger for the UI ("Rebuild + redeploy app
+(keep sessions)", `app.redeploy`; works from desktop and mobile). POST
+validates a source checkout + `uv` on PATH (`409 no_source_checkout` /
+`409 uv_not_found`), an attached supervisor (`409 supervisor_not_attached`
+unless `force=true`, same authority as restart), and a pid single-flight lock
+(`409 redeploy_in_progress`), then spawns `packaging/redeploy_desktop.py`
+detached from the daemon's lifetime (log: `<data_dir>/redeploy.log`, lock:
+`<data_dir>/redeploy.lock`) and returns `202 {status: "redeploying", pid,
+log}`. The script builds into `dist/.staging` while this daemon keeps serving,
+stops it only after a successful build, swaps the bundle (previous kept at
+`dist/swe-mux.prev`), and rolls back if the new build never reports healthy.
+GET returns `{running, pid, log_tail, available}` so the UI can detect an
+early build failure while the old daemon is still alive.
+
 ## PTY supervisor IPC (local only)
 
 With `pty_supervisor_enabled`, the daemon talks to the standalone PTY supervisor over a
@@ -182,6 +203,32 @@ Scopes are `global | project`. Writes are revision checked; same-ID global/Proje
 are returned explicitly. Template bodies are bounded inert UTF-8 text and terminal control
 characters are rejected. The browser's Insert action uses terminal paste semantics and never
 adds Enter or submits.
+
+## Clipboard history
+
+```text
+GET    /clipboard
+POST   /clipboard                        {text, source?, session_id?, project_id?, device?}
+DELETE /clipboard[?include_pinned=1]
+GET    /clipboard/{entry_id}
+PATCH  /clipboard/{entry_id}             {pinned}
+DELETE /clipboard/{entry_id}
+```
+
+`GET /clipboard` returns the ring's settings (`enabled`, `persist`, `limit`, `entry_max_chars`,
+`retention_hours`, `redact_secrets`, `count`) plus entries carrying **previews only** — a
+single-line, whitespace-collapsed 180-character label with character/line counts, provenance
+(`source`, `session_id`, `project_id`, `device`) and `pinned`. The copied text is returned only
+by the per-entry `GET`, so a long history never ships in the list payload.
+
+`POST /clipboard` is the capture path used by the browser's boot-installed hooks. It always
+answers `{stored, reason, entry}` and never errors on a refusal: `stored:false` with reason
+`disabled | empty | too_large | secret`, `promoted` when identical text already existed (the
+existing entry moves to the front instead of duplicating), `stored` otherwise. Mutations emit a
+`clipboard_changed` event whose payload deliberately carries no text — those events are persisted
+in the history event log, which would defeat the memory-only default.
+
+Pinned entries are exempt from eviction, retention, and an ordinary `DELETE /clipboard`.
 
 ## Sessions
 
@@ -348,11 +395,15 @@ another registered Project service is rewritten through that service's `/preview
 
 ```text
 GET    /provider-accounts
+GET    /provider-accounts/audit[?limit=]
 POST   /provider-accounts/refresh
+POST   /provider-accounts/verify
 POST   /provider-accounts/{provider}/capture
 POST   /provider-accounts/{provider}/login
 PATCH  /provider-accounts/{provider}/{account_id}
-POST   /provider-accounts/{provider}/{account_id}/select
+POST   /provider-accounts/{provider}/{account_id}/select {force?: bool}
+POST   /provider-accounts/{provider}/{account_id}/adopt
+POST   /provider-accounts/{provider}/{account_id}/purge-telemetry {since?: epoch}
 DELETE /provider-accounts/{provider}/{account_id}
 GET|POST /usage
 DELETE /usage/cache
@@ -364,7 +415,24 @@ Auth file contents never appear in API responses. `GET /provider-accounts` repor
 system auth state as `saved | external | signed_out | unreadable`; saved selection is derived
 from the system auth file rather than restored from registry memory. Explicit selection changes
 only the provider's system auth file; polling covers saved active and inactive accounts.
-Quota fields are derived from the newest durable sample. The operational endpoint caps
+Quota fields are derived from the newest durable sample.
+
+Account identity carries its provenance. `identity_source` is `token` when the owner was
+resolved by asking the provider with that credential, and `cli`/`file` for weaker readings that
+describe machine state rather than the token. Only a `token` identity or an exact digest match
+lets reconciliation move credentials into a saved account; a weaker match is reported as
+`current.match_hint` and applied only through `…/adopt`. `POST /provider-accounts/verify`
+re-derives every saved account's owner. Saved accounts resolving to one provider account carry
+`conflict`, and every non-primary duplicate stops being polled and reports quota status
+`conflict`. Selecting a different account while live sessions of that provider are running
+returns HTTP 409 with `conflict: true` until the caller passes `force`; those sessions hold the
+outgoing token and rotate it back into the shared credential file. `GET
+/provider-accounts/audit` returns the append-only record of credential-affecting decisions
+(action, matched-by, truncated digests) and never credential contents. Quota samples carry
+`provider_account_uuid`, the verified account a sample describes independent of the slot it was
+filed under; `…/purge-telemetry` discards a slot's durable rows, bounded by `since` when only
+the period after a credential handover is bad (daily rollups have no instant to cut on and are
+left intact by a bounded purge). The operational endpoint caps
 `limit` to 1–1,000 per collection and returns quota samples/rollups/reset evidence,
 probabilistic attributions, tool/skill aggregates, parser coverage, and explicit compactions.
 Its interpretation is always `observational_correlation_only`.

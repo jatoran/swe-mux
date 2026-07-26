@@ -32,6 +32,15 @@ def test_mobile_workspace_and_recovery_contracts_remain_available() -> None:
     )
     assert "contextMenu.source!=='mobile'" in combined
     assert "tabMenu.source==='mobile'" in combined
+    # Mobile rail order is a device-local permutation of the projection. It must
+    # never write layout: that is the only thing keeping a phone's reordering
+    # from rearranging the desktop pane tree for every client.
+    assert "MOBILE_TAB_ORDER_KEY" in combined
+    app = source("App.tsx")
+    move_slot = app.split("const moveMobileTabSlot=")[1].split("const mobileMoveRow=")[0]
+    assert "updateLayout" not in move_slot
+    assert "api(" not in move_slot
+    assert "'mux.mobileTabOrder.v1'" in source("mobileTabOrder.ts")
     assert "beginWorkspaceTabDrag" in combined
     assert "beginProjectPointerDrag" in combined
     assert "beginSessionPointerDrag" in combined

@@ -82,6 +82,19 @@ KEYBINDING_COMMANDS = (
     ("terminal.paste", "Paste into focused terminal", "terminal"),
     ("terminal.selectAll", "Select all in focused terminal", "terminal"),
     ("terminal.clear", "Clear focused terminal", "terminal"),
+    # Read/select mode: the touch control that keeps the on-screen keyboard down.
+    # Bindable like any other command so it can drive a gesture or the palette.
+    ("terminal.keyboardToggle", "Toggle read/select mode in focused terminal", "terminal"),
+    # The right-edge utility drawer (default two-finger swipe-left gesture on
+    # touch; an always-visible icon rail on desktop). `drawer.toggle` reopens the
+    # last tab; the per-tab ids open one directly and close it if it is showing.
+    ("drawer.toggle", "Toggle the side panel", "view"),
+    ("drawer.clipboard", "Side panel: clipboard history", "clipboard"),
+    ("drawer.commands", "Side panel: session commands", "terminal"),
+    ("drawer.prompts", "Side panel: prompt templates", "input"),
+    ("drawer.notifications", "Side panel: notifications", "view"),
+    ("clipboard.open", "Open clipboard history", "clipboard"),
+    ("clipboard.clear", "Clear unpinned clipboard history", "clipboard"),
     *tuple(
         (f"project.activate({index})", f"Switch to project {index}", "project")
         for index in range(1, 10)

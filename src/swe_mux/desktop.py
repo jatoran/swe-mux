@@ -230,7 +230,11 @@ class DesktopRuntime:
         if health_snapshot(self.url) is not None:
             return
         assert self.config.config_path is not None
-        environment = os.environ.copy()
+        from .spawn_contract import scrub_claude_session_markers
+
+        # Scrubbed so a shell launched from inside an agent session cannot pass
+        # parent-Claude child-session markers down to every terminal.
+        environment = scrub_claude_session_markers(os.environ)
         environment[CONTROL_TOKEN_ENV] = self.token
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         log_path = self.config.data_dir / "desktop-daemon.log"

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "resume_open_turn_stale",
+  "description": "Catch-up over an old open turn treats it as a stale artifact of an ended run: the session settles to idle instead of staying stuck working forever.",
+  "steps": [
+    {"kind": "session", "record": {"state": "working"}},
+    {"kind": "catchup", "open_turn": true, "historical_seen": 5, "age_seconds": 120, "expect_state": "idle"},
+    {"kind": "terminal", "mode": "normal", "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [],
+    "states": [
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "no_root_lifecycle_evidence"
+  }
+}

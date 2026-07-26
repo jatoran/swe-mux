@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "resume_open_turn_recent",
+  "description": "Catch-up over pre-existing transcript content with a recently-open turn resumes as working (promotion moments after the user submitted), then closes on proven evidence.",
+  "steps": [
+    {"kind": "catchup", "open_turn": true, "historical_seen": 5, "age_seconds": 10, "expect_state": "working", "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 1, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "terminal_mode_unknown_or_stale"
+  }
+}

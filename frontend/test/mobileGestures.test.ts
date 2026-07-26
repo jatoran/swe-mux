@@ -35,6 +35,19 @@ test('two-finger gestures resolve tap and directional swipes', () => {
   assert.equal(classifyGesture({ pointerCount: 2, dx: 90, dy: 12, durationMs: 220 }), 'two_finger_swipe_right')
 })
 
+test('two-finger vertical swipes resolve, single-finger vertical still does not', () => {
+  assert.equal(classifyGesture({ pointerCount: 2, dx: 10, dy: -90, durationMs: 220 }), 'two_finger_swipe_up')
+  assert.equal(classifyGesture({ pointerCount: 2, dx: 10, dy: 90, durationMs: 220 }), 'two_finger_swipe_down')
+  // Unbounded duration: a two-finger drag has no competing selection gesture.
+  assert.equal(classifyGesture({ pointerCount: 2, dx: 0, dy: 120, durationMs: 3000 }), 'two_finger_swipe_down')
+  // The single-finger vertical channel stays with the terminal.
+  assert.equal(classifyGesture({ pointerCount: 1, dx: 10, dy: -120, durationMs: 200 }), null)
+})
+
+test('two-finger diagonals that fail the axis ratio stay unclassified', () => {
+  assert.equal(classifyGesture({ pointerCount: 2, dx: 70, dy: 62, durationMs: 220 }), null)
+})
+
 test('a slow or long two-finger press is not a tap', () => {
   assert.equal(classifyGesture({ pointerCount: 2, dx: 4, dy: 6, durationMs: 900 }), null)
   assert.equal(classifyGesture({ pointerCount: 2, dx: 40, dy: 6, durationMs: 200 }), null)
@@ -48,5 +61,6 @@ test('gesture settings fall back to opinionated defaults and accept overrides', 
   assert.equal(overridden.swipe_left, 'palette.open')
   assert.equal(overridden.two_finger_tap, '')
   assert.equal(overridden.swipe_right, defaultMobileGestureSettings.swipe_right)
-  assert.equal(GESTURE_SLOTS.length, 5)
+  assert.equal(GESTURE_SLOTS.length, 7)
+  assert.equal(overridden.two_finger_swipe_down, defaultMobileGestureSettings.two_finger_swipe_down)
 })

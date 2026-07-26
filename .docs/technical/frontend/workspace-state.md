@@ -9,7 +9,8 @@
 | rendered layout | `layoutMap[project_id]` | component state |
 | layout revision/write chain | refs keyed by Project | browser session |
 | focused view and active terminal | App/view preference | device/session-local |
-| mobile unified tab rail | pure projection of layout | derived only |
+| mobile unified tab rail | projection of layout, permuted by the order overlay | derived only |
+| mobile tab order overlay | local storage (`mux.mobileTabOrder.v1`), per Project | device-local |
 | sidebar width/collapse | local storage | device-local |
 | pointer drag target/ghost | refs and direct DOM attributes | one gesture |
 | note/file draft | resource component/save queue | resource-local |
@@ -86,10 +87,30 @@ leaf's owning stack. Closing uses `adjacentMobileTab` before applying the ordina
 This separation is required for responsive transitions: rotating a phone, using desktop device
 emulation, or resizing through 760 px must never erase desktop splits.
 
+### Device-local rail order
+
+The rail can be rearranged on the device without touching the layout. `mobileTabOrder` holds one
+ordered id list per Project in local storage; the projection applies it as a **permutation only**,
+so the layout stays authoritative for membership and the overlay can never invent or drop a tab.
+Reordering writes no layout revision and issues no request — that is the whole reason a phone
+rearranging its rail cannot rearrange desktop panes, and the phase-4 contract test asserts the
+move handler contains neither `updateLayout` nor an API call.
+
+Merge rules (`orderMobileTabs`): saved ids that no longer exist are ignored; ids the save predates
+are inserted after their nearest *layout* predecessor rather than appended, so a session launched
+from a given tab still appears beside it; a run of new tabs anchors on the previously inserted one
+and stays in layout order. Every move stores the full displayed order, so the save self-heals.
+Because the whole mobile surface reads `projection.tabs`, swipe navigation and close-focus
+adjacency follow the rearranged rail without extra wiring. Desktop never calls the projection, and
+widening a narrow window back past 760 px restores pure layout order.
+
 ## Test focus
 
 - `frontend/test/layout.test.ts`: migrations and all stack/split transforms.
-- `frontend/test/mobileWorkspace.test.ts`: complete flattening, selection priority, close fallback.
+- `frontend/test/mobileWorkspace.test.ts`: complete flattening, selection priority, close fallback,
+  and that a saved order permutes without changing membership.
+- `frontend/test/mobileTabOrder.test.ts`: merge rules for new/stale ids, move bounds, storage
+  round-trip and malformed payloads, project pruning.
 - `frontend/test/randomId.test.ts`: secure and non-secure browser identity fallbacks.
 - `frontend/test/previewLinks.test.ts`: loopback-only terminal link normalization.
 - Pointer behavior tests/inspection must cover threshold, exact insertion, split edges, cross-pane

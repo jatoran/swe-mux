@@ -192,6 +192,7 @@ after its most fragile input (it hooks *events*, not hooks — see §10).
 | **Tier 0 / Tier 1 / Tier 2** | Deterministic facts / cheap-model semantic index (the scan timeline) / strong-model analysis. Named after cost and cadence, not model brand. |
 | **Scan timeline** | The Tier 1 semantic index: periodic/event-triggered cheap-model records of what each session is doing, forming a per-session behavioral timeline. |
 | **Return path** | The inverse arrow: how accumulated insight reaches the coding agent, primarily a queryable **mux MCP** read surface the agent pulls from (§7). |
+| **mux MCP** | The agent-facing transport for the return path: MCP tools that are thin callers over the same typed daemon operations the browser/CLI/mailbox use. A transport, never a permission model — authority stays in the daemon op (§7.1). Ships as **v0** (read/discovery, buildable now) then **v1** (memory tools, needs steps 1–5). |
 | **Enablement DAG** | The per-project opt-in dependency graph: a consumer cannot be enabled unless its substrate dependencies are enabled for that project (§8). |
 | **Automation layer** | Umbrella term for rules + observers when one word is needed. |
 | **Native hooks** | Reserved exclusively for the CLIs' own hook systems (Claude Code hooks, Codex `notify`). They are an event *source*, nothing more. |
@@ -634,7 +635,9 @@ answers when asked. The agent reaching out to swe-mux is the agent using a tool,
 same as any other; swe-mux is not gating the turn, so it stays out-of-band.
 
 **Mechanism: a mux MCP server.** Both Claude Code and Codex speak MCP, so swe-mux
-exposes read-only tools the agent calls mid-coding when relevant:
+exposes tools the agent calls mid-coding when relevant. The memory tools below are
+the v1 target; the smaller read/discovery surface that ships first is §7.5, and the
+two bounded write tools are §7.2:
 
 ```text
 mux.provenance(file)        → who touched this, what hash, what tests ran on it
@@ -676,11 +679,123 @@ just for the human UI, they are the index behind these tools. And insights need 
 **confidence/scope tag** so the retrieval layer can withhold low-confidence items
 from the agent even while showing them (with a suppressed count) to the human.
 
-**Roadmap composition.** The MCP read surface is a natural extension of the typed
-daemon operations Phase 7 already wants (browser, CLI, mailbox routed through
-shared typed ops — MCP is one more consumer). Instruction sync is Phase 6; the
-queue-draft path is Phase 4/5. The return path is a read API layered over machinery
-already scheduled, not a new pillar.
+### 7.1 MCP is transport, not authority
+
+The MCP server is an interface, not a permission model. Every tool it exposes is a
+thin caller over the same typed daemon operations the browser, CLI, and mailbox use
+(`ROADMAP.md` Phase 7). Nothing is implemented *inside* the MCP layer.
+
+This matters most for the write tools. Building agent-to-agent messaging into the
+MCP server itself would create a second delivery path that skips the Phase 4/5
+queue's readiness contract, head-of-line ordering, provenance, and loop bounds —
+two delivery semantics to keep in sync, and the newer one is the one an agent can
+reach without a human. The rule:
+
+> **The daemon owns the queue and every safety predicate. MCP is one more client of
+> it, alongside browser, CLI, and mailbox.**
+
+Corollary: chain depth, cycle detection, per-origin budgets, target allowlists, and
+the loop kill switch live in the typed daemon operation. If they lived in the MCP
+layer, the browser and mailbox paths would not get them, and every later client
+would have to reimplement them.
+
+### 7.2 Write tools: `notify` bounded, `spawn` drafted
+
+The request that motivates this (`.swe-mux/notes/project.md`: "agent A finishes and
+notifies agent B, and sometimes spawns a new session for B") is three asks of
+different risk classes. They must not be gated together:
+
+| Ask | Risk | Disposition |
+|---|---|---|
+| See active, prior, and concurrent sessions | read-only | MCP v0. No gate. |
+| Notify a specific existing session | writes into another agent's input | Phase 5 queue op, surfaced as an MCP tool. |
+| Spawn a new session to receive the message | creates a new actor, spend, and account use | Gated (§16), reachable only as a draft. |
+
+`mux.notify(target, body)` is a tool-shaped caller over the Phase 5 A→B message
+operation: the message enters the target's queue, waits for receiver-side readiness,
+never interrupts an active turn or bypasses approvals/Q&A, and carries the calling
+session as provenance. Session A gains no knowledge of or authority over session B
+beyond what the target allowlist grants.
+
+Spawn stays out of agent reach, but a flat refusal loses the workflow actually
+wanted. The middle path is the §13 queue-draft pattern applied to spawn:
+`mux.requestSpawn(...)` creates an **inert draft in the observation inbox**, not a
+session. The human approves it with one tap, including from the phone, and the
+approved draft is what starts the session with the handoff prompt pre-seeded. The
+agent never holds spawn authority, and approval stays a single deliberate act rather
+than a standing policy exception. This is the one boundary worth being rigid about:
+a prompt-injected agent that can spawn workers is a fan-out amplifier, and that is
+the failure mode a queue purge cannot undo.
+
+### 7.3 Where the server runs, and what the supervisor split changed
+
+The PTY supervisor split (`SESSION_PRESERVING_RELOAD.md`, shipped 2026-07-23)
+constrains the return path in ways this section predates:
+
+- **The MCP surface belongs in the daemon, never the supervisor.** §8 of that
+  document is the hard rule: the supervisor cannot be updated without killing every
+  live session, so it stays tiny and near-frozen (~600–800 lines). A tool surface
+  that grows a new tool per consumer is exactly the churn that must live on the
+  volatile side.
+- **Prefer a streamable-HTTP endpoint on the daemon over a stdio server.** The daemon
+  is already an HTTP server on a stable configured port. stdio would mean a
+  subprocess per session, an MCP entry point shipped inside the frozen bundle, and a
+  server process living inside the supervisor's reaper Job. HTTP gives one
+  implementation, per-session auth as a header, and nothing new to package. *Verify
+  before committing:* Claude Code supports http/sse transports; confirm the targeted
+  Codex version supports streamable HTTP in `mcp_servers`. If it is stdio-only, ship
+  a thin stdio shim that proxies to the daemon endpoint, keeping the daemon as the
+  single implementation either way.
+- **Tool calls must tolerate a daemon restart.** `POST /api/daemon/restart` and the
+  redeploy cycle replace the daemon process while agents keep running, so an
+  in-flight MCP call can fail through no fault of the caller. Tools return a typed
+  transient error the agent may retry; they never return a partial or fabricated
+  result. The listen port is stable across restarts, so the CLI-side server config
+  never has to be rewritten.
+
+### 7.4 Caller identity is injected, never claimed
+
+A tool that accepts a `from_session` argument has forgeable provenance, which makes
+per-origin budgets, allowlists, and cycle detection decorative. swe-mux spawns every
+session, so it mints a per-session token at spawn and injects it into the session
+environment; the daemon derives the caller from the token, and no tool signature has
+a sender parameter.
+
+Two consequences to design for up front:
+
+- **Tokens must be persisted, not in-memory.** The daemon now restarts under live
+  sessions by design. An in-memory token table would invalidate every live session's
+  MCP credential on each reload — precisely the operation the supervisor split exists
+  to make routine.
+- **A token's default scope is its session's Project.** Cross-project reads are a
+  separate explicit grant. The default answer to "what may this agent see" is its own
+  Project, consistent with per-project opt-in (§8).
+
+### 7.5 Shipping order: a v0 read surface long before v1 memory
+
+The §9 build order originally placed the whole return path last, which conflates two
+very different dependency profiles:
+
+- **v0 — buildable now.** `searchHistory` (mostly built), list active/prior/concurrent
+  sessions, session status and metadata, transcript read. These depend on machinery
+  that already exists plus the Phase 3.5 status contract; nothing in Tier 0, the
+  project card, or the scan timeline. v0 is also the entirety of the "agents can see
+  concurrent sessions" utility, which is useful on its own and is the cheapest way to
+  prove the transport, identity, and restart-tolerance decisions above.
+- **v1 — genuinely late.** `provenance`, `priorResolutions`, `deadEnds`,
+  `verifiedStatus`. Retrieval over substrate that steps 1–5 produce; cannot ship
+  earlier and should not be faked earlier (see the precision gate above).
+
+Ship v0 as its own small phase, add `notify`/`requestSpawn` when the Phase 5 queue
+lands, and keep v1 in step 8 where it belongs.
+
+**Roadmap composition.** The MCP surface is a natural extension of the typed daemon
+operations Phase 7 already wants (browser, CLI, mailbox routed through shared typed
+ops — MCP is one more consumer). Instruction sync is Phase 6; the queue-draft path
+is Phase 4/5. The return path is a read API layered over machinery already
+scheduled, not a new pillar. In `ROADMAP.md` it lands in three places: **Phase 4.5**
+(v0 read/discovery), the Phase 5 agent-to-agent section (`notify`/`requestSpawn` as
+callers over the queue), and **Phase 7.5** (v1 memory tools, this document's step 8).
 
 ---
 
@@ -747,6 +862,16 @@ another agent can pick up mid-plan. Section links point to the design detail.
   - [x] Observation inbox (`.swe-mux/observations.json`, no AI) — full stack + tests
   - [x] Screenshot capture (full + drag region) → copies a reference to the clipboard;
     optional Playwright backend; saves into the Project's `.swe-mux/preview-shots/`
+- [ ] **2.5 · mux MCP v0: read + discovery surface** (§7.5). Pulled forward out of step 8:
+  it depends only on shipped machinery + the Phase 3.5 status contract, and it proves the
+  transport/identity/restart decisions (§7.3–7.4) before any memory tool depends on them.
+  Delivered as `ROADMAP.md` Phase 4.5.
+  - [ ] Streamable-HTTP MCP endpoint on the **daemon** (never the supervisor, §7.3), with
+    per-session tokens minted at spawn, persisted across daemon restarts, Project-scoped
+  - [ ] Read tools only: list active/prior/concurrent sessions, session status + metadata,
+    transcript read, `searchHistory`
+  - [ ] Auto-registration of the server into each spawned session's CLI config
+  - [ ] Restart-tolerance: typed transient error on daemon reload, never a partial result
 - [ ] **3 · Deterministic consumers** (§6.1, 6.3, 6.4, 6.5). No model; write to `annotations`.
   - [ ] Loop/stall deterministic half (§6.4) — pure Tier 0 fingerprint query; build first
   - [ ] Declared-vs-verified (§6.3) — Tier 0 test facts + completion-claim regex
@@ -759,8 +884,10 @@ another agent can pick up mid-plan. Section links point to the design detail.
 - [ ] **6 · Model narration** (§14). Cheap-model "why" on top of the deterministic detectors.
 - [ ] **7 · Attention ranking / inbox** (§6.7). Last — needs every other signal. Fan-out,
   daily interrupt budget, four channels, breakpoint delivery.
-- [ ] **8 · Cross-session + novel + return path** (§6.6, 6.8, 6.10, 7). Interlocks, digests,
-  second opinions, experience DB, the mux MCP read surface.
+- [ ] **8 · Cross-session + novel + mux MCP v1** (§6.6, 6.8, 6.10, 7). Interlocks, digests,
+  second opinions, experience DB, and the memory half of the return path
+  (`provenance`, `priorResolutions`, `deadEnds`, `verifiedStatus`) layered onto the v0
+  transport from step 2.5. Delivered as `ROADMAP.md` Phase 7.5.
 
 ### UI work (design before it ships — the enablement surface is the big risk)
 
@@ -1101,6 +1228,12 @@ Posture:
   human-directed with a corrected instruction, never an automatic loop.
 - Auto-approval additionally requires an explicit allowlist and belongs with the
   Phase 5 trust-boundary work.
+- **Agent-requested spawn is drafted, never granted.** The return path exposes
+  `mux.requestSpawn` (§7.2), which writes an inert draft into the observation inbox
+  and starts nothing. It is the §13 pattern applied to spawn: the capability an agent
+  gets is "ask the human," not "create an actor." An agent holding real spawn
+  authority turns a single prompt injection into unbounded fan-out, which is why this
+  stays gated even though the messaging half (`mux.notify`) ships in Phase 5.
 - The line that keeps this from re-growing orchestration: observers are advisory and
   stateless; anything that *commands* agents is relay, and relay is reserved. The
   drafting-for-approval channel (§13) is the safe pressure-release: it delivers
@@ -1145,6 +1278,15 @@ Universal hooks abstracts the CLIs' *signals*. The same move applies elsewhere:
   coverage thresholds that trigger a Tier 2 source expansion.
 - Return-path retrieval precision: the scope/confidence thresholds below which MCP
   tools return nothing rather than a weak match, per tool.
+- MCP transport on the Codex side: whether the targeted Codex version accepts a
+  streamable-HTTP `mcp_servers` entry, or whether a stdio proxy shim is required
+  (§7.3). Verify against the shipped CLI before the v0 phase starts, not during it.
+- MCP v0 read scope: whether cross-Project reads are ever granted to an agent token,
+  and if so what the grant surface looks like — the default is own-Project only
+  (§7.4), but "what else am I working on right now" is inherently cross-Project.
+- Whether `mux.notify` targets need a per-Project allowlist UI or whether "any live
+  session in the same Project, plus explicit user-added targets" is sufficient
+  bounding for Phase 5.
 - Enablement-DAG UX: how to present a consumer's substrate dependencies when
   toggling, and how disabling a substrate node communicates to its dependents.
 - Per-project baselines: how much history before an ETA / neglect-time estimate is

@@ -3,44 +3,13 @@
   "backend": "claude",
   "description": "Sidechain completion cannot end the root turn; root completion becomes safe only after terminal evidence and debounce.",
   "steps": [
-    {
-      "kind": "transcript",
-      "record": {"type": "user", "isSidechain": false, "message": {"content": "Inspect the fixture."}},
-      "expect_delivery": "blocked",
-      "oracle_safe": false
-    },
-    {
-      "kind": "transcript",
-      "record": {"type": "assistant", "isSidechain": true, "message": {"content": [{"type": "text", "text": "subagent done"}], "stop_reason": "end_turn"}},
-      "expect_delivery": "blocked",
-      "oracle_safe": false
-    },
-    {
-      "kind": "transcript",
-      "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Read"}], "stop_reason": "tool_use"}}
-    },
-    {
-      "kind": "transcript",
-      "record": {"type": "user", "isSidechain": false, "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "fixture", "is_error": false}]}}
-    },
-    {
-      "kind": "transcript",
-      "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "root done"}], "stop_reason": "end_turn"}},
-      "expect_delivery": "unknown",
-      "oracle_safe": false
-    },
-    {
-      "kind": "terminal",
-      "mode": "normal",
-      "expect_delivery": "unknown",
-      "oracle_safe": false
-    },
-    {
-      "kind": "timer",
-      "seconds": 2.1,
-      "expect_delivery": "safe",
-      "oracle_safe": true
-    }
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "Inspect the fixture."}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": true, "message": {"content": [{"type": "text", "text": "subagent done"}], "stop_reason": "end_turn"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Read"}], "stop_reason": "tool_use"}}},
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "fixture", "is_error": false}]}}},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "root done"}], "stop_reason": "end_turn"}}, "expect_delivery": "unknown", "oracle_safe": false, "expect_state": "idle"},
+    {"kind": "terminal", "mode": "normal", "expect_delivery": "unknown", "oracle_safe": false, "expect_state": "idle"},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"}
   ],
   "expected": {
     "events": [
@@ -49,6 +18,10 @@
       {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "Read"},
       {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "Read", "success": true},
       {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
     ],
     "parser": {"status": "ready", "recognized": 5, "unknown": 0, "unknown_signatures": {}},
     "delivery_state": "safe",

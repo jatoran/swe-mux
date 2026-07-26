@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { memo } from 'preact/compat'
-import type { ComponentChildren } from 'preact'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
@@ -28,8 +27,12 @@ import {
 } from './mobileInput'
 import { isMobileTerminalInput, mobileImeDelta } from './mobileTerminalIme'
 import { clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, ResilientClipboardProvider } from './terminalClipboard'
+import { noteTerminalFocus } from './insertTarget'
+import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
 import { railPayload, resolveRail, type RailBackend, type RailItem } from './commandRail'
+import { activatePromptRailItem } from './promptRail'
+import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { currentProfile, loadRailItems } from './deviceSettings'
 import { redrawVisibleTerminal, refitVisibleTerminal } from './terminalViewport'
 import { localPreviewUrl } from './previewLinks'
@@ -47,6 +50,13 @@ import {
 
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 
+/**
+ * Ceiling on keystrokes held while the terminal buffer replays. A replay is short,
+ * so this is only reached when one never completes (socket died mid-stream); the cap
+ * keeps that from accumulating input forever.
+ */
+const MAX_PENDING_INPUT = 4096
+
 interface Props {
   session: Session
   onState: (session: Session) => void
@@ -57,13 +67,6 @@ interface Props {
   scrollback: number
   rendererPreference: TerminalRendererPreference
   mobileInput: MobileInputSettings
-  // Read-aloud UI lives in this pane's own bottom region so the terminal sizes above it.
-  // The playback strip sits just over the clipboard rail; the toggle chips lead the rail.
-  // `voiceKey` folds every input those nodes render from so the memo re-renders when the
-  // voice state actually changes without recomputing on unrelated App refreshes.
-  voiceStrip?: ComponentChildren
-  railLeading?: ComponentChildren
-  voiceKey?: string
   /** Open the command-rail settings editor (the rail's trailing gear). */
   onConfigureRail?: () => void
   /** Fork this agent conversation into a sibling pane (rail Branch button). */
@@ -119,7 +122,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session) {
   term.focus()
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, mobileInput, voiceStrip, railLeading, onConfigureRail, onBranch }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, mobileInput, onConfigureRail, onBranch }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
@@ -136,6 +139,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const [clipboardStatus,setClipboardStatus]=useState('')
   const [manualPaste,setManualPaste]=useState(false)
   const [imageDropActive,setImageDropActive]=useState(false)
+  // True while the viewport sits above the newest line. Mirrored in a ref so the
+  // per-render tail check can bail without touching component state.
+  const [offTail,setOffTail]=useState(false)
+  const offTailRef=useRef(false)
   // Bumped when another surface edits the shared rail config so this pane re-reads it.
   const [,bumpRailRev]=useState(0)
   useEffect(()=>{const on=()=>bumpRailRev(value=>value+1);window.addEventListener('mux:settings-changed',on);return()=>window.removeEventListener('mux:settings-changed',on)},[])
@@ -263,6 +270,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     searchRef.current = search
     term.open(host.current)
     const mobileLiveInput=isMobileTerminalInput()?mobileLiveInputRef.current:null
+    // The live-input textarea is uncontrolled, and switching stack tabs re-runs this
+    // effect against the *same* DOM node (the pane is rendered unkeyed as the stack's
+    // only active child, so Preact reuses the instance). The IME delta baseline below
+    // starts empty on every run, so any text left in the element would be re-sent in
+    // full on the next keystroke — duplicating the composer contents, or leaking the
+    // previous tab's text into this session. Element and baseline must start in sync.
+    if(mobileLiveInput)mobileLiveInput.value=''
     const focusTerminalInput=()=>{
       if(keyboardOffRef.current)return
       if(mobileLiveInput){
@@ -299,6 +313,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       if (decision.kind === 'copySelection') {
         const text = term.getSelection()
+        captureCopy(text, 'terminal')
         void copyPreparedText(text).then(copied => {
           if (copied) { term.clearSelection(); showClipboardStatus('Copied') }
           else prepareClipboardFallback(text)
@@ -318,6 +333,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let replayEndReceived = false
     let replayAllowsTerminalResponses = false
     let pendingReplayWrites = 0
+    // Keystrokes typed while the buffer replays. Returning to a tab always re-attaches
+    // (and a long absence reconnects), so the tap-and-type right after coming back lands
+    // mid-replay; sending it then would race the replayed bytes, and dropping it loses
+    // characters the mobile IME baseline has already advanced past. Hold and flush in order.
+    const pendingUserInput: { data: string; broadcast: boolean }[] = []
+    let pendingUserInputLength = 0
     let currentRevision = -1
     let lastReplyTriggerState=session.state
     let exitWritten = false
@@ -362,6 +383,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       socket.send(JSON.stringify({ type: 'terminal_state', mode: term.buffer.active.type }))
     }
     const bufferChange = term.buffer.onBufferChange(reportTerminalState)
+    // Jump-to-latest state. Scrolling up on a phone leaves no cheap way back to
+    // the tail, and output arriving while scrolled up moves `baseY` without
+    // moving the viewport, so this is checked on render (not only on scroll) —
+    // O(1) with an early return, and it only re-renders on the actual flip.
+    const syncTail = () => {
+      const buffer = term.buffer.active
+      const off = buffer.type === 'normal' && buffer.viewportY < buffer.baseY
+      if (off === offTailRef.current) return
+      offTailRef.current = off
+      setOffTail(off)
+    }
+    const tailScroll = term.onScroll(syncTail)
+    const tailRender = term.onRender(syncTail)
     const terminalStateTimer = window.setInterval(reportTerminalState, 5000)
     const scheduleViewport = (invalidateAtlas: boolean) => {
       invalidateAtlasOnRedraw ||= invalidateAtlas
@@ -430,6 +464,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     })
     const claimInput = () => {
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'claim_input' }))
+      // Focus here also makes this terminal the target for inserted text (clipboard
+      // history, prompt templates) once an overlay has taken DOM focus away.
+      noteTerminalFocus(session.id)
     }
     const scheduleReconnect=()=>{
       if(disposed||['exited','crashed'].includes(stateRef.current)||reconnectTimer!==undefined)return
@@ -438,6 +475,23 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       reconnectAttempt+=1
       reconnectTimer=window.setTimeout(()=>{reconnectTimer=undefined;connect(true)},delay)
     }
+    const sendInput = (data: string, protocolResponse: boolean, broadcast: boolean) => {
+      if (socket?.readyState !== WebSocket.OPEN) return
+      socket.send(JSON.stringify({
+        type: 'input',
+        data,
+        kind: protocolResponse ? 'terminal_response' : 'user',
+        broadcast: protocolResponse ? false : broadcast,
+      }))
+    }
+    const finishReplay = () => {
+      replaying = false
+      replayAllowsTerminalResponses = false
+      const queued = pendingUserInput.splice(0, pendingUserInput.length)
+      pendingUserInputLength = 0
+      for (const item of queued) sendInput(item.data, false, item.broadcast)
+      scheduleFullRedraw()
+    }
     const handleMessage=(event:MessageEvent)=>{
       if (event.data instanceof ArrayBuffer) {
         scheduleLatestReply()
@@ -445,11 +499,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           pendingReplayWrites += 1
           term.write(new Uint8Array(event.data), () => {
             pendingReplayWrites -= 1
-            if (replayEndReceived && pendingReplayWrites === 0) {
-              replaying = false
-              replayAllowsTerminalResponses = false
-              scheduleFullRedraw()
-            }
+            if (replayEndReceived && pendingReplayWrites === 0) finishReplay()
           })
         } else term.write(new Uint8Array(event.data))
       }
@@ -473,11 +523,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if (frame.type === 'replay_end') {
           reportStartup('replay_ready')
           replayEndReceived = true
-          if (pendingReplayWrites === 0) {
-            replaying = false
-            replayAllowsTerminalResponses = false
-            scheduleFullRedraw()
-          }
+          if (pendingReplayWrites === 0) finishReplay()
         }
         if (frame.type === 'exit') {
           setConnectionState('ended')
@@ -532,11 +578,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     const input = term.onData(data => {
       if (shouldSuppressTerminalProtocolResponse(data, backendRef.current)) return
-      const protocolResponse = isTerminalProtocolResponse(data)
-      const replayResponse = replaying && replayAllowsTerminalResponses && protocolResponse
-      if ((!replaying || replayResponse) && socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'input', data, kind: protocolResponse ? 'terminal_response' : 'user', broadcast: protocolResponse ? false : broadcastRef.current }))
+      if (isTerminalProtocolResponse(data)) {
+        // Terminal query replies are only meaningful inside the probe window that asked
+        // for them, so these are never queued: a late reply is worse than none.
+        if (!replaying || replayAllowsTerminalResponses) sendInput(data, true, false)
+        return
       }
+      if (replaying) {
+        if (pendingUserInputLength + data.length > MAX_PENDING_INPUT) return
+        pendingUserInputLength += data.length
+        pendingUserInput.push({ data, broadcast: broadcastRef.current })
+        return
+      }
+      sendInput(data, false, broadcastRef.current)
     })
     let mobileInputValue=''
     let lineBreakSent=false
@@ -617,6 +671,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const text=term.getSelection()
       if(!text||text===lastAutoCopiedSelectionRef.current)return
       lastAutoCopiedSelectionRef.current=text
+      captureCopy(text,'terminal')
       void copyPreparedText(text).then(copied=>{
         if(copied)showClipboardStatus('Selection copied')
         else prepareClipboardFallback(text)
@@ -842,13 +897,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     window.visualViewport?.addEventListener('resize',scheduleFit)
     loadLatestReply()
     connect(false)
-    return () => { disposed=true;stopSelectionScroll();if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('online',onOnline);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{} }
+    return () => { disposed=true;stopSelectionScroll();if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('online',onOnline);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, mobileInput])
 
   const copy = async () => {
     const term = termRef.current
     if (!term?.hasSelection()) { reportError('Copy requires a terminal selection.'); setMenu(null); return }
     const text = term.getSelection()
+    // Reported here for the provenance label; the global capture hook would
+    // otherwise record the same text as a generic 'app' copy (and is deduped).
+    captureCopy(text, 'terminal')
     if (await copyPreparedText(text)) {
       term.clearSelection()
       setPreparedClipboard('')
@@ -887,6 +945,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
     }
+    captureCopy(text,'reply')
     if(await copyPreparedText(text)){
       setPreparedClipboard('');setManualClipboard(false);showClipboardStatus('Reply copied')
     }else prepareClipboardFallback(text)
@@ -912,14 +971,23 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
 
   useEffect(() => {
     const onAction = (event: Event) => {
-      const detail = (event as CustomEvent<{sessionId:string|null;action:string;text?:string;targetKey?:string}>).detail
+      const detail = (event as CustomEvent<{sessionId:string|null;action:string;text?:string;submit?:boolean;targetKey?:string}>).detail
       if (detail.sessionId !== session.id) return
       if (detail.action === 'copy') void copy()
       else if (detail.action === 'paste') void paste()
       else if (detail.action === 'selectAll') { termRef.current?.selectAll(); setMenu(null) }
       else if (detail.action === 'clear') { termRef.current?.clear(); setMenu(null) }
       else if (detail.action === 'find') find()
-      else if (detail.action === 'insertText' && detail.text) { termRef.current?.paste(detail.text); focusTerminalInputRef.current() }
+      else if (detail.action === 'toggleKeyboard') toggleKeyboard()
+      else if (detail.action === 'insertText' && detail.text) { injectText(detail.text, detail.submit) }
+      // Rail items rendered outside this pane (the drawer's Commands tab) route
+      // here rather than touching xterm: the pane stays the single owner of
+      // terminal writes, so broadcast, replay, and read/select mode still apply.
+      else if (detail.action === 'sendKey' && detail.text) sendKey(detail.text)
+      else if (detail.action === 'copyReply') void copyLastReply()
+      else if (detail.action === 'copyResume') void copyResumeCommand()
+      else if (detail.action === 'branch') onBranch?.()
+      else if (detail.action === 'relaunch') runCommand('session.relaunch')
       else if (detail.action === 'captureSelection') {
         const term = termRef.current
         if (!term?.hasSelection()) reportError('Select terminal text before capturing it into notes.')
@@ -930,11 +998,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     return () => window.removeEventListener('mux:terminal-action', onAction)
   }, [session.id, session.backend])
 
-  // The read-aloud strip shares the terminal-surface grid, so showing or hiding it changes
-  // the terminal's row count. Re-fit on that flip so the bottom line is never clipped under
-  // the strip. A boolean (not the VNode) keeps this to the actual show/hide transition.
-  const voiceVisible = !!voiceStrip
-  useEffect(() => { scheduleFitRef.current() }, [voiceVisible])
 
   // Rail key buttons inject raw bytes on the normal onData path (broadcast + replay aware).
   // In read/select mode we deliberately do not refocus, so sending a key never raises the
@@ -956,6 +1019,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const isTask = !!session.relaunchable
   const copyResumeCommand = async () => {
     if (!resumeCmd) return
+    captureCopy(resumeCmd,'resume')
     if (await copyPreparedText(resumeCmd)) {
       setPreparedClipboard('');setManualClipboard(false);showClipboardStatus('Resume command copied')
     } else prepareClipboardFallback(resumeCmd)
@@ -979,30 +1043,64 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     else if(!keyboardOffRef.current)focusTerminalInputRef.current()
   }
 
+  // Tap/click feedback for every rail button (voice chips included). Touch
+  // browsers keep :hover on the last tapped element, so the CSS hover rule is
+  // gated to real pointers and activation instead plays a one-shot pulse that
+  // always returns the button to rest. The class is stripped before it is
+  // re-added so consecutive taps restart the animation.
+  // Driven by click, not pointerdown: the rail scrolls horizontally, so a finger
+  // landing on a button is just as likely to be the start of a drag, and pulsing
+  // on contact made every swipe look like it had selected whatever it started on.
+  // click only fires for a real activation — a scroll drag never produces one.
+  const pulseRail=(rail:HTMLElement,target:EventTarget|null)=>{
+    const button=target instanceof Element?target.closest('button'):null
+    if(!button||button.disabled||!rail.contains(button))return
+    button.classList.remove('rail-pulse')
+    void button.offsetWidth
+    button.classList.add('rail-pulse')
+    const clear=()=>{button.classList.remove('rail-pulse');button.removeEventListener('animationend',clear)}
+    button.addEventListener('animationend',clear)
+  }
+
+  const runPromptItem=async(item:RailItem)=>{
+    const note=await activatePromptRailItem(item,{sessionId:session.id,projectId:session.project_id})
+    if(note)reportError(note)
+  }
+
   // The rail region after the leading voice chips is data-driven so it can be
   // reordered/extended from settings; built-in ids keep their exact dynamic
   // markup (disabled states, tooltips), generic types render uniformly.
-  const railItems=resolveRail(loadRailItems(session.project_id),{platform:currentProfile(),backend:session.backend as RailBackend})
+  // Strip placement only: the long tail lives in the utility drawer's Commands
+  // tab, where a full-width grid can show it with labels.
+  const railItems=resolveRail(loadRailItems(session.project_id),{platform:currentProfile(),backend:session.backend as RailBackend},'strip')
   const renderRailItem=(item:RailItem)=>{
     switch(item.id){
       case 'relaunch':return isTask?<button key={item.id} class="term-relaunch" title="Relaunch this task terminal — stops it and re-runs the same command" onClick={()=>runCommand('session.relaunch')}>Relaunch</button>:null
-      case 'copyReply':return isTask?null:<button key={item.id} disabled={session.backend==='shell'} title={session.backend==='shell'?'Copy reply is available in Claude and Codex sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}>Copy reply</button>
+      // Copy reply / Branch / Paste are icon-only: their marks are conventional enough to read
+      // without a word, and dropping four rail-widths of text is what keeps the terminal keys
+      // reachable without scrolling. Copy resume deliberately keeps its label — a copy glyph
+      // alone cannot distinguish it from Copy reply, and the two sit side by side.
+      case 'copyReply':return isTask?null:<button key={item.id} class="rail-icon" disabled={session.backend==='shell'} aria-label="Copy last reply" title={session.backend==='shell'?'Copy reply is available in Claude and Codex sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}><CopyIcon/></button>
       case 'copyResume':return isTask?null:<button key={item.id} disabled={!resumeCmd} title={resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${session.backend==='claude'?` (run it from ${session.run_cwd||session.cwd})`:''}`:session.backend==='codex'?'Codex has not reported its session id yet':'Resume commands are available in Claude and Codex sessions'} onClick={()=>void copyResumeCommand()}>Copy resume</button>
       case 'branch':{
         if(!onBranch)return null
         const ready=session.backend==='claude'||(session.backend==='codex'&&!!session.native_session_id&&session.native_session_id!==session.id)
-        return <button key={item.id} disabled={!ready} title={ready?'Fork this conversation into a sibling pane, keeping the original open':session.backend==='codex'?'Codex has not reported its session id yet — branch is available shortly':'Branching is available in Claude and Codex sessions'} onClick={()=>onBranch()}>Branch</button>
+        return <button key={item.id} class="rail-icon" disabled={!ready} aria-label="Branch this conversation" title={ready?'Fork this conversation into a sibling pane, keeping the original open':session.backend==='codex'?'Codex has not reported its session id yet — branch is available shortly':'Branching is available in Claude and Codex sessions'} onClick={()=>onBranch()}><BranchIcon/></button>
       }
-      case 'paste':return <button key={item.id} onClick={()=>void paste()}>Paste</button>
+      case 'paste':return <button key={item.id} class="rail-icon" aria-label="Paste into terminal" title="Paste the clipboard into this terminal" onClick={()=>void paste()}><PasteIcon/></button>
+      case 'clipboardHistory':return <button key={item.id} title="Open clipboard history — recent copies, insertable into this terminal" onClick={()=>runCommand('clipboard.open')}>Clip</button>
       case 'kbdToggle':return <button key={item.id} class={`term-key kbd-toggle ${keyboardOff?'active':''}`} aria-pressed={keyboardOff} title={keyboardOff?'Read mode: tap the terminal to select/scroll without the keyboard. Click to type again.':'Hide the on-screen keyboard so you can select, scroll, and paste'} onClick={toggleKeyboard}>⌨</button>
     }
     if(item.type==='key')return <button key={item.id} class={item.className||'term-key'} title={item.title||item.label} onClick={()=>sendKey(item.bytes||'')}>{item.label}</button>
     if(item.type==='action')return null
+    // Prompt templates resolve over the network at click time (see promptRail.ts), so
+    // they cannot go through the synchronous payload path below.
+    if(item.type==='prompt')return <button key={item.id} class={item.className||''} title={item.title||'Insert this prompt template into the composer'} onClick={()=>void runPromptItem(item)}>{item.label}</button>
     const payload=railPayload(item,session.backend as RailBackend)
     return <button key={item.id} class={item.className||''} title={item.title||payload} onClick={()=>injectText(payload,item.submit)}>{item.label}</button>
   }
 
-  return <div class="terminal-surface"><div class="terminal-host" ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{voiceStrip}<div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions" onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{railLeading}{railItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  return <div class="terminal-surface"><div class="terminal-host" ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)} onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{railItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{offTail&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={()=>{termRef.current?.scrollToBottom();if(!keyboardOffRef.current)focusTerminalInputRef.current()}}>↓ latest</button>}{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }
@@ -1021,6 +1119,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;termRef.current?.paste(text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
     <button role="menuitem" disabled={!termRef.current?.hasSelection()} onClick={() => runCommand('terminal.copy')}>Copy</button>
     <button role="menuitem" onClick={() => runCommand('terminal.paste')}>Paste</button>
+    <button role="menuitem" onClick={() => { setMenu(null); runCommand('clipboard.open') }}>Clipboard history…</button>
     <button role="menuitem" onClick={() => runCommand('terminal.selectAll')}>Select all</button>
     <button role="menuitem" onClick={() => runCommand('terminal.find')}>Find…</button>
     <button role="menuitem" onClick={() => runCommand('terminal.clear')}>Clear display</button>
@@ -1052,6 +1151,5 @@ export const TerminalPane = memo(TerminalPaneImpl, (a, b) =>
   a.broadcast === b.broadcast &&
   a.scrollback === b.scrollback &&
   a.keybindings === b.keybindings &&
-  a.mobileInput === b.mobileInput &&
-  a.voiceKey === b.voiceKey,
+  a.mobileInput === b.mobileInput,
 )

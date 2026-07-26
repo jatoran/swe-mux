@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "notification_semantics",
+  "description": "idle_prompt maps to idle and never clobbers a pending approval; permission_prompt and elicitation_dialog map to awaiting with the correct sub-reason.",
+  "steps": [
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "hook", "event": "Notification", "payload": {"notification_type": "idle_prompt"}, "expect_state": "idle"},
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {}, "expect_state": "working"},
+    {"kind": "hook", "event": "Notification", "payload": {"notification_type": "permission_prompt", "message": "Bash"}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "awaiting", "expect_awaiting": "approval"},
+    {"kind": "hook", "event": "Notification", "payload": {"notification_type": "idle_prompt"}, "expect_state": "awaiting", "expect_awaiting": "approval"},
+    {"kind": "hook", "event": "PreToolUse", "payload": {"tool_name": "Bash"}, "expect_state": "working"},
+    {"kind": "hook", "event": "Notification", "payload": {"notification_type": "elicitation_dialog", "message": "pick one"}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "awaiting", "expect_awaiting": "elicitation"},
+    {"kind": "hook", "event": "Stop", "payload": {}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"},
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "approval_needed", "source": "hook", "scope": "root", "kind": "approval"},
+      {"type": "tool_use", "source": "hook", "scope": "root", "tool": "Bash"},
+      {"type": "approval_needed", "source": "hook", "scope": "root", "kind": "input"},
+      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"},
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "awaiting", "source": "hook", "proof": "proven", "awaiting_reason": "approval"},
+      {"previous": "awaiting", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "awaiting", "source": "hook", "proof": "proven", "awaiting_reason": "elicitation"},
+      {"previous": "awaiting", "state": "idle", "source": "hook", "proof": "proven"}
+    ],
+    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "terminal_mode_unknown_or_stale"
+  }
+}

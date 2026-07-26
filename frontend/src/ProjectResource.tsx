@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { api } from './api'
 import { insertEditorTab } from './editorText'
+import { copyPreparedText } from './terminalClipboard'
+import { absoluteProjectPath, copySummary, FILE_COPY_MAX_LINES, truncateForClipboard } from './fileClipboard'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
 import { fileSaveTarget, noteQueueKey, noteSaveQueue, noteSaveTarget, type NoteSaveState, type ResourceSaveTarget } from './noteSaveQueue'
@@ -80,6 +82,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
   // the shared server-persisted set so a refresh or a different device restores it.
   const [expanded,setExpanded]=useState<Set<string>>(()=>cachedBrowser?.expanded||new Set(resource.kind==='files'?loadExpandedFolders(project.id):[]))
   const [treeMenu,setTreeMenu]=useState<TreeMenu|null>(null)
+  // Transient "copied" confirmation, and the text of a copy the browser refused to write.
+  const [notice,setNotice]=useState('')
+  const [pendingCopy,setPendingCopy]=useState<string|null>(null)
   const [query,setQuery]=useState('')
   const [searchMode,setSearchMode]=useState<SearchMode>('names')
   const [filtersOpen,setFiltersOpen]=useState(false)
@@ -98,6 +103,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
   const lastSavedTree=useRef<string|undefined>(undefined)
   const interacted=useRef(false)
   const treeMenuPanel=useRef<HTMLDivElement>(null)
+  const copyFallback=useRef<HTMLTextAreaElement>(null)
+  const noticeTimer=useRef<number|undefined>(undefined)
   const noteLoadGeneration=useRef(0)
   const textRef=useRef(text)
   const baselineRef=useRef(baseline)
@@ -360,6 +367,45 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
 
+  const showNotice=(message:string)=>{
+    setNotice(message)
+    if(noticeTimer.current)clearTimeout(noticeTimer.current)
+    noticeTimer.current=window.setTimeout(()=>{setNotice('');noticeTimer.current=undefined},2600)
+  }
+  useEffect(()=>()=>{if(noticeTimer.current)clearTimeout(noticeTimer.current)},[])
+
+  // The offscreen textarea gives `copyPreparedText` its synchronous execCommand path, which is
+  // what carries the write on mobile and in non-secure contexts where the async Clipboard API
+  // is refused. If both routes fail the text is parked in `pendingCopy`, so a blocked copy
+  // costs one more tap instead of losing the payload.
+  const writeClipboard=async(text:string,summary:string)=>{
+    if(await copyPreparedText(text,copyFallback.current)){
+      setPendingCopy(null);setError('');showNotice(summary);return true
+    }
+    setPendingCopy(text)
+    setError('Clipboard write was blocked. Copy the prepared text below.')
+    return false
+  }
+
+  const copyPath=async(item:DirectoryItem,form:'absolute'|'relative')=>{
+    setTreeMenu(null)
+    const path=form==='absolute'?absoluteProjectPath(project.root,item.path):item.path
+    await writeClipboard(path,`Copied ${form} path`)
+  }
+
+  // Contents are fetched rather than read from any open editor draft: the tree menu can target
+  // a file that is not open, and copying what is on disk is the predictable behaviour.
+  const copyContents=async(item:DirectoryItem)=>{
+    setTreeMenu(null)
+    try{
+      const payload=await api<FilePayload>('GET',`/api/projects/${project.id}/file?path=${encodeURIComponent(item.path)}`)
+      if(payload.status==='too-large'){setError(`${item.name} is above the 2 MiB read limit and cannot be copied.`);return}
+      if(payload.status==='binary'||payload.text===undefined){setError(`${item.name} is not text, so there is nothing to copy.`);return}
+      const slice=truncateForClipboard(payload.text,item.path)
+      await writeClipboard(slice.text,copySummary(slice))
+    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+  }
+
   const ignoreResource=async(item:DirectoryItem,scope:'global'|'project')=>{
     setTreeMenu(null)
     try{
@@ -399,6 +445,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
         </div>}
       </div>
       {error&&<p class="resource-error">{error}</p>}
+      {notice&&<p class="resource-notice" role="status" aria-live="polite">{notice}</p>}
       {results!==null
         ?<div class="file-results" role="list" aria-busy={searching}>
           {searching&&!results.length?<p class="file-tree-loading">Searching…</p>
@@ -411,11 +458,23 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
         </div>
         :<div class="file-tree" role="tree">{tree('')}</div>}
     </div>
-    {treeMenu&&<div class="context-menu project-file-menu" ref={el=>{treeMenuPanel.current=el;fitMenuInViewport(el)}} role="menu" aria-label={`File actions for ${treeMenu.item.name}`} style={{left:clampContextMenuLeft(treeMenu.x,window.innerWidth),top:Math.max(4,Math.min(treeMenu.y,window.innerHeight-140))}} onMouseDown={event=>event.stopPropagation()}>
+    {treeMenu&&<div class="context-menu project-file-menu" ref={el=>{treeMenuPanel.current=el;fitMenuInViewport(el)}} role="menu" aria-label={`File actions for ${treeMenu.item.name}`} style={{left:clampContextMenuLeft(treeMenu.x,window.innerWidth),top:Math.max(4,Math.min(treeMenu.y,window.innerHeight-(treeMenu.item.kind==='file'?250:220)))}} onMouseDown={event=>event.stopPropagation()}>
       <div class="context-title"><strong>{treeMenu.item.name}</strong></div>
       <button role="menuitem" onClick={()=>void revealResource(treeMenu.item)}>Open in default explorer</button>
+      <div class="context-rule"/>
+      <button role="menuitem" title={absoluteProjectPath(project.root,treeMenu.item.path)} onClick={()=>void copyPath(treeMenu.item,'absolute')}>Copy full path</button>
+      <button role="menuitem" title={treeMenu.item.path} onClick={()=>void copyPath(treeMenu.item,'relative')}>Copy path from project root</button>
+      {treeMenu.item.kind==='file'&&<button role="menuitem" title={`Copy the file's text, capped at ${FILE_COPY_MAX_LINES.toLocaleString()} lines`} onClick={()=>void copyContents(treeMenu.item)}>Copy file contents</button>}
+      <div class="context-rule"/>
       <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'global')}>Add pattern to global ignores</button>
       <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'project')}>Add pattern to project ignores</button>
+    </div>}
+    <textarea ref={copyFallback} class="resource-copy-relay" tabIndex={-1} aria-hidden="true" readOnly/>
+    {pendingCopy!==null&&<div class="resource-copy-fallback" role="dialog" aria-label="Copy blocked text">
+      <span>Your browser blocked the write. Copy it once from here.</span>
+      <button onClick={()=>void writeClipboard(pendingCopy,'Copied')}>Copy</button>
+      <button aria-label="Dismiss blocked copy" onClick={()=>{setPendingCopy(null);setError('')}}>×</button>
+      <textarea readOnly value={pendingCopy} aria-label="Text waiting to be copied" onFocus={event=>event.currentTarget.select()}/>
     </div>}
   </section>
 

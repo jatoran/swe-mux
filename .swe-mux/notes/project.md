@@ -5,29 +5,32 @@ id = "29a044bb-a06b-4216-95e4-39c5e91d48fb"
 ---
 # swe-mux project notes
 
-in session history cant scroll down transcript of selected past sessions
 
 
-i wonder if i could make it so that the agent command rail is a right sidebar you can swipe out on mobile? so its a vertical column or a grid of commands? hmmmmmm 
+redo tutorial + mobile tutorial
 
-make it easy to copy path to clipboard from the file tab when long press the file or via hover-over on desktop showing a copy icon floating above the file
+settings search
 
-agent to agent communication in swe-mux. will be nice when i can have an agent do a task and then notify another with a message(such as when continuity agent finishes an update and wants to notify a specific swe-mux agent to update the package. will this be an mcp or what? cuz it has to know what agents are active, AND it will also need to spawn new agent sessions as well sometimes
+ability to click file paths from agent chats and they open
+	and ability to click links and they open in external browser
 
-swe-mux mcp would also make it easy for agents to see previous sessions, and concurrent sessions, and that adds utility
 
-- [ ] the remaining roadmap updates starting with phase 3.5
-
-- [x] the session preserving reload update
-
-- [ ] control plane updates
+maybe congifurable gesture zones? swipe left top half of screen does one thing, swipe left bottom half of screen does another
+	what other ways to expose more UI in a clean and intuitive way?
+	and not just on mobile/gestures?
+	2 finger drag down and up? would this be fine and 1 finger would still work for scroll?
+	
 
 allow making command rail be multiple rows? on mobile maybe? and configuring what is on each row?
 
+- [ ] the remaining roadmap updates starting with phase 3.5
+	- [ ] confirm phase 3.5 detections are all working
+		- they arent fully. it was asking for approval in a claude chat, and i approved it, and it went on working, but its status still said awaiting approval. once it finished it did properly update to 'ready' though
 
-cleaning up ui of tts/speak functionality - the toggles and settings
+- [ ] control plane updates
 
-ability to tap, on mobile, to a specific part of your chat input (this doesn't work on native codex on desktop, but it works on claude code.. hmm). i wonder if we can just make it work foe both? to move the carat to wherever you tap or click in your currently being typed message in these agent cli sessions?
+
+ability to tap, on mobile in agent sessions, to a specific part of your chat input (this doesn't work on native codex on desktop, but it works on claude code.. hmm). i wonder if we can just make it work foe both? to move the carat to wherever you tap or click in your currently being typed message in these agent cli sessions?
 
 
 on mobile agent sessions:
@@ -35,19 +38,13 @@ on mobile agent sessions:
 		pretty hard problem probably. evaluate and discuss if this is reasonably feasible
 
 
-
-a command rail on the project and session notes panes, or on any file viewing pane really:
-	create new codex/claude session and send selection
-	queue message (once i build in the queue) - must pick a specific session
-	send after delay - must pick a specific session and a delay amount
-		maybe this and/or a schedule send to schedule something automatically
-
-
 scheduled agent runs, and repeated ones on a schedule
 
 
 - speak system updates:
 	- user configurable trigger word + variants		- replace "mux" with "swe"?
+
+	- expanding the voice system for use navigating swe-mux, going to open/active sessions, starting new sessions, etc.
 
   - Mux, send / submit — submits buffered speech.
   - Mux, cancel / clear — clears the entire draft.
@@ -66,10 +63,10 @@ knowledge graph building?
 
 memory building?
 
-a combined ledger that agents can be made aware of
-	how made aware?
+- a combined ledger that agents can be made aware of
+	- how made aware?
 	
-	that they can refer to. will help them with parallel work, provenance, decisions, etc.
+	- that they can refer to. will help them with parallel work, provenance, decisions, etc.
 	
 can capture your entire update prompt and traversal timeline when parsing all your session transcripts and tagging them all
 

@@ -11,7 +11,7 @@ from typing import Any
 
 from .keybindings import is_command
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {"light", "dark", "system", "solarized-dark", "tokyo-night", "custom"}
 CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "accent", "error"}
@@ -119,11 +119,15 @@ def default_voice_commands() -> list[dict[str, Any]]:
 # shade), so the mappable channels are mid-screen single-finger horizontal swipes and
 # two-finger gestures. Each slot maps to a command id (see keybindings.COMMAND_IDS) or
 # "" to disable it.
+# Vertical two-finger swipes are mappable: only the *single*-finger vertical
+# channel is reserved for the terminal (scrollback / application wheel).
 MOBILE_GESTURE_SLOTS = (
     "swipe_left",
     "swipe_right",
     "two_finger_swipe_left",
     "two_finger_swipe_right",
+    "two_finger_swipe_up",
+    "two_finger_swipe_down",
     "two_finger_tap",
 )
 
@@ -132,8 +136,13 @@ def default_mobile_gestures() -> dict[str, str]:
     return {
         "swipe_left": "mobileTab.next",
         "swipe_right": "mobileTab.previous",
-        "two_finger_swipe_left": "sidebar.toggle",
+        # Left/right are directional: swiping right drags the left-edge sidebar in,
+        # swiping left (i.e. starting at the right edge) drags the right-edge utility
+        # drawer in. Both were sidebar.toggle before that drawer existed.
+        "two_finger_swipe_left": "drawer.toggle",
         "two_finger_swipe_right": "sidebar.toggle",
+        "two_finger_swipe_up": "session.note",
+        "two_finger_swipe_down": "terminal.keyboardToggle",
         "two_finger_tap": "palette.open",
     }
 
@@ -226,6 +235,15 @@ class Config:
     mobile_long_press: str = "context_menu"
     mobile_gestures: dict[str, str] = field(default_factory=default_mobile_gestures)
     terminal_auto_copy_selection: bool = True
+    # Clipboard history (clipboard_store.py). Capture is in-app only — nothing
+    # polls the OS clipboard — and the ring is memory-only unless `persist` is
+    # set, because a durable ring of copied text accumulates credentials.
+    clipboard_history_enabled: bool = True
+    clipboard_history_persist: bool = False
+    clipboard_history_limit: int = 200
+    clipboard_history_entry_max_chars: int = 100_000
+    clipboard_history_retention_hours: int = 24
+    clipboard_history_redact_secrets: bool = True
     notes_default_open: str = "dock"
     ccusage_enabled: bool = False
     ccusage_refresh_minutes: int = 0
@@ -388,6 +406,14 @@ def _validate(config: Config) -> None:
         errors["provider_quota_turn_refresh_min_minutes"] = "must be between 1 and 1440"
     if not 1 <= config.history_limit <= 10000:
         errors["history_limit"] = "must be between 1 and 10000"
+    if not 1 <= config.clipboard_history_limit <= 2000:
+        errors["clipboard_history_limit"] = "must be between 1 and 2000 entries"
+    if not 256 <= config.clipboard_history_entry_max_chars <= 1_000_000:
+        errors["clipboard_history_entry_max_chars"] = "must be between 256 and 1000000 characters"
+    if not 0 <= config.clipboard_history_retention_hours <= 8760:
+        errors["clipboard_history_retention_hours"] = (
+            "must be between 0 (keep until evicted) and 8760 hours"
+        )
     if not 1 <= config.automation_retention_days <= 3650:
         errors["automation_retention_days"] = "must be between 1 and 3650"
     if not 1 <= config.automation_concurrency <= 16:
@@ -638,6 +664,16 @@ def load_config(path: Path | None = None) -> Config:
                 migrated = True
             if gestures.get("two_finger_swipe_left") == "sidebar.close":
                 gestures["two_finger_swipe_left"] = "sidebar.toggle"
+                migrated = True
+            cfg.mobile_gestures = gestures
+        if source_schema < 17:
+            # The utility drawer added a right-edge slide-in panel. Both horizontal
+            # two-finger swipes toggled the (left-edge) sidebar, which made one of
+            # them redundant; the leftward swipe now pulls the new panel in. Only the
+            # duplicate default is upgraded, so a deliberate mapping is left intact.
+            gestures = dict(cfg.mobile_gestures)
+            if gestures.get("two_finger_swipe_left") == "sidebar.toggle":
+                gestures["two_finger_swipe_left"] = "drawer.toggle"
                 migrated = True
             cfg.mobile_gestures = gestures
     if not cfg.shell_profiles:

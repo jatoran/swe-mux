@@ -14,7 +14,24 @@
 .row-actions button.confirming,.pane-tools button.confirming,.context-menu button.confirming { width:auto;min-width:43px;padding:0 6px;background:#4b2025;color:#ff9da4 }
 .empty-list { text-align:center;padding:52px 20px;color:#737d8a;display:flex;flex-direction:column;gap:8px;font-size:11px;line-height:1.5 }.empty-list strong { color:#b5bcc6;font-size:12px }.empty-glyph { font:18px 'JetBrains Mono';color:#586357 }.sidebar-footer { flex:none;height:46px;padding:7px;border-top:1px solid var(--line);display:flex;gap:6px }.sidebar-footer button { border:1px solid #2a3038;background:#14181d;border-radius:6px;cursor:pointer;font-size:11px }.sidebar-footer button:first-child { flex:1;text-align:left;padding-left:9px }.sidebar-footer button:first-child span { color:var(--green);margin-right:6px }.sidebar-footer button:not(:first-child) { width:32px }.sidebar-footer button:hover,.sidebar-footer button.on { border-color:#526143;background:#1a2118 }
 .main-stage { min-width:0;min-height:0;display:grid;grid-template-rows:37px minmax(0,1fr);background:#0a0c0f }.pane-bar { display:grid;grid-template-columns:auto minmax(50px,1fr) auto;align-items:center;padding:0 8px 0 12px;border-bottom:1px solid #242931;background:#111419;font-size:11px }.pane-bar>div { display:flex;align-items:center;gap:7px }.pane-bar .state-dot { margin:0 }.pane-path { justify-content:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#636d7a;font:9px 'JetBrains Mono' }.pane-tools { color:#68727f;font:9px 'JetBrains Mono' }.pane-tools button { background:transparent;border:0;border-radius:4px;width:25px;height:23px;cursor:pointer;color:#7d8692 }.pane-tools button:hover { background:#252b32;color:var(--text) }.terminal-host { min-height:0;padding:7px 7px 3px 10px;overflow:hidden }.terminal-host .xterm { height:100% }
-.pane-grid { grid-row:1/-1;min-width:0;min-height:0;display:grid;gap:1px;background:#293039 }.pane-grid.count-1 { grid-template-columns:1fr }.pane-grid.count-2 { grid-template-columns:repeat(2,minmax(0,1fr)) }.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr)) }.terminal-pane { position:relative;min-width:0;min-height:0;display:grid;grid-template-rows:37px minmax(0,1fr);background:#0a0c0f;box-shadow:inset 0 0 0 1px transparent }.terminal-pane.focused { box-shadow:inset 0 0 0 1px #536348 }.terminal-pane.focused>.pane-bar { background:#141a14 }
+/* The header is [state] [cwd] [voice] [tools]. `grid-auto-flow:column` is load-bearing: it
+   is what guarantees the bar stays ONE row. Without it an item beyond the declared column
+   count auto-places into a second row, which is how the voice chips (a variable-length set)
+   would silently wrap the pane tools under the status line. Overflow is absorbed inside
+   `.pane-voice`, which scrolls, rather than by growing the bar. */
+.pane-bar { grid-auto-flow:column;grid-template-columns:auto minmax(50px,1fr) auto auto }
+/* The trailing fade is the group's overflow affordance. It costs nothing when the chips fit
+   (it lands on empty track) and turns the chip the scroller cuts in half into a visible
+   "there is more, scroll me" instead of something that reads as a clipping bug. */
+.pane-voice { min-width:0;overflow-x:auto;overscroll-behavior-x:contain;touch-action:pan-x;scrollbar-width:none;-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 13px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 13px),transparent) }
+.pane-voice::-webkit-scrollbar { display:none }
+.pane-voice>* { flex:0 0 auto }
+.pane-voice button { height:23px;min-width:auto;padding:0 6px;border:0;border-radius:4px;background:transparent;color:#7d8692;white-space:nowrap;cursor:pointer;font:9px 'JetBrains Mono' }
+.pane-voice button:hover:not(:disabled) { background:#252b32;color:var(--text) }
+/* Desktop keeps only the mode chip and the mic here; speak / verbatim / autoplay / settings
+   are the strip's job one row below. On touch the strip is harder to hit, so they show. */
+.pane-voice .mobile-voice-action { display:none }
+.pane-grid { grid-row:1/-1;min-width:0;min-height:0;display:grid;gap:1px;background:#293039 }.pane-grid.count-1 { grid-template-columns:1fr }.pane-grid.count-2 { grid-template-columns:repeat(2,minmax(0,1fr)) }.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr)) }.terminal-pane { position:relative;min-width:0;min-height:0;display:grid;grid-template-rows:37px auto minmax(0,1fr);background:#0a0c0f;box-shadow:inset 0 0 0 1px transparent }.terminal-pane>.pane-bar { grid-row:1 }.terminal-pane>.voice-strip { grid-row:2 }.terminal-pane>.terminal-surface { grid-row:3 }.terminal-pane.focused { box-shadow:inset 0 0 0 1px #536348 }.terminal-pane.focused>.pane-bar { background:#141a14 }
 .pane-grid.zoomed { grid-template-columns:1fr;grid-template-rows:1fr }.pane-grid.zoomed>.terminal-pane:not(.zoom-target) { display:none }
 .empty-stage { grid-row:1/-1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;background-image:linear-gradient(#ffffff025 1px,transparent 1px),linear-gradient(90deg,#ffffff025 1px,transparent 1px);background-size:32px 32px }.hero-terminal { width:70px;height:54px;border:1px solid #3b4537;border-radius:10px;background:#111610;box-shadow:0 12px 45px #000,0 0 35px #82cf5012;display:flex;align-items:center;justify-content:center;gap:6px;font:20px 'JetBrains Mono';color:var(--green);margin-bottom:24px }.hero-cursor { height:20px;width:2px;background:var(--green);animation:blink 1.1s steps(1) infinite }.empty-stage h1 { font-size:23px;letter-spacing:-.035em;margin:0 0 8px }.empty-stage p { width:min(460px,80%);color:#7d8795;font-size:13px;line-height:1.55;margin:0 0 22px }.empty-stage button,.modal-footer button { height:34px;padding:0 14px;border:1px solid #333a43;background:#171b21;border-radius:7px;margin:0 4px;cursor:pointer;font-size:11px }.primary { background:var(--green)!important;color:#11160e!important;border-color:var(--green)!important;font-weight:700!important }.primary:hover { background:#b3f887!important }
 /* Overlay band. A full-screen dialog must sit above every piece of persistent
@@ -29,7 +46,7 @@
 .terminal-menu { position:fixed;z-index:40;width:145px;padding:5px;border:1px solid #3b434d;border-radius:7px;background:#15191e;box-shadow:0 15px 50px #000 }.terminal-menu button { width:100%;height:28px;border:0;border-radius:4px;background:transparent;color:#bac2cc;text-align:left;padding:0 8px;font-size:10px;cursor:pointer }.terminal-menu button:hover:not(:disabled) { background:#252c25;color:#e6ece2 }.terminal-menu button:disabled { color:#4f5863 }
 .mobile-paste { display:none }
 .history-workspace { container-type:inline-size;width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;background:#070a08 }.history-body { height:100%;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(260px,38%) minmax(0,1fr);grid-template-rows:minmax(0,1fr) }.history-body>aside { min-width:0;min-height:0;overflow-x:hidden;overflow-y:auto;border-right:1px solid var(--line);padding:7px;background:#0e1115 }.history-search { padding:2px 2px 8px }.history-search>* { min-width:0;max-width:100% }.history-search input { width:100%;height:34px;border:1px solid #303741;border-radius:6px;background:#090c0f;color:var(--text);padding:0 9px;font-size:10px }.history-query-row { display:grid;grid-template-columns:minmax(0,1fr) 105px;gap:4px;grid-column:1/-1 }.history-search label { display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:5px;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;text-transform:uppercase }.history-backfill-control { grid-column:1/-1;display:grid;gap:4px;padding-top:3px }.history-backfill-control button,.history-backfill-status button { min-height:30px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);cursor:pointer }.history-backfill-control small,.history-backfill-status small { white-space:normal!important;line-height:1.4 }.history-backfill-status { grid-column:1/-1;display:grid;gap:5px;padding:7px;border:1px solid var(--line);background:#080d09 }.history-backfill-status>div { display:flex;justify-content:space-between;text-transform:uppercase }.history-backfill-status progress { width:100%;accent-color:var(--green) }.history-backfill-status.completed { border-color:#36563c }.history-backfill-status.failed,.history-backfill-status .error { color:var(--red) }.history-body>aside>button { width:100%;height:63px;display:flex;flex-direction:column;justify-content:center;gap:3px;border:1px solid transparent;border-radius:6px;background:transparent;text-align:left;padding:0 9px;cursor:pointer }.history-body>aside>button:hover { background:#171c22 }.history-body>aside>button.active { background:#192019;border-color:#35452f }.history-body>aside strong { font-size:11px }.history-body>aside span { color:#7d8793;font-size:9px }.history-body>aside small { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#5e6874;font:8px 'JetBrains Mono' }.history-body>main { min-width:0;min-height:0;display:flex;flex-direction:column;background:#0b0e11 }.history-match { width:100%;display:block!important;padding:4px 6px;border-left:2px solid #4d6352;background:#0b110d;white-space:normal!important;line-height:1.35 }.history-match b { margin-right:6px;color:#789681;text-transform:uppercase;font-size:7px }.history-match.assistant { border-left-color:#59647a }.transcript-heading { min-height:58px;height:auto;flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 16px;border-bottom:1px solid var(--line) }.transcript-heading h3 { margin:0 0 4px;font-size:13px }.transcript-heading span { color:#68727e;font:8px 'JetBrains Mono' }.transcript-heading button { height:31px;border-radius:6px }.transcript-match-nav { display:flex;align-items:center;gap:4px;margin-left:auto }.transcript-match-nav button { min-width:30px }.messages { flex:1;overflow:auto;padding:22px max(22px,calc((100% - 800px)/2)) }.messages article { margin-bottom:17px;padding:12px 14px;border:1px solid #242b33;border-radius:8px;background:#11151a }.messages article.user { border-color:#34442d;background:#121912 }.messages article.search-match-message { border-left-color:#6b926f }.messages article.active-search-match { outline:2px solid #769d75;outline-offset:2px }.messages article header { margin-bottom:8px;color:#76816f;font:600 8px 'JetBrains Mono';letter-spacing:.1em;text-transform:uppercase }.messages article p { white-space:pre-wrap;margin:0;color:#cbd1d9;font-size:12px;line-height:1.55 }.messages article pre { white-space:pre-wrap;color:#9da8b5;font:9px/1.5 'JetBrains Mono' }.history-placeholder,.no-transcript { height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#68737f;text-align:center }.history-placeholder>span { font-size:27px;color:#50604a }.history-placeholder strong { margin-top:9px;color:#aab2bc;font-size:12px }.history-placeholder p { font-size:10px }.no-transcript { min-height:260px;font-size:11px }
-@media(max-width:760px) { .topbar { grid-template-columns:auto 1fr }.top-context,.top-actions { display:none }.workspace { grid-template-columns:72px minmax(0,1fr) }.sidebar-heading { justify-content:center }.sidebar-heading span { display:none }.project-row { grid-template-columns:12px minmax(0,1fr) }.project-row small,.project-row button { display:none }.session-row { height:45px;grid-template-columns:8px 1fr;padding:6px }.session-copy small,.sidebar-footer button:first-child { display:none }.session-copy strong { font-size:9px }.sidebar-footer button:not(:first-child) { width:100% }.pane-path { display:none }.pane-bar { grid-template-columns:1fr auto }.pane-grid.count-2,.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:1fr;grid-template-rows:1fr }.terminal-pane:not(.focused) { display:none }.mobile-paste { display:block;position:absolute;right:12px;bottom:12px;z-index:8;height:32px;border:1px solid #46513f;border-radius:6px;background:#192117;color:#b9d7ac;font-size:10px }.quick-launcher { left:78px;width:calc(100% - 90px) }.history-body { grid-template-columns:120px minmax(0,1fr) } }
+@media(max-width:760px) { .topbar { grid-template-columns:auto 1fr }.top-context,.top-actions { display:none }.workspace { grid-template-columns:72px minmax(0,1fr) }.sidebar-heading { justify-content:center }.sidebar-heading span { display:none }.project-row { grid-template-columns:12px minmax(0,1fr) }.project-row small,.project-row button { display:none }.session-row { height:45px;grid-template-columns:8px 1fr;padding:6px }.session-copy small,.sidebar-footer button:first-child { display:none }.session-copy strong { font-size:9px }.sidebar-footer button:not(:first-child) { width:100% }.pane-path { display:none }.pane-bar { grid-template-columns:auto minmax(0,1fr) auto }.pane-grid.count-2,.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:1fr;grid-template-rows:1fr }.terminal-pane:not(.focused) { display:none }.mobile-paste { display:block;position:absolute;right:12px;bottom:12px;z-index:8;height:32px;border:1px solid #46513f;border-radius:6px;background:#192117;color:#b9d7ac;font-size:10px }.quick-launcher { left:78px;width:calc(100% - 90px) }.history-body { grid-template-columns:120px minmax(0,1fr) } }
 
 /* Terminal chrome: visual only. Interaction and layout behavior stay unchanged. */
 :root {
@@ -98,14 +115,35 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .account-summary>button:hover{background:var(--panel2)}.account-summary>button span{color:var(--green);text-transform:uppercase}.account-summary>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-weight:400}.account-summary>button small{grid-column:1/-1;color:var(--muted)}
 .account-summary>button.untracked strong{color:var(--muted)}
 .account-summary>button.external strong{color:var(--amber)}
-.account-summary>button.quota-reset-indicator{grid-column:1/-1;border-left:3px solid #a855f7;background:#6b21a822}.account-summary>button.quota-reset-indicator span,.account-summary>button.quota-reset-indicator strong{color:#d8b4fe}.account-mobile-trigger.quota-reset-unread{border-color:#a855f7;color:#d8b4fe;background:#6b21a833}
+.account-summary>button.quota-reset-indicator{grid-column:1/-1;border-left:3px solid #a855f7;background:#6b21a822}.account-summary>button.quota-reset-indicator span,.account-summary>button.quota-reset-indicator strong{color:#d8b4fe}
 .account-popover{position:fixed;z-index:96;width:340px;max-width:calc(100vw - 16px);overflow:auto;border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px 0 #0009;color:var(--text)}
 .account-popover>header,.account-popover>footer{display:flex;align-items:center;justify-content:space-between;padding:7px;border-bottom:1px solid var(--line)}.account-popover>header div{display:grid;gap:2px}.account-popover>header span{color:var(--muted);font-size:8px}.account-popover button{border:0;background:transparent;color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.account-popover>section{padding:6px;border-bottom:1px solid var(--line)}.account-popover h4{margin:0 0 4px;color:var(--green);font-size:9px;text-transform:uppercase}.account-popover section>button{width:100%;display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 6px;padding:7px;text-align:left}.account-popover section>button:hover,.account-popover section>button.active{background:var(--panel2)}.account-popover section>button span{color:var(--green)}.account-popover section>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.account-popover section>button small{grid-column:1/-1;color:var(--muted);white-space:normal;line-height:1.5}.account-popover section>button small .account-refresh-age{color:var(--muted);opacity:.65;font-style:normal}.account-popover section>p,.account-error{margin:5px;color:var(--muted);font-size:8px}.account-error{color:var(--red)}.account-popover>footer{justify-content:flex-end;gap:5px;border:0}.account-popover>footer button{min-height:27px;padding:0 7px;border:1px solid var(--line)}
 .account-popover .account-current-notice{margin:4px 2px 7px;padding:6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted)}.account-popover .account-current-notice.external{border-color:#735f37;color:var(--amber)}.account-popover .account-current-notice.unreadable{border-color:#73373c;color:var(--red)}
 .account-popover>section.account-reset-alert{border-left:3px solid #a855f7;background:#6b21a81c}.account-popover>section.account-reset-alert h4{color:#d8b4fe}.account-popover>section.account-reset-alert p{margin:4px 0 7px;color:var(--text)}.account-reset-alert>div{display:flex;flex-wrap:wrap;gap:5px}.account-reset-alert>div button{min-height:27px;padding:0 7px;border:1px solid #a855f777}.account-reset-alert>div button.danger{border-color:color-mix(in srgb,var(--red) 65%,var(--line));color:var(--red)}
 .account-settings{grid-column:1/-1!important}.account-provider-settings{margin:0 0 13px;border:1px solid var(--line);background:var(--bg)}.account-provider-settings>header{display:flex;align-items:center;justify-content:space-between;padding:9px;border-bottom:1px solid var(--line)}.account-provider-settings>header div{display:grid;gap:3px}.account-provider-settings>header strong{color:var(--green)}.account-provider-settings>header small{color:var(--muted)}.account-add{display:grid;grid-template-columns:minmax(120px,1fr) auto auto;gap:5px;padding:9px}.account-settings .account-help{margin:0;padding:0 9px 9px;font-size:9px}.account-list{display:grid;gap:1px;background:var(--line);border-top:1px solid var(--line)}.account-list article{display:grid;grid-template-columns:72px minmax(120px,.8fr) minmax(140px,1fr) minmax(170px,1fr) auto;align-items:center;gap:7px;padding:8px;background:var(--panel)}.account-list article.active{box-shadow:inset 3px 0 var(--green)}.account-state{color:var(--green);font-size:8px}.account-list article>small{overflow:hidden;text-overflow:ellipsis;color:var(--muted)}.account-quota{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;color:var(--muted);font-size:8px}.account-quota b{color:var(--text)}.account-quota em{grid-column:1/-1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-style:normal}.account-actions{display:flex;gap:4px}.account-actions .danger{color:var(--red)}.account-empty{padding:18px;background:var(--panel);color:var(--muted);text-align:center}
+.account-conflict{grid-column:1/-1;margin:6px 0 0;padding:6px 7px;border-left:3px solid var(--red);background:#73373c22;color:var(--red);font-size:8px}
+.account-list article.conflicted{box-shadow:inset 3px 0 var(--red)}
+.account-popover button.conflicted strong{color:var(--red)}
+.account-identity{display:block;font-style:normal;font-size:8px;color:var(--muted)}
+.account-identity.verified{color:var(--green)}
+.account-identity.unverified{color:var(--amber)}
+.account-relink{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 0;color:var(--amber);font-size:8px}
 .account-current{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 9px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}.account-current span{grid-row:1/3;color:var(--green);font-size:8px;align-self:center}.account-current strong{font-size:9px;font-weight:500}.account-current small{color:var(--muted)}.account-current.external span,.account-current.external strong{color:var(--amber)}.account-current.unreadable span,.account-current.unreadable strong{color:var(--red)}.account-current.signed_out span,.account-current.signed_out strong{color:var(--muted)}
-.account-mobile-trigger{min-width:42px;height:32px;border:1px solid var(--line);background:var(--panel2);color:var(--green);font:8px 'Cascadia Mono',Consolas,monospace}
+/* Mobile toolbar quota box: provider mark + weekly percent on one line, the weekly reset
+   countdown under it. Two of these have to fit beside nav, the Project title, and Run, so the
+   box is sized to its content and the digits carry the contrast rather than a border. */
+.toolbar-quota{min-width:0;height:36px;padding:1px 5px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;line-height:1.15;cursor:pointer;display:grid;grid-template-columns:auto auto;grid-template-rows:auto auto;align-items:center;justify-items:center;column-gap:3px}
+.toolbar-quota .provider-glyph{grid-row:1;font-size:10px;line-height:1;color:var(--text)}
+.toolbar-quota .provider-mark{width:10px;height:10px;display:block}
+.toolbar-quota>strong{grid-row:1;font-weight:600;color:var(--text)}
+.toolbar-quota>small{grid-row:2;grid-column:1/-1;color:var(--muted);font-size:8px;white-space:nowrap}
+.toolbar-quota:hover,.toolbar-quota:focus-visible{border-color:var(--green)}
+.toolbar-quota.usage-warn>strong{color:var(--amber,#e5c07b)}
+.toolbar-quota.usage-critical{border-color:var(--red)}
+.toolbar-quota.usage-critical>strong{color:var(--red)}
+.toolbar-quota.quota-reset-unread{border-color:#a855f7;background:#6b21a833}
+.toolbar-quota.quota-reset-unread>strong{color:#d8b4fe}
+.account-switcher.compact{display:flex;align-items:center;gap:4px}
 @media(max-width:760px){.account-switcher.compact{position:static;justify-self:end;border:0}.sidebar-status{display:none}.account-add{grid-template-columns:1fr}.account-list article{grid-template-columns:72px minmax(0,1fr);gap:6px}.account-list article>small,.account-quota,.account-actions{grid-column:2}.account-actions{flex-wrap:wrap}}
 
 /* Semantic themes and the Phase 1 terminal-style Settings surface. */
@@ -160,8 +198,13 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .session-row.agent.read:not(.awaiting) .agent-prefix { color:#5c6f61 }
 .session-row.agent.read:not(.awaiting) .agent-prefix.claude { color:#8f6f5a }
 .session-row.agent.read:not(.awaiting) .agent-prefix.codex { color:#4f8873 }
-.session-row.agent.viewing { box-shadow:inset 2px 0 #37514180 }
-.session-row.agent.unread { box-shadow:inset 2px 0 #4d8f93 }
+/* Attention edges sit on the row's RIGHT and are inset vertically. On the left
+   they shared a gutter with the layout tree's connector lines, so a row marker
+   read as a branch line, and consecutive marked rows merged into one long rule
+   that looked like a stray tree spine. The left gutter belongs to the tree. */
+.session-row.agent.viewing:after,.session-row.agent.unread:after { content:"";position:absolute;right:0;top:9px;bottom:9px;width:2px;pointer-events:none }
+.session-row.agent.viewing:after { background:#37514180 }
+.session-row.agent.unread:after { background:#4d8f93 }
 .session-row.agent.unread .session-copy strong { color:#e6efe9 }
 .session-row.agent.unread:hover .session-copy strong { color:#f0f7f2 }
 .broadcast-flag { margin-left:5px;color:var(--amber);font-weight:600 }
@@ -293,8 +336,11 @@ body {
 .pane-grid {
   background:var(--line);
 }
+/* Header, then the optional read-aloud strip, then the terminal surface. The rows are
+   placed explicitly so the middle track collapses to nothing when no strip is rendered,
+   instead of the surface sliding up into it. */
 .terminal-pane {
-  grid-template-rows:34px minmax(0,1fr);
+  grid-template-rows:34px auto minmax(0,1fr);
 }
 .pane-bar {
   height:34px;
@@ -513,7 +559,7 @@ body {
   .history-body>aside { display:block }
   .history-body>main { display:none }
   .history-body:has(.transcript-heading)>aside { display:none }
-  .history-body:has(.transcript-heading)>main { display:block }
+  .history-body:has(.transcript-heading)>main { display:flex }
   .history-search { grid-template-columns:1fr;position:sticky;top:0;z-index:2;background:var(--panel);padding:5px }
   .history-row>button,.history-project-heading,.history-load-more { min-height:44px }
   .history-back{display:block;width:100%;margin-bottom:8px;min-height:44px}.transcript-heading{display:block}
@@ -650,7 +696,15 @@ body {
 @media(max-width:760px){.folder-picker-layer{padding:0}.folder-picker{width:100%;height:100dvh;border:0;box-shadow:none}.folder-picker>footer>span{display:none}.folder-picker-path{grid-template-columns:auto minmax(0,1fr) auto}}
 
 /* Project Run is a project-level launcher. Imported tasks never impose pane geometry. */
-.app-identity .project-run-header{width:auto;min-width:51px;margin-left:auto;padding:0 6px;border-left:1px solid var(--line);color:var(--accent);font-size:8px;white-space:nowrap}.workspace.sidebar-collapsed .project-run-header{display:none}.project-row{grid-template-columns:16px minmax(0,1fr) 25px!important}.project-row-run{display:grid!important;place-items:center;font-size:8px}
+/* Desktop's primary launcher. Tab strips have no new-tab button, so this is the
+   one always-visible way to start a session — styled as a real chip rather than
+   a faint label. When the sidebar collapses there is no room for it in the 40px
+   header column, and the collapsed rail's ▶ button takes over. */
+.app-identity .project-run-header{width:auto;min-width:56px;height:21px;margin-left:auto;padding:0 8px;border:1px solid color-mix(in srgb,var(--accent) 50%,var(--line));background:color-mix(in srgb,var(--accent) 11%,transparent);color:var(--accent);font-size:9px;white-space:nowrap}
+.app-identity .project-run-header:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);color:var(--accent)}
+.workspace.sidebar-collapsed .project-run-header{display:none}
+.sidebar-rail .rail-run{border-color:color-mix(in srgb,var(--accent) 50%,var(--line));color:var(--accent)}
+.sidebar-rail .rail-run:disabled{opacity:.4;cursor:not-allowed}.project-row{grid-template-columns:16px minmax(0,1fr) 25px!important}.project-row-run{display:grid!important;place-items:center;font-size:8px}
 .run-menu-scrim{position:fixed;inset:0;z-index:76;background:transparent}.project-run-menu{position:fixed;z-index:77;width:300px;max-height:min(560px,calc(100dvh - 12px));overflow:auto;border:1px solid var(--line);background:var(--panel);box-shadow:7px 9px #0009}.project-run-menu>header{position:sticky;top:0;z-index:1;min-height:42px;display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--line);background:var(--panel)}.project-run-menu>header>div{min-width:0;flex:1;display:grid;gap:2px}.project-run-menu>header span,.run-menu-section>small{color:var(--accent);font-size:8px;text-transform:uppercase}.project-run-menu>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-run-menu>header>button{width:29px;height:29px;border:0;background:transparent;color:var(--muted);cursor:pointer}.run-menu-section{display:grid;padding:5px;border-bottom:1px solid var(--line)}.run-menu-section>small{padding:4px 5px}.run-menu-section>button{min-height:34px;display:grid;grid-template-columns:24px minmax(0,1fr);align-items:center;gap:5px;border:0;background:transparent;color:var(--text);text-align:left;cursor:pointer}.run-menu-section>button:hover:not(:disabled){background:var(--panel2)}.run-menu-section>button:disabled{opacity:.5;cursor:not-allowed}.run-menu-section>button>span{color:var(--accent);text-align:center}.run-menu-section>button>div{min-width:0;display:flex;align-items:baseline;justify-content:space-between;gap:8px}.run-menu-section>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.run-menu-section>button em{flex:none;color:var(--muted);font-size:8px;font-style:normal}.project-run-menu>p,.project-run-menu details{margin:0;padding:9px;color:var(--muted);font-size:8px}.project-run-menu summary{cursor:pointer}.project-run-menu details p{margin:6px 0 0;line-height:1.4}.project-action-trust-layer{z-index:90}.project-action-trust{width:min(620px,calc(100vw - 24px))}.project-action-trust-body{padding:16px 20px;color:var(--muted);line-height:1.5}.project-action-trust-body strong{color:var(--text)}.project-action-trust-body ul{padding-left:20px}.project-action-trust-body pre{max-height:180px;overflow:auto;padding:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);white-space:pre-wrap}.mobile-run-trigger{display:none}
 @media(max-width:760px){.mobile-toolbar{grid-template-columns:minmax(44px,1fr) minmax(0,2fr) auto minmax(44px,1fr)!important}.mobile-run-trigger{display:block;min-width:58px;height:36px;border:1px solid var(--line);background:var(--panel2);color:var(--accent);font:9px 'Cascadia Mono',Consolas,monospace}.project-row{grid-template-columns:12px minmax(0,1fr) 36px!important}.project-row-run{display:grid!important;place-items:center;font-size:10px;min-height:34px}.project-run-menu{left:6px!important;right:6px;width:auto;max-height:calc(100dvh - 12px)}.run-menu-section>button{min-height:44px}.project-action-trust-layer{padding:0}.project-action-trust{width:100vw;height:100dvh;border:0;display:flex;flex-direction:column}.project-action-trust-body{flex:1;overflow:auto}}
 
@@ -681,12 +735,34 @@ body {
 
 /* Phase 5.5: layout hierarchy, terminal stacks, and the durable project shelf. */
 .project-row{grid-template-columns:14px minmax(0,1fr) 18px 24px}
-.layout-cluster{position:relative;min-width:0;margin-left:8px;padding-left:12px}.layout-cluster>.layout-branch{position:relative;min-width:0}.layout-cluster.stack:before{content:"";position:absolute;left:3px;top:20px;bottom:20px;border-left:2px solid var(--blue)}.layout-cluster.stack>.layout-branch:before{content:"";position:absolute;z-index:1;left:-9px;top:20px;width:17px;border-top:1px solid var(--blue);pointer-events:none}.layout-cluster .session-row{position:relative;z-index:2}.layout-affinity{display:inline-block;margin-left:6px;font-weight:700;font-size:9px}.layout-affinity.tab{color:var(--blue)}.layout-affinity.loose{color:var(--muted)}.layout-resource-row{height:40px;display:flex;align-items:center;gap:8px;color:var(--muted)}.layout-loose{margin-top:4px;padding-top:3px}.layout-loose-divider{height:10px;display:grid;grid-template-columns:13px 1fr;align-items:center;color:var(--muted);font-size:8px}.layout-loose-divider i{display:block;border-top:1px dotted var(--line)}.foreign-scope{margin-left:6px;color:var(--amber)}.anchor-badge{color:var(--green);margin-left:auto}.project-row .anchor-badge+small{margin-left:0}
-.pane-stack{width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;display:grid;grid-template-rows:31px minmax(0,1fr)}.stack-active{min-width:0;min-height:0;overflow:hidden;display:flex}.stack-active>.terminal-pane,.stack-active>.note-pane,.stack-active>.preview-pane,.stack-active>.pane-split{width:100%;height:100%;min-width:0;min-height:0;flex:1 1 0}.stack-tabs{min-width:0;display:flex;overflow-x:auto;overflow-y:hidden;background:var(--panel);border-bottom:1px solid var(--line);scrollbar-width:thin}.stack-tabs button{flex:0 0 auto;max-width:220px;height:31px;border:0;border-right:1px solid var(--line);background:transparent;color:var(--muted);display:flex;align-items:center;gap:7px;padding:0 11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.stack-tabs button.active{color:var(--text);background:var(--bg)}.stack-tabs button.awaiting{color:var(--amber)}
-.stack-tabs .stack-add{width:30px;padding:0;justify-content:center;border-right:0;color:var(--muted)}.stack-tabs .stack-add:hover:not(:disabled){color:var(--green);background:var(--panel2)}.stack-tabs .stack-add:disabled{opacity:.35}
+/* Only a stack indents: it needs the gutter for the bracket that shows those
+   sessions share one pane. A split has no connector to draw, so indenting for it
+   was unexplained nesting — the sidebar is a session list, not a pane-geometry
+   diagram, and split branches read as siblings at the same depth. */
+.layout-cluster{position:relative;min-width:0}
+.layout-cluster.stack{margin-left:8px;padding-left:12px}
+.layout-cluster>.layout-branch{position:relative;min-width:0}/* The bracket is drawn per branch, not once across the cluster: a branch is as
+   tall as its session row plus that session's note/preview rows, so a single
+   cluster-height spine dangled past the last session row whenever the last
+   branch had any. Each branch contributes its own segment, and the first/last
+   stop at their session row's centre (rows are 40px). */
+.layout-cluster.stack>.layout-branch:after{content:"";position:absolute;left:-9px;top:0;bottom:0;border-left:2px solid var(--blue);pointer-events:none}
+.layout-cluster.stack>.layout-branch.first:after{top:20px}
+.layout-cluster.stack>.layout-branch.last:after{bottom:calc(100% - 20px)}
+.layout-cluster.stack>.layout-branch:before{content:"";position:absolute;z-index:1;left:-9px;top:20px;width:17px;border-top:1px solid var(--blue);pointer-events:none}.layout-cluster .session-row{position:relative;z-index:2}.layout-affinity{display:inline-block;margin-left:6px;font-weight:700;font-size:9px}.layout-affinity.tab{color:var(--blue)}.layout-affinity.loose{color:var(--muted)}.layout-resource-row{height:40px;display:flex;align-items:center;gap:8px;color:var(--muted)}.layout-loose{margin-top:4px;padding-top:3px}.layout-loose-divider{height:10px;display:grid;grid-template-columns:13px 1fr;align-items:center;color:var(--muted);font-size:8px}.layout-loose-divider i{display:block;border-top:1px dotted var(--line)}.foreign-scope{margin-left:6px;color:var(--amber)}.anchor-badge{color:var(--green);margin-left:auto}.project-row .anchor-badge+small{margin-left:0}
+.pane-stack{width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;display:grid;grid-template-rows:31px minmax(0,1fr)}.stack-active{min-width:0;min-height:0;overflow:hidden;display:flex}.stack-active>.terminal-pane,.stack-active>.note-pane,.stack-active>.preview-pane,.stack-active>.pane-split{width:100%;height:100%;min-width:0;min-height:0;flex:1 1 0}.stack-tabs{min-width:0;display:flex;overflow-x:auto;overflow-y:hidden;background:var(--panel);border-bottom:1px solid var(--line);scrollbar-width:thin}.stack-tabs button{flex:0 0 auto;max-width:220px;height:31px;border:0;border-right:1px solid var(--line);background:transparent;color:var(--muted);display:flex;align-items:center;gap:7px;padding:0 11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}/* The active tab was distinguished only by swapping --panel for --bg, a difference of a few
+   RGB points that is invisible on a phone screen in daylight and easy to miss on desktop. It
+   now carries a real outline plus a thick underline in the app accent, and a tinted fill.
+   `--tab-active-bg` exists so the close button's fade overlay tracks the same colour instead
+   of blending toward a background the tab no longer uses. */
+.stack-tabs{--tab-active-bg:color-mix(in srgb,var(--green) 12%,var(--bg))}
+.stack-tabs button.active{color:var(--text);background:var(--tab-active-bg);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 52%,transparent),inset 0 -3px var(--green)}.stack-tabs button.awaiting{color:var(--amber)}
+/* Tab strips carry no new-tab button on any platform: the Project Run menu
+   (top bar, collapsed rail, mobile toolbar, sidebar project row) is the single
+   launcher, and it lands a new session as a tab in the focused pane. */
 .projects-layer{position:fixed;inset:0;z-index:85;background:#030407cc;display:grid;place-items:center;padding:18px}.projects-panel{width:min(1120px,96vw);height:min(760px,92vh);background:var(--bg);border:1px solid var(--line);display:flex;flex-direction:column;box-shadow:8px 10px #0009}.projects-panel>header{height:52px;flex:none;display:flex;align-items:center;gap:14px;padding:0 14px;border-bottom:1px solid var(--line)}.projects-panel>header>div{flex:1}.projects-panel h2,.projects-panel h3,.projects-panel h4{margin:0;font:inherit;font-weight:700}.projects-panel>header span{color:var(--muted)}.projects-body{display:grid;grid-template-columns:minmax(280px,35%) 1fr;min-height:0;flex:1}.projects-body>aside{overflow:auto;border-right:1px solid var(--line)}.projects-body>aside>button{width:100%;display:grid;grid-template-columns:auto 1fr;gap:2px 8px;text-align:left;padding:11px 13px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--text)}.projects-body>aside>button.active,.projects-body>aside>button:hover{background:var(--panel2)}.projects-body>aside small,.projects-body>aside em{grid-column:2;color:var(--muted);font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.projects-body>main{overflow:auto;padding:16px}.projects-body main>section{padding:14px 0;border-top:1px solid var(--line)}.project-detail-heading{display:flex;gap:8px;align-items:start;padding-bottom:15px}.project-detail-heading>div{flex:1;display:flex;flex-direction:column}.project-detail-heading span,.project-detail-heading small{color:var(--muted)}.project-anchor-row{display:grid;grid-template-columns:180px 1fr;gap:10px;align-items:center;margin:8px 0}.project-anchor-row select{width:100%}.projects-body article{display:flex;flex-direction:column;padding:7px 0}.projects-body article span,.projects-placeholder{color:var(--muted)}.projects-error{padding:8px 14px;color:var(--red);border-bottom:1px solid var(--line)}
 .anchor-picker{width:min(620px,94vw)}.anchor-picker>p{padding:0 16px;color:var(--muted)}.anchor-options{max-height:340px;overflow:auto;padding:8px 16px}.anchor-options button{width:100%;display:flex;flex-direction:column;text-align:left;margin-bottom:7px;padding:10px;background:transparent;color:var(--text);border:1px solid var(--line)}.anchor-options button:hover{background:var(--panel2)}.anchor-options span{color:var(--muted)}
-@media(max-width:700px){.project-row{grid-template-columns:12px minmax(0,1fr)}.anchor-badge{display:none}.projects-layer{padding:0}.projects-panel{width:100vw;height:100dvh;border:0}.projects-body{grid-template-columns:1fr}.projects-body>aside{max-height:42vh;border-right:0;border-bottom:1px solid var(--line)}.stack-tabs button{max-width:160px}.project-anchor-row{grid-template-columns:1fr}.layout-cluster{margin-left:3px;padding-left:7px}.layout-cluster.stack:before{left:1px}.layout-cluster.stack>.layout-branch:before{left:-6px;width:12px}.layout-affinity{display:none}}
+@media(max-width:700px){.project-row{grid-template-columns:12px minmax(0,1fr)}.anchor-badge{display:none}.projects-layer{padding:0}.projects-panel{width:100vw;height:100dvh;border:0}.projects-body{grid-template-columns:1fr}.projects-body>aside{max-height:42vh;border-right:0;border-bottom:1px solid var(--line)}.stack-tabs button{max-width:160px}.project-anchor-row{grid-template-columns:1fr}.layout-cluster.stack{margin-left:3px;padding-left:7px}.layout-cluster.stack>.layout-branch:before{left:-6px;width:12px}.layout-cluster.stack>.layout-branch:after{left:-6px}.layout-affinity{display:none}}
 
 /* Project selection is shown by the active group's tint, border, and green
    chevron — no separate ownership rail down the session list (it only ate
@@ -792,13 +868,16 @@ body {
 
 /* Desktop app identity occupies only the cell above the sidebar. Each pane owns the
    adjacent tab strip at the top of its own stack, including both branches of a split. */
-.workspace{grid-template-columns:var(--sidebar-width,254px) 4px minmax(0,1fr);grid-template-rows:34px minmax(0,1fr)}
+.workspace{grid-template-columns:var(--sidebar-width,254px) 4px minmax(0,1fr) 40px;grid-template-rows:34px minmax(0,1fr)}
+/* The docked utility drawer adds its own resizer + column ahead of the icon
+   rail. Negative column lines keep the rail last whatever the sidebar does. */
+.workspace.drawer-open{grid-template-columns:var(--sidebar-width,254px) 4px minmax(0,1fr) 4px var(--drawer-width,380px) 40px}
 .app-topbar{position:relative;z-index:48;grid-column:1;grid-row:1;min-width:0;display:flex;align-items:stretch;border-right:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--panel);box-shadow:0 1px #000}
 .app-identity{min-width:0;flex:1 1 0;display:flex;align-items:center;gap:5px;padding:0 7px 0 11px;white-space:nowrap}.app-identity strong{margin-right:4px;color:var(--text);text-transform:lowercase}.app-identity button{width:25px;height:25px;border:0;background:transparent;color:var(--muted);cursor:pointer}.app-identity button:hover{background:var(--panel2);color:var(--accent)}.app-identity .daemon-ok{width:20px;height:25px;margin:0;justify-content:center}.app-identity .daemon-ok i{width:6px;height:8px}
 .pane-stack{grid-template-rows:34px minmax(0,1fr)}.pane-stack>.stack-tabs{display:flex}.pane-stack>.stack-tabs button{height:33px}.pane-stack.focused-pane{outline:1px solid color-mix(in srgb,var(--accent) 32%,transparent);outline-offset:-1px}
 
 /* Desktop sidebar sizing is device-local UI state. */
-.sidebar{grid-column:1;grid-row:2;min-width:0;overflow:hidden}.sidebar-resizer{grid-column:2;grid-row:1/3;position:relative;z-index:8;cursor:col-resize;background:var(--line);touch-action:none}.sidebar-resizer:after{content:"";position:absolute;inset:0 -3px}.sidebar-resizer:hover,.sidebar-resizing .sidebar-resizer{background:var(--accent)}.main-stage{grid-column:3;grid-row:1/3}.workspace.sidebar-collapsed{grid-template-columns:40px 0 minmax(0,1fr)}
+.sidebar{grid-column:1;grid-row:2;min-width:0;overflow:hidden}.sidebar-resizer{grid-column:2;grid-row:1/3;position:relative;z-index:8;cursor:col-resize;background:var(--line);touch-action:none}.sidebar-resizer:after{content:"";position:absolute;inset:0 -3px}.sidebar-resizer:hover,.sidebar-resizing .sidebar-resizer{background:var(--accent)}.main-stage{grid-column:3;grid-row:1/3}.workspace.sidebar-collapsed{grid-template-columns:40px 0 minmax(0,1fr) 40px}.workspace.sidebar-collapsed.drawer-open{grid-template-columns:40px 0 minmax(0,1fr) 4px var(--drawer-width,380px) 40px}
 /* The rail shares the collapsed sidebar's cell; the sidebar itself is only
    visibility-hidden, so it still reserves the column but paints nothing. */
 .sidebar-rail{grid-column:1;grid-row:2;display:flex;flex-direction:column;align-items:center;gap:4px;min-height:0;padding:6px 0;border-right:1px solid var(--line);background:var(--panel);overflow:hidden}
@@ -825,8 +904,8 @@ body {
 .rail-quota.usage-warn>strong{color:var(--yellow,#e5c07b)}
 .rail-quota.usage-critical{border-color:var(--red)}
 .rail-quota.usage-critical>strong{color:var(--red)}
-.account-mobile-trigger.usage-warn{color:var(--yellow,#e5c07b)}
-.account-mobile-trigger.usage-critical{border-color:var(--red);color:var(--red)}.workspace.sidebar-collapsed .app-identity{justify-content:center;padding:0}.workspace.sidebar-collapsed .app-identity strong,.workspace.sidebar-collapsed .app-identity .daemon-ok{display:none}.workspace.sidebar-collapsed .sidebar{visibility:hidden;border:0}.workspace.sidebar-collapsed .sidebar-resizer{display:none}.sidebar-resizing{cursor:col-resize;user-select:none}.sidebar-resizing iframe{pointer-events:none}
+
+.workspace.sidebar-collapsed .app-identity{justify-content:center;padding:0}.workspace.sidebar-collapsed .app-identity strong,.workspace.sidebar-collapsed .app-identity .daemon-ok{display:none}.workspace.sidebar-collapsed .sidebar{visibility:hidden;border:0}.workspace.sidebar-collapsed .sidebar-resizer{display:none}.sidebar-resizing{cursor:col-resize;user-select:none}.sidebar-resizing iframe{pointer-events:none}
 
 /* Provider and owned-process status share the sidebar footer while their overlays
    render at viewport level, independent of the current sidebar width. */
@@ -835,7 +914,7 @@ body {
 .resource-usage-popover>section{padding:0}.resource-usage-total{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border-bottom:1px solid var(--line)}.resource-usage-total article{display:grid;gap:3px;padding:9px;background:var(--bg)}.resource-usage-total span,.resource-project-list small,.resource-daemon-usage small{color:var(--muted);font-size:8px}.resource-usage-total strong{font-size:12px;font-weight:500}.resource-project-list>h4,.resource-daemon-usage>h4{margin:0;padding:6px 8px;border-bottom:1px solid var(--line);color:var(--green);font:inherit;text-transform:uppercase}.resource-project-list>article,.resource-daemon-usage>article{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 10px;padding:8px;border-bottom:1px solid var(--line)}.resource-project-list>article>div,.resource-daemon-usage>article>div{min-width:0;display:grid;grid-row:1/3;gap:3px}.resource-project-list>article strong,.resource-daemon-usage>article strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}.resource-project-list>article>span,.resource-daemon-usage>article>span{white-space:nowrap;color:var(--muted);font-size:8px}.resource-project-list b,.resource-daemon-usage b{color:var(--text);font-weight:500}.resource-usage-empty{margin:0;padding:12px;color:var(--muted)}
 
 @media(max-width:760px){.app-topbar{display:none}.workspace,.workspace.sidebar-collapsed{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}.sidebar,.workspace.sidebar-collapsed .sidebar{grid-column:1;grid-row:1;visibility:visible;width:min(285px,86vw);border-right:1px solid var(--line)}.sidebar-resizer{display:none}.main-stage{grid-column:1;grid-row:1}.pane-stack.focused-pane{outline:0}}
-.mobile-unified-workspace{width:100%;height:100%;grid-template-rows:34px minmax(0,1fr)}.mobile-unified-tabs{flex-wrap:nowrap}.mobile-unified-active{width:100%;height:100%;min-width:0;min-height:0}.mobile-unified-active>.terminal-pane,.mobile-unified-active>.project-resource,.mobile-unified-active>.preview-pane,.mobile-unified-active>.workspace-leaf-placeholder{width:100%;height:100%;min-width:0;min-height:0}.mobile-unified-tab>.tab-main{cursor:pointer}
+.mobile-unified-workspace{width:100%;height:100%;grid-template-rows:34px minmax(0,1fr)}.mobile-unified-workspace.no-tabs{grid-template-rows:minmax(0,1fr)}.mobile-unified-tabs{flex-wrap:nowrap}.mobile-unified-active{width:100%;height:100%;min-width:0;min-height:0}.mobile-unified-active>.terminal-pane,.mobile-unified-active>.project-resource,.mobile-unified-active>.preview-pane,.mobile-unified-active>.workspace-leaf-placeholder{width:100%;height:100%;min-width:0;min-height:0}.mobile-unified-tab>.tab-main{cursor:pointer}
 /* Keep a preview inside its mobile tab instead of floating fixed over the rails. */
 .mobile-unified-active>.preview-pane{position:static;inset:auto;z-index:auto}
 .transcript-lineage{flex:none;max-height:150px;overflow:auto;border-bottom:1px solid var(--line);padding:7px 16px;display:flex;align-items:center;gap:8px}.transcript-lineage h4{flex:none;margin:0;color:var(--muted);font:inherit}.transcript-lineage article{min-width:220px;display:grid;gap:2px;padding:7px 9px;border-left:2px solid var(--accent);background:var(--panel2)}.transcript-lineage article span,.transcript-lineage article small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
@@ -866,44 +945,100 @@ body {
 
 /* The mobile toolbar stays in normal layout flow so browser chrome cannot overlap it. */
 .mobile-toolbar{display:none}
-/* Terminal on top (1fr), then the optional read-aloud strip, then the clipboard rail.
-   Both bottom rows are in normal flow, so the terminal is bounded above them and never
-   sits under an overlay. The strip's row collapses to zero height when TTS is off. */
-.terminal-surface{position:relative;width:100%;height:100%;min-width:0;min-height:0;display:grid;grid-template-rows:minmax(0,1fr) auto auto;overflow:hidden}
+/* Terminal on top (1fr), then the clipboard rail. The rail is in normal flow, so the
+   terminal is bounded above it and never sits under an overlay. */
+.terminal-surface{position:relative;width:100%;height:100%;min-width:0;min-height:0;display:grid;grid-template-rows:minmax(0,1fr) auto;overflow:hidden}
 .terminal-surface>.terminal-host{grid-row:1;min-width:0;min-height:0}
-.terminal-surface>.voice-strip{grid-row:2}
 .mobile-terminal-live-input{display:none}
 /* The rail holds voice, terminal keys, and clipboard actions; it overflows on narrow panes
    and scrolls horizontally (touch drag, scrollbar, or wheel via the onWheel handler). Items
    keep their natural width so nothing collapses while scrolling. */
-.terminal-action-rail{grid-row:3;min-height:34px;display:flex;align-items:center;gap:5px;padding:3px 7px;border-top:1px solid var(--line);background:var(--panel);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;touch-action:pan-x;-webkit-overflow-scrolling:touch}
+.terminal-action-rail{grid-row:2;min-height:34px;display:flex;align-items:center;gap:5px;padding:3px 7px;border-top:1px solid var(--line);background:var(--panel);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;touch-action:pan-x;-webkit-overflow-scrolling:touch}
 .terminal-action-rail>*{flex:0 0 auto}
-.terminal-action-rail .term-key,.terminal-action-rail .voice-chip,.terminal-action-rail .voice-mic,.terminal-action-rail .conversation-chip{min-width:30px;padding:0 6px}
-.terminal-action-rail .mobile-voice-action{display:none}
+.terminal-action-rail .term-key{min-width:30px;padding:0 6px}
+/* Icon-only actions size like keys, not like the 74px text buttons they replaced. The svg is
+   sized here rather than in `em` because the rail's font is 9px. */
+.terminal-action-rail .rail-icon{min-width:30px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;color:var(--text)}
+.terminal-action-rail .rail-icon svg{width:15px;height:15px;display:block}
+.terminal-action-rail .rail-icon:disabled{color:var(--muted)}
 .terminal-action-rail .kbd-toggle{display:none}
 @media(pointer:coarse){.terminal-action-rail .kbd-toggle{display:inline-flex;align-items:center;justify-content:center}}
 .terminal-action-rail .kbd-toggle.active{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
 .terminal-action-rail .rail-config{margin-left:auto;min-width:30px!important;padding:0 6px;font-size:12px}
-.commandrail-settings .rail-scope{display:flex;align-items:center;gap:8px;margin:6px 0}
+.commandrail-settings .rail-intro{margin:0 0 8px}
+.commandrail-settings .rail-intro b{color:var(--text);font-weight:600}
+.commandrail-settings .rail-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:6px 0}
+.commandrail-settings .rail-scope{display:flex;align-items:center;gap:8px;margin:0;padding:0;grid-template-columns:none}
 .commandrail-settings .rail-scope select{flex:0 0 auto;min-width:200px}
 .commandrail-settings .rail-scope-note{margin:2px 0 0;color:var(--muted);font-size:9px}
-.commandrail-settings .rail-editor{display:flex;flex-direction:column;gap:4px;margin:8px 0}
-.commandrail-settings .rail-row{display:grid;grid-template-columns:minmax(120px,1.3fr) minmax(0,1.5fr) auto auto;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--line);background:var(--panel2)}
-.commandrail-settings .rail-row.off{opacity:.5}
-.commandrail-settings .rail-enable{display:flex;align-items:center;gap:6px;margin:0;min-width:0}
-.commandrail-settings .rail-enable span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.commandrail-settings .rail-editor{display:flex;flex-direction:column;gap:3px;margin:8px 0}
+/* Name column first and elastic, every control auto-sized on the right. The name used to share
+   a fixed column with the placement <select>, which clipped it to an ellipsis at ~60px; it now
+   owns the flexible column and wraps instead of truncating, because the item label is the one
+   thing in the row you cannot guess from context. */
+.commandrail-settings .rail-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:4px 10px;padding:4px 8px;border:1px solid var(--line);background:var(--panel2)}
+.commandrail-settings .rail-row.off{opacity:.55}
+.commandrail-settings .rail-id{min-width:0;display:flex;flex-direction:column;gap:1px}
+.commandrail-settings .rail-name{color:var(--text);overflow-wrap:anywhere}
 .commandrail-settings .rail-meta{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px}
-.commandrail-settings .rail-tags{display:flex;align-items:center;gap:3px}
+.commandrail-settings .rail-controls{display:flex;align-items:center;gap:10px}
+.commandrail-settings .rail-where,.commandrail-settings .rail-tags{display:flex;align-items:center;gap:3px}
 .commandrail-settings .rail-tags i{width:6px;display:inline-block}
-.commandrail-settings .rail-tags button,.commandrail-settings .rail-order button{min-width:28px;height:22px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:9px;cursor:pointer}
+.commandrail-settings .rail-where button,.commandrail-settings .rail-tags button,.commandrail-settings .rail-order button{min-width:28px;height:22px;padding:0 5px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:9px;cursor:pointer}
+/* Two accents, two meanings: blue says "this region renders it", green says "this
+   device/backend is allowed to". Sharing one colour made the row read as one long toggle set. */
+.commandrail-settings .rail-where button.on{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 16%,transparent);color:var(--blue)}
 .commandrail-settings .rail-tags button.on{border-color:var(--green);color:var(--green)}
 .commandrail-settings .rail-tags button:disabled,.commandrail-settings .rail-order button:disabled{opacity:.35;cursor:not-allowed}
 .commandrail-settings .rail-order{display:flex;gap:3px}
-.commandrail-settings .rail-del{color:var(--error,#f07178)}
-.commandrail-settings .rail-add{display:flex;flex-wrap:wrap;align-items:end;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
-.commandrail-settings .rail-add h4{width:100%;margin:0}
-@media(max-width:760px){.commandrail-settings .rail-row{grid-template-columns:1fr auto}.commandrail-settings .rail-meta{grid-column:1/-1}.commandrail-settings .rail-tags{grid-column:1/-1;flex-wrap:wrap}}
-.terminal-action-rail button{min-width:74px;height:27px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.terminal-action-rail button:hover:not(:disabled){border-color:var(--green);color:var(--green)}.terminal-action-rail button:disabled{opacity:.38;cursor:not-allowed}.terminal-action-rail span{min-width:0;max-width:220px;margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
+.commandrail-settings .rail-del{color:var(--red,#f07178)}
+.commandrail-settings .rail-add{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+.commandrail-settings .rail-add>summary{cursor:pointer;color:var(--text)}
+.commandrail-settings .rail-add-form{display:flex;flex-wrap:wrap;align-items:end;gap:8px;margin-top:8px}
+/* The settings-form label grid (165px label column) is wrong for this inline row: each field
+   stacks its own caption over its control and sizes to content. */
+.commandrail-settings .rail-add-form label{display:flex;flex-direction:column;gap:3px;margin:0;padding:0;grid-template-columns:none}
+.commandrail-settings .rail-add-form label.check{flex-direction:row;align-items:center;gap:6px;height:26px}
+.commandrail-settings .rail-add-form label.check>input{margin:0}
+.commandrail-settings .rail-add-form input,.commandrail-settings .rail-add-form select{min-width:130px}
+.commandrail-settings .rail-add-note{margin:8px 0 0;color:var(--muted);font-size:9px}
+/* Two rows per item on a phone: name/meta + reorder on the first, the placement and filter
+   toggles on the second. Every cell is placed explicitly. Spanning cells across `1/-1` and
+   letting the rest auto-place was what produced four full-width rows and 157px per item: grid
+   auto-placement never backtracks, so once a full-width item consumed row 1, the reorder
+   buttons could not return to the free cell beside the name and landed on a row of their own.
+   With 22 items that was ~3,500px of scrolling to reach the bottom. */
+@media(max-width:760px){
+  .commandrail-settings .rail-row{grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:8px;row-gap:4px;padding:5px 8px}
+  .commandrail-settings .rail-id{grid-area:1/1}
+  .commandrail-settings .rail-order{grid-area:1/2}
+  /* nowrap, not wrap: two placement chips plus five filter chips fit the width, and wrapping
+     is what would silently reintroduce a third row. */
+  .commandrail-settings .rail-controls{grid-area:2/1/3/3;flex-wrap:nowrap;justify-content:space-between;gap:8px}
+  .commandrail-settings .rail-where button,.commandrail-settings .rail-tags button,.commandrail-settings .rail-order button{height:30px;min-width:30px}
+  .commandrail-settings .rail-add-form input,.commandrail-settings .rail-add-form select{min-width:0;width:100%}
+  .commandrail-settings .rail-add-form label{flex:1 1 140px}
+}
+.terminal-action-rail button{min-width:74px;height:27px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+/* Hover styling is gated to real pointers: touch browsers keep :hover on the last
+   tapped element until something else is tapped, which made a rail button look
+   permanently selected. Touch feedback is the one-shot pulse below instead, added
+   as a class on click (never pointerdown — the rail scrolls, so a finger landing on
+   a button may be a drag) and cleared on animationend (see TerminalPane). */
+@media(hover:hover){.terminal-action-rail button:hover:not(:disabled){border-color:var(--green);color:var(--green)}}
+.terminal-action-rail button.rail-pulse:not(:disabled){animation:rail-pulse .34s ease-out}
+@keyframes rail-pulse{
+  0%{border-color:var(--green);color:var(--green);background:color-mix(in srgb,var(--green) 26%,var(--panel2));box-shadow:0 0 0 0 color-mix(in srgb,var(--green) 50%,transparent)}
+  70%{border-color:var(--green);color:var(--green);box-shadow:0 0 0 4px transparent}
+  100%{box-shadow:0 0 0 0 transparent}
+}
+@media(prefers-reduced-motion:reduce){.terminal-action-rail button.rail-pulse:not(:disabled){animation-duration:.12s}}
+.terminal-action-rail button:disabled{opacity:.38;cursor:not-allowed}.terminal-action-rail span{min-width:0;max-width:220px;margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
+/* Jump-to-latest. Only rendered while the viewport is off the tail, and anchored
+   above the action rail so it never covers the newest line it points at. */
+.terminal-jump-latest{grid-row:1;grid-column:1;justify-self:end;align-self:end;z-index:14;margin:0 9px 9px 0;min-height:26px;padding:0 10px;border:1px solid var(--green);background:color-mix(in srgb,var(--bg) 88%,var(--green));color:var(--green);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer;box-shadow:0 2px 10px #0009}
+.terminal-jump-latest:hover{background:color-mix(in srgb,var(--bg) 72%,var(--green))}
+@media(hover:none){.terminal-jump-latest{min-height:38px;padding:0 14px;font-size:11px}}
 .terminal-image-drop{position:absolute;z-index:18;inset:10px;display:grid;place-items:center;border:2px dashed var(--green);background:color-mix(in srgb,var(--bg) 82%,transparent);color:var(--green);font-weight:700;letter-spacing:.06em;text-transform:uppercase;pointer-events:none}
 .terminal-connection{position:absolute;z-index:13;top:5px;left:50%;transform:translateX(-50%);padding:3px 7px;border:1px solid var(--line);background:var(--panel);color:var(--muted);pointer-events:none}
 .terminal-connection.reconnecting{color:var(--amber)}.terminal-connection.ended{color:var(--red)}
@@ -913,9 +1048,19 @@ body {
 
 @media(max-width:760px){
   .app-shell{height:var(--app-height,100dvh);min-height:0}
-  .mobile-toolbar{position:sticky;top:0;z-index:43;flex:none;display:grid;grid-template-columns:minmax(44px,1fr) minmax(0,2fr) minmax(44px,1fr);align-items:center;gap:6px;min-height:44px;padding:max(5px,env(safe-area-inset-top)) max(6px,env(safe-area-inset-right)) 5px max(6px,env(safe-area-inset-left));border-bottom:1px solid var(--line);background:var(--panel)}
-  .mobile-nav-toggle{position:static;inset:auto;z-index:auto;min-width:44px;height:44px;padding:0 6px}
-  .mobile-project-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;color:var(--text)}
+  /* [nav] [quota] [project name] [Run]. Flex, not grid: only the title flexes and the other
+     three are content-sized, which grid expressed poorly here — an `auto` track next to the
+     title's `1fr` absorbed the slack and left the quota chips floating mid-bar. `nowrap` is
+     also what guarantees the bar stays one row as chip content changes width. */
+  .mobile-toolbar{position:sticky;top:0;z-index:43;flex:none;display:flex;flex-wrap:nowrap;align-items:center;gap:6px;min-height:44px;padding:max(5px,env(safe-area-inset-top)) max(6px,env(safe-area-inset-right)) 5px max(6px,env(safe-area-inset-left));border-bottom:1px solid var(--line);background:var(--panel)}
+  .mobile-toolbar>*{flex:0 0 auto}
+  /* Halved from 44px to buy the quota chips their width; the font drops with it so `:nav` is
+     not clipped. The 44px touch target survives vertically, and the sidebar also opens by
+     swipe, so this is not the only way in. */
+  .mobile-nav-toggle{position:static;inset:auto;min-width:24px;width:24px;height:44px;padding:0;overflow:hidden;z-index:auto}
+  .mobile-project-name{flex:1 1 auto;min-width:0;height:38px;border:0;background:transparent;padding:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;color:var(--text);cursor:pointer}
+  .mobile-project-name:disabled{color:var(--muted);cursor:default}
+  .mobile-project-name:not(:disabled):active{background:var(--panel2)}
   .pane-stack{grid-template-rows:34px minmax(0,1fr)}
   .pane-stack>.stack-tabs{display:flex;flex-wrap:nowrap;width:100%;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scrollbar-width:thin;touch-action:pan-x;-webkit-overflow-scrolling:touch}
   .pane-stack>.stack-tabs .stack-tab-shell{flex:0 0 auto}
@@ -927,16 +1072,51 @@ body {
      definite remaining height after the in-flow session/voice headers. */
   .mobile-unified-active{height:100%;min-height:0;overflow:hidden}
   .mobile-unified-active>.terminal-pane{display:flex!important;flex-direction:column;height:100%;min-height:0;overflow:hidden}
-  .mobile-unified-active>.terminal-pane>.pane-bar{flex:0 0 34px;min-height:34px}
+  /* The session header is one row on a phone: status at the left, the voice group in the
+     middle, note/proc/⋯ at the right. The cwd column is dropped here — it is the pane's
+     least useful field on a narrow screen, and as an extra item it was silently wrapping
+     the tools onto a second row. `.pane-bar>div` (0,1,1) also out-specifies the legacy
+     `.pane-path{display:none}` mobile rule (0,1,0), which is why the path showed at all,
+     so hide it from the bar itself. The voice group takes the flexible column and scrolls
+     inside itself; status is capped so it cannot squeeze the group out of the bar. */
+  .pane-bar>.pane-path{display:none}
+  .mobile-unified-active>.terminal-pane>.pane-bar{flex:0 0 auto;height:auto;min-height:40px;grid-template-columns:auto minmax(0,1fr) auto;padding:5px 6px 1px 10px}
+  .mobile-unified-active>.terminal-pane>.pane-bar>div{min-width:0}
+  .mobile-unified-active>.terminal-pane>.pane-bar .pane-state{max-width:min(28vw,120px)}
+  .mobile-unified-active>.terminal-pane>.voice-strip{flex:0 0 auto}
+  /* Touch-sized voice chips, and the settings shortcut the strip has no room for. Metrics are
+     tuned so the whole group fits unscrolled at 390–412 px (where phones actually are); the
+     group still scrolls below that rather than clipping the pane tools. */
+  .pane-voice{gap:3px}
+  .pane-voice button{height:32px;padding:0 5px;font-size:10px}
+  .pane-voice .mobile-voice-action{display:inline-flex;align-items:center;justify-content:center}
   .mobile-unified-active>.terminal-pane>.terminal-surface{flex:1 1 0;height:auto;min-height:0;overflow:hidden}
   .mobile-unified-active .terminal-host{height:auto;min-height:0}
   .terminal-host .xterm{touch-action:none}
   .prepared-clipboard{top:5px;grid-template-columns:minmax(0,1fr) auto auto}.prepared-clipboard button{min-height:44px}.prepared-clipboard textarea{display:block;min-height:96px;padding:10px;font-size:16px;line-height:1.4;user-select:text;-webkit-user-select:text;touch-action:auto}
-  .terminal-action-rail{min-height:52px;gap:7px;padding:4px max(7px,env(safe-area-inset-right)) max(4px,env(safe-area-inset-bottom)) max(7px,env(safe-area-inset-left))}.terminal-action-rail button{min-width:96px;height:44px;font-size:11px}.terminal-action-rail .term-key,.terminal-action-rail .voice-chip,.terminal-action-rail .voice-mic,.terminal-action-rail .conversation-chip{min-width:44px;padding:0 8px}.terminal-action-rail .mobile-voice-action{display:inline-flex;align-items:center;justify-content:center;min-width:76px}.terminal-action-rail .voice-content.summary,.terminal-action-rail .voice-autoplay.active{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}.terminal-action-rail span{font-size:9px}.manual-terminal-paste{bottom:58px}.manual-terminal-paste textarea{min-height:92px}
+  .terminal-action-rail{min-height:52px;gap:7px;padding:4px max(7px,env(safe-area-inset-right)) max(4px,env(safe-area-inset-bottom)) max(7px,env(safe-area-inset-left))}.terminal-action-rail button{min-width:96px;height:44px;font-size:11px}.terminal-action-rail .term-key,.terminal-action-rail .rail-icon{min-width:44px;padding:0 8px}.terminal-action-rail .rail-icon svg{width:19px;height:19px}.terminal-action-rail span{font-size:9px}.manual-terminal-paste{bottom:58px}.manual-terminal-paste textarea{min-height:92px}
   .context-menu{z-index:49}
   .sidebar-footer{height:auto;min-height:54px;padding:5px 6px}
   .sidebar-footer button.menu-trigger{display:flex;min-height:44px;align-items:center;justify-content:center}
   .sidebar-footer .notes-shelf-trigger{height:44px;min-height:44px}
+}
+
+/* Transient touch feedback pill (swipe landed on tab X, held Run started Y).
+   Non-interactive and self-clearing, so it never needs a dismiss affordance. */
+.mobile-hud{position:fixed;z-index:47;top:max(58px,calc(env(safe-area-inset-top) + 52px));left:50%;transform:translateX(-50%);max-width:min(76vw,320px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:7px 13px;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) 92%,var(--green));color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;box-shadow:0 4px 14px #000a;pointer-events:none;animation:mobile-hud-in .14s ease-out}
+@keyframes mobile-hud-in{from{opacity:0;transform:translate(-50%,-6px)}to{opacity:1;transform:translate(-50%,0)}}
+@media(prefers-reduced-motion:reduce){.mobile-hud{animation:none}}
+
+/* Touch-only: app chrome is tap targets, not prose. Long-pressing a toolbar
+   title, tab, sidebar row, or rail button to reach its context menu must not
+   raise the native selection UI (highlight, handles, magnifier, callout) — that
+   reads as "I selected text" when the user only wanted the menu. Selection is
+   restored inside real content: the terminal, editors, and any input. */
+@media(hover:none){
+  .mobile-toolbar,.stack-tabs,.sidebar,.sidebar-rail,.pane-bar,.terminal-action-rail,
+  .voice-strip,.context-menu{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  .sidebar input,.sidebar textarea,.context-menu input,.context-menu textarea,
+  .pane-bar input,[contenteditable]{-webkit-user-select:text;user-select:text}
 }
 
 @media (max-width:760px), (pointer:coarse){
@@ -951,7 +1131,21 @@ body {
 .project-row{grid-template-columns:16px minmax(0,1fr)}
 .draggable-project,.draggable-tab{cursor:grab;user-select:none}.draggable-project:active,.draggable-tab:active{cursor:grabbing}.draggable-project.dragging,.draggable-tab.dragging,.session-row.dragging{opacity:.32}.workspace-pointer-dragging,.workspace-pointer-dragging *{cursor:grabbing!important;user-select:none!important}.workspace-pointer-dragging iframe{pointer-events:none}.project-group.project-drop-target:after,.draggable-tab.drag-over:after{content:"";position:absolute;z-index:5;background:var(--green);box-shadow:0 0 0 1px #081109,0 0 8px color-mix(in srgb,var(--green) 65%,transparent);pointer-events:none}.project-group.project-drop-target:after{left:2px;right:2px;height:3px}.project-group.project-drop-target.drop-before:after{top:-2px}.project-group.project-drop-target.drop-after:after{bottom:-2px}.project-group.project-drop-target{background:color-mix(in srgb,var(--green) 7%,transparent)}.draggable-tab.drag-over:after{top:3px;bottom:3px;width:2px}.draggable-tab.drag-over.drop-before:after{left:-1px}.draggable-tab.drag-over.drop-after:after{right:-1px}
 .pane-stack.tab-drop-active{position:relative}.pane-stack.tab-drop-active:after{content:"";position:absolute;z-index:24;pointer-events:none;border:2px solid var(--green);background:color-mix(in srgb,var(--green) 13%,transparent);box-shadow:inset 0 0 18px color-mix(in srgb,var(--green) 12%,transparent),0 0 8px #0008}.pane-stack.drop-zone-left:after{inset:34px 75% 0 0}.pane-stack.drop-zone-right:after{inset:34px 0 0 75%}.pane-stack.drop-zone-top:after{inset:34px 0 75%}.pane-stack.drop-zone-bottom:after{inset:75% 0 0}.pane-stack.drop-zone-tabs:after{inset:34px 0 0;background:transparent;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 35%,transparent)}
-.stack-tab-shell{position:relative;display:flex;flex:0 0 auto;min-width:0;max-width:244px}.stack-tab-shell>.tab-main{min-width:0;cursor:grab}.stack-tab-shell>.tab-main:active{cursor:grabbing}.stack-tab-shell>.tab-close{width:22px;min-width:22px;max-width:22px;flex:0 0 22px;justify-content:center;gap:0;padding:0;cursor:pointer;color:var(--muted)}.stack-tab-shell>.tab-close:active{cursor:pointer}.stack-tab-shell>.tab-close:hover:not(:disabled){background:color-mix(in srgb,var(--red) 13%,var(--panel));color:var(--red)}.stack-tab-shell>.tab-main.active+.tab-close{background:var(--bg)}.stack-tab-shell>.tab-close.confirming{background:color-mix(in srgb,var(--green) 14%,var(--panel));color:var(--green)}.stack-tab-shell>.tab-close:disabled{opacity:.35;cursor:not-allowed}
+.stack-tab-shell{position:relative;display:flex;flex:0 0 auto;min-width:0;max-width:244px}.stack-tab-shell>.tab-main{min-width:0;cursor:grab}.stack-tab-shell>.tab-main:active{cursor:grabbing}
+/* The close affordance floats over the tab's right edge instead of holding a
+   column, so tab width is identical whether or not it is showing. It is revealed
+   on hover (pointer devices only) and fades the label out under it with a
+   gradient in the tab's own background. Touch devices never get it — closing
+   there goes through the tab's long-press menu. */
+.stack-tab-shell>.tab-close{position:absolute;z-index:2;top:0;right:1px;bottom:0;width:30px;min-width:30px;max-width:30px;flex:none;justify-content:center;gap:0;padding:0 2px 0 8px;border-right:0;color:var(--muted);cursor:pointer;opacity:0;pointer-events:none;transition:opacity .1s ease;background:linear-gradient(to right,transparent,var(--panel) 42%)}
+.stack-tab-shell>.tab-main.active+.tab-close{background:linear-gradient(to right,transparent,var(--tab-active-bg,var(--bg)) 42%)}
+.stack-tab-shell>.tab-close:active{cursor:pointer}
+@media(hover:hover){.stack-tab-shell:hover>.tab-close,.stack-tab-shell>.tab-close:focus-visible,.stack-tab-shell>.tab-close.confirming{opacity:1;pointer-events:auto}}
+@media(hover:none){.stack-tab-shell>.tab-close{display:none}}
+.stack-tab-shell>.tab-close:hover:not(:disabled){background:color-mix(in srgb,var(--red) 20%,var(--panel));color:var(--red)}
+.stack-tab-shell>.tab-close.confirming{background:color-mix(in srgb,var(--green) 20%,var(--panel));color:var(--green)}
+.stack-tab-shell>.tab-close:disabled{opacity:0;pointer-events:none;cursor:not-allowed}
+@media(hover:hover){.stack-tab-shell:hover>.tab-close:disabled{opacity:.35}}
 .context-direction-row{min-height:31px;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:2px 8px;color:#b8c0ca;font:10px 'Cascadia Mono',Consolas,monospace}.context-direction-row>span{white-space:nowrap}.context-direction-row>div{display:flex;gap:2px}.context-direction-row button{width:25px;height:25px;display:grid;place-items:center;border:1px solid var(--line);background:var(--bg);color:var(--text);font:13px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.context-direction-row button:hover:not(:disabled){border-color:var(--green);background:var(--panel2);color:var(--green)}.context-direction-row button:disabled{opacity:.22;cursor:not-allowed}
 .projects-manager-layer{z-index:84}.project-registry-dialog-layer{z-index:92}.projects-manager{width:min(1040px,calc(100vw - 30px));height:min(720px,calc(100dvh - 30px));display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden;border:1px solid var(--line);background:var(--panel);box-shadow:12px 14px 0 #0009}.projects-manager>header{min-height:74px;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:13px 16px;border-bottom:1px solid var(--line)}.projects-manager>header>div:first-child{min-width:0;display:grid;gap:3px}.projects-manager h2,.projects-manager h3{margin:0}.projects-manager header span,.projects-manager-title span{color:var(--green);font-size:8px;letter-spacing:.1em}.projects-manager header small,.projects-manager-title small{color:var(--muted);font-size:9px}.projects-manager button{min-height:30px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.projects-manager button.primary{border-color:color-mix(in srgb,var(--green) 55%,var(--line));color:var(--green)}.projects-manager button:disabled{opacity:.42;cursor:not-allowed}.projects-manager-header-actions{display:flex;align-items:center;gap:6px}.projects-manager-header-actions button{padding:0 10px}.projects-manager-header-actions .icon{width:32px;padding:0;border:0;background:transparent;font-size:18px}.projects-manager-body{min-height:0;display:grid;grid-template-columns:320px minmax(0,1fr)}.projects-manager-body>aside{min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);border-right:1px solid var(--line);background:var(--bg)}.projects-manager-filter{display:grid;grid-template-columns:minmax(0,1fr) 92px;padding:8px;border-bottom:1px solid var(--line)}.projects-manager input,.projects-manager select{min-width:0;height:32px;border:1px solid var(--line);background:var(--bg);color:var(--text);padding:0 8px;font:10px 'Cascadia Mono',Consolas,monospace}.projects-manager-list{min-height:0;overflow:auto;padding:6px}.projects-manager-list>button{width:100%;display:grid;grid-template-columns:10px minmax(0,1fr) auto;grid-template-rows:auto auto;gap:3px 7px;margin-bottom:4px;padding:8px;text-align:left}.projects-manager-list>button.active{border-color:var(--green);background:var(--panel)}.projects-manager-list strong,.projects-manager-list small{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.projects-manager-list small{grid-column:2/4;color:var(--muted);font-size:8px}.projects-manager-list em{color:var(--muted);font-size:8px;font-style:normal}.project-visibility-dot{grid-row:1/3;align-self:center;width:7px;height:7px;border:1px solid var(--muted);border-radius:50%}.project-visibility-dot.visible{border-color:var(--green);background:var(--green)}.projects-manager-list>p{padding:18px;color:var(--muted)}.projects-manager-body>main{min-width:0;min-height:0;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto auto;padding:18px;overflow:auto}.projects-manager-title{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-bottom:14px;border-bottom:1px solid var(--line)}.projects-manager-title>div{display:grid;gap:5px;min-width:0}.sidebar-visibility-toggle{flex:none;display:flex;align-items:center;gap:7px;padding:0 10px}.sidebar-visibility-toggle.active{border-color:var(--green);color:var(--green)}.projects-manager-actions{display:flex;flex-wrap:wrap;gap:6px;padding:12px 0}.projects-manager-actions button{padding:0 10px}.projects-manager-form{display:grid;align-content:start;gap:13px;padding:12px 0}.projects-manager-form label{display:grid;gap:5px;color:var(--muted);font-size:9px}.projects-manager-form label>div{display:grid;grid-template-columns:minmax(0,1fr) 32px}.projects-manager-form label>div button{min-width:0}.projects-manager-error{margin:0 0 10px;color:var(--red)}.projects-manager footer{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding-top:12px;border-top:1px solid var(--line)}.projects-manager footer span{color:var(--muted);font-size:8px}.projects-manager footer button{padding:0 11px}.projects-manager footer .danger{color:var(--red)}.projects-manager footer .confirming{border-color:var(--red);background:color-mix(in srgb,var(--red) 12%,var(--panel))}.projects-manager-empty{height:100%;display:grid;place-content:center;justify-items:center;gap:9px;color:var(--muted)}
 @media(max-width:700px){.projects-manager{width:100vw;height:100dvh}.projects-manager>header{align-items:flex-start}.projects-manager>header small,.projects-manager-header-actions>button:first-child{display:none}.projects-manager-body{grid-template-columns:1fr}.projects-manager-body>aside{max-height:38vh;border-right:0;border-bottom:1px solid var(--line)}.projects-manager-body>main{padding:12px}.projects-manager-title{align-items:flex-start}.projects-manager footer{grid-template-columns:1fr 1fr}.projects-manager footer span{display:none}.context-direction-row button{width:34px;height:34px}}
@@ -968,7 +1162,10 @@ body {
 /* Read aloud (TTS) + dictation. The strip renders inside .terminal-surface, above the
    clipboard rail, so the pane keeps its plain pane-bar + surface two-row grid. */
 .pending-terminal-pane{grid-template-rows:37px minmax(0,1fr)}.pending-terminal-body{min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted);background:radial-gradient(circle at center,color-mix(in srgb,var(--green) 7%,transparent),transparent 42%)}.pending-terminal-body strong{color:var(--text);font-size:12px;font-weight:500}.pending-terminal-body small{font-size:9px}.pending-terminal-spinner{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--green);animation:pending-terminal-spin .75s linear infinite}.pending-terminal-row{cursor:wait}.pending-terminal-tab{cursor:wait;opacity:.82}@keyframes pending-terminal-spin{to{transform:rotate(360deg)}}
-.voice-strip{display:flex;align-items:center;gap:6px;min-height:26px;padding:2px 8px;border-top:1px solid var(--line);background:var(--panel);font:9px 'JetBrains Mono';color:var(--muted);overflow-x:auto;scrollbar-width:none}
+/* The playback strip is the expanded half of the header's voice group: it draws as its own
+   row immediately under the pane bar (hence border-bottom, not border-top) and only exists
+   while read-aloud is on, so the terminal keeps every row it would otherwise have. */
+.voice-strip{display:flex;align-items:center;gap:6px;min-height:26px;padding:2px 8px;border-bottom:1px solid var(--line);background:var(--panel);font:9px 'JetBrains Mono';color:var(--muted);overflow-x:auto;overscroll-behavior-x:contain;touch-action:pan-x;scrollbar-width:none}
 .voice-strip::-webkit-scrollbar{display:none}
 .voice-strip button{flex:none;border:0;background:transparent;border-radius:4px;height:20px;min-width:22px;padding:0 5px;color:var(--muted);cursor:pointer;font:inherit}
 .voice-strip button:hover:not(:disabled){background:#252b32;color:var(--text)}
@@ -993,6 +1190,16 @@ body {
 .empty-project-cta{width:100%;display:grid;gap:5px;padding:14px;border:1px dashed var(--line);background:transparent;color:var(--text);text-align:left;cursor:pointer}.empty-project-cta small{color:var(--muted)}
 .context-select{display:grid;grid-template-columns:auto minmax(110px,1fr);align-items:center;gap:9px;padding:6px 9px;color:var(--muted);font-size:9px}.context-select select{min-width:0;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
 .project-resource{position:relative;width:100%;height:100%;min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);background:var(--bg)}.project-resource>header{min-height:42px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;border-bottom:1px solid var(--line)}.project-resource>header>div{min-width:0;display:grid;gap:3px}.project-resource>header strong,.project-resource>header span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-resource>header span{color:var(--muted);font-size:8px}.project-resource>header button{min-height:29px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit}.project-resource textarea{width:100%;height:100%;min-height:0;resize:none;border:0;padding:12px;background:var(--bg);color:var(--text);font:12px/1.55 'Cascadia Mono',Consolas,monospace;outline:none}.file-list{min-height:0;overflow:auto}.file-list>button{width:100%;min-height:31px;display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;gap:7px;border:0;border-bottom:1px solid var(--line);padding:0 9px;background:transparent;color:var(--text);text-align:left}.file-list>button:hover{background:var(--panel2)}.file-list>button span,.file-list>button small{color:var(--muted)}.file-list>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.resource-error,.resource-unavailable{margin:0;padding:12px;color:var(--red)}.resource-unavailable{color:var(--muted)}
+/* Self-clearing "copied" confirmation for the file-tree context actions. */
+.resource-notice{margin:0;padding:6px 12px;color:var(--green,#8bd450);font-size:9px}
+/* Offscreen relay that gives copyPreparedText a synchronous execCommand target. It must stay
+   in the layout (not display:none) for selection to work, so it is parked out of view. */
+.resource-copy-relay{position:absolute!important;left:-9999px;top:0;width:1px!important;height:1px!important;min-height:0!important;padding:0!important;opacity:0;pointer-events:none}
+/* Shown only when both clipboard routes were refused, so the payload is never just lost. */
+.resource-copy-fallback{position:absolute;z-index:6;left:8px;right:8px;bottom:8px;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);background:var(--panel);box-shadow:0 10px 26px #000a;color:var(--muted);font-size:9px}
+.resource-copy-fallback button{min-height:26px;padding:0 9px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.resource-copy-fallback textarea{grid-column:1/-1;height:auto!important;min-height:76px;max-height:34vh;padding:8px!important;border:1px solid var(--line)!important;font-size:11px!important;user-select:text;-webkit-user-select:text}
+@media(max-width:760px),(pointer:coarse){.resource-copy-fallback button{min-height:44px}.resource-copy-fallback textarea{font-size:16px!important}}
 continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hidden;background:var(--bg);--continuity-background:var(--bg);--continuity-foreground:var(--text);--continuity-muted:var(--muted);--continuity-accent:var(--green);--continuity-selection:#8ee69a3d;--continuity-border:var(--line)}
 .note-conflict{position:absolute;left:0;right:0;top:42px;z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 18px #0009}.note-conflict-actions{display:flex;gap:6px}.note-conflict-actions button{min-height:26px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;padding:0 8px;cursor:pointer}
 .session-notes-modal{width:min(760px,calc(100% - 30px));max-height:min(80vh,760px);display:flex;flex-direction:column}
@@ -1016,17 +1223,22 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 @media(max-width:760px){.history-modal{width:100%;height:100%;max-height:100dvh;border-radius:0}}
 .pane-tools .note-chip.written{color:var(--text)}
 .pane-tools .note-chip.open{color:var(--accent,#7aa2f7)}
-.terminal-action-rail .voice-chip.auto{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
-.terminal-action-rail .voice-chip.on_demand{color:var(--text)}
-.terminal-action-rail .conversation-chip.listening{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
-.terminal-action-rail .conversation-chip.hearing{border-color:var(--error,#f07178);color:var(--error,#f07178);animation:voice-rec-pulse .9s ease-in-out infinite}
-.terminal-action-rail .conversation-chip.starting,.terminal-action-rail .conversation-chip.transcribing,.terminal-action-rail .conversation-chip.sending{border-color:var(--blue,#7aa2f7);color:var(--blue,#7aa2f7)}
-.terminal-action-rail .conversation-chip.error{border-color:var(--error,#f07178);color:var(--error,#f07178)}
-.terminal-action-rail .conversation-status{max-width:260px;margin-left:0}.terminal-action-rail .conversation-status.error{max-width:420px;color:var(--error,#f07178)}
-@media(max-width:760px){.terminal-action-rail .conversation-status.error{max-width:320px;white-space:normal;line-height:1.25}}
-.terminal-action-rail .voice-mic.recording{border-color:var(--error,#f07178);color:var(--error,#f07178);animation:voice-rec-pulse 1.2s ease-in-out infinite}
+/* Voice chip states. These read as tinted text in the header (the bar's buttons are
+   borderless) and keep their outline on the bottom rail's bordered buttons, so both the
+   border and the colour are set and whichever the host applies wins. */
+.pane-voice .voice-chip.auto{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
+.pane-voice .voice-chip.on_demand{color:var(--text)}
+.pane-voice .conversation-chip.listening{color:var(--green,#8bd450)}
+.pane-voice .conversation-chip.hearing{color:var(--error,#f07178);animation:voice-rec-pulse .9s ease-in-out infinite}
+.pane-voice .conversation-chip.starting,.pane-voice .conversation-chip.transcribing,.pane-voice .conversation-chip.sending{color:var(--blue,#7aa2f7)}
+.pane-voice .conversation-chip.error{color:var(--error,#f07178)}
+/* The live-transcript readout is the one variable-width member of the group. It is capped
+   and clipped so a long utterance scrolls the group instead of widening the bar. */
+.pane-voice .conversation-status{flex:0 1 auto;min-width:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pane-voice .conversation-status.error{max-width:320px;color:var(--error,#f07178)}
+.pane-voice .voice-mic.recording{color:var(--error,#f07178);animation:voice-rec-pulse 1.2s ease-in-out infinite}
 @keyframes voice-rec-pulse{0%,100%{opacity:1}50%{opacity:.35}}
-@media(pointer:coarse){.terminal-action-rail .voice-mic{display:none}}
+@media(pointer:coarse){.pane-voice .voice-mic{display:none}}
 @media(max-width:760px){.voice-strip{min-height:30px}.voice-strip button{height:24px;min-width:26px}.voice-strip .voice-seek{height:20px}}
 .mux-pointer-drag-ghost{position:fixed;left:0;top:0;z-index:9999;max-width:260px;padding:7px 11px;border:1px solid var(--green);background:var(--panel2);color:var(--text);box-shadow:5px 6px 0 #0008;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;font:10px 'Cascadia Mono',Consolas,monospace;will-change:transform}
 .draggable-project,.draggable-tab,.session-row{touch-action:auto}
@@ -1042,3 +1254,102 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .project-name-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .project-collapsed-badge{flex:none;min-width:15px;height:15px;padding:0 4px;display:inline-grid;place-items:center;border-radius:8px;background:color-mix(in srgb,var(--green) 22%,transparent);color:var(--green);font:600 8px 'JetBrains Mono';letter-spacing:0}
 .context-note{padding:2px 8px 6px;color:#8a9382;font:400 9px 'JetBrains Mono';line-height:1.35}
+/* Utility-drawer tab bodies (clipboard rows, prompt rows, command grids).
+   Inserting targets the pane that was focused before the panel opened, so the
+   workspace has to stay visible behind it; desktop therefore gets no scrim (Escape,
+   the × or the toggle close it) while mobile dims, because the panel covers most of
+   a phone viewport. Row order and paddings mirror the sidebar's touch sizing. */
+.clipboard-disabled{flex:none;margin:0;padding:8px 10px;border-bottom:1px solid var(--line);color:var(--amber);font-size:9px;line-height:1.45}
+.clipboard-disabled .link{padding:0;border:0;background:transparent;color:var(--green);font:inherit;text-decoration:underline;cursor:pointer}
+.clipboard-search{flex:none;padding:7px 9px;border-bottom:1px solid var(--line)}
+.clipboard-search input{width:100%;height:30px;padding:0 8px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
+.clipboard-search input:focus{outline:0;border-color:var(--green)}
+.clipboard-entries{flex:1 1 auto;min-height:0;overflow:auto}
+.clipboard-entry{display:grid;grid-template-columns:minmax(0,1fr) auto;border-bottom:1px solid var(--line)}
+.clipboard-entry.active{background:var(--panel2)}
+.clipboard-entry.pinned .clipboard-entry-body>small{color:var(--green)}
+.clipboard-entry-body{min-width:0;display:grid;gap:4px;padding:8px 9px;border:0;background:transparent;color:var(--text);text-align:left;font:inherit;cursor:pointer}
+.clipboard-entry-body>span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35;word-break:break-word}
+.clipboard-entry-body>small{color:var(--muted);font-size:8px}
+.clipboard-entry-body:disabled{opacity:.6;cursor:progress}
+.clipboard-entry-actions{flex:none;display:flex;align-items:center;gap:2px;padding:0 6px 0 2px}
+.clipboard-entry-actions button{width:26px;height:26px;border:1px solid transparent;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
+.clipboard-entry-actions button:hover{border-color:var(--line);color:var(--text)}
+.clipboard-empty{margin:0;padding:22px 12px;color:var(--muted);font-size:9px;line-height:1.45;text-align:center}
+/* Kept in the layout (offscreen, never display:none) when idle: the legacy
+   execCommand('copy') fallback has to select a live textarea inside the original
+   user gesture, so it cannot wait for a re-render after a refused modern write. */
+.clipboard-manual{flex:none;display:grid;gap:5px}
+.clipboard-manual:not(.shown){position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+.clipboard-manual.shown{padding:7px 9px;border-top:1px solid var(--line)}
+.clipboard-manual textarea{min-height:70px;padding:6px;resize:vertical;border:1px solid var(--amber);background:var(--bg);color:var(--text);font:inherit;user-select:text;-webkit-user-select:text}
+.clipboard-manual button{min-height:29px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.clipboard-note{flex:none;margin:0;padding:7px 9px;border-top:1px solid var(--line);color:var(--amber);font-size:8px;line-height:1.4}
+@media(max-width:760px){
+  .clipboard-panel{width:min(430px,92vw);box-shadow:-8px 0 0 #0008}
+  .clipboard-panel-scrim{display:block;position:fixed;inset:0;z-index:59;border:0;background:#020403aa}
+  .clipboard-search input{height:38px;font-size:16px}
+  .clipboard-entry-body{padding:11px 10px}
+  .clipboard-entry-actions button{width:36px;height:40px}
+  .clipboard-panel>footer button{min-height:40px}
+}
+@media(prefers-reduced-motion:reduce){.clipboard-panel{animation:none}}
+/* Utility drawer host: one component, two renderings.
+   Desktop docks it as a workspace grid column (the pane tree shrinks instead of
+   being covered, which matters in a tiling workspace) beside an always-visible
+   icon rail; mobile takes the same element out of flow as an overlay with a scrim,
+   mirroring the navigation sidebar it is mutually exclusive with. */
+.utility-drawer{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--panel);font:10px 'Cascadia Mono',Consolas,monospace}
+.utility-drawer.docked{grid-column:-3/-2;grid-row:1/3;border-left:1px solid var(--line)}
+.drawer-resizer{grid-column:-4/-3;grid-row:1/3;position:relative;z-index:8;cursor:col-resize;background:var(--line);touch-action:none}
+.drawer-resizer:after{content:"";position:absolute;inset:0 -3px}
+.drawer-resizer:hover,.sidebar-resizing .drawer-resizer{background:var(--accent)}
+.utility-drawer.overlay{position:fixed;z-index:60;top:0;right:0;bottom:0;width:min(430px,92vw);border-left:1px solid var(--line);box-shadow:-9px 0 22px #000a;animation:utility-drawer-in .14s ease-out}
+@keyframes utility-drawer-in{from{transform:translateX(101%)}to{transform:translateX(0)}}
+.utility-drawer-scrim{position:fixed;z-index:59;inset:0;border:0;background:#020403aa}
+/* Always-visible desktop strip: the reason these surfaces stop being buried. */
+.utility-rail{grid-column:-2/-1;grid-row:1/3;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0;border-left:1px solid var(--line);background:var(--panel)}
+.utility-rail button{position:relative;width:28px;height:30px;flex:none;display:grid;place-items:center;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:12px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+.utility-rail button:hover,.utility-rail button:focus-visible{border-color:var(--accent);color:var(--text)}
+.utility-rail button.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel2));color:var(--text);box-shadow:inset -2px 0 var(--accent)}
+.drawer-badge{position:absolute;top:-4px;right:-4px;min-width:14px;height:14px;padding:0 3px;display:grid;place-items:center;border-radius:7px;background:var(--amber);color:#12140c;font:600 8px 'Cascadia Mono',Consolas,monospace;font-style:normal}
+.drawer-tabs{flex:none;display:flex;align-items:stretch;border-bottom:1px solid var(--line);background:var(--panel2);overflow-x:auto;scrollbar-width:none}
+.drawer-tabs::-webkit-scrollbar{display:none}
+.drawer-tabs button{position:relative;min-height:34px;flex:1 0 auto;display:flex;align-items:center;justify-content:center;gap:5px;padding:0 9px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;white-space:nowrap;cursor:pointer}
+.drawer-tabs button:hover{color:var(--text)}
+.drawer-tabs button.active{border-bottom-color:var(--accent);color:var(--text);background:var(--panel)}
+.drawer-tabs .drawer-close{flex:0 0 auto;width:30px;padding:0;color:var(--muted);font-size:15px}
+.drawer-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.drawer-status{flex:none;margin:0;padding:6px 9px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drawer-empty{margin:0;padding:22px 12px;color:var(--muted);font-size:9px;line-height:1.45;text-align:center}
+.drawer-actions{flex:none;display:flex;gap:6px;padding:8px 9px;border-top:1px solid var(--line)}
+.drawer-actions button{flex:1;min-height:30px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.drawer-actions button.danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red)}
+.drawer-actions button:disabled{opacity:.45;cursor:not-allowed}
+/* Command grid: labelled buttons, unlike the strip's abbreviated keys. */
+.drawer-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:5px;padding:8px 9px}
+.drawer-grid.keys{grid-template-columns:repeat(auto-fill,minmax(58px,1fr));border-top:1px solid var(--line)}
+.drawer-grid button{min-height:38px;display:grid;align-content:center;gap:2px;padding:5px 7px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.drawer-grid.keys button{place-items:center;text-align:center}
+.drawer-grid button:hover{border-color:var(--accent)}
+.drawer-grid button>small{color:var(--muted);font-size:8px}
+.drawer-fields{display:grid;gap:6px;padding:8px 9px;border-top:1px solid var(--line);background:var(--panel2)}
+.drawer-fields label{display:grid;gap:3px;color:var(--muted)}
+.drawer-fields input{min-height:30px;padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
+.drawer-fields button{min-height:32px;border:1px solid var(--accent);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}
+.drawer-fields button:disabled{opacity:.45;cursor:not-allowed}
+.utility-drawer .notification-list{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 9px;display:grid;gap:6px;align-content:start}
+.utility-drawer .notification-list article{display:grid;grid-template-columns:9px minmax(0,1fr);gap:7px;padding:7px;border:1px solid var(--line);background:var(--bg)}
+.utility-drawer .notification-list article>div{min-width:0;display:grid;gap:3px}
+.utility-drawer .notification-list strong{font-weight:400}
+.utility-drawer .notification-list span,.utility-drawer .notification-list small{color:var(--muted);font-size:8px}
+.utility-drawer .notification-list button{grid-column:2;justify-self:start;min-height:27px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.utility-drawer .notification-empty{margin:0;padding:22px 12px;color:var(--muted);text-align:center;line-height:1.45}
+@media(max-width:760px){
+  .utility-rail{display:none}
+  .drawer-tabs button{min-height:42px}
+  .drawer-grid button{min-height:46px}
+  .drawer-fields input{min-height:38px;font-size:16px}
+  .drawer-actions button{min-height:40px}
+}
+@media(prefers-reduced-motion:reduce){.utility-drawer.overlay{animation:none}}

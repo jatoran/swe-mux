@@ -41,7 +41,10 @@ rollouts with `parent_thread_id`; history reconciliation applies the same root-o
 harness control transcript chunks/truncation, hooks, terminal state/input/focus, process
 evidence, timers, restart, replacement, demotion, and exit. Golden tests compare normalized
 event streams, parser coverage, delivery state/reason, and safe/unsafe oracle checkpoints.
-They contain no native prompt bodies, credentials, or terminal captures.
+They contain no native prompt bodies, credentials, or terminal captures. Since Phase 3.5
+the same corpus also pins the user-visible status stream (`expected.states`), awaiting
+sub-reasons, and the watchdog recovery paths, with an edge-case inventory that fails CI
+when a fixture or its guard disappears; see `design/features/status-detection.md`.
 
 Ordinary CI runs the deterministic suite and skips provider calls:
 

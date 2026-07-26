@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "subagent_stop_root_open",
+  "description": "SubagentStart/SubagentStop hooks are child-scoped activity: a child stop never completes the root turn, which stays working until root Stop evidence.",
+  "steps": [
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "hook", "event": "SubagentStart", "payload": {}, "expect_state": "working"},
+    {"kind": "hook", "event": "SubagentStop", "payload": {}, "expect_state": "working", "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "hook", "event": "Stop", "payload": {}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "subagent_activity", "source": "hook", "scope": "subagent", "kind": "SubagentStart"},
+      {"type": "subagent_activity", "source": "hook", "scope": "subagent", "kind": "SubagentStop"},
+      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"}
+    ],
+    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "terminal_mode_unknown_or_stale"
+  }
+}

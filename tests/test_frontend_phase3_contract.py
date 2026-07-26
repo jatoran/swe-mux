@@ -195,10 +195,17 @@ def test_workspace_tabs_have_inline_close_controls_with_terminal_confirmation() 
     assert "removeLeaf(latest,child.kind,child.id)" in app
     assert "{confirming?'✓':'×'}</button>" in app
     assert "terminal&&(!session||!!session.pending)" in app
-    assert (
-        ".stack-tab-shell>.tab-close{width:22px;min-width:22px;max-width:22px;flex:0 0 22px" in css
-    )
+    # The close control floats over the tab's right edge rather than holding a
+    # column, so showing it never changes tab width.
+    assert ".stack-tab-shell>.tab-close{position:absolute" in css
+    assert "@media(hover:hover){.stack-tab-shell:hover>.tab-close" in css
     assert ".stack-tab-shell>.tab-close.confirming" in css
+    # Touch never gets it: closing there is the tab's long-press menu, so the
+    # mobile tab renders the tab button alone.
+    assert "@media(hover:none){.stack-tab-shell>.tab-close{display:none}}" in css
+    assert "class=\"stack-tab-shell mobile-unified-tab\"" in app
+    mobile_tab_body = app.split("const mobileTab=")[1].split("const mobileUnifiedWorkspace=")[0]
+    assert "tab-close" not in mobile_tab_body
 
 
 def test_session_tab_context_menu_omits_redundant_focus_and_detach_actions() -> None:

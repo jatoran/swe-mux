@@ -294,10 +294,22 @@ def test_mobile_gestures_default_and_are_hot_reloadable_and_validated(tmp_path: 
     assert config.mobile_gestures == {
         "swipe_left": "mobileTab.next",
         "swipe_right": "mobileTab.previous",
-        "two_finger_swipe_left": "sidebar.toggle",
+        # Directional: leftward pulls in the right-edge clipboard panel, rightward
+        # the left-edge sidebar (both were sidebar.toggle before the panel existed).
+        "two_finger_swipe_left": "drawer.toggle",
         "two_finger_swipe_right": "sidebar.toggle",
+        "two_finger_swipe_up": "session.note",
+        "two_finger_swipe_down": "terminal.keyboardToggle",
         "two_finger_tap": "palette.open",
     }
+
+    # Vertical two-finger slots are real, mappable slots (only single-finger
+    # vertical stays reserved for the terminal).
+    hot, _ = update_config(
+        config, {"mobile_gestures": {"two_finger_swipe_up": "processes.open"}}
+    )
+    assert hot == {"mobile_gestures"}
+    assert config.mobile_gestures == {"two_finger_swipe_up": "processes.open"}
 
     hot, restart = update_config(
         config,
@@ -331,7 +343,9 @@ def test_legacy_sidebar_gestures_migrate_to_toggle(tmp_path: Path) -> None:
     config = load_config(path)
 
     assert config.mobile_gestures["two_finger_swipe_right"] == "sidebar.toggle"
-    assert config.mobile_gestures["two_finger_swipe_left"] == "sidebar.toggle"
+    # Chained through the schema-17 migration: the leftward swipe's old default
+    # (sidebar.toggle, redundant with the rightward one) now opens the clipboard panel.
+    assert config.mobile_gestures["two_finger_swipe_left"] == "drawer.toggle"
     # A custom, non-default binding is preserved rather than force-migrated.
     path2 = tmp_path / "custom.toml"
     path2.write_text(

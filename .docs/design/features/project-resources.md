@@ -90,9 +90,24 @@ include a registered Project nested below another Git root.
 - Global `project_ignore_patterns` and Project-local `ignore_patterns` compose. They filter the
   browser and watcher only, never Git. Settings preserves line breaks while editing and trims
   blank entries only on explicit Save.
-- A file/folder context menu can reveal it in the host file manager, add its basename to global
-  ignores, or add its Project-relative path to Project ignores. Windows reveal selects a file
-  and asks Explorer to foreground its window.
+- A file/folder context menu can reveal it in the host file manager, copy either path form,
+  copy a file's contents, add its basename to global ignores, or add its Project-relative path
+  to Project ignores. Windows reveal selects a file and asks Explorer to foreground its window.
+  The tree, the search results, and an opened file's own resource tab all offer the copy group,
+  so a path never has to be transcribed by hand or re-found in the browser.
+- Both path forms are offered because both are the right answer somewhere: the absolute path is
+  what pastes into a shell, the Project-relative one is what agents and commit messages use. The
+  absolute form is rebuilt against the Project root's own separator, so a Windows root yields a
+  backslash path even though the API carries paths as posix.
+- Copying contents is bounded at **5,000 lines or 200,000 characters, whichever bites first**,
+  cutting at a line boundary and appending a notice naming exactly how much was left behind.
+  The bound is not about clipboard capacity (megabytes are fine) but about the destination:
+  these copies are usually pasted into an agent prompt, where every line is paid for. The
+  notice is load-bearing for the same reason — without it an agent reads a truncated file as
+  the whole file. Binary files and anything above the server's 2 MiB read limit are refused
+  with a reason rather than copied empty.
+- A refused clipboard write (non-secure context, mobile activation loss) parks the payload in a
+  recovery panel in the Files view instead of dropping it, so a blocked copy costs one tap.
 - `Tab` inserts a literal tab in the plain-textarea file editor. Continuity Markdown surfaces
   handle their own indentation and list behavior.
 

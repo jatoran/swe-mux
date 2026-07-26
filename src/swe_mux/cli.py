@@ -51,6 +51,14 @@ def main() -> None:
     sub.add_parser("projects")
     sub.add_parser("profiles")
     sub.add_parser("doctor")
+    accounts = sub.add_parser(
+        "accounts",
+        help="inspect provider accounts, re-verify their identities, or read the credential audit",
+    )
+    accounts.add_argument(
+        "action", choices=("list", "verify", "audit"), nargs="?", default="list"
+    )
+    accounts.add_argument("--limit", type=int, default=50, help="audit entries to show")
     resume = sub.add_parser("resume")
     resume.add_argument("id")
     resume.add_argument("--project", required=True)
@@ -89,6 +97,15 @@ def main() -> None:
         result = request("GET", "/api/profiles")
     elif args.command == "doctor":
         result = request("GET", "/api/remote/status")
+    elif args.command == "accounts":
+        if args.action == "verify":
+            # Re-derives every saved account's owner from its own credentials,
+            # which is what exposes two slots holding one provider account.
+            result = request("POST", "/api/provider-accounts/verify", {})
+        elif args.action == "audit":
+            result = request("GET", f"/api/provider-accounts/audit?limit={args.limit}")
+        else:
+            result = request("GET", "/api/provider-accounts")
     else:
         result = request("POST", f"/api/history/{args.id}/resume", {"project_id": args.project})
     json.dump(result, sys.stdout, indent=2)

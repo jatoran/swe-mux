@@ -297,14 +297,41 @@ user/agent-facing triggers:
   `daemon.reload`) with a blocking overlay + auto page reload; `mux reload-daemon [--force]`;
   plain HTTP for agents (`curl -X POST http://127.0.0.1:<port>/api/daemon/restart`). "Reload
   UI" (`ui.reload`) is the frontend half: rebuild assets (`npm run build`), reload the page.
+  **Caveat:** `npm run build` writes to `src/swe_mux/static`, which is served directly *only*
+  when the daemon runs from source. The frozen desktop app serves its bundled copy under
+  `dist/swe-mux/_internal/swe_mux/static`, so a source rebuild + "Reload UI" does nothing for
+  a frozen/remote/phone client — push frontend-only changes to the frozen app via the redeploy
+  below. Verify what's actually served by comparing the `index-*.css` hash from
+  `curl -s http://127.0.0.1:<port>/` against `src/swe_mux/static/index.html`.
 - **Frozen redeploy** (`uv run python packaging/redeploy_desktop.py [--hidden|--no-launch|
   --skip-build|--force]`): preflights that a supervisor is running *outside* `dist/swe-mux`
-  and that no `swe-mux-action.exe` task terminals hold the dist tree, detach-stops the daemon
-  (control token) and kills the shell, rebuilds, relaunches, and reports reattached sessions.
-  Safe to run from an agent session inside swe-mux: the agent's PTY lives in the supervisor
-  and survives the whole cycle. Refreshing the supervisor bundle itself still requires
-  `muxd --shutdown` first (§8), and the redeploy script keeps the old bundle with a warning
-  when supervisor sources changed while sessions are live.
+  and that no `swe-mux-action.exe` task terminals hold the dist tree, then runs a **staged**
+  cycle: build frontend + app bundle into `dist/.staging` while the old app keeps running,
+  detach-stop the daemon (control token) and kill the shell only after the build succeeded,
+  swap (`dist/swe-mux` → `dist/swe-mux.prev`, staging → `dist/swe-mux`, with a bounded rename
+  retry for lock stragglers), relaunch, and report reattached sessions. The rollback slot is
+  cleared *before* the app is stopped, and never with a bare `rmtree(ignore_errors=True)`:
+  Windows will not unlink an exe/DLL whose image is still mapped, so a partially removed
+  `swe-mux.prev` survives and blocks every later rename onto it (WinError 183). Removal is
+  retried, and a leftover that still will not go is moved aside to `swe-mux.prev.stale-*`
+  (swept on a later run) so a poisoned slot can never abort a swap after the daemon is down.
+  A failed build leaves
+  the running app untouched; a new build that never reports healthy is rolled back to
+  `swe-mux.prev` (the bad bundle is kept at `dist/swe-mux.failed`), so a remote/phone client
+  is never stranded without a daemon. Safe to run from an agent session inside swe-mux: the
+  agent's PTY lives in the supervisor and survives the whole cycle. Refreshing the supervisor
+  bundle itself still requires `muxd --shutdown` first (§8), and the redeploy script keeps
+  the old bundle with a warning when supervisor sources changed while sessions are live.
+- **Redeploy from the UI** (`POST /api/daemon/redeploy`, menu/palette "Rebuild + redeploy app
+  (keep sessions)", `app.redeploy` — works from desktop and mobile): the daemon validates it
+  runs from a source checkout with `uv` available and a supervisor attached (409 otherwise;
+  `force=true` matches the restart semantics), takes a pid single-flight lock
+  (`<data_dir>/redeploy.lock`), and spawns the redeploy script detached from its own lifetime
+  with output to `<data_dir>/redeploy.log`. `GET /api/daemon/redeploy` reports
+  `{running, log_tail, available}` — while the build stage runs the old daemon still serves,
+  so the UI detects an early build failure (lock cleared, daemon never dropped) and shows the
+  log instead of waiting out the reconnect window; once the daemon drops it polls health and
+  reloads when the successor (or rolled-back predecessor) answers.
 
 ## 8. Residual limitation (accept it)
 

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "approval_answered_resume",
+  "description": "After the user answers a permission prompt the agent keeps working; ordered transcript evidence written after the prompt clears the hook-raised awaiting instead of leaving it stuck for the rest of the turn.",
+  "steps": [
+    {"kind": "transcript", "ts_offset": 0, "record": {"type": "user", "isSidechain": false, "message": {"content": "run the tests"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "transcript", "ts_offset": 0, "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Bash", "input": {}}], "stop_reason": "tool_use"}}, "expect_state": "working"},
+    {"kind": "hook", "event": "PermissionRequest", "payload": {"tool_name": "Bash"}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "awaiting", "expect_awaiting": "approval"},
+    {"kind": "hook", "event": "Notification", "payload": {"notification_type": "permission_prompt", "message": "Bash"}, "expect_state": "awaiting", "expect_awaiting": "approval"},
+    {"kind": "timer", "seconds": 12},
+    {"kind": "transcript", "ts_offset": 0, "record": {"type": "user", "isSidechain": false, "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "ok", "is_error": false}]}}, "expect_state": "working"},
+    {"kind": "transcript", "ts_offset": 0, "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "Bash"},
+      {"type": "approval_needed", "source": "hook", "scope": "root", "kind": "approval"},
+      {"type": "approval_needed", "source": "hook", "scope": "root", "kind": "approval"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "Bash", "success": true},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "awaiting", "source": "hook", "proof": "proven", "awaiting_reason": "approval"},
+      {"previous": "awaiting", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 4, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "terminal_mode_unknown_or_stale"
+  }
+}

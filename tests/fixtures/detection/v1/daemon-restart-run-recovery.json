@@ -6,11 +6,11 @@
     {"kind": "hook", "event": "UserPromptSubmit"},
     {"kind": "hook", "event": "Stop"},
     {"kind": "terminal", "mode": "normal"},
-    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true},
-    {"kind": "restart", "expect_delivery": "unknown", "oracle_safe": false},
-    {"kind": "hook", "event": "UserPromptSubmit", "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"},
+    {"kind": "restart", "expect_delivery": "unknown", "oracle_safe": false, "expect_state": "idle"},
+    {"kind": "hook", "event": "UserPromptSubmit", "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
     {"kind": "hook", "event": "Stop"},
-    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true}
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"}
   ],
   "expected": {
     "events": [
@@ -18,6 +18,12 @@
       {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"},
       {"type": "turn_started", "source": "hook", "scope": "root"},
       {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"},
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"}
     ],
     "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
     "delivery_state": "safe",

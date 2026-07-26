@@ -1,7 +1,38 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+# Environment markers a live Claude Code process stamps on its children to
+# identify them as nested/child sessions. When swe-mux itself is (re)launched
+# from inside an agent session — the designed redeploy workflow — these leak
+# down to every terminal, and a `claude` started there then reports
+# "Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker",
+# which also breaks swe-mux's transcript-based observation. Only per-process
+# identity/lifecycle markers are scrubbed; deliberate user configuration
+# (feature flags, ANTHROPIC_* credentials) passes through untouched.
+CLAUDE_SESSION_MARKERS = frozenset(
+    {
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_SSE_PORT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_PID",
+        "CLAUDE_EFFORT",
+    }
+)
+
+
+def scrub_claude_session_markers(environment: Mapping[str, str]) -> dict[str, str]:
+    """Drop parent-Claude session markers so terminals get a clean lineage."""
+    return {
+        key: value
+        for key, value in environment.items()
+        if key.upper() not in CLAUDE_SESSION_MARKERS
+    }
 
 
 @dataclass(frozen=True, slots=True)

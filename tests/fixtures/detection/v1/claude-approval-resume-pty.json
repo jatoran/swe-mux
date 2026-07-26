@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "approval_answered_long_tool",
+  "description": "An approved long-running tool writes no transcript record until it finishes, so only this session's own screen proves the block is gone; the watchdog resumes working once the dialog gave way to the spinner.",
+  "steps": [
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "hook", "event": "PermissionRequest", "payload": {"tool_name": "Bash"}, "expect_state": "awaiting", "expect_awaiting": "approval"},
+    {"kind": "pty_tail", "data": "Bash command\n  npm test\n\nDo you want to proceed?\n\u276f 1. Yes\n  2. No"},
+    {"kind": "timer", "seconds": 45},
+    {"kind": "watchdog", "expect_state": "awaiting", "expect_awaiting": "approval"},
+    {"kind": "pty_tail", "data": "Bash command\n  npm test\n\nDo you want to proceed?\n\u276f 1. Yes\n  2. No\n\nRunning npm test\u2026 (esc to interrupt)"},
+    {"kind": "timer", "seconds": 6},
+    {"kind": "watchdog", "expect_state": "working"},
+    {"kind": "hook", "event": "Stop", "payload": {}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "approval_needed", "source": "hook", "scope": "root", "kind": "approval"},
+      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "awaiting", "source": "hook", "proof": "proven", "awaiting_reason": "approval"},
+      {"previous": "awaiting", "state": "working", "source": "watchdog-pty", "proof": "inferred"},
+      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"}
+    ],
+    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "terminal_mode_unknown_or_stale"
+  }
+}

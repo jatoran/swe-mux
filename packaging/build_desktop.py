@@ -75,12 +75,19 @@ def build_frontend() -> None:
     publish_frontend(staging, ROOT / "src" / "swe_mux" / "static")
 
 
-def build_app_bundle() -> None:
+def build_app_bundle(distpath: Path | None = None) -> None:
+    """Build the app bundle; ``distpath`` overrides PyInstaller's output root.
+
+    A staged redeploy builds into a staging distpath while the old app is
+    still running (nothing under dist/swe-mux is touched), then swaps the
+    finished bundle in after stopping it.
+    """
     create_tray_image(256).save(
         ROOT / "packaging" / "swe-mux.ico",
         format="ICO",
         sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (256, 256)],
     )
+    output_root = distpath or (ROOT / "dist")
     subprocess.run(
         [
             sys.executable,
@@ -88,13 +95,15 @@ def build_app_bundle() -> None:
             "PyInstaller",
             "--noconfirm",
             "--clean",
+            "--distpath",
+            str(output_root),
             str(ROOT / "packaging" / "swe_mux.spec"),
         ],
         cwd=ROOT,
         check=True,
     )
-    print(f"Built {ROOT / 'dist' / 'swe-mux' / 'swe-mux.exe'}")
-    print(f"Built {ROOT / 'dist' / 'swe-mux' / 'swe-mux-action.exe'}")
+    print(f"Built {output_root / 'swe-mux' / 'swe-mux.exe'}")
+    print(f"Built {output_root / 'swe-mux' / 'swe-mux-action.exe'}")
 
 
 def build_supervisor_bundle(*, force: bool = False) -> bool:
@@ -149,6 +158,14 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="never touch the supervisor bundle in this run",
     )
+    result.add_argument(
+        "--app-distpath",
+        type=Path,
+        default=None,
+        help="PyInstaller distpath for the app bundle (staged redeploys build "
+        "outside dist/ and swap in afterwards); the supervisor bundle always "
+        "goes to dist/swe-mux-supervisor",
+    )
     return result
 
 
@@ -158,7 +175,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         build_supervisor_bundle(force=args.force_supervisor)
         return
     build_frontend()
-    build_app_bundle()
+    build_app_bundle(distpath=args.app_distpath)
     if not args.skip_supervisor:
         build_supervisor_bundle(force=args.force_supervisor)
 

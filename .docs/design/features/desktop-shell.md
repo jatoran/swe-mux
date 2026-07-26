@@ -68,9 +68,20 @@ continues to own every terminal.
   Frozen daemons prefer this bundle; `--supervisor-child` remains the fallback when the
   bundle is absent, and `SWE_MUX_SUPERVISOR_EXE` overrides resolution in any mode.
 - `packaging/redeploy_desktop.py` is the frozen update workflow (usable by an agent from
-  inside a supervised session): preflight (dedicated supervisor running, no live
-  `swe-mux-action.exe` task terminals), detach-stop the daemon and shell, rebuild, relaunch;
-  the fresh daemon reattaches every live session.
+  inside a supervised session, or via `POST /api/daemon/redeploy` behind the UI's
+  "Rebuild + redeploy app" menu entry): preflight (dedicated supervisor running, no live
+  `swe-mux-action.exe` task terminals), then a **staged** cycle — build frontend + app bundle
+  into `dist/.staging` while the old app keeps serving, detach-stop the daemon and shell only
+  after the build succeeded, swap (`dist/swe-mux` → `dist/swe-mux.prev`, staging in; renames
+  retry through lock stragglers), relaunch; the fresh daemon reattaches every live session.
+  The `swe-mux.prev` rename target is proven free before the app is stopped — a tree Windows
+  only partially deleted (mapped exe/DLL images) otherwise blocks the swap after the daemon
+  is already down; a stubborn leftover is moved aside to `swe-mux.prev.stale-*`.
+  A failed build never touches the running app, and a new build that never reports healthy is
+  rolled back to `swe-mux.prev` (failed bundle kept at `dist/swe-mux.failed`), so a remote
+  client cannot be stranded. The endpoint validates source checkout + `uv`, requires the
+  attached supervisor (or `force`), and is single-flight via `<data_dir>/redeploy.lock` with
+  output in `<data_dir>/redeploy.log`.
 - Packaged `--daemon-child` re-enters the daemon entry inside a separate process; source mode
   uses `python -m swe_mux`. Packaged `--supervisor-child` mirrors the same split for the PTY
   supervisor; source mode uses `python -m swe_mux.supervisor`. The daemon discovers-or-spawns

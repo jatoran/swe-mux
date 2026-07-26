@@ -76,6 +76,33 @@ async def _assert_transcript_conformance(
     assert "turn_ended" in event_types
     if require_subagent:
         assert "subagent_activity" in event_types
+    _assert_proven_status_shape(replay)
+
+
+def _assert_proven_status_shape(replay: DetectionReplay) -> None:
+    """Phase 3.5: a scripted real-CLI run must reach terminal status by proven
+    evidence. Any inferred (watchdog/backstop) transition in the captured
+    state-log means the current CLI no longer emits the terminal signals the
+    observer relies on — exactly the drift this canary exists to catch."""
+    transitions = [
+        entry
+        for entry in replay.session.state_transitions
+        if entry.get("kind") == "transition" and entry["previous"] != entry["state"]
+    ]
+    assert transitions, "run produced no status transitions"
+    inferred = [entry for entry in transitions if entry["proof"] != "proven"]
+    assert not inferred, f"run needed inferred recoveries: {inferred}"
+    assert replay.session.record.state == "idle", (
+        f"run ended in {replay.session.record.state}, not proven idle"
+    )
+    terminal = transitions[-1]
+    assert terminal["state"] == "idle"
+    assert terminal["source"] in {"transcript", "hook"}
+    assert terminal["evidence"], "terminal transition carried no evidence"
+    health = replay.session.status_health()
+    assert health["watchdog_recoveries"] == 0
+    assert health["terminals"]["inferred"] == 0
+    assert health["contract_violations"] == 0
 
 
 async def _assert_phase2_telemetry_conformance(

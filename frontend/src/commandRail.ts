@@ -19,7 +19,20 @@ export type RailBackend = 'claude' | 'codex' | 'shell'
 // 'text'  → inject literal text, optionally submitting with Enter
 // 'slash' → inject a provider slash command (/name), optionally submitting
 // 'skill' → inject a skill invocation, backend-aware (/name on Claude, $name on Codex)
-export type RailItemType = 'key' | 'action' | 'text' | 'slash' | 'skill'
+// 'prompt'→ insert a prompt-library template, resolved from the server by key at
+//           click time so the button always injects the template's current text
+export type RailItemType = 'key' | 'action' | 'text' | 'slash' | 'skill' | 'prompt'
+
+// Where an item lives. The horizontal strip under a terminal is scarce — that
+// scarcity is why several built-ins shipped switched off — so it holds the items
+// you hammer, and the utility drawer's Commands tab holds the long tail you
+// browse. Nothing is hidden by placement; `enabled: false` still hides outright.
+export type RailPlacement = 'strip' | 'drawer'
+
+// A stored placement may also be 'both': the two regions are independent
+// surfaces, not a single either/or slot, so an item you hammer under the
+// terminal can also carry a full label in the drawer.
+export type RailPlacementSetting = RailPlacement | 'both'
 
 export interface RailItem {
   id: string
@@ -30,6 +43,10 @@ export interface RailItem {
   bytes?: string
   /** 'text' | 'slash' | 'skill' items: the payload (command/skill name or literal text). */
   text?: string
+  /** 'prompt' items: the library template's `scope:id` key. The body is deliberately
+   *  *not* copied here — a rail button is a pointer at the template, so editing the
+   *  template updates every button that references it. */
+  promptKey?: string
   /** Append Enter after a text/slash/skill payload to submit it. */
   submit?: boolean
   /** 'action' items: which built-in handler to run. */
@@ -40,8 +57,11 @@ export interface RailItem {
   backends?: RailBackend[]
   /** Restrict to these platforms; undefined = both. */
   platforms?: RailPlatform[]
-  /** User toggle; false hides the item everywhere. */
+  /** User toggle; false hides the item everywhere (strip and drawer alike). */
   enabled?: boolean
+  /** 'strip' (default) renders under the terminal, 'drawer' in the Commands tab,
+   *  'both' in each. */
+  placement?: RailPlacementSetting
 }
 
 export const ALL_BACKENDS: readonly RailBackend[] = ['claude', 'codex', 'shell']
@@ -58,6 +78,9 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'copyResume', type: 'action', action: 'copyResume', label: 'Copy resume' },
   { id: 'branch', type: 'action', action: 'branch', label: 'Branch', backends: ['claude', 'codex'] },
   { id: 'paste', type: 'action', action: 'paste', label: 'Paste' },
+  // Clipboard history picker. Paired with Paste because it is the paste path on
+  // touch, where reading the system clipboard is unreliable or refused outright.
+  { id: 'clipboardHistory', type: 'action', action: 'clipboardHistory', label: 'Clip' },
   { id: 'kbdToggle', type: 'action', action: 'toggleKeyboard', label: '⌨', className: 'term-key kbd-toggle' },
   { id: 'esc', type: 'key', bytes: '\x1b', label: 'Esc', className: 'term-key', title: 'Escape' },
   { id: 'enter', type: 'key', bytes: '\r', label: '⏎', className: 'term-key', title: 'Enter' },
@@ -67,20 +90,42 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', title: 'Down / next command' },
   { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', title: 'Left' },
   { id: 'right', type: 'key', bytes: '\x1b[C', label: '→', className: 'term-key', title: 'Right' },
-  // Navigation + editing extras. Seeded disabled so the default rail is
-  // unchanged until a user enables them from settings.
-  { id: 'home', type: 'key', bytes: '\x1b[H', label: 'Home', className: 'term-key', title: 'Home / start of line', enabled: false },
-  { id: 'end', type: 'key', bytes: '\x1b[F', label: 'End', className: 'term-key', title: 'End / end of line', enabled: false },
-  { id: 'ctrlHome', type: 'key', bytes: '\x1b[1;5H', label: '^Home', className: 'term-key', title: 'Ctrl+Home / top', enabled: false },
-  { id: 'ctrlEnd', type: 'key', bytes: '\x1b[1;5F', label: '^End', className: 'term-key', title: 'Ctrl+End / bottom', enabled: false },
+  // Navigation + editing extras. These used to ship switched *off*, because the
+  // strip has no room for them; they now ship on, in the drawer, where room is
+  // not the constraint.
+  { id: 'home', type: 'key', bytes: '\x1b[H', label: 'Home', className: 'term-key', title: 'Home / start of line', placement: 'drawer' },
+  { id: 'end', type: 'key', bytes: '\x1b[F', label: 'End', className: 'term-key', title: 'End / end of line', placement: 'drawer' },
+  { id: 'ctrlHome', type: 'key', bytes: '\x1b[1;5H', label: '^Home', className: 'term-key', title: 'Ctrl+Home / top', placement: 'drawer' },
+  { id: 'ctrlEnd', type: 'key', bytes: '\x1b[1;5F', label: '^End', className: 'term-key', title: 'Ctrl+End / bottom', placement: 'drawer' },
   // Ctrl+J (raw LF) inserts a newline in agent composers without submitting.
-  { id: 'newline', type: 'key', bytes: '\n', label: '↵ nl', className: 'term-key', title: 'Insert newline (Ctrl+J) without submitting', enabled: false },
+  { id: 'newline', type: 'key', bytes: '\n', label: '↵ nl', className: 'term-key', title: 'Insert newline (Ctrl+J) without submitting', placement: 'drawer' },
   // Ctrl+U clears the composed input (restorable with Ctrl+Y in Claude).
-  { id: 'clearInput', type: 'key', bytes: '\x15', label: 'clear', className: 'term-key', title: 'Clear the current input (Ctrl+U)', enabled: false },
+  { id: 'clearInput', type: 'key', bytes: '\x15', label: 'clear', className: 'term-key', title: 'Clear the current input (Ctrl+U)', placement: 'drawer' },
   // Opens Claude's interactive /rewind picker (there is no one-shot,
   // conversation-only variant, so this just launches the picker).
-  { id: 'rewind', type: 'slash', text: 'rewind', label: 'Rewind…', submit: true, backends: ['claude'], title: 'Open Claude /rewind (interactive checkpoint picker)', enabled: false },
+  { id: 'rewind', type: 'slash', text: 'rewind', label: 'Rewind…', submit: true, backends: ['claude'], title: 'Open Claude /rewind (interactive checkpoint picker)', placement: 'drawer' },
 ]
+
+/** Custom items (skills, slash commands, literal text) default to the drawer:
+ *  they are unbounded in number and would otherwise crowd the arrows off the strip. */
+export const DEFAULT_CUSTOM_PLACEMENT: RailPlacement = 'drawer'
+
+/** Resolve a saved entry's enabled/placement pair, migrating pre-placement saves.
+ *
+ *  Before the drawer existed, "off" was the only way to get an item out of a full
+ *  strip, so a save that predates `placement` and says `enabled: false` means
+ *  "not on the strip", not "never show me this". Those become drawer items; an
+ *  explicit placement is always honoured. */
+export function adoptPlacement(
+  entry: Pick<RailItem, 'enabled' | 'placement'>,
+  fallback: RailPlacementSetting = 'strip',
+): { enabled: boolean | undefined; placement: RailPlacementSetting } {
+  if (entry.placement === 'strip' || entry.placement === 'drawer' || entry.placement === 'both') {
+    return { enabled: entry.enabled, placement: entry.placement }
+  }
+  if (entry.enabled === false) return { enabled: undefined, placement: 'drawer' }
+  return { enabled: entry.enabled, placement: fallback }
+}
 
 /** True for built-in item ids whose behaviour (type/bytes/action/label) is
  *  owned by the app; users may reorder them and edit only enabled/filters. */
@@ -102,10 +147,10 @@ export function mergeRail(saved: RailItem[] | undefined | null): RailItem[] {
     seen.add(entry.id)
     const builtin = builtinById.get(entry.id)
     if (builtin) {
-      out.push({ ...builtin, enabled: entry.enabled, platforms: entry.platforms, backends: entry.backends })
-    } else if (entry.type === 'key' || entry.type === 'text' || entry.type === 'slash' || entry.type === 'skill') {
+      out.push({ ...builtin, ...adoptPlacement(entry), platforms: entry.platforms, backends: entry.backends })
+    } else if (entry.type === 'key' || entry.type === 'text' || entry.type === 'slash' || entry.type === 'skill' || entry.type === 'prompt') {
       // Custom items may only be safe injection types, never 'action'.
-      out.push({ ...entry })
+      out.push({ ...entry, ...adoptPlacement(entry, DEFAULT_CUSTOM_PLACEMENT) })
     }
   }
   for (const builtin of BUILTIN_RAIL) {
@@ -161,14 +206,31 @@ export function railItemVisible(item: RailItem, ctx: RailContext): boolean {
   return true
 }
 
-/** The ordered items to render for a given platform/backend. */
-export function resolveRail(items: RailItem[], ctx: RailContext): RailItem[] {
-  return items.filter(item => railItemVisible(item, ctx))
+export function railItemPlacement(item: RailItem): RailPlacementSetting {
+  return item.placement === 'drawer' || item.placement === 'both' ? item.placement : 'strip'
+}
+
+/** Does this item render in the given region? 'both' renders in each. */
+export function railItemInPlacement(item: RailItem, placement: RailPlacement): boolean {
+  const setting = railItemPlacement(item)
+  return setting === 'both' || setting === placement
+}
+
+/** The ordered items to render for a given platform/backend and host.
+ *  `placement` defaults to the strip so existing callers keep their meaning. */
+export function resolveRail(
+  items: RailItem[],
+  ctx: RailContext,
+  placement: RailPlacement = 'strip',
+): RailItem[] {
+  return items.filter(item => railItemVisible(item, ctx) && railItemInPlacement(item, placement))
 }
 
 /** Backend-aware injected payload for text/slash/skill items. Claude invokes
  *  skills as `/name`; Codex invokes them as `$name`. Slash commands are literal
- *  `/name` on both; a `text` item is passed through verbatim. */
+ *  `/name` on both; a `text` item is passed through verbatim. A 'prompt' item has
+ *  no local payload — its text lives in the library and is fetched on click
+ *  (`promptRail.ts`), so this returns '' for it. */
 export function railPayload(item: RailItem, backend: RailBackend): string {
   if (item.type === 'text') return item.text || ''
   const bare = (item.text || '').trim().replace(/^[/$]/, '')

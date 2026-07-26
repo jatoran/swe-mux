@@ -9,12 +9,33 @@ Live agent/terminal sessions are owned by a separate PTY supervisor process and 
 daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
 
 - **Frontend change**: `cd frontend && npm run build` (outputs into `src/swe_mux/static`),
-  then refresh the browser / UI menu → "Reload UI". No daemon restart needed.
+  then refresh the browser / UI menu → "Reload UI". **This only reaches the running app if
+  the daemon serves from source** (`uv run` / dev). The **frozen desktop app** (`dist/`,
+  what the tray icon and any remote/phone client connect to) serves its OWN bundled copy at
+  `dist/swe-mux/_internal/swe_mux/static`, which `npm run build` does NOT touch — so the
+  rebuilt CSS/JS never loads and your change silently does nothing on that client. Before
+  assuming a frontend change is live, **confirm which build is being served**: compare the
+  hashed asset the live daemon returns against the one you just built —
+  `curl -s http://127.0.0.1:8765/ | grep -o 'assets/index-[A-Za-z0-9_-]*\.css'` vs the same
+  grep on `src/swe_mux/static/index.html`. If they differ, you are on the frozen app: ship
+  the change with the **Frozen desktop app update** flow below (a plain `npm run build` is not
+  enough). Symptom of this trap: a verified-correct CSS/JS fix that "still doesn't work" for
+  the user, especially on mobile.
 - **Backend/daemon change**: `curl -X POST http://127.0.0.1:8765/api/daemon/restart`
   (or UI menu → "Reload daemon (keep sessions)", or `mux reload-daemon`). The daemon
   restarts in place with your code; every session survives.
 - **Frozen desktop app update** (rebuild `dist/` + relaunch, sessions preserved —
-  safe to run from a session inside swe-mux): `uv run python packaging/redeploy_desktop.py`.
+  safe to run from a session inside swe-mux): `uv run python packaging/redeploy_desktop.py`,
+  or from the UI: menu → "Rebuild + redeploy app (keep sessions)" (`app.redeploy`, also on
+  mobile; `POST /api/daemon/redeploy`). This is the correct way to push a **frontend-only**
+  change to the frozen app too (it rebuilds the frontend into the bundle). It is a
+  multi-minute PyInstaller rebuild, **staged**: it builds into `dist/.staging` while the old
+  app keeps running, stops it only after a successful build, then swaps — a failed build
+  leaves the running app untouched, and a new build that never turns healthy is rolled back
+  to `dist/swe-mux.prev` (bad bundle kept at `dist/swe-mux.failed`). If the swap's rename
+  retries exhaust on a `WinError 5/32` lock straggler, the script relaunches the old bundle
+  itself; do NOT reach for `taskkill`/`muxd --shutdown` (that reaps sessions). Endpoint log:
+  `<data_dir>/redeploy.log`.
 - **Never** run `muxd --shutdown`, kill `swe-mux-supervisor.exe`, or taskkill swe-mux
   processes as part of an update — those reap every live session. They are only for
   intentionally stopping everything.

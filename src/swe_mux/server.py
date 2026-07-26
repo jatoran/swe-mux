@@ -11,6 +11,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import tomllib
@@ -40,6 +41,7 @@ from .automation import (
 )
 from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
+from .clipboard_store import ClipboardStore
 from .config import Config, load_config, update_config
 from .event_bus import EventBus
 from .file_manager import open_in_file_manager
@@ -99,13 +101,17 @@ from .project_files import (
 from .project_watcher import ProjectFileWatcher
 from .projects import ProjectManager
 from .prompt_library import PromptLibrary, PromptScope
-from .provider_accounts import ProviderAccountError, ProviderAccountManager
+from .provider_accounts import (
+    ProviderAccountConflict,
+    ProviderAccountError,
+    ProviderAccountManager,
+)
 from .push import PushSender, PushStore
 from .reconcile import reconcile_external_history
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import Session, SessionManager
 from .settings_store import SettingsStore
-from .spawn_contract import SpawnRequest
+from .spawn_contract import SpawnRequest, scrub_claude_session_markers
 from .subprocess_flags import background_creation_flags
 from .supervisor_client import SupervisorClient
 from .tailscale import (
@@ -167,6 +173,10 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         raise
     except KeyError as exc:
         return json_response({"error": f"not found: {exc.args[0]}"}, 404)
+    except ProviderAccountConflict as exc:
+        # Distinct from a bad request: the caller must resolve an ownership
+        # clash or explicitly force the action.
+        return json_response({"error": str(exc), "conflict": True}, 409)
     except (ValueError, TypeError, ProviderAccountError) as exc:
         return json_response({"error": str(exc)}, 400)
     except Exception:
@@ -312,6 +322,8 @@ def create_app(
             web.get("/api/health", health),
             web.post("/api/desktop/shutdown", desktop_shutdown),
             web.post("/api/daemon/restart", daemon_restart),
+            web.post("/api/daemon/redeploy", daemon_redeploy),
+            web.get("/api/daemon/redeploy", daemon_redeploy_status),
             web.get("/api/remote/status", remote_status),
             web.post("/api/remote/mobile-voice/enable", enable_mobile_voice),
             web.get("/api/config", get_config),
@@ -401,6 +413,7 @@ def create_app(
             web.post("/api/sessions", spawn_session),
             web.get("/api/sessions/{sid}", get_session),
             web.get("/api/sessions/{sid}/state-log", get_session_state_log),
+            web.get("/api/diagnostics/status-health", get_status_health),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
             web.patch("/api/sessions/{sid}", patch_session),
             web.delete("/api/sessions/{sid}", delete_session),
@@ -425,6 +438,12 @@ def create_app(
             web.get("/api/events", list_events),
             web.get("/api/settings", get_settings),
             web.put("/api/settings/{profile}", put_settings),
+            web.get("/api/clipboard", list_clipboard_entries),
+            web.post("/api/clipboard", capture_clipboard_entry),
+            web.delete("/api/clipboard", clear_clipboard_entries),
+            web.get("/api/clipboard/{entry_id}", get_clipboard_entry),
+            web.patch("/api/clipboard/{entry_id}", patch_clipboard_entry),
+            web.delete("/api/clipboard/{entry_id}", delete_clipboard_entry),
             web.get("/api/push/vapid-public-key", get_vapid_public_key),
             web.post("/api/push/subscribe", push_subscribe),
             web.post("/api/push/unsubscribe", push_unsubscribe),
@@ -444,13 +463,23 @@ def create_app(
             web.get("/api/telemetry/operational", operational_telemetry),
             web.patch("/api/telemetry/quota-resets/{reset_id}", review_quota_reset),
             web.get("/api/provider-accounts", get_provider_accounts),
+            web.get("/api/provider-accounts/audit", get_provider_account_audit),
             web.post("/api/provider-accounts/refresh", refresh_provider_accounts),
+            web.post("/api/provider-accounts/verify", verify_provider_accounts),
             web.post("/api/provider-accounts/{provider}/capture", capture_provider_account),
             web.post("/api/provider-accounts/{provider}/login", login_provider_account),
             web.patch("/api/provider-accounts/{provider}/{account_id}", patch_provider_account),
             web.post(
                 "/api/provider-accounts/{provider}/{account_id}/select",
                 select_provider_account,
+            ),
+            web.post(
+                "/api/provider-accounts/{provider}/{account_id}/adopt",
+                adopt_provider_account,
+            ),
+            web.post(
+                "/api/provider-accounts/{provider}/{account_id}/purge-telemetry",
+                purge_provider_account_telemetry,
             ),
             web.delete("/api/provider-accounts/{provider}/{account_id}", remove_provider_account),
             web.get("/api/processes", list_processes),
@@ -593,6 +622,18 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     voice = VoiceService(config, events, sessions, voice_store, automation_store, openrouter)
     prompt_library = PromptLibrary(config.data_dir)
     settings_store = SettingsStore(config.data_dir)
+    clipboard = ClipboardStore(
+        config.database_path,
+        enabled=config.clipboard_history_enabled,
+        persist=config.clipboard_history_persist,
+        limit=config.clipboard_history_limit,
+        entry_max_chars=config.clipboard_history_entry_max_chars,
+        retention_hours=config.clipboard_history_retention_hours,
+        redact_secrets=config.clipboard_history_redact_secrets,
+    )
+    # Adopts the persisted ring when persistence is on, and deletes any rows left
+    # behind by an earlier persisted run when it is off.
+    await clipboard.load()
     push_store = PushStore(config.data_dir)
     project_actions = ProjectActionService(config.data_dir)
     project_watcher = ProjectFileWatcher(projects, events, config)
@@ -675,6 +716,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         voice_store=voice_store,
         prompt_library=prompt_library,
         settings_store=settings_store,
+        clipboard=clipboard,
         push_store=push_store,
         project_actions=project_actions,
         project_watcher=project_watcher,
@@ -725,11 +767,13 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         await supervisor_client.close()
     await telemetry.stop()
     await tier0.stop()
+    await clipboard.stop()
     history.close()
     automation_store.close()
     voice_store.close()
     telemetry.close()
     tier0.close()
+    clipboard.close()
     reaper.close()
 
 
@@ -806,6 +850,11 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
             provider_accounts.executables["claude"] = config.claude_exe
         if "codex_exe" in changed:
             provider_accounts.executables["codex"] = config.codex_exe
+    clipboard: ClipboardStore | None = app.get("clipboard")
+    if clipboard and any(field.startswith("clipboard_history_") for field in changed):
+        # Owns its own side effects: disabling drops the ring, and turning
+        # persistence off deletes the rows already written.
+        clipboard.apply_config(config)
     telemetry: OperationalTelemetryStore | None = app.get("telemetry")
     if telemetry and "operational_telemetry_retention_days" in changed:
         telemetry.retention_days = config.operational_telemetry_retention_days
@@ -946,6 +995,154 @@ async def daemon_restart(request: web.Request) -> web.Response:
     _spawn_daemon_successor(list(relaunch), config.data_dir / "daemon-relaunch.log")
     stop_event.set()
     response = json_response({"status": "restarting", "sessions_preserved": attached}, 202)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def redeploy_source_root() -> Path | None:
+    """The source checkout this daemon can rebuild itself from, if any.
+
+    Frozen builds live at ``<root>/dist/swe-mux/swe-mux.exe`` inside the
+    checkout; source runs resolve from this file. A frozen app deployed away
+    from its checkout has neither, and redeploy is refused.
+    """
+    candidates: list[Path] = []
+    if getattr(sys, "frozen", False):
+        with suppress(OSError, IndexError):
+            candidates.append(Path(sys.executable).resolve().parents[2])
+    with suppress(OSError, IndexError):
+        candidates.append(Path(__file__).resolve().parents[2])
+    for root in candidates:
+        if (root / "packaging" / "redeploy_desktop.py").is_file() and (
+            root / "pyproject.toml"
+        ).is_file():
+            return root
+    return None
+
+
+def _redeploy_lock_pid(config: Config) -> int | None:
+    """PID of a live in-flight redeploy, or None (missing/stale lock)."""
+    import psutil
+
+    try:
+        pid = int((config.data_dir / "redeploy.lock").read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return None
+    return pid if psutil.pid_exists(pid) else None
+
+
+async def daemon_redeploy(request: web.Request) -> web.Response:
+    """Kick off the staged frozen-app redeploy (the UI "Rebuild + redeploy").
+
+    Spawns ``packaging/redeploy_desktop.py`` detached from this daemon's
+    lifetime and returns immediately. The script builds into staging while
+    this daemon keeps serving, stops it only after a successful build, swaps
+    the bundle in, and rolls back to the previous bundle if the new one never
+    reports healthy — so a failed redeploy never strands a remote client.
+    """
+    config: Config = request.app["config"]
+    root = redeploy_source_root()
+    if root is None:
+        return json_response(
+            {
+                "error": "no_source_checkout",
+                "message": (
+                    "this daemon is not running from a source checkout, so it cannot "
+                    "rebuild itself; run the redeploy from the repo instead"
+                ),
+            },
+            409,
+        )
+    uv = shutil.which("uv")
+    if uv is None:
+        return json_response(
+            {"error": "uv_not_found", "message": "uv is required to run the redeploy script"},
+            409,
+        )
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        body = {}
+    force = bool(body.get("force")) if isinstance(body, dict) else False
+    supervisor = request.app.get("supervisor")
+    attached = bool(supervisor is not None and supervisor.connected)
+    if not attached and not force:
+        return json_response(
+            {
+                "error": "supervisor_not_attached",
+                "message": (
+                    "the PTY supervisor is not attached, so a redeploy would kill "
+                    "every session; enable pty_supervisor_enabled or pass force=true"
+                ),
+            },
+            409,
+        )
+    in_flight = _redeploy_lock_pid(config)
+    if in_flight is not None:
+        return json_response(
+            {
+                "error": "redeploy_in_progress",
+                "message": f"a redeploy is already running (pid {in_flight})",
+            },
+            409,
+        )
+    log_path = config.data_dir / "redeploy.log"
+    command = [
+        uv,
+        "run",
+        "--project",
+        str(root),
+        "python",
+        str(root / "packaging" / "redeploy_desktop.py"),
+        "--hidden",
+    ]
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("wb", buffering=0) as log_file:
+        # Detached from this daemon's process group and lifetime: the script
+        # stops this very daemon mid-run, so it must not die with it. cwd is
+        # the source root (never inside dist/, which would lock the rebuild)
+        # and the env is scrubbed of parent-Claude session markers.
+        process = subprocess.Popen(  # noqa: ASYNC220 - non-blocking Popen
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            cwd=str(root),
+            env=scrub_claude_session_markers(os.environ),
+            creationflags=background_creation_flags()
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+        )
+    (config.data_dir / "redeploy.lock").write_text(str(process.pid), encoding="ascii")
+    response = json_response(
+        {"status": "redeploying", "pid": process.pid, "log": str(log_path)}, 202
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def daemon_redeploy_status(request: web.Request) -> web.Response:
+    """Whether a redeploy is in flight, plus the tail of its build log.
+
+    While the build stage runs this daemon is still alive, so the UI can
+    detect an early build failure (running=false without ever losing the
+    daemon) and surface the log instead of waiting out a reconnect window.
+    """
+    config: Config = request.app["config"]
+    pid = _redeploy_lock_pid(config)
+    tail = ""
+    try:
+        data = (config.data_dir / "redeploy.log").read_bytes()
+        tail = data[-8192:].decode("utf-8", "replace")
+    except OSError:
+        pass
+    response = json_response(
+        {
+            "running": pid is not None,
+            "pid": pid,
+            "log_tail": tail.splitlines()[-40:],
+            "available": redeploy_source_root() is not None and shutil.which("uv") is not None,
+        }
+    )
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -2591,9 +2788,27 @@ async def get_session_state_log(request: web.Request) -> web.Response:
             "observer_last_fault": session.observer_last_fault,
             "watchdog_recoveries": session.watchdog_recoveries,
             "observation_replay": session.observation_replay,
+            "awaiting_reason": session.record.awaiting_reason,
+            "status_health": session.status_health(now),
+            # Real state changes are kept separately: a busy turn emits dozens
+            # of same-state tool detail updates that would otherwise evict the
+            # history explaining how the session reached its current state.
+            "state_changes": list(session.state_changes),
             "transitions": list(session.state_transitions),
         }
     )
+
+
+async def get_status_health(request: web.Request) -> web.Response:
+    """Fleet status-health diagnostic: inferred-recovery counts, bounds, alarm.
+
+    A healthy fleet reaches terminal status by proven evidence; a rise in
+    inferred recoveries, a contract violation, or a session stuck active past
+    the bound raises the alarm the soak matrix asserts on.
+    """
+    from .session import fleet_status_health
+
+    return json_response(fleet_status_health(request.app["sessions"].sessions.values()))
 
 
 async def patch_session(request: web.Request) -> web.Response:
@@ -3618,6 +3833,94 @@ async def put_settings(request: web.Request) -> web.Response:
     return json_response({"profile": profile, "settings": updated})
 
 
+def _clipboard_store(request: web.Request) -> ClipboardStore:
+    store: ClipboardStore = request.app["clipboard"]
+    return store
+
+
+async def _emit_clipboard_changed(request: web.Request, reason: str, entry_id: str = "") -> None:
+    """Announce a ring change so other clients refetch.
+
+    The payload carries no copied text: these events are persisted in the history
+    event log, and putting clipboard contents there would defeat the point of the
+    memory-only default.
+    """
+
+    await request.app["events"].emit(
+        "clipboard_changed",
+        source="user",
+        reason=reason,
+        entry_id=entry_id,
+        count=len(_clipboard_store(request).entries()),
+    )
+
+
+async def list_clipboard_entries(request: web.Request) -> web.Response:
+    store = _clipboard_store(request)
+    await store.prune()
+    return json_response(
+        {
+            **store.status(),
+            "entries": [entry.snapshot() for entry in store.entries()],
+        }
+    )
+
+
+async def capture_clipboard_entry(request: web.Request) -> web.Response:
+    store = _clipboard_store(request)
+    body = await request.json() if request.can_read_body else {}
+    entry, reason = await store.capture(
+        body.get("text"),
+        source=str(body.get("source") or ""),
+        session_id=body.get("session_id"),
+        project_id=body.get("project_id"),
+        device=str(body.get("device") or ""),
+    )
+    if entry is not None:
+        await _emit_clipboard_changed(request, reason, entry.id)
+    return json_response(
+        {
+            "stored": entry is not None,
+            "reason": reason,
+            "entry": entry.snapshot() if entry else None,
+        },
+        201 if reason == "stored" else 200,
+    )
+
+
+async def get_clipboard_entry(request: web.Request) -> web.Response:
+    entry = _clipboard_store(request).entry(request.match_info["entry_id"])
+    if entry is None:
+        raise KeyError(request.match_info["entry_id"])
+    return json_response(entry.snapshot(include_text=True))
+
+
+async def patch_clipboard_entry(request: web.Request) -> web.Response:
+    body = await request.json() if request.can_read_body else {}
+    if "pinned" not in body:
+        raise ValueError("pinned is required")
+    entry = await _clipboard_store(request).set_pinned(
+        request.match_info["entry_id"], bool(body["pinned"])
+    )
+    await _emit_clipboard_changed(request, "pinned" if entry.pinned else "unpinned", entry.id)
+    return json_response(entry.snapshot())
+
+
+async def delete_clipboard_entry(request: web.Request) -> web.Response:
+    entry_id = request.match_info["entry_id"]
+    if not await _clipboard_store(request).delete(entry_id):
+        raise KeyError(entry_id)
+    await _emit_clipboard_changed(request, "deleted", entry_id)
+    return json_response({"ok": True})
+
+
+async def clear_clipboard_entries(request: web.Request) -> web.Response:
+    include_pinned = request.query.get("include_pinned", "").lower() in {"1", "true", "yes"}
+    removed = await _clipboard_store(request).clear(include_pinned=include_pinned)
+    await _emit_clipboard_changed(request, "cleared")
+    return json_response({"ok": True, "removed": removed})
+
+
 async def get_vapid_public_key(request: web.Request) -> web.Response:
     return json_response({"key": request.app["push_store"].application_server_key})
 
@@ -3857,16 +4160,32 @@ async def get_provider_accounts(request: web.Request) -> web.Response:
     telemetry: OperationalTelemetryStore = request.app["telemetry"]
     latest = await telemetry.latest_quota_by_account()
     for account in snapshot["accounts"]:
+        conflict = account.get("conflict")
+        if conflict and not conflict.get("is_primary"):
+            # Durable samples for a duplicate slot are the primary account's
+            # numbers; showing them again is the mirrored-usage illusion.
+            continue
         if account["id"] in latest:
             account["quota"] = latest[account["id"]]
     snapshot["reset_alert"] = await telemetry.reset_summary()
     return json_response(snapshot)
 
 
+async def get_provider_account_audit(request: web.Request) -> web.Response:
+    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    limit = max(1, min(1000, int(request.query.get("limit") or 100)))
+    return json_response({"items": accounts.audit_entries(limit)})
+
+
 async def refresh_provider_accounts(request: web.Request) -> web.Response:
     accounts: ProviderAccountManager = request.app["provider_accounts"]
     body = await request.json() if request.can_read_body else {}
     return json_response(await accounts.refresh(body.get("account_id"), force_identity_probe=True))
+
+
+async def verify_provider_accounts(request: web.Request) -> web.Response:
+    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    return json_response(await accounts.verify_identities())
 
 
 async def capture_provider_account(request: web.Request) -> web.Response:
@@ -3905,8 +4224,33 @@ async def patch_provider_account(request: web.Request) -> web.Response:
 
 async def select_provider_account(request: web.Request) -> web.Response:
     accounts: ProviderAccountManager = request.app["provider_accounts"]
+    body = await request.json() if request.can_read_body else {}
     return json_response(
-        await accounts.select(request.match_info["provider"], request.match_info["account_id"])
+        await accounts.select(
+            request.match_info["provider"],
+            request.match_info["account_id"],
+            force=bool(body.get("force")),
+        )
+    )
+
+
+async def adopt_provider_account(request: web.Request) -> web.Response:
+    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    return json_response(
+        await accounts.adopt(request.match_info["provider"], request.match_info["account_id"])
+    )
+
+
+async def purge_provider_account_telemetry(request: web.Request) -> web.Response:
+    accounts: ProviderAccountManager = request.app["provider_accounts"]
+    body = await request.json() if request.can_read_body else {}
+    since = body.get("since")
+    return json_response(
+        await accounts.purge_telemetry(
+            request.match_info["provider"],
+            request.match_info["account_id"],
+            since=float(since) if since is not None else None,
+        )
     )
 
 

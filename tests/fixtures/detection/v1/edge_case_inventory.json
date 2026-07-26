@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "description": "Tracked inventory of every known status edge case. Each entry names its reproducing fixture in this directory, the guard that closes it (a test `tests/<file>::<name>` or a module symbol `<module>::<symbol>`), and a one-line root cause. tests/test_detection_replay.py::test_edge_case_inventory_is_closed_and_consistent fails CI when a fixture or guard disappears, and when a fixture tagged edge_case is not registered here.",
+  "edge_cases": {
+    "late_hook_reopen": {
+      "fixture": "claude-late-hook-reopen-race.json",
+      "guard": "tests/test_observation.py::test_healthy_transcript_gates_late_tool_hooks_from_reopening_working",
+      "root_cause": "Hooks are an unordered retried side channel; a late PreToolUse/PostToolUse/UserPromptSubmit can land after the transcript's end-of-turn and reopen working on a finished session."
+    },
+    "closed_by_transcript_latch": {
+      "fixture": "claude-late-hook-reopen-race.json",
+      "guard": "tests/test_observation.py::test_transcript_close_latch_blocks_hook_reopen_until_new_transcript_turn",
+      "root_cause": "Defense-in-depth behind the authority gate: once the transcript closes a turn, a hook-sourced re-begin is refused (and counted) until fresh transcript activity starts the next turn."
+    },
+    "hook_transcript_race_trailing_completion": {
+      "fixture": "hook-transcript-dedupe.json",
+      "guard": "tests/test_status_contract.py::test_trailing_completion_record_does_not_blink_working",
+      "root_cause": "The reverse race: a trailing assistant end_turn record landing after a hook Stop already closed the turn used to re-begin and immediately re-finish, blinking the status working for an instant."
+    },
+    "ended_stuck_force_idle": {
+      "fixture": "claude-watchdog-ended-stuck.json",
+      "guard": "tests/test_status_contract.py::test_watchdog_decision_pins_thresholds",
+      "root_cause": "A lost Stop hook (failed POST, spool not yet drained) leaves working forever even though the transcript tail proves the turn ended; the watchdog force-idles at STATE_WATCHDOG_ENDED_STUCK_SECONDS."
+    },
+    "esc_pause_without_marker": {
+      "fixture": "claude-esc-pause-without-marker.json",
+      "guard": "tests/test_observation.py::test_watchdog_pty_backstop_idles_open_tail_at_idle_prompt",
+      "root_cause": "ESC can pause a turn without writing the interrupt marker, leaving an open tool tail with no terminal record; only the PTY idle-prompt backstop may recover it after STATE_WATCHDOG_PTY_STUCK_SECONDS."
+    },
+    "long_tool_esc_interrupt": {
+      "fixture": "claude-long-tool-never-cut.json",
+      "guard": "tests/test_observation.py::test_watchdog_pty_backstop_spares_open_tail_while_cli_busy",
+      "root_cause": "A genuine long tool call reads as an open tail too; 'esc to interrupt' on screen keeps pty_tail_appears_idle False so the backstop never cuts it short."
+    },
+    "sibling_transcript_cross_attribution": {
+      "fixture": "claude-sibling-cross-attribution.json",
+      "guard": "tests/test_agent_lifecycle.py::test_transcript_switch_blocked_by_any_sibling_in_same_cwd",
+      "root_cause": "With sibling sessions in one cwd a fresh sibling transcript is indistinguishable from an in-CLI resume; following it would bleed the sibling's status into this record. The switch is gated, and the PTY backstop (own ground truth) recovers the stuck session."
+    },
+    "schema_drift_unknown_tail": {
+      "fixture": "codex-watchdog-unknown-tail.json",
+      "guard": "tests/test_observation.py::test_transcript_tail_codex_states",
+      "root_cause": "Schema drift can leave the tail with no decisive signal (unknown); the conservative prior keeps the session working until the PTY idle-prompt backstop proves the CLI is at its prompt."
+    },
+    "crash_mid_turn": {
+      "fixture": "claude-crash-mid-turn.json",
+      "guard": "tests/test_session_reliability.py::test_natural_exit_releases_conpty_but_retains_scrollback",
+      "root_cause": "A process death mid-turn produces no transcript terminal record; PTY ground truth maps the exit code to crashed/exited and permanently blocks delivery."
+    },
+    "compaction_mid_turn": {
+      "fixture": "claude-compaction-mid-turn.json",
+      "guard": "tests/test_status_contract.py::test_compaction_records_never_disturb_turn_state",
+      "root_cause": "Compaction boundaries are telemetry, not turn evidence; treating them as activity would reopen or close turns spuriously."
+    },
+    "resume_open_turn_recent": {
+      "fixture": "claude-resume-catchup-recent.json",
+      "guard": "tests/test_observation.py::test_observe_transcript_resumes_working_for_recent_open_turn",
+      "root_cause": "Promotion moments after the user submitted attaches over an open turn; a recent open tail must resume as working, not idle."
+    },
+    "resume_open_turn_stale": {
+      "fixture": "claude-resume-catchup-stale.json",
+      "guard": "tests/test_observation.py::test_observe_transcript_suppresses_historical_replay_then_tracks_live",
+      "root_cause": "An old open turn found during catch-up is a stale artifact of an ended run; resuming it as working would strand the session."
+    },
+    "approval_answered_resume": {
+      "fixture": "claude-approval-resume-transcript.json",
+      "guard": "tests/test_status_contract.py::test_answered_approval_does_not_outlive_the_block",
+      "root_cause": "An approval is raised by an unordered hook (priority 2) while every resumption record arrives on the ordered transcript (priority 1), and `_begin_root_turn` deliberately does not release arbitration while the state is working/awaiting — so arbitration refused all of it and the session displayed \"awaiting approval\" for the entire rest of the turn (observed live: 558s across two further approvals). Transcript evidence written after the block now clears it."
+    },
+    "approval_answered_long_tool": {
+      "fixture": "claude-approval-resume-pty.json",
+      "guard": "tests/test_status_contract.py::test_watchdog_decision_pins_thresholds",
+      "root_cause": "Nothing fires when a permission dialog is dismissed, and an approved long-running tool writes no transcript record until it completes, so no ordered evidence exists to clear the block; the CLI's own working spinner is the only timely proof."
+    },
+    "pending_approval_preserved": {
+      "fixture": "claude-pending-approval-not-cleared.json",
+      "guard": "tests/test_status_contract.py::test_unanswered_approval_survives_everything_that_could_hide_it",
+      "root_cause": "The inverse hazard of clearing a stale awaiting: the tool_use record that triggered the prompt can be observed after it, a parallel tool's result can land while the dialog is up, and idle_prompt can arrive — none of which mean the user answered. Hiding a real prompt is worse than showing a stale one, so clearing requires proof (record newer than the block, screen not showing a dialog)."
+    },
+    "notification_semantics": {
+      "fixture": "claude-idle-vs-permission-vs-elicitation.json",
+      "guard": "tests/test_observation.py::test_idle_prompt_never_clobbers_a_pending_approval",
+      "root_cause": "idle_prompt means ready-for-input (a turn boundary), not a blocking approval; permission_prompt and elicitation_dialog are awaiting with distinct sub-reasons, and idle_prompt must never overwrite a pending approval."
+    },
+    "subagent_stop_root_open": {
+      "fixture": "claude-subagent-only-stop.json",
+      "guard": "tests/test_observation.py::test_claude_sidechain_end_turn_never_completes_root",
+      "root_cause": "Child stops are subagent-scoped activity; letting them complete the root turn shows idle while the root is still working."
+    },
+    "rate_limit_abort": {
+      "fixture": "codex-rate-limit-abort.json",
+      "guard": "tests/test_status_contract.py::test_rate_limit_maps_to_awaiting_rate_limit",
+      "root_cause": "A provider rate limit is awaiting (sub-reason rate_limit), and the subsequent aborted turn must resolve to idle on transcript evidence, never linger as working."
+    },
+    "daemon_restart_mid_turn": {
+      "fixture": "daemon-restart-run-recovery.json",
+      "guard": "tests/test_detection_replay.py::test_replay_oracles_have_no_false_safe_or_false_blocked_decisions",
+      "root_cause": "A daemon restart mid-turn loses volatile completion evidence; readiness must re-require a fresh root lifecycle boundary instead of trusting pre-restart state."
+    },
+    "promotion_demotion_status": {
+      "fixture": "claude-promote-demote-lifecycle.json",
+      "guard": "tests/test_agent_lifecycle.py::test_shell_prompt_after_agent_exit_demotes_quiescent_session",
+      "root_cause": "Promotion/demotion are daemon-owned lifecycle transitions (starting/running); they must flow through the ledger and reset source arbitration for the new backend's evidence."
+    }
+  }
+}

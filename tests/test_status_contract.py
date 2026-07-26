@@ -1,0 +1,500 @@
+"""Phase 3.5 status contract: per-state evidence predicates, the typed transition
+ledger, the proven/inferred classification, watchdog decision thresholds, and the
+fleet status-health bounds."""
+
+from __future__ import annotations
+
+from typing import Any, get_args
+
+import pytest
+
+from swe_mux.models import AwaitingReason, SessionState
+from swe_mux.session import (
+    INFERRED_TRANSITION_SOURCES,
+    STATE_EVIDENCE_SOURCES,
+    STATE_WATCHDOG_AWAITING_RESUME_SECONDS,
+    STATE_WATCHDOG_ENDED_STUCK_SECONDS,
+    STATE_WATCHDOG_PTY_STUCK_SECONDS,
+    STATUS_HEALTH_MAX_INFERRED_TERMINAL_RATIO,
+    STATUS_HEALTH_MIN_TERMINALS_FOR_RATIO_ALARM,
+    STATUS_HEALTH_STUCK_ACTIVE_SECONDS,
+    fleet_status_health,
+    pty_tail_appears_idle,
+    pty_tail_state,
+    transition_proof,
+    watchdog_decision,
+)
+from tests.support.detection_replay import DetectionReplay, ReplaySession
+
+
+def test_state_evidence_sources_cover_every_session_state() -> None:
+    # The contract is total: every SessionState names the sources allowed to
+    # set it, and no state is settable by an empty evidence set.
+    assert set(STATE_EVIDENCE_SOURCES) == set(get_args(SessionState))
+    for state, sources in STATE_EVIDENCE_SOURCES.items():
+        assert sources, f"{state} has no allowed evidence sources"
+    # Active states require provider evidence; the PTY may never invent work.
+    assert "pty" not in STATE_EVIDENCE_SOURCES["working"]
+    assert "pty" not in STATE_EVIDENCE_SOURCES["awaiting"]
+    # Inferred recovery is confined to resolving an active state: idle (a turn
+    # that ended without its marker) and working (an approval the user already
+    # answered). It may never raise `awaiting` or fabricate a lifecycle state.
+    for state, sources in STATE_EVIDENCE_SOURCES.items():
+        if state not in {"idle", "working"}:
+            assert not (sources & INFERRED_TRANSITION_SOURCES), state
+    assert STATE_EVIDENCE_SOURCES["working"] & INFERRED_TRANSITION_SOURCES == {"watchdog-pty"}
+    # ...and the only inferred path into `working` starts from `awaiting`.
+    assert (
+        watchdog_decision(
+            "idle", stalled_seconds=10_000, tail_verdict=None, pty_state="working"
+        )
+        == "none"
+    )
+
+
+def test_transition_proof_classification() -> None:
+    assert transition_proof("transcript") == "proven"
+    assert transition_proof("hook") == "proven"
+    assert transition_proof("pty") == "proven"
+    assert transition_proof("daemon") == "proven"
+    assert transition_proof("watchdog") == "inferred"
+    assert transition_proof("watchdog-pty") == "inferred"
+    # The startup-quiet fallback marks itself inferred explicitly.
+    assert transition_proof("pty", inferred=True) == "inferred"
+
+
+def test_transition_ledger_entries_are_complete_and_typed() -> None:
+    session = ReplaySession("claude")
+    assert session.transition(
+        "working", "Read", source="transcript", evidence="tool_use_record"
+    )
+    session.clock.advance(3.5)
+    assert session.transition(
+        "idle", None, source="transcript", evidence="stop_reason=end_turn"
+    )
+    entries = [e for e in session.state_transitions if e["kind"] == "transition"]
+    assert len(entries) == 2
+    for entry in entries:
+        for key in (
+            "ts",
+            "monotonic",
+            "previous",
+            "state",
+            "detail",
+            "awaiting_reason",
+            "source",
+            "priority",
+            "evidence",
+            "proof",
+            "allowed_source",
+            "seconds_in_previous",
+        ):
+            assert key in entry, f"ledger entry missing {key}"
+    assert entries[0]["evidence"] == "tool_use_record"
+    assert entries[1]["seconds_in_previous"] == pytest.approx(3.5)
+    # Turn-terminal latency is measured from entering the active state.
+    assert session.terminal_latencies[0]["seconds"] == pytest.approx(3.5)
+    assert session.terminal_latencies[0]["proof"] == "proven"
+
+
+def test_contract_violation_is_ledgered_and_counted_not_refused() -> None:
+    session = ReplaySession("claude")
+    # "pty" may never set working; the transition still applies (conservatively
+    # refusing could strand a session) but is flagged for the corpus to catch.
+    assert session.transition("working", None, source="pty", evidence="bogus")
+    entry = [e for e in session.state_transitions if e["kind"] == "transition"][-1]
+    assert entry["allowed_source"] is False
+    assert session.status_health_counters["contract_violations"] == 1
+
+
+def test_awaiting_reason_is_typed_and_cleared_on_leaving_awaiting() -> None:
+    session = ReplaySession("claude")
+    assert set(get_args(AwaitingReason)) == {"approval", "question", "elicitation", "rate_limit"}
+    session.transition(
+        "awaiting", "Bash", source="hook", awaiting_reason="approval", evidence="hook"
+    )
+    assert session.record.awaiting_reason == "approval"
+    session.transition("working", None, source="hook", evidence="hook")
+    assert session.record.awaiting_reason is None
+    # A non-awaiting transition can never carry a sub-reason.
+    session.transition("idle", None, source="hook", awaiting_reason="approval", evidence="hook")
+    assert session.record.awaiting_reason is None
+
+
+@pytest.mark.parametrize(
+    ("state", "stalled", "verdict", "pty_state", "expected"),
+    [
+        # Below the ENDED-stuck threshold nothing fires, even with proof.
+        ("working", STATE_WATCHDOG_ENDED_STUCK_SECONDS - 0.1, "ended", "idle", "none"),
+        # At the threshold a proven-ended tail force-idles.
+        ("working", STATE_WATCHDOG_ENDED_STUCK_SECONDS, "ended", "unknown", "force_idle_ended"),
+        ("awaiting", STATE_WATCHDOG_ENDED_STUCK_SECONDS, "ended", "unknown", "force_idle_ended"),
+        # unknown/open tails wait for the full PTY stall window.
+        ("working", STATE_WATCHDOG_PTY_STUCK_SECONDS - 0.1, "open", "idle", "none"),
+        ("working", STATE_WATCHDOG_PTY_STUCK_SECONDS, "open", "idle", "force_idle_pty"),
+        ("working", STATE_WATCHDOG_PTY_STUCK_SECONDS, "unknown", "idle", "force_idle_pty"),
+        # A busy CLI (esc to interrupt) can never be cut short.
+        ("working", STATE_WATCHDOG_PTY_STUCK_SECONDS * 10, "open", "working", "none"),
+        # A session parked at a real permission dialog is not "idle at the
+        # prompt": the backstop must not force-idle it and hide the prompt.
+        ("awaiting", STATE_WATCHDOG_PTY_STUCK_SECONDS * 10, "open", "approval", "none"),
+        ("awaiting", STATE_WATCHDOG_PTY_STUCK_SECONDS * 10, "unknown", "unknown", "none"),
+        # An answered prompt: the CLI is back to its working spinner.
+        ("awaiting", STATE_WATCHDOG_AWAITING_RESUME_SECONDS, None, "working", "resume_working"),
+        ("awaiting", STATE_WATCHDOG_AWAITING_RESUME_SECONDS, "open", "working", "resume_working"),
+        # ...but not before the dialog has had time to finish painting.
+        (
+            "awaiting",
+            STATE_WATCHDOG_AWAITING_RESUME_SECONDS - 0.1,
+            None,
+            "working",
+            "none",
+        ),
+        # Resume never applies to a session that is already working.
+        ("working", STATE_WATCHDOG_ENDED_STUCK_SECONDS, None, "working", "none"),
+        # Non-active states are never touched.
+        ("idle", STATE_WATCHDOG_PTY_STUCK_SECONDS * 10, "ended", "idle", "none"),
+        ("exited", STATE_WATCHDOG_PTY_STUCK_SECONDS * 10, "ended", "idle", "none"),
+    ],
+)
+def test_watchdog_decision_pins_thresholds(
+    state: Any, stalled: float, verdict: str | None, pty_state: Any, expected: str
+) -> None:
+    assert (
+        watchdog_decision(
+            state,
+            stalled_seconds=stalled,
+            tail_verdict=verdict,
+            pty_state=pty_state,
+        )
+        == expected
+    )
+
+
+def test_pty_tail_idle_heuristic_branches() -> None:
+    assert pty_tail_appears_idle("❯  ? for shortcuts") is True
+    assert pty_tail_appears_idle("? FOR SHORTCUTS") is True
+    # A later working spinner wins over an earlier idle hint.
+    assert pty_tail_appears_idle("? for shortcuts ... esc to interrupt") is False
+    # An unrecognized TUI reads as not-idle (fail-safe).
+    assert pty_tail_appears_idle("some other prompt") is False
+    assert pty_tail_appears_idle("") is False
+
+
+def test_pty_tail_state_reads_the_latest_frame_not_mere_presence() -> None:
+    # The retained tail holds redraw history: a session that showed a dialog and
+    # then resumed still contains the dialog text, so only ordering can say what
+    # is on screen now. Getting this wrong is what strands an answered approval.
+    assert pty_tail_state("") == "unknown"
+    assert pty_tail_state("nothing recognizable here") == "unknown"
+    assert pty_tail_state("Do you want to proceed?\n❯ 1. Yes") == "approval"
+    assert pty_tail_state("esc to interrupt") == "working"
+    assert pty_tail_state("❯ ? for shortcuts") == "idle"
+    # Dialog raised, then answered → the spinner is the live frame.
+    assert (
+        pty_tail_state("Do you want to proceed?\n❯ 1. Yes\nRunning… esc to interrupt")
+        == "working"
+    )
+    # Turn finished after the dialog → back at the input prompt.
+    assert (
+        pty_tail_state("Do you want to proceed?\nesc to interrupt\n❯ ? for shortcuts")
+        == "idle"
+    )
+    # A dialog raised *after* earlier work is still the live frame.
+    assert (
+        pty_tail_state("esc to interrupt\n? for shortcuts\nDo you want to run this command?")
+        == "approval"
+    )
+
+
+async def test_trailing_completion_record_does_not_blink_working() -> None:
+    """A transcript end_turn landing after a hook Stop closed the turn must not
+    re-enter working for an instant (the residual status blink)."""
+    replay = DetectionReplay("claude")
+    await replay.step({"kind": "hook", "event": "UserPromptSubmit", "payload": {}})
+    assert replay.session.record.state == "working"
+    await replay.step({"kind": "hook", "event": "Stop", "payload": {}})
+    assert replay.session.record.state == "idle"
+    await replay.step(
+        {
+            "kind": "transcript",
+            "record": {
+                "type": "assistant",
+                "isSidechain": False,
+                "message": {
+                    "content": [{"type": "text", "text": "done"}],
+                    "stop_reason": "end_turn",
+                },
+            },
+        }
+    )
+    states = [e for e in replay.session.state_transitions if e["kind"] == "transition"]
+    assert [e["state"] for e in states] == ["working", "idle"]
+    assert replay.session.record.state == "idle"
+
+
+async def _approval_then(replay: DetectionReplay, tool: str = "Bash") -> None:
+    """Drive a session to a hook-raised approval over an authoritative transcript."""
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 0,
+            "record": {"type": "user", "isSidechain": False, "message": {"content": "go"}},
+        }
+    )
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 0,
+            "record": {
+                "type": "assistant",
+                "isSidechain": False,
+                "message": {
+                    "content": [{"type": "tool_use", "id": "t1", "name": tool, "input": {}}],
+                    "stop_reason": "tool_use",
+                },
+            },
+        }
+    )
+    assert replay.session.record.parser_status == "ready"
+    await replay.step(
+        {"kind": "hook", "event": "PermissionRequest", "payload": {"tool_name": tool}}
+    )
+    assert replay.session.record.state == "awaiting"
+
+
+async def test_answered_approval_does_not_outlive_the_block() -> None:
+    """The reported defect, reproduced from a real session's ledger.
+
+    A hook raises `awaiting` at priority 2; every record proving the agent
+    resumed arrives on the transcript at priority 1, and `_begin_root_turn`
+    does not release arbitration while the state is active. Live, that showed
+    "awaiting approval" for 558 seconds of real work — through two further
+    approval prompts — and only corrected when the turn's forced close landed.
+    """
+    replay = DetectionReplay("claude")
+    await _approval_then(replay)
+    replay.clock.advance(12)  # the user reads the prompt and approves
+
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 0,
+            "record": {
+                "type": "user",
+                "isSidechain": False,
+                "message": {
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}
+                    ]
+                },
+            },
+        }
+    )
+    assert replay.session.record.state == "working"
+    assert replay.session.record.awaiting_reason is None
+    entry = [e for e in replay.session.state_transitions if e["kind"] == "transition"][-1]
+    assert entry["evidence"] == "resumed_after_awaiting:tool_result_record"
+    assert entry["proof"] == "proven"
+
+
+async def test_unanswered_approval_survives_everything_that_could_hide_it() -> None:
+    """Hiding a real prompt is worse than showing a stale one.
+
+    Nothing short of proof may clear an awaiting: not the tool_use record that
+    triggered it arriving late, not a parallel tool finishing while the dialog
+    is up, and not an idle_prompt notification.
+    """
+    replay = DetectionReplay("claude")
+    await _approval_then(replay, tool="Edit")
+    await replay.step(
+        {"kind": "pty_tail", "data": "Do you want to make this edit to app.py?\n❯ 1. Yes"}
+    )
+
+    # The record that caused the prompt, observed after it (transcript polling
+    # lags the hook's immediate POST).
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": -5,
+            "record": {
+                "type": "assistant",
+                "isSidechain": False,
+                "message": {
+                    "content": [{"type": "tool_use", "id": "t9", "name": "Edit", "input": {}}],
+                    "stop_reason": "tool_use",
+                },
+            },
+        }
+    )
+    assert replay.session.record.state == "awaiting"
+
+    # A parallel tool completing is not an answer to this prompt.
+    replay.clock.advance(10)
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 0,
+            "record": {
+                "type": "user",
+                "isSidechain": False,
+                "message": {
+                    "content": [{"type": "tool_result", "tool_use_id": "t8", "content": "ok"}]
+                },
+            },
+        }
+    )
+    assert replay.session.record.state == "awaiting"
+    assert replay.session.record.awaiting_reason == "approval"
+
+    # Neither is a notification that the CLI is waiting for input.
+    await replay.step(
+        {"kind": "hook", "event": "Notification", "payload": {"notification_type": "idle_prompt"}}
+    )
+    assert replay.session.record.state == "awaiting"
+
+    # ...and the PTY backstop must not force-idle a session parked at a dialog,
+    # which would hide the prompt entirely.
+    replay.clock.advance(600)
+    await replay.step({"kind": "watchdog"})
+    assert replay.session.record.state == "awaiting"
+    assert replay.session.watchdog_recoveries == 0
+
+
+async def test_idle_prompt_clears_awaiting_only_with_screen_proof() -> None:
+    replay = DetectionReplay("claude")
+    await _approval_then(replay)
+    # Screen is back at the input prompt: the dialog is provably gone, which is
+    # exactly what the notification claims.
+    await replay.step({"kind": "pty_tail", "data": "❯ ? for shortcuts"})
+    await replay.step(
+        {"kind": "hook", "event": "Notification", "payload": {"notification_type": "idle_prompt"}}
+    )
+    assert replay.session.record.state == "idle"
+    assert replay.session.record.awaiting_reason is None
+
+
+async def test_rate_limit_maps_to_awaiting_rate_limit() -> None:
+    codex = DetectionReplay("codex")
+    await codex.step(
+        {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_started"}}}
+    )
+    await codex.step(
+        {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "rate_limited"}}}
+    )
+    assert codex.session.record.state == "awaiting"
+    assert codex.session.record.awaiting_reason == "rate_limit"
+
+    claude = DetectionReplay("claude")
+    await claude.step({"kind": "hook", "event": "UserPromptSubmit", "payload": {}})
+    await claude.step(
+        {
+            "kind": "hook",
+            "event": "Notification",
+            "payload": {"notification_type": "rate_limit"},
+        }
+    )
+    assert claude.session.record.state == "awaiting"
+    assert claude.session.record.awaiting_reason == "rate_limit"
+
+
+async def test_compaction_records_never_disturb_turn_state() -> None:
+    replay = DetectionReplay("claude")
+    await replay.step(
+        {
+            "kind": "transcript",
+            "record": {"type": "user", "isSidechain": False, "message": {"content": "go"}},
+        }
+    )
+    assert replay.session.record.state == "working"
+    await replay.step(
+        {"kind": "transcript", "record": {"type": "system", "subtype": "compact_boundary"}}
+    )
+    assert replay.session.record.state == "working"
+    compacted = [e for e in replay.normalized if e["type"] == "context_compacted"]
+    assert len(compacted) == 1
+
+
+def _health_stub(
+    *,
+    proven: int = 0,
+    inferred: int = 0,
+    state: str = "idle",
+    seconds_in_state: float = 0.0,
+    seconds_since_evidence: float | None = None,
+    violations: int = 0,
+) -> ReplaySession:
+    session = ReplaySession("claude")
+    session.record.state = state  # type: ignore[assignment]
+    counters = session.status_health_counters
+    counters["terminal_proven"] = proven
+    counters["terminal_inferred"] = inferred
+    if violations:
+        counters["contract_violations"] = violations
+    session.last_state_change_ts = session.clock.wall() - seconds_in_state
+    session.last_evidence_ts = session.clock.wall() - (
+        seconds_in_state if seconds_since_evidence is None else seconds_since_evidence
+    )
+    return session
+
+
+def test_fleet_status_health_alarm_bounds() -> None:
+    now = ReplaySession("claude").clock.wall()
+    healthy = fleet_status_health([_health_stub(proven=100, inferred=2)], now=now)
+    assert healthy["alarm"] is False
+    assert healthy["terminals"]["inferred_ratio"] == pytest.approx(2 / 102, abs=1e-4)
+
+    # Ratio alarm only fires with enough terminals to be meaningful.
+    small = fleet_status_health([_health_stub(proven=2, inferred=2)], now=now)
+    assert small["alarm"] is False
+
+    minimum = STATUS_HEALTH_MIN_TERMINALS_FOR_RATIO_ALARM
+    ratio_breach = fleet_status_health(
+        [_health_stub(proven=minimum, inferred=int(minimum * 0.2))], now=now
+    )
+    assert ratio_breach["alarm"] is True
+    assert "inferred_terminal_ratio_exceeded" in ratio_breach["alarm_reasons"]
+    assert (
+        ratio_breach["terminals"]["inferred_ratio"]
+        > STATUS_HEALTH_MAX_INFERRED_TERMINAL_RATIO
+    )
+
+    # A long turn is NOT stuck: tools keep landing evidence even though the
+    # visible state stays "working" for many minutes. An elapsed-time-only
+    # bound alarmed on every healthy long turn in the live fleet.
+    long_turn = fleet_status_health(
+        [
+            _health_stub(
+                state="working",
+                seconds_in_state=STATUS_HEALTH_STUCK_ACTIVE_SECONDS * 3,
+                seconds_since_evidence=20.0,
+            )
+        ],
+        now=now,
+    )
+    assert long_turn["alarm"] is False
+    assert long_turn["stuck_sessions"] == []
+
+    # Silence is the real signal: no observation of any kind for the window.
+    stuck = fleet_status_health(
+        [
+            _health_stub(
+                state="working",
+                seconds_in_state=STATUS_HEALTH_STUCK_ACTIVE_SECONDS + 1,
+                seconds_since_evidence=STATUS_HEALTH_STUCK_ACTIVE_SECONDS + 1,
+            )
+        ],
+        now=now,
+    )
+    assert stuck["alarm"] is True
+    assert "session_stuck_active" in stuck["alarm_reasons"]
+    assert stuck["stuck_sessions"] == ["replay-session"]
+
+    violated = fleet_status_health([_health_stub(violations=1)], now=now)
+    assert violated["alarm"] is True
+    assert "status_contract_violation" in violated["alarm_reasons"]
+
+    # Shell sessions are outside the agent status contract.
+    shell = ReplaySession("claude")
+    shell.record.backend = "shell"
+    assert fleet_status_health([shell], now=now)["sessions"] == []

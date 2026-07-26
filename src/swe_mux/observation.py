@@ -12,7 +12,7 @@ from typing import Any
 from .adapters.codex import codex_data_home
 from .event_bus import EventBus
 from .models import SessionState
-from .session import Session
+from .session import Session, pty_tail_state, transition_proof
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +90,33 @@ CATCHUP_OPEN_TURN_WINDOW_SECONDS = 60.0
 # A hook-initiated turn whose own submission turns out to be a local command is
 # closed only when nothing else has happened in it and it began moments ago.
 EMPTY_HOOK_TURN_WINDOW_SECONDS = 3.0
+# An approval is raised by an unordered hook (priority 2) while the resumption
+# evidence arrives on the ordered transcript (priority 1), so arbitration alone
+# would keep a session "awaiting approval" for the whole rest of the turn. A
+# transcript record may clear it, but only when provably written *after* the
+# block: the transcript is polled while hooks POST immediately, so the record
+# that triggered the prompt can be observed just after the prompt itself. The
+# slack absorbs sub-second write/notify interleaving; a human approval is
+# always slower than that.
+AWAITING_RESUME_SLACK_SECONDS = 0.5
+# Codex payloads that prove the model/tooling is running again.
+CODEX_RESUME_PAYLOADS = frozenset(
+    {
+        "agent_message",
+        "custom_tool_call",
+        "custom_tool_call_output",
+        "exec_command_begin",
+        "exec_command_end",
+        "function_call",
+        "function_call_output",
+        "mcp_tool_call_end",
+        "patch_apply_end",
+        "reasoning",
+        "task_started",
+        "user_message",
+        "web_search_end",
+    }
+)
 
 CLAUDE_CONTEXT_WINDOWS = {
     "claude-opus-4-8": 1_000_000,
@@ -399,16 +426,27 @@ async def _finish_transcript_catchup(
     if not historical_seen:
         # An empty replacement is still authoritative cancel/revert evidence.
         if session.record.state in {"working", "awaiting"}:
-            await _transition(session, events, "idle", source="transcript", force=True)
+            await _transition(
+                session,
+                events,
+                "idle",
+                source="transcript",
+                force=True,
+                evidence="catchup:empty_replacement",
+            )
         return
     if hasattr(session, "state_source_priority"):
         # A complete provider snapshot is a new observation boundary.  It may
         # reconcile a turn whose higher-priority completion hook never fired.
         session.state_source_priority = -1
     if open_turn and recent:
-        await _begin_root_turn(session, events, source="transcript")
+        await _begin_root_turn(
+            session, events, source="transcript", evidence="catchup:open_turn_recent"
+        )
     else:
-        await _transition(session, events, "idle", source="transcript")
+        await _transition(
+            session, events, "idle", source="transcript", evidence="catchup:settled"
+        )
     _publish_update(session)
 
 
@@ -471,6 +509,11 @@ def transcript_tail_turn_state(backend: str, path: Path) -> str:
             continue
         if isinstance(item, dict):
             records.append(item)
+    return tail_turn_state(backend, records)
+
+
+def tail_turn_state(backend: str, records: list[dict[str, Any]]) -> str:
+    """Classify already-parsed tail records; shared with the replay harness."""
     if backend == "claude":
         return _claude_tail_state(records)
     if backend == "codex":
@@ -621,7 +664,52 @@ def _transcript_authoritative(session: Session) -> bool:
     return getattr(session.record, "parser_status", "") == "ready"
 
 
-async def _begin_root_turn(session: Session, events: EventBus, *, source: str) -> None:
+def session_pty_state(session: Session) -> str:
+    """What this session's CLI is showing, or "unknown" without a scrollback."""
+    scrollback = getattr(session, "scrollback", None)
+    if scrollback is None:
+        return "unknown"
+    try:
+        return pty_tail_state(scrollback.bytes()[-8192:].decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        return "unknown"
+
+
+async def _resume_from_awaiting(
+    session: Session, events: EventBus, event: dict[str, Any], *, evidence: str
+) -> None:
+    """Clear an already-answered `awaiting` when the transcript proves work resumed.
+
+    Ordered, in-band evidence written after the block was raised means the user
+    answered (or the CLI moved on): the tool ran, the model spoke again, or a new
+    prompt was submitted. The PTY is used only as a veto — if this session's own
+    screen still shows a permission dialog, a parallel tool's record must not
+    hide a prompt the user has yet to answer.
+    """
+    if session.record.state != "awaiting":
+        return
+    state = _observation_state(session)
+    awaiting_since = state.get("awaiting_since")
+    if not isinstance(awaiting_since, (int, float)):
+        return
+    ts = _event_timestamp(event)
+    if ts is None or ts <= awaiting_since + AWAITING_RESUME_SLACK_SECONDS:
+        return
+    if session_pty_state(session) == "approval":
+        return
+    await _transition(
+        session,
+        events,
+        "working",
+        source="transcript",
+        force=True,
+        evidence=f"resumed_after_awaiting:{evidence}",
+    )
+
+
+async def _begin_root_turn(
+    session: Session, events: EventBus, *, source: str, evidence: str | None = None
+) -> None:
     state = _observation_state(session)
     if source == "transcript":
         # Ordered, in-band evidence of new work supersedes the prior close.
@@ -629,7 +717,11 @@ async def _begin_root_turn(session: Session, events: EventBus, *, source: str) -
     elif state.get("closed_by_transcript") and _transcript_authoritative(session):
         # The transcript already closed this turn; a later, unordered hook must
         # not reopen "working" on a session that is really waiting for input.
-        # Only fresh transcript activity (above) starts the next turn.
+        # Only fresh transcript activity (above) starts the next turn. Each
+        # refusal is a hook/transcript race, counted as a regression signal.
+        note = getattr(session, "note_reopen_blocked", None)
+        if callable(note):
+            note(source)
         return
     if (
         not state["root_turn_active"]
@@ -640,7 +732,7 @@ async def _begin_root_turn(session: Session, events: EventBus, *, source: str) -
         # A new root turn lets the best currently available tier take ownership
         # when a hook or transcript source has gone missing.
         session.state_source_priority = -1
-    await _transition(session, events, "working", source=source)
+    await _transition(session, events, "working", source=source, evidence=evidence)
     if state["root_turn_active"]:
         return
     state["root_turn_active"] = True
@@ -657,6 +749,8 @@ async def _finish_root_turn(
     source: str,
     outcome: str = "completed",
     force: bool = False,
+    evidence: str | None = None,
+    inferred: bool | None = None,
     **payload: Any,
 ) -> None:
     state = _observation_state(session)
@@ -676,8 +770,14 @@ async def _finish_root_turn(
     )
     state["root_turn_active"] = False
     state["root_completion_seen"] = True
+    if transition_proof(source, inferred) == "inferred":
+        # Recovery inferences stay visible in the event stream, not only the ledger.
+        payload.setdefault("inferred", True)
     if outcome == "completed":
-        await _transition(session, events, "idle", source=source, force=force)
+        await _transition(
+            session, events, "idle", source=source, force=force,
+            evidence=evidence, inferred=inferred,
+        )
         await events.emit(
             "turn_ended",
             session_id=session.record.id,
@@ -687,7 +787,10 @@ async def _finish_root_turn(
             **payload,
         )
     else:
-        await _transition(session, events, "idle", outcome, source=source, force=force)
+        await _transition(
+            session, events, "idle", outcome, source=source, force=force,
+            evidence=evidence, inferred=inferred,
+        )
         await events.emit(
             "turn_aborted",
             session_id=session.record.id,
@@ -712,7 +815,9 @@ async def _complete_empty_hook_turn(session: Session, events: EventBus) -> None:
     started = float(state.get("turn_started_at") or 0.0)
     if time.time() - started > EMPTY_HOOK_TURN_WINDOW_SECONDS:
         return
-    await _finish_root_turn(session, events, source="transcript", force=True)
+    await _finish_root_turn(
+        session, events, source="transcript", force=True, evidence="local_command_record"
+    )
 
 
 def hook_event_scope(event_type: str, payload: dict[str, Any]) -> str:
@@ -748,18 +853,20 @@ async def apply_hook_observation(
     # turn as "working"). Turn-end, approval, and notification hooks below stay
     # live because they carry signals the transcript lacks or delivers later.
     if event_type == "SessionStart":
-        await _transition(session, events, "idle", source="hook")
+        await _transition(session, events, "idle", source="hook", evidence="hook:SessionStart")
     elif event_type in {"UserPromptSubmit", "turn_started", "task_started"}:
         if _transcript_authoritative(session):
             return
-        await _begin_root_turn(session, events, source="hook")
+        await _begin_root_turn(session, events, source="hook", evidence=f"hook:{event_type}")
     elif event_type == "PreToolUse":
         if _transcript_authoritative(session):
             return
-        await _begin_root_turn(session, events, source="hook")
+        await _begin_root_turn(session, events, source="hook", evidence="hook:PreToolUse")
         _observation_state(session)["turn_saw_activity"] = True
         tool = str(payload.get("tool_name") or payload.get("name") or "tool")
-        await _transition(session, events, "working", tool, source="hook")
+        await _transition(
+            session, events, "working", tool, source="hook", evidence="hook:PreToolUse"
+        )
         await events.emit(
             "tool_use",
             session_id=session.record.id,
@@ -770,10 +877,20 @@ async def apply_hook_observation(
     elif event_type in {"PostToolUse", "PostToolUseFailure"}:
         if _transcript_authoritative(session):
             return
-        await _transition(session, events, "working", source="hook")
+        await _transition(
+            session, events, "working", source="hook", evidence=f"hook:{event_type}"
+        )
     elif event_type in {"PermissionRequest", "approval_needed", "approval-requested"}:
         tool = str(payload.get("tool_name") or payload.get("message") or "approval")
-        await _transition(session, events, "awaiting", tool, source="hook")
+        await _transition(
+            session,
+            events,
+            "awaiting",
+            tool,
+            source="hook",
+            evidence=f"hook:{event_type}",
+            awaiting_reason="approval",
+        )
         await events.emit(
             "approval_needed",
             session_id=session.record.id,
@@ -789,13 +906,26 @@ async def apply_hook_observation(
             # agent is back at the prompt. That is "ready", not a blocking approval:
             # bucketing it as awaiting shows a phantom approval on a finished agent.
             # Treat it as a turn boundary (also recovers a missed Stop), but never
-            # clobber a genuine approval the user has not yet acted on.
-            if session.record.state != "awaiting":
-                await _finish_root_turn(session, events, source="hook")
+            # clobber a genuine approval the user has not yet acted on — unless
+            # this session's own screen proves the dialog is gone and the CLI is
+            # back at its input prompt, which is exactly what the hook claims.
+            if session.record.state != "awaiting" or session_pty_state(session) == "idle":
+                await _finish_root_turn(
+                    session, events, source="hook", evidence="hook:Notification:idle_prompt"
+                )
         elif notification in {"permission_prompt", "elicitation_dialog"}:
             kind = "approval" if notification == "permission_prompt" else "input"
+            reason = "approval" if notification == "permission_prompt" else "elicitation"
             detail = str(payload.get("message") or notification)
-            await _transition(session, events, "awaiting", detail, source="hook")
+            await _transition(
+                session,
+                events,
+                "awaiting",
+                detail,
+                source="hook",
+                evidence=f"hook:Notification:{notification}",
+                awaiting_reason=reason,
+            )
             await events.emit(
                 "approval_needed",
                 session_id=session.record.id,
@@ -805,7 +935,15 @@ async def apply_hook_observation(
                 detail=detail,
             )
         elif notification in {"rate_limit", "rate_limited"}:
-            await _transition(session, events, "awaiting", "rate_limit", source="hook")
+            await _transition(
+                session,
+                events,
+                "awaiting",
+                "rate_limit",
+                source="hook",
+                evidence=f"hook:Notification:{notification}",
+                awaiting_reason="rate_limit",
+            )
             await events.emit(
                 "rate_limited",
                 session_id=session.record.id,
@@ -813,7 +951,7 @@ async def apply_hook_observation(
                 scope="root",
             )
     elif event_type in {"Stop", "turn_ended", "agent-turn-complete", "task_complete"}:
-        await _finish_root_turn(session, events, source="hook")
+        await _finish_root_turn(session, events, source="hook", evidence=f"hook:{event_type}")
     elif event_type == "SessionEnd":
         await _finish_root_turn(
             session,
@@ -821,6 +959,7 @@ async def apply_hook_observation(
             source="hook",
             outcome=str(payload.get("reason") or "session_ended"),
             force=True,
+            evidence="hook:SessionEnd",
         )
 
 
@@ -832,22 +971,36 @@ async def _transition(
     *,
     source: str = "transcript",
     force: bool = False,
+    evidence: str | None = None,
+    inferred: bool | None = None,
+    awaiting_reason: str | None = None,
 ) -> bool:
     if getattr(session, "observation_replay", False):
         return False
-    if force and hasattr(session, "state_source_priority"):
-        # Interrupt/abort evidence exists only in the transcript; hooks never
-        # deliver it, so it may reclaim authority from an earlier hook state.
-        session.state_source_priority = -1
+    # force: interrupt/abort evidence exists only in the transcript; hooks never
+    # deliver it, so it may reclaim authority from an earlier hook state. The
+    # shared contract resets arbitration before applying.
     previous = session.record.state
     transition = getattr(session, "transition", None)
     if callable(transition):
-        accepted = transition(state, detail, source=source)
+        accepted = transition(
+            state,
+            detail,
+            source=source,
+            evidence=evidence,
+            inferred=inferred,
+            awaiting_reason=awaiting_reason,
+            force=force,
+        )
         if not accepted:
             return False
     else:
+        if force and hasattr(session, "state_source_priority"):
+            session.state_source_priority = -1
         session.record.state = state
         session.record.state_detail = detail
+        if hasattr(session.record, "awaiting_reason"):
+            session.record.awaiting_reason = awaiting_reason if state == "awaiting" else None
         _publish_update(session)
     if previous != state:
         await events.emit(
@@ -857,6 +1010,8 @@ async def _transition(
             previous=previous,
             state=state,
             detail=detail,
+            awaiting_reason=awaiting_reason if state == "awaiting" else None,
+            proof=transition_proof(source, inferred),
         )
     return True
 
@@ -887,7 +1042,12 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
             return
         if _is_interrupt_text(text):
             await _finish_root_turn(
-                session, events, source="transcript", outcome="interrupted", force=True
+                session,
+                events,
+                source="transcript",
+                outcome="interrupted",
+                force=True,
+                evidence="interrupt_marker",
             )
             return
         has_tool_result = isinstance(content, list) and any(
@@ -902,10 +1062,18 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
             )
             and not has_tool_result
         ):
-            await _begin_root_turn(session, events, source="transcript")
+            # A fresh prompt while blocked means the user answered and moved on.
+            await _resume_from_awaiting(session, events, event, evidence="user_prompt_record")
+            await _begin_root_turn(
+                session, events, source="transcript", evidence="user_prompt_record"
+            )
         elif has_tool_result:
+            # The tool actually ran: an approval (or denial) resolved it.
+            await _resume_from_awaiting(session, events, event, evidence="tool_result_record")
             session.record.state_detail = None
-            await _begin_root_turn(session, events, source="transcript")
+            await _begin_root_turn(
+                session, events, source="transcript", evidence="tool_result_record"
+            )
             _observation_state(session)["turn_saw_activity"] = True
             for block in content if isinstance(content, list) else []:
                 if not isinstance(block, dict) or block.get("type") != "tool_result":
@@ -941,7 +1109,23 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                         kind="completed",
                     )
     elif event_type == "assistant":
-        await _begin_root_turn(session, events, source="transcript")
+        # The model produced output again, so nothing is blocking it.
+        await _resume_from_awaiting(session, events, event, evidence="assistant_record")
+        state = _observation_state(session)
+        # A trailing completion record for a turn something else (hook Stop,
+        # EventBus-deduped boundary) already closed must not blink the status
+        # back to "working" just to close it again: an end_turn assistant record
+        # never starts a turn (submission always precedes it), so when the
+        # completion was already seen it only confirms the existing boundary.
+        trailing_completion = (
+            message.get("stop_reason") == "end_turn"
+            and not state.get("root_turn_active")
+            and state.get("root_completion_seen")
+        )
+        if not trailing_completion:
+            await _begin_root_turn(
+                session, events, source="transcript", evidence="assistant_record"
+            )
         _observation_state(session)["turn_saw_activity"] = True
         has_text = False
         content = message.get("content") or []
@@ -957,7 +1141,9 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                 if tool_use_id:
                     _tool_names(session)[tool_use_id] = name
                 target, content_hash = tool_call_evidence(block.get("input"))
-                await _transition(session, events, "working", name)
+                await _transition(
+                    session, events, "working", name, evidence="tool_use_record"
+                )
                 await events.emit(
                     "tool_use",
                     session_id=session.record.id,
@@ -1017,7 +1203,9 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
         # A text response with end_turn is authoritative; tool-use messages are
         # deliberately left working until their result or a later completion.
         if message.get("stop_reason") == "end_turn" and has_text:
-            await _finish_root_turn(session, events, source="transcript")
+            await _finish_root_turn(
+                session, events, source="transcript", evidence="stop_reason=end_turn"
+            )
     elif event_type == "system":
         subtype = str(event.get("subtype") or "")
         if subtype == "turn_duration":
@@ -1025,6 +1213,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                 session,
                 events,
                 source="transcript",
+                evidence="system:turn_duration",
                 duration_ms=event.get("durationMs"),
             )
         elif subtype in {"compact_boundary", "context_compacted", "compaction"}:
@@ -1060,7 +1249,7 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         if native_id:
             session.record.native_session_id = str(native_id)
         session.record.model = str(payload.get("model") or "") or session.record.model
-        await _transition(session, events, "idle")
+        await _transition(session, events, "idle", evidence="session_meta")
     if state.get("codex_scope") == "subagent":
         await events.emit(
             "subagent_activity",
@@ -1070,13 +1259,19 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             kind=str(payload_type or outer_type or "activity"),
         )
         return
+    if payload_type in CODEX_RESUME_PAYLOADS:
+        # Tooling or the model is running again, so any approval was answered.
+        await _resume_from_awaiting(session, events, event, evidence=str(payload_type))
     if payload_type in {"task_started", "user_message"}:
-        await _begin_root_turn(session, events, source="transcript")
+        await _begin_root_turn(
+            session, events, source="transcript", evidence=str(payload_type)
+        )
     elif payload_type == "task_complete":
         await _finish_root_turn(
             session,
             events,
             source="transcript",
+            evidence="task_complete",
             turn_id=payload.get("turn_id"),
             duration_ms=payload.get("duration_ms"),
         )
@@ -1086,6 +1281,7 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             events,
             source="transcript",
             outcome=str(payload.get("reason") or "aborted"),
+            evidence="turn_aborted",
             turn_id=payload.get("turn_id"),
             duration_ms=payload.get("duration_ms"),
         )
@@ -1096,6 +1292,7 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             source="transcript",
             outcome="rolled_back",
             force=True,
+            evidence="thread_rolled_back",
         )
     elif payload_type in {"function_call", "custom_tool_call"}:
         name = str(payload.get("name") or "tool")
@@ -1105,8 +1302,12 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         target, content_hash = tool_call_evidence(
             payload.get("arguments") or payload.get("input")
         )
-        await _begin_root_turn(session, events, source="transcript")
-        await _transition(session, events, "working", name)
+        await _begin_root_turn(
+            session, events, source="transcript", evidence=str(payload_type)
+        )
+        await _transition(
+            session, events, "working", name, evidence=str(payload_type)
+        )
         await events.emit(
             "tool_use",
             session_id=session.record.id,
@@ -1194,7 +1395,15 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         "request_user_input",
     }:
         detail = "input" if payload_type == "request_user_input" else "approval"
-        await _transition(session, events, "awaiting", detail)
+        reason = "question" if payload_type == "request_user_input" else "approval"
+        await _transition(
+            session,
+            events,
+            "awaiting",
+            detail,
+            evidence=str(payload_type),
+            awaiting_reason=reason,
+        )
         await events.emit(
             "approval_needed",
             session_id=session.record.id,
@@ -1203,7 +1412,14 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             kind=detail,
         )
     elif payload_type in {"rate_limit", "rate_limited"}:
-        await _transition(session, events, "awaiting", "rate_limit")
+        await _transition(
+            session,
+            events,
+            "awaiting",
+            "rate_limit",
+            evidence=str(payload_type),
+            awaiting_reason="rate_limit",
+        )
         await events.emit(
             "rate_limited",
             session_id=session.record.id,

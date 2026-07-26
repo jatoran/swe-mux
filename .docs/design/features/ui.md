@@ -16,9 +16,24 @@ responsive controls.
 - The sidebar shows only Projects marked for active navigation. Each Project row exposes its
   fixed Project note and Files view, then layout/session rows. An initialized or open session
   note appears beneath its terminal.
+- Only a tabbed pane indents its sessions in the sidebar, and it does so because it draws the
+  bracket that explains the indent. Split branches are siblings at the same depth: the sidebar is
+  a session list, not a pane-geometry diagram, and indenting per split produced unexplained
+  nesting that deepened with every split. Indentation is therefore at most one level.
+- The bracket is drawn per branch and stops at the first and last session rows' centres. A
+  cluster-height spine would dangle past the last session row whenever that session also has a
+  note or preview row beneath it.
+- Agent attention edges (`viewing`, `unread`) sit on the row's right and are inset vertically.
+  On the left they shared a gutter with the tree's connector lines, so a row marker read as a
+  branch, and consecutive marked rows merged into one long rule that looked like a stray spine.
+  The left gutter belongs to the tree alone.
 - The active-Project header and each Project row expose **Run**. Its compact menu contains new
   Claude/Codex/shell/custom-terminal launchers followed by trusted Project Actions; it is a
   launch surface, not persistent sidebar grouping.
+- Run is the only always-present launcher, since tab strips carry no new-tab button
+  (`workspace-layout.md`). The header Run is styled as an accent chip rather than a faint label,
+  and because it has no room in the 40 px collapsed header column, the collapsed rail carries an
+  equivalent `▶` button. Mobile's toolbar Run is the same surface.
 - `projects` opens the viewport-level Projects manager, which lists configured visible and
   hidden Projects. A Project must exist before terminal actions are enabled.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
@@ -36,6 +51,8 @@ responsive controls.
   sub-window of one provider's plan rather than a measure comparable across providers. The mark
   is the only thing identifying the row, so it keeps full contrast while the percentage carries
   the shared ok/warn/critical banding. Providers render in the same order as everywhere else.
+  The mobile toolbar renders the same chip with the weekly countdown added beneath; the rail has
+  no room for that second line, and on desktop the tooltip already carries it.
 - The resource chip reports RAM rather than CPU, since a percentage that moves every sample is
   not worth a permanent glance, and abbreviates it (`3.2G`) to fit the strip.
 - Popover direction is independent of the condensed trigger, so a rail anchored at the bottom of
@@ -74,12 +91,18 @@ responsive controls.
   interaction with that confirmation is inside the modal boundary and cannot also trigger the
   Settings backdrop.
 - The app menu's `MAINTENANCE` section (mirrored in the sidebar context menu and command
-  palette as `daemon.reload`/`ui.reload`) exposes the session-preserving reloads on every
-  device, including mobile. "Reload daemon (keep sessions)" posts `/api/daemon/restart`, shows
-  a blocking wait overlay while the daemon is down, and reloads the page when the successor
-  answers health; the server refuses (409, surfaced as a toast) when no PTY supervisor is
-  attached so the action can never silently kill sessions. "Reload UI" is a plain page reload
-  for picking up freshly built frontend assets.
+  palette as `daemon.reload`/`app.redeploy`/`ui.reload`) exposes the session-preserving
+  reloads on every device, including mobile. "Reload daemon (keep sessions)" posts
+  `/api/daemon/restart`, shows a blocking wait overlay while the daemon is down, and reloads
+  the page when the successor answers health; the server refuses (409, surfaced as a toast)
+  when no PTY supervisor is attached so the action can never silently kill sessions.
+  "Rebuild + redeploy app (keep sessions)" confirms, posts `/api/daemon/redeploy` (staged
+  frozen-app rebuild; the only reload that reaches the frozen bundle's own assets), and shows
+  a blocking overlay through the multi-minute build/swap/relaunch: while the old daemon still
+  serves it polls `GET /api/daemon/redeploy` so an early build failure surfaces as an error
+  toast with the log tail (the running app is untouched); after the daemon drops it polls
+  health for up to 8 minutes and reloads when the new (or rolled-back) app answers. "Reload
+  UI" is a plain page reload for picking up freshly built frontend assets.
 
 ## Settings contract
 
@@ -111,6 +134,8 @@ responsive controls.
 - Highlighted product controls replace **Next** for action steps. Transparent blockers leave only
   the spotlight opening and tutorial card interactive; Project creation, account save, terminal
   launch, and layout drops advance only after their ordinary operation reports success.
+- Both the Run step and the second-tab step drive the real Run menu, since tab strips have no
+  new-tab button to point at; the second-tab step's spotlight returns to Run.
 - Run requires opening the actual menu and selecting Shell. Account setup requires either
   **sign in + save** or **save current login** to complete successfully. Failures remain on the
   current step with the owning feature's normal error surface.
@@ -130,14 +155,73 @@ responsive controls.
 
 - Focus is device-local and URL-addressable by Project/session. Reload prefers a valid URL
   target, then remembered focus, then a visible fallback.
-- Mobile's top row contains navigation at left, active Project name centered, and provider
-  accounts at right. It has no separate session dropdown.
+- Mobile's top row is `[nav] [quota] [Project name] [Run]`: navigation and the two provider
+  quota boxes at the left, the Project name taking the slack in the middle, Run pinned to the
+  far right. It has no separate session dropdown. The Project name is a real button: a single
+  tap opens the Project menu (long-press and right-click stay equivalent), because reaching a
+  menu should never require a hold on touch.
+- The bar is flex with `nowrap`, not grid. Only the Project name flexes and the other three are
+  content-sized; expressed as grid, the `auto` track next to the name's `1fr` absorbed the
+  slack and left the quota boxes stranded mid-bar.
+- Mobile quota is **two boxes, one per provider**, each carrying the weekly percentage and the
+  weekly reset countdown (`23%` over `4d8h`). It previously showed a single number — whichever
+  provider's weekly window was furthest along — which hid *which* provider was burning and gave
+  no sense of how long until it cleared, and a phone has no hover tooltip to recover either.
+  Providers render in the same order as every other surface.
+- Nav is half width and therefore a glyph rather than the `:nav` label. No word survives at that
+  width, and pinning a font size to force one would ignore the user's UI-scale setting, which
+  this button is subject to through an `!important` rule. The 44 px touch target survives
+  vertically, and the sidebar also opens by swipe, so this is not its only entry point.
+- Every Run trigger that targets the active Project — mobile toolbar, desktop header, collapsed
+  rail — toggles: a second click collapses the menu. Sidebar project rows keep the plain open, so
+  clicking another Project's `▶` while a menu is up switches to it rather than only closing.
+- Both mobile toolbar triggers toggle: tapping an expanded Project menu or Run menu collapses it.
+  Each needs its own guard, because they close by different routes. The Project menu relies on
+  the document dismiss handler, so its trigger carries `data-menu-toggle` and that handler skips
+  it — otherwise pointer-down closes and the click reopens, which looks like a menu that will not
+  close. The Run menu instead has a full-viewport scrim above the toolbar, so a second tap
+  dismisses through the scrim and never reaches the button; on touch the click then lands on
+  whatever is under the finger once the scrim is gone, so the trigger treats a click within
+  350 ms of a scrim dismissal as the closing half of the toggle rather than a fresh open.
+- On touch devices, app chrome (toolbar, tab strips, sidebar, pane bars, action rail, voice
+  strip, context menus) suppresses text selection and the native callout. Long-pressing a
+  control to reach its menu must not raise selection handles or the magnifier over its label.
+  Terminals, editors, and inputs keep normal selection — the suppression is scoped to chrome,
+  never to content.
 - Mobile's contextual toolbar includes the same Project-level Run menu as desktop.
 - Mobile uses one horizontally scrolling tab rail and one selected view. This is a projection
   of the durable desktop pane tree; see `workspace-layout.md` for placement and restoration
   rules.
 - The selected terminal keeps an in-flow session header above a remaining-height terminal
   surface. Terminal visibility does not depend on convergence with a separate global active ID.
+- That header is a single row on touch: status at the left, note/proc/⋯ at the right. The cwd
+  column (including its `last-known::` spawn-cwd marking) is desktop-only — on a phone it is the
+  least useful field in the bar, and as a third item in a two-column grid it wrapped the tools
+  onto a second row. It is hidden via `.pane-bar>.pane-path`, since the bar's own `.pane-bar>div`
+  layout rule out-specifies a bare `.pane-path` override.
+- Touch gestures are configurable command slots: single-finger horizontal swipes, two-finger
+  horizontal *and vertical* swipes, and a two-finger tap. Only the **single**-finger vertical
+  channel is reserved (terminal scrollback / application wheel); two-finger vertical is a real
+  mappable slot. Edge- and top-anchored swipes stay with the OS. Slot names are validated
+  server-side, so adding one requires the same slot list in `config.py`.
+- The gesture recognizer yields to anything that owns horizontal scrolling (the action rail,
+  tab strips, the voice strip, plus a generic `overflow-x` scan), and it must yield *cheaply*.
+  Only the `touchmove` listener ever calls `preventDefault`, and a non-passive `touchmove`
+  registered on `window` forces Chrome to route every touch through the main thread before it
+  may scroll — on a busy pane that is enough to swallow the first drag on the rail. So
+  `touchstart`/`touchend` stay passive and the non-passive `touchmove` is attached only once a
+  touchstart has claimed the gesture, then dropped when the sequence ends. Registering it during
+  touchstart dispatch still yields cancelable moves, so owned gestures keep working while drags
+  inside a scroller meet no handler at all.
+- A recognized gesture gives a short haptic tick, and tab navigation shows a transient label
+  pill naming the tab it landed on. Both exist because a swipe that lands on an unbound slot,
+  or a tab change the eye misses, is otherwise indistinguishable from "nothing happened".
+- A terminal scrolled off its newest line shows a jump-to-latest chip in the terminal's own
+  grid cell, above the action rail. It is checked per render, not only on scroll, because
+  output arriving while scrolled up moves the buffer base without moving the viewport.
+- Mobile Run is tap-to-open-launcher, hold-to-repeat: a long-press starts the last launched
+  backend directly. The click that follows a long-press is swallowed, or the launcher would
+  open on top of the session the hold just started.
 - Touch long-press in a terminal selects the word under the pointer and drag extends that xterm
   selection. Touch-originated synthetic context-menu events never open the desktop terminal
   menu. Selection release automatically attempts to copy by default; the preference is
@@ -145,14 +229,72 @@ responsive controls.
 - Narrow and coarse-pointer terminals focus a dedicated native IME bridge. Android composition
   replacements are converted to incremental terminal text and DEL input as they happen, so Gboard
   and other composing keyboards provide live PTY input without xterm's temporary composition box.
+- A terminal pane is three rows: the header bar, an optional read-aloud player strip, then the
+  terminal surface (terminal + action rail). The rows are placed explicitly so the middle track
+  collapses to nothing when no strip is rendered.
+- The pane header is `[status] [cwd] [voice] [tools]` and **must stay one row**. It is a grid
+  with `grid-auto-flow:column`, which is what enforces that: without it, an item beyond the
+  declared column count auto-places into a *second row*, and the voice group is a
+  variable-length chip set, so the tools would silently drop under the status line. Overflow is
+  absorbed by `.pane-voice`, which scrolls horizontally with a trailing fade, never by growing
+  the bar. Phones drop the cwd column and cap the status width so the group keeps room.
 - Every terminal has an in-flow action rail at the bottom of its pane on desktop and mobile,
-  below the terminal rather than over it. It carries, in order, the agent read-aloud and
-  hands-free Conversation toggles (agent panes only), a keyboard toggle plus terminal-key
+  below the terminal rather than over it. It carries a keyboard toggle plus terminal-key
   buttons (Esc, Enter, Tab,
-  Ctrl-C, and the four arrows), then Copy reply and Paste, then a status readout. Keys inject
+  Ctrl-C, and the four arrows), then Copy reply, Paste, and the clipboard-history picker (`Clip`),
+  then a status readout. Rail items now carry a **placement**: `strip` (here), `drawer` (the
+  utility drawer's Commands tab), or `both`. That replaces the old enabled/disabled toggle, which
+  was a bad model — the strip is horizontally scarce, so "off" was the only way to get an item out
+  of it, and several useful built-ins (Home/End, ^Home/^End, newline, clear input, `/rewind`)
+  shipped hidden for want of room. Those now ship *on*, in the drawer, and custom skills and slash
+  commands default there too rather than crowding the arrows off the strip. The two regions are
+  independent surfaces, not one slot: an item you hammer under the terminal can also carry its
+  full label in the drawer, so the settings row edits them as two toggles (`Rail`, `Panel`) rather
+  than a three-way select. Clearing both is what hides an item (`enabled: false`); the settings
+  row is what dims. Saves predating placement are migrated on read: `enabled: false` meant "not on
+  the strip", so it becomes a drawer item.
+- Rail items come in five kinds: terminal `key`, built-in `action`, literal `text`, `slash`
+  command, `skill`, and `prompt`. A `prompt` item is a *pointer* at a prompt-library template
+  (`prompt-library.md`) — it stores the `scope:id` key, never the body, so the button always
+  injects the template's current text and cannot drift into a stale copy. It is the one item type
+  whose activation is asynchronous (the body is fetched on click) and the one that can never
+  submit, which is the library's own contract. Templates carrying `{{variables}}` have nothing to
+  inject yet, so the button opens the drawer's Prompts tab preselected with its fields expanded
+  rather than pasting a half-rendered body. Both hosts route through `promptRail.ts` and insert
+  over the `mux:terminal-action` bus, so the pane stays the single owner of terminal writes.
+- The command-rail settings rows are a name-first grid: the item name owns the elastic column and
+  wraps rather than truncating (it used to share a fixed column with the placement select and
+  clipped to an ellipsis), with type/payload preview beneath it and the toggles auto-sized on the
+  right. Placement chips are blue ("this region renders it") and the device/backend filter chips
+  green ("this context is allowed to"), because one accent across seven chips read as a single
+  toggle set. Phones keep two grid rows per item: name + reorder, then the toggles.
+- The Commands tab is session-scoped but renders outside the terminal pane, so it activates items
+  over the same `mux:terminal-action` bus (`sendKey`, `insertText`, `copyReply`, `copyResume`,
+  `branch`, `relaunch`): the pane stays the single owner of terminal writes, so broadcast, replay,
+  and read/select mode keep applying. With no terminal focused the tab says so instead of rendering
+  dead buttons. Keys inject
   raw bytes on the normal input path. The rail overflows on narrow panes and scrolls
-  horizontally (touch drag, scrollbar, or mouse wheel); it never wraps. On agent panes the
-  read-aloud player strip sits directly above it.
+  horizontally (touch drag, scrollbar, or mouse wheel); it never wraps. Voice controls are not
+  here — they are in the pane header (`voice.md`), because the rail is a scroller the user pages
+  through and they kept scrolling out of reach.
+- Copy reply, Branch, and Paste render as icons alone; every other action keeps its text. The
+  rail is width-starved — those three cost 74 px each on desktop and 96 px on a phone, which is
+  most of a screen's worth of rail before the terminal keys begin — and their marks (offset
+  sheets, git branch, clipboard) are conventional enough to read without a word. **Copy resume
+  deliberately keeps its label**: a copy glyph cannot distinguish it from Copy reply, and the
+  two sit side by side. Icon buttons size like keys (30/44 px) and carry an explicit
+  `aria-label`, since the title attribute is not a name on touch.
+- Rail buttons must not carry a resting selected appearance. Hover styling is gated to
+  hover-capable pointers, because touch browsers retain `:hover` on the last tapped element
+  until another element is tapped, which reads as a stuck selection. Activation feedback is a
+  one-shot pulse cleared when its animation ends, so every button returns to rest on its own.
+  The pulse fires on **click, never pointer-down**: the rail is a horizontal scroller, so a
+  finger landing on a button is as likely to begin a drag as a tap, and pulsing on contact made
+  every swipe look like it had selected whatever button it started on. Only a real activation
+  produces a click; a scroll drag produces none.
+- The keyboard toggle is also a registered command (`terminal.keyboardToggle`), not only a rail
+  button, so it can be bound to a gesture or a key and reached from the palette. It routes over
+  the same session-targeted terminal-action bus as copy/paste/find.
 - The keyboard toggle is a touch-only read/select mode: while on, tapping the terminal selects,
   scrolls, and positions without raising the on-screen keyboard, so selection auto-copy and
   Paste work keyboard-down; tapping the toggle again restores typing. Sending a key from the
@@ -166,6 +308,69 @@ responsive controls.
 - Terminal copy is success-preserving: keyboard, menu, automatic selection, the action rail, and
   provider OSC 52 requests retain the exact text until a write succeeds. Blocked or insecure
   clipboard contexts open a prepared fallback automatically, leaving one explicit Copy tap.
+## Utility drawer
+
+- The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they
+  are one gesture (mobile) or one visible click (desktop) away instead of two menu levels deep.
+  Tabs, in order: **Clipboard**, **Commands** (the rail's long tail), **Prompts**, **Alerts**
+  (notifications). The first three are all the same verb — text into the focused session — which is
+  what makes them one surface rather than three menu entries; notifications is the outlier and sits
+  last. Session history, the process fleet, usage, and automation stay modal: they are wide,
+  table-shaped surfaces that a ~380 px column serves badly.
+- One component, two renderings (`UtilityDrawer.tsx`). **Mobile** is an overlay with a scrim,
+  mutually exclusive with the navigation sidebar (opening either closes the other). **Desktop** is
+  an in-flow column of the workspace grid: the pane tree shrinks rather than being covered, because
+  covering a terminal in a tiling workspace is exactly backwards for a panel you opened to work
+  *with* that terminal. Width is pointer-resizable and device-local, like the sidebar's.
+- Every width change reflows the pane tree and refits its terminals, which sends a resize to each
+  PTY and makes agent TUIs redraw. That is why the drawer never opens itself, its width persists,
+  and the drag commits on pointer-up rather than per-frame.
+- Desktop additionally has an always-visible 40 px **icon rail** on the far right, one icon per tab,
+  with a badge for unread notifications. The rail is the part that actually fixes discoverability:
+  the surfaces are visible without a menu, a chord, or any configuration. Mobile reaches the same
+  tabs through the drawer's own tab strip. Last-used tab is remembered per device, so
+  `drawer.toggle` (default two-finger swipe **left**, the swipe that drags a right-edge panel in;
+  the rightward swipe keeps the left-edge sidebar) reopens where you left off, while `drawer.<tab>`
+  commands open one tab directly and close it if it is already showing.
+- Inserting closes the drawer on mobile, where it covers the terminal it just typed into, and
+  leaves it open on desktop, where the column sits beside that terminal and a second insert is the
+  common next action.
+- **Clipboard history** is a shared, bounded ring of every text copied *inside* swe-mux, and the
+  drawer's first tab. Capture is installed once at boot in `clipboardHistory.ts` rather than at each copy
+  site: `Clipboard.prototype.writeText` is wrapped (which covers all ~30 in-app calls *and* the
+  vendored Continuity editor, since it calls the same global) plus a capture-phase `copy`/`cut`
+  listener for the paths that never reach `writeText` (plain DOM selections, the editor's
+  `execCommand` fallback). One gesture can trip both hooks, so identical text inside a short
+  window is collapsed client-side and the daemon promotes an existing entry instead of
+  duplicating it. Nothing reads or polls the OS clipboard: copies made in other applications
+  never appear, by design.
+- On mobile the sidebar and the utility drawer are mutually exclusive: opening either closes the
+  other. They are both full-height drawers over the workspace entering from opposite edges, so two
+  open at once leave no workspace between them and bury one under the other's scrim. The rule is
+  enforced in the state setters themselves (`App.tsx` wraps both `useState` setters), not at each
+  call site, so every entry point — gesture, command, nav toggle, tutorial — inherits it. Desktop
+  is unaffected: there the sidebar is an in-flow column the drawer's own column never covers.
+- Spawning a terminal closes the mobile sidebar. Every launch focuses the new tab, so every
+  launch has to clear what is covering it — launching from a sidebar Project row otherwise
+  focused a tab the drawer was still hiding, which reads as "the Run button did nothing". This
+  lives in `spawnTerminal` rather than at the Run menu's call site, so every entry point
+  (sidebar row, toolbar Run, palette, keybinding, custom launcher) inherits it, and it runs
+  with the optimistic state so the pending terminal is visible immediately. Project Actions
+  take the same step in `attachActionSessions`.
+- The drawer is deliberately *not* a modal layer. Inserting targets the surface that was focused
+  before it opened — terminal or Continuity note, whichever was last focused (`insertTarget.ts`;
+  a detached editor loses the routing to the focused terminal) — so the workspace has to stay
+  visible behind it. Desktop therefore gets no scrim (Escape, ×, or the toggle closes it) while
+  mobile dims, and the drawer and its scrim are in the gesture recognizer's allowlist so the same
+  swipe that pulled it in pushes it back out. Clipboard rows carry previews only; full text is
+  fetched per entry on use. Row actions are insert (primary), copy to the system clipboard, pin,
+  forget.
+- Clipboard history's safety properties are part of the feature, not an afterthought: the ring is
+  **memory-only by default** (`clipboard_history_persist` opts into the SQLite mirror, and turning
+  it back off deletes the rows), secret-shaped copies are skipped rather than stored, oversized
+  copies are skipped rather than stored truncated (a partial paste into an agent prompt is worse
+  than a missing entry), pinned entries are exempt from eviction/retention/Clear, and everything
+  is reachable by anything that can reach the daemon — see `remote-access.md`.
 - Shift+Enter and Ctrl+Enter insert a newline in Claude and Codex terminals instead of
   submitting. The browser cannot express either chord in the legacy encoding both agents parse,
   so the pane rewrites them to ESC+CR, the one sequence Claude and Codex each read as an editor

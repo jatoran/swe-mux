@@ -4,40 +4,15 @@
   "description": "A question blocks delivery, subagent activity does not complete the root, and task completion is debounced.",
   "steps": [
     {"kind": "transcript", "record": {"type": "session_meta", "payload": {"id": "root-thread", "cwd": "."}}},
-    {
-      "kind": "transcript",
-      "record": {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-1"}},
-      "expect_delivery": "blocked",
-      "oracle_safe": false
-    },
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-1"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
     {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "user_message", "message": "test"}}},
     {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "sub_agent_activity", "kind": "started", "agent_path": ["worker"], "agent_thread_id": "child"}}},
-    {
-      "kind": "transcript",
-      "record": {"type": "event_msg", "payload": {"type": "request_user_input"}},
-      "expect_delivery": "blocked",
-      "oracle_safe": false
-    },
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "request_user_input"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "awaiting", "expect_awaiting": "question"},
     {"kind": "terminal", "mode": "normal"},
-    {
-      "kind": "timer",
-      "seconds": 3.0,
-      "expect_delivery": "blocked",
-      "oracle_safe": false
-    },
+    {"kind": "timer", "seconds": 3.0, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "awaiting", "expect_awaiting": "question"},
     {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-1"}}},
-    {
-      "kind": "transcript",
-      "record": {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-1", "duration_ms": 50}},
-      "expect_delivery": "unknown",
-      "oracle_safe": false
-    },
-    {
-      "kind": "timer",
-      "seconds": 2.1,
-      "expect_delivery": "safe",
-      "oracle_safe": true
-    }
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-1", "duration_ms": 50}}, "expect_delivery": "unknown", "oracle_safe": false, "expect_state": "idle"},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"}
   ],
   "expected": {
     "events": [
@@ -45,6 +20,12 @@
       {"type": "subagent_activity", "source": "transcript", "scope": "subagent", "kind": "started"},
       {"type": "approval_needed", "source": "transcript", "scope": "root", "kind": "input"},
       {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "awaiting", "source": "transcript", "proof": "proven", "awaiting_reason": "question"},
+      {"previous": "awaiting", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
     ],
     "parser": {"status": "ready", "recognized": 7, "unknown": 0, "unknown_signatures": {}},
     "delivery_state": "safe",

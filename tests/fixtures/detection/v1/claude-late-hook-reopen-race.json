@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "late_hook_reopen",
+  "description": "Late PreToolUse/PostToolUse/UserPromptSubmit hooks landing after the transcript closed the turn are gated by transcript authority and never reopen working.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "test"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Read", "input": {}}], "stop_reason": "tool_use"}}},
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "ok", "is_error": false}]}}},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}}, "expect_state": "idle"},
+    {"kind": "hook", "event": "PreToolUse", "payload": {"tool_name": "Read"}, "expect_state": "idle"},
+    {"kind": "hook", "event": "PostToolUse", "payload": {"tool_name": "Read"}, "expect_state": "idle"},
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {}, "expect_state": "idle"},
+    {"kind": "terminal", "mode": "normal"},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "Read"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "Read", "success": true},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 4, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "safe",
+    "delivery_reason": "all_required_evidence_positive"
+  }
+}

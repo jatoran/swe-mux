@@ -17,6 +17,25 @@ def test_provider_account_ui_distinguishes_live_external_and_saved_auth() -> Non
     assert "startup never restores an older saved account" in source
 
 
+def test_provider_account_ui_surfaces_identity_verification_and_duplicates() -> None:
+    source = (ROOT / "frontend" / "src" / "ProviderAccounts.tsx").read_text(
+        encoding="utf-8"
+    )
+    css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert "identity_source?:IdentitySource|null" in source
+    assert "conflict?:AccountConflict|null" in source
+    assert "match_hint?:MatchHint|null" in source
+    assert "verified with the provider" in source
+    assert "Quota polling is suspended" in source
+    assert "relink only if this really is that account" in source
+    assert "/adopt" in source
+    assert "'/api/provider-accounts/verify'" in source
+    assert "switch anyway" in source
+    assert ".account-conflict{" in css
+    assert ".account-identity.verified{" in css
+
+
 def test_provider_account_ui_marks_external_and_unreadable_states() -> None:
     css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 

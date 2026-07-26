@@ -31,3 +31,17 @@ test('mobile workspace falls back to the first pane active tab and chooses an ad
   assert.equal(adjacentMobileTab(projection.tabs,'note-a')?.id,'term-b')
   assert.equal(adjacentMobileTab(projection.tabs,'preview-a')?.id,'history:archive')
 })
+
+test('a device-local order permutes the rail without changing membership',()=>{
+  const projection=mobileWorkspaceProjection(layout,null,null,['history:archive','term-a','note-a','term-b','preview-a'])
+  assert.deepEqual(projection.tabs.map(tab=>tab.id),['history:archive','term-a','note-a','term-b','preview-a'])
+  // Swipe order and close-focus adjacency both read the reordered rail.
+  assert.equal(adjacentMobileTab(projection.tabs,'history:archive')?.id,'term-a')
+})
+
+test('a saved order cannot invent or drop tabs, and merges what it predates',()=>{
+  // 'ghost' is gone from the layout and is ignored; note-a/term-b/history are
+  // absent from the save and land after their layout predecessor.
+  const projection=mobileWorkspaceProjection(layout,null,null,['ghost','preview-a','term-a'])
+  assert.deepEqual(projection.tabs.map(tab=>tab.id),['preview-a','history:archive','term-a','note-a','term-b'])
+})

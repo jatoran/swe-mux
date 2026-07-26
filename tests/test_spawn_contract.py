@@ -2,7 +2,33 @@ from __future__ import annotations
 
 import pytest
 
-from swe_mux.spawn_contract import SpawnRequest
+from swe_mux.spawn_contract import SpawnRequest, scrub_claude_session_markers
+
+
+def test_scrub_drops_parent_claude_markers_but_keeps_user_configuration() -> None:
+    environment = {
+        "CLAUDECODE": "1",
+        "claude_code_child_session": "1",  # Windows env is case-insensitive
+        "CLAUDE_CODE_ENTRYPOINT": "cli",
+        "CLAUDE_CODE_SESSION_ID": "abc",
+        "CLAUDE_CODE_EXECPATH": r"C:\bin\claude.exe",
+        "CLAUDE_PID": "123",
+        "CLAUDE_EFFORT": "high",
+        # Deliberate user configuration must pass through untouched.
+        "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+        "ANTHROPIC_API_KEY": "secret",
+        "PATH": r"C:\Windows",
+    }
+    scrubbed = scrub_claude_session_markers(environment)
+    assert "CLAUDECODE" not in scrubbed
+    assert "claude_code_child_session" not in scrubbed
+    assert "CLAUDE_CODE_ENTRYPOINT" not in scrubbed
+    assert "CLAUDE_CODE_SESSION_ID" not in scrubbed
+    assert "CLAUDE_CODE_EXECPATH" not in scrubbed
+    assert "CLAUDE_PID" not in scrubbed and "CLAUDE_EFFORT" not in scrubbed
+    assert scrubbed["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] == "1"
+    assert scrubbed["ANTHROPIC_API_KEY"] == "secret"
+    assert scrubbed["PATH"] == r"C:\Windows"
 
 
 def test_spawn_contract_normalizes_structured_fields() -> None:

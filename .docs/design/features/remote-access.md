@@ -45,6 +45,12 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
 - There is no swe-mux bearer/login path. Tailscale policy decides which devices/users may
   reach the direct listener or optional Serve endpoint; an admitted peer has terminal and
   code-execution authority.
+- Clipboard history widens what an admitted peer can *read*, not what it can do: `/api/clipboard`
+  serves recent copied text from every device driving this install. That is the reason the ring is
+  memory-only by default, time- and count-bounded, refuses secret-shaped copies, and can be turned
+  off entirely (Settings → Input). On direct tailnet HTTP — where the Clipboard API is restricted
+  because the URL is not a secure context — the ring is also the practical paste path: insert from
+  the panel instead of asking the browser to read the system clipboard.
 - Per-session hook secrets remain a separate loopback-only machine integration boundary.
   Hook ingress has a bounded body/burst, event allowlist, constant-time secret check, and
   rejects ended sessions.

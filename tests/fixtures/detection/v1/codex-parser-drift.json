@@ -24,12 +24,13 @@
     {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
     {"kind": "transcript", "record": {"type": "mystery", "payload": {"type": "future"}}},
     {"kind": "terminal", "mode": "normal"},
-    {"kind": "timer", "seconds": 2.1, "expect_delivery": "unknown", "oracle_safe": false}
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "unknown", "oracle_safe": false, "expect_state": "idle"}
   ],
   "expected": {
     "events": [
       {"type": "capability_degraded", "source": "transcript"}
     ],
+    "states": [],
     "parser": {"status": "degraded", "recognized": 0, "unknown": 20, "unknown_signatures": {"codex:mystery:future": 20}},
     "delivery_state": "unknown",
     "delivery_reason": "no_root_lifecycle_evidence"

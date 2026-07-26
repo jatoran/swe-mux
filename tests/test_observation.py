@@ -136,8 +136,8 @@ async def test_claude_parser_finishes_on_end_turn_without_duration_record() -> N
 
 async def test_native_completion_closes_a_hook_started_turn() -> None:
     session = cast(Any, SimpleNamespace(record=record("claude"), state_source_priority=-1))
-    session.transition = lambda state, detail, source: Session.transition(  # type: ignore[attr-defined]
-        session, state, detail, source=source
+    session.transition = lambda state, detail, **kw: Session.transition(  # type: ignore[attr-defined]
+        session, state, detail, **kw
     )
     session.publish_update = lambda: None
     events = EventBus()
@@ -163,8 +163,8 @@ async def test_native_completion_closes_a_hook_started_turn() -> None:
 
 async def test_new_turn_releases_previous_source_priority() -> None:
     session = cast(Any, SimpleNamespace(record=record("claude"), state_source_priority=-1))
-    session.transition = lambda state, detail, source: Session.transition(  # type: ignore[attr-defined]
-        session, state, detail, source=source
+    session.transition = lambda state, detail, **kw: Session.transition(  # type: ignore[attr-defined]
+        session, state, detail, **kw
     )
     session.publish_update = lambda: None
     events = EventBus()
@@ -564,7 +564,7 @@ def _watchdog_session(path: Path, now: float, scrollback: bytes) -> Any:
         transcript_path=path,
         scrollback=SimpleNamespace(bytes=lambda: scrollback),
         observation_state={"root_turn_active": False, "root_completion_seen": True},
-        note_watchdog_recovery=lambda _reason: None,
+        note_watchdog_recovery=lambda _reason, **_kw: None,
     )
     session.record.state = "working"
     return session
@@ -581,7 +581,8 @@ def _fake_manager() -> Any:
         events=SimpleNamespace(emit=lambda *_a, **_k: asyncio.sleep(0)),
         _drain_hook_spool=noop_drain,
     )
-    # Reuse the real PTY-idle heuristic so the test exercises it end to end.
+    # Reuse the real PTY screen classifier so the test exercises it end to end.
+    mgr._pty_tail_state = SessionManager._pty_tail_state
     mgr._pty_appears_idle = lambda s: SessionManager._pty_appears_idle(cast(Any, mgr), s)
     return mgr
 
@@ -777,8 +778,8 @@ async def test_transcript_rewrite_reconciles_an_active_turn(tmp_path: Path) -> N
             publish_update=lambda: None,
         ),
     )
-    session.transition = lambda state, detail, source: Session.transition(  # type: ignore[attr-defined]
-        session, state, detail, source=source
+    session.transition = lambda state, detail, **kw: Session.transition(  # type: ignore[attr-defined]
+        session, state, detail, **kw
     )
     events = EventBus()
     stop = asyncio.Event()
@@ -805,8 +806,8 @@ async def test_transcript_rewrite_reconciles_an_active_turn(tmp_path: Path) -> N
 
 async def test_codex_rollback_finishes_the_active_turn() -> None:
     session = cast(Any, SimpleNamespace(record=record("codex"), state_source_priority=-1))
-    session.transition = lambda state, detail, source: Session.transition(  # type: ignore[attr-defined]
-        session, state, detail, source=source
+    session.transition = lambda state, detail, **kw: Session.transition(  # type: ignore[attr-defined]
+        session, state, detail, **kw
     )
     session.publish_update = lambda: None
     events = EventBus()

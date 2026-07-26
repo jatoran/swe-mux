@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "promotion_demotion_status",
+  "description": "Promotion enters starting, the turn runs to proven idle, demotion returns to running, and a clean process exit maps to exited \u2014 all through the ledgered daemon/PTY sources.",
+  "steps": [
+    {"kind": "lifecycle", "state": "starting", "evidence": "promotion", "expect_state": "starting"},
+    {"kind": "event", "event": "backend_detected", "source": "daemon", "payload": {"backend": "claude"}},
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "test"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}}, "expect_state": "idle"},
+    {"kind": "lifecycle", "state": "running", "evidence": "demotion", "expect_state": "running"},
+    {"kind": "event", "event": "backend_demoted", "source": "daemon", "payload": {"backend": "claude"}},
+    {"kind": "exit", "exit_code": 0, "reason": "process_exit", "expect_state": "exited", "expect_delivery": "blocked", "oracle_safe": false}
+  ],
+  "expected": {
+    "events": [
+      {"type": "backend_detected", "source": "daemon"},
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"},
+      {"type": "backend_demoted", "source": "daemon"},
+      {"type": "session_exited", "source": "pty"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "starting", "source": "daemon", "proof": "proven"},
+      {"previous": "starting", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"},
+      {"previous": "idle", "state": "running", "source": "daemon", "proof": "proven"},
+      {"previous": "running", "state": "exited", "source": "pty", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 2, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "blocked",
+    "delivery_reason": "session_ended"
+  }
+}

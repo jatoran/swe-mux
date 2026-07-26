@@ -11,6 +11,11 @@ The original roadmap is preserved at `archive/ROADMAP.md`. Its completed Phases 
 historical records. Every incomplete Phase 8–12 item is carried into this roadmap's
 Phases 7–11. Current behavior and invariants remain authoritative in `../design/`.
 
+Control-plane work is planned in `CONTROL_PLANE_ROADMAP.md`, which is authoritative for its
+own scope and design. The decimal phases here (3.7, 4.5, 5.5, 6.5, 7.5) pin that document's
+build-order steps into this delivery order so the two tracks progress in one sequence rather
+than two; see "Control-plane track interlock" below.
+
 Checkboxes are completion records. A phase is complete only when implementation,
 acceptance coverage, migrations, diagnostics, and relevant design/interface docs agree.
 
@@ -48,6 +53,12 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
   system-wide provider-account selection.
 - Universal rules, normalized events, read-only OpenRouter observers, annotations,
   budgets, composite attention, fleet intelligence, and compatibility hooks.
+- Control-plane build-order steps 0–2 (`CONTROL_PLANE_ROADMAP.md` §9): the per-project
+  enablement framework with its cycle-checked dependency DAG (`automation_registry.py`),
+  Tier 0 deterministic fact capture with source pointers (`tier0_store.py`), and the
+  helps-today siblings (observation inbox, preview screenshot capture). Step 1 retains one
+  known gap: git commit/tree hashes and read-side file hashes, which block the provenance
+  graph.
 - Session-preserving daemon reload (`pty_supervisor_enabled`, default off): an out-of-process
   PTY supervisor owns ConPTYs/scrollback/reaper Job so a daemon restart leaves agents running
   and the next daemon reattaches; intent-signaled shutdown (desktop Quit/Restart, terminal
@@ -64,14 +75,21 @@ Phase 1  Evidence replay + delivery-readiness contract
   -> Phase 2  Durable process/quota/session telemetry
     -> Phase 3  Daily-workflow UX, prompts, config, and notifications
       -> Phase 3.5  Agent status-detection hardening and regression defense
-        -> Phase 4  Persistent manual prompt queue
-          -> Phase 5  Gated auto-delivery + mailbox + bounded agent communication
-            -> Phase 6  Portable instructions and skills
-              -> Phase 7  Windows maturity, CLI, doctor, and soak
-                -> Phase 8  Telegram control
-                  -> Phase 9  SSH/native attach
-                    -> Phase 10  WSL bridge + Linux/macOS
-                      -> Phase 11  Public packaging and release
+        -> Phase 3.7  Control-plane deterministic consumers          [CP step 1 gap + 3]
+          -> Phase 4  Persistent manual prompt queue
+            -> Phase 4.5  mux MCP v0: read + discovery surface        [CP step 2.5, §7.5]
+              -> Phase 5  Gated auto-delivery + mailbox + bounded agent communication
+                 (incl. mux.notify / mux.requestSpawn over the queue) [CP §7.2]
+                -> Phase 5.5  Control-plane project card + scan timeline  [CP steps 4-5]
+                  -> Phase 6  Portable instructions and skills
+                     (instruction sync = return-path channel 2)       [CP §7]
+                    -> Phase 6.5  Model narration + attention ranking [CP steps 6-7]
+                      -> Phase 7  Windows maturity, CLI, doctor, and soak
+                        -> Phase 7.5  mux MCP v1 + cross-session memory  [CP step 8]
+                          -> Phase 8  Telegram control
+                            -> Phase 9  SSH/native attach
+                              -> Phase 10  WSL bridge + Linux/macOS
+                                -> Phase 11  Public packaging and release
 ```
 
 Phase 3 interface work may proceed alongside Phase 2 when it does not depend on unfinished
@@ -80,6 +98,40 @@ hardens the lifecycle-state and readiness evidence those gates read from; it pre
 delivery automation because an inaccurate `working`/`idle`/`awaiting` status silently
 corrupts every downstream head-of-line, arming, and auto-delivery decision.
 Cross-cutting tests ship with each phase.
+
+### Control-plane track interlock
+
+The control-plane work is planned in `CONTROL_PLANE_ROADMAP.md`, whose §9 build order is
+sequenced by the enablement DAG (substrate before consumers, deterministic before model).
+That ordering is authoritative for control-plane content; the decimal phases below exist so
+the two documents progress in one order instead of two. Each is a thin pointer plus its
+cross-track dependency edges — scope, design, and acceptance detail stay in the control-plane
+document and are not duplicated here.
+
+| Control-plane step (§9) | Roadmap v2 phase | Cross-track dependency |
+|---|---|---|
+| 0 · Enablement framework | shipped (Implemented baseline) | — |
+| 1 · Tier 0 + raw store | shipped, one gap | git/read hashes block CP 6.1 |
+| 2 · Helps-today siblings | shipped (Implemented baseline) | observation inbox is where `requestSpawn` drafts land |
+| 2.5 · mux MCP v0 | **Phase 4.5** | needs Phase 3.5 status contract; independent of Phase 4 |
+| 3 · Deterministic consumers | **Phase 3.7** | writes drafts through the Phase 4 queue once it exists |
+| 4–5 · Project card + scan timeline | **Phase 5.5** | first model-cost layer; no Phase 5 dependency |
+| 6–7 · Narration + attention ranking | **Phase 6.5** | needs Phase 2 telemetry and Phase 3 notification channels |
+| 8 · Cross-session + mux MCP v1 | **Phase 7.5** | needs CP 4–5 substrate and the Phase 7 typed daemon operations |
+| §7.2 return-path write tools | inside **Phase 5** | callers over the Phase 5 A→B queue, not a separate path |
+| §13 queue-draft channel | inside **Phase 4** | `sender_kind` + typed payload land with the queue model |
+
+Ordering rules across the two tracks:
+
+- A control-plane phase never introduces a new delivery path. Anything that writes toward a
+  session goes through the Phase 4/5 queue and its readiness contract.
+- Phases 3.7 and 5.5 have no dependency on the queue phases and may proceed in parallel with
+  Phase 4/5 when capacity allows; the reverse is not true, because Phase 5's observer-sourced
+  messages read Phase 3.7 output.
+- Phase 4.5 depends on shipped machinery plus the Phase 3.5 status contract only. It is
+  deliberately pulled out of control-plane step 8 so the MCP transport, caller-identity, and
+  daemon-restart decisions (`CONTROL_PLANE_ROADMAP.md` §7.3–7.4) are proven cheaply, before
+  the memory tools in Phase 7.5 depend on them.
 
 ## Phase 1 — Evidence replay and delivery readiness
 
@@ -348,94 +400,122 @@ conformance harness (`tests/test_live_agent_conformance.py`), and the `GET
 
 ### Status contract and evidence ledger
 
-- [ ] Write down, per `SessionState` value, the exact positive evidence predicate that may
+- [x] Write down, per `SessionState` value, the exact positive evidence predicate that may
   set it and which sources (`pty`/`transcript`/`hook`/`watchdog`/`notification`) are allowed
   to, mirroring the `delivery_state` discipline. Ambiguous or absent evidence resolves to the
   conservative prior, never a guessed active state.
-- [ ] Define and document the total mapping from `SessionState` (plus the `awaiting`
+- [x] Define and document the total mapping from `SessionState` (plus the `awaiting`
   sub-reason: approval / Q&A / elicitation) to the single user-visible status shown per
   session, and its relationship to `delivery_state` and attention. These three axes stay
   separate; the UI renders one coherent status without collapsing them incorrectly.
-- [ ] Make the `state-log` ring buffer a complete, typed transition ledger: every transition
+- [x] Make the `state-log` ring buffer a complete, typed transition ledger: every transition
   carries prior state, next state, source, the evidence that justified it, whether it was
   inferred, and monotonic timing. No transition may occur without a ledger entry.
-- [ ] Classify each transition as `proven` (hook/transcript/notification evidence) or
+- [x] Classify each transition as `proven` (hook/transcript/notification evidence) or
   `inferred` (watchdog/PTY backstop). Inferred transitions are recovery events, counted and
   bounded, never the primary path for a healthy session.
 
 ### Golden corpus extension to user-visible status
 
-- [ ] Extend the detection replay corpus to assert `SessionState` (and `awaiting` sub-reason)
+- [x] Extend the detection replay corpus to assert `SessionState` (and `awaiting` sub-reason)
   at every checkpoint, not only `delivery_state`, `events`, and `parser`. The user-visible
   status becomes a golden-stream output with the same no-drift protection.
-- [ ] Add deterministic fixtures for every documented failure mode, each with a root-cause
+- [x] Add deterministic fixtures for every documented failure mode, each with a root-cause
   note and the guard that closes it: hook/transcript race reopening `working` (late
   `PreToolUse`/`PostToolUse` landing after the transcript `end_turn`), the
   `closed_by_transcript` latch refusing a hook-sourced re-begin, ESC-pause-without-marker,
   observer stuck on a sibling transcript (cross-attribution), crash mid-turn, compaction,
   resume, promotion/demotion, `idle_prompt` versus `permission_prompt` versus
   `elicitation_dialog`, subagent-only stop, rate-limit abort, and daemon restart mid-turn.
-- [ ] Pin the watchdog recovery paths as golden behavior, not incidental timing: ENDED-stuck
+- [x] Pin the watchdog recovery paths as golden behavior, not incidental timing: ENDED-stuck
   force-idle at `STATE_WATCHDOG_ENDED_STUCK_SECONDS`, the PTY backstop force-idle at
   `STATE_WATCHDOG_PTY_STUCK_SECONDS` for both `unknown` and `open` tails, and the
   `_pty_appears_idle` true/false branches (a genuine long tool with "esc to interrupt" up
   must never be cut short).
-- [ ] Make status-affecting parser, mapping, or watchdog changes fail CI when golden status
+- [x] Make status-affecting parser, mapping, or watchdog changes fail CI when golden status
   streams change without a reviewed fixture update, mirroring the Phase 1 safe-to-inject gate.
 
 ### Edge-case inventory and closure
 
-- [ ] Maintain an explicit, tracked inventory of every known status edge case with: a
+- [x] Maintain an explicit, tracked inventory of every known status edge case with: a
   reproducing fixture, the guard that closes it, and a one-line root cause. Closing an edge
   case means both exist; removing either fails CI.
-- [ ] Guarantee no session can remain in a non-terminal active state indefinitely: for every
+- [x] Guarantee no session can remain in a non-terminal active state indefinitely: for every
   `working`/`awaiting` path there is a proven or bounded-inferred exit, and the watchdog
   bounds are covered by fixtures at their thresholds.
-- [ ] Prove the cross-attribution gate: an observer bound to the wrong sibling transcript
+- [x] Prove the cross-attribution gate: an observer bound to the wrong sibling transcript
   never sets this session's status from another session's evidence, and the PTY backstop (own
   session's ground truth) still recovers it.
-- [ ] Prove notification semantics: `idle_prompt` maps to `idle` and never clobbers a real
+- [x] Prove notification semantics: `idle_prompt` maps to `idle` and never clobbers a real
   pending approval; `permission_prompt`/`elicitation_dialog` map to `awaiting` with the
   correct sub-reason.
 
 ### Regression detection over time
 
-- [ ] Add a sanitized capture → golden-fixture pipeline: a real stuck or misclassified
+- [x] Add a sanitized capture → golden-fixture pipeline: a real stuck or misclassified
   session's `state-log` (and the minimal evidence stream that produced it) can be captured,
   scrubbed of terminal bytes and prompt bodies, and promoted into the versioned corpus so it
   becomes a permanent regression test.
-- [ ] Publish status-health metrics through test and runtime diagnostics: inferred-recovery
+- [x] Publish status-health metrics through test and runtime diagnostics: inferred-recovery
   count by source (`watchdog-ended`, `watchdog-pty`), reopen-after-authoritative count,
   unknown/open-tail durations, and time-to-terminal after a turn ends. A rise in inferred
   recoveries is a tracked regression signal, not silent drift.
-- [ ] Extend the live-agent conformance harness to diff captured `state-log` transitions
+- [x] Extend the live-agent conformance harness to diff captured `state-log` transitions
   against expected proven-transition shapes for scripted real-CLI runs, flagging any run that
   reached a terminal status only via inference.
-- [ ] Bound and alarm on the health metrics in soak: define the acceptable inferred-recovery
+- [x] Bound and alarm on the health metrics in soak: define the acceptable inferred-recovery
   rate for a healthy fleet and fail the soak matrix when it is exceeded.
 
 ### UI reflection correctness
 
-- [ ] Add a frontend contract test that the `SessionState` → sidebar/pane indicator mapping is
+- [x] Add a frontend contract test that the `SessionState` → sidebar/pane indicator mapping is
   total and unambiguous: no state renders blank or as a permanent blinking `working`, and a
   terminal transition in the `state-log` always clears the working indicator.
-- [ ] Assert the `awaiting` indicator distinguishes approval, Q&A, and elicitation with the
+- [x] Assert the `awaiting` indicator distinguishes approval, Q&A, and elicitation with the
   correct affordance, and that `idle_prompt`-driven idle never renders as awaiting approval.
-- [ ] Verify the mobile unified-tab projection shows the same status as the desktop pane for
+- [x] Verify the mobile unified-tab projection shows the same status as the desktop pane for
   the same session, driven from the same evidence, with no independent heuristic.
 
 ### Phase 3.5 exit criteria
 
-- [ ] Every `SessionState` transition (and `awaiting` sub-reason) is reproducible from
+- [x] Every `SessionState` transition (and `awaiting` sub-reason) is reproducible from
   fixtures across hook/transcript/PTY races and is asserted in the golden corpus, not only
   `delivery_state`.
-- [ ] Every documented stuck-`working`, reopened-turn, misclassified-`awaiting`, and
+- [x] Every documented stuck-`working`, reopened-turn, misclassified-`awaiting`, and
   mis-attribution edge case has a named fixture and a guard; removing either fails CI.
-- [ ] Inferred/watchdog recoveries are measured, bounded, and alarmed; a healthy session
+- [x] Inferred/watchdog recoveries are measured, bounded, and alarmed; a healthy session
   reaches terminal status by proven evidence, and a rise in inferred recoveries surfaces as a
   regression.
-- [ ] Desktop and mobile UI reflect status through a total, tested mapping with no permanent
+- [x] Desktop and mobile UI reflect status through a total, tested mapping with no permanent
   `working` on a completed turn and correct `awaiting` sub-reasons.
+
+## Phase 3.7 — Control-plane deterministic consumers
+
+Control-plane build-order step 3, plus the step 1 gap it is blocked on
+(`CONTROL_PLANE_ROADMAP.md` §9). This is the first phase that turns captured Tier 0 facts
+into user-visible judgements, and it is deliberately model-free: every detector here is a
+query over deterministic facts, writing to `annotations`. Design detail lives in the
+control-plane document; this phase exists to fix its position in the delivery order.
+
+- [ ] Close the step 1 substrate gap: git commit/tree hashes and read-side file hashes
+  (`CONTROL_PLANE_ROADMAP.md` §5.3). The provenance graph cannot ship without them.
+- [ ] Loop/stall deterministic half (CP §6.4) — pure Tier 0 fingerprint query; build first
+  because it needs no new capture.
+- [ ] Declared-vs-verified (CP §6.3) — Tier 0 test facts plus completion-claim detection.
+- [ ] Doc-debt ledger (CP §6.5) — Tier 0 files-changed against the `.docs/CLAUDE.md` routing
+  table.
+- [ ] Provenance graph (CP §6.1) — unblocked by the hash work above.
+- [ ] Ship the enablement-DAG toggle surface (CP §9 UI work) or accept that enabling any of
+  these still means hand-editing `.swe-mux/config.toml`. Do not ship a fourth consumer
+  without the toggle.
+
+### Phase 3.7 exit criteria
+
+- [ ] Each detector is per-project opt-in through the existing DAG, inert when disabled, and
+  spends no model tokens.
+- [ ] Every annotation these produce is traceable to the exact Tier 0 fact(s) that caused it.
+- [ ] No detector writes toward a session. Output is annotations only until the Phase 4 queue
+  gives it a `queue_draft` path (`CONTROL_PLANE_ROADMAP.md` §13).
 
 ## Phase 4 — Persistent manual prompt queue
 
@@ -493,6 +573,68 @@ framework.
 - [ ] Closing a session strands pending work instead of losing or retargeting it.
 - [ ] Every actual delivery is initiated by an explicit user action and is auditable.
 
+## Phase 4.5 — mux MCP v0: read and discovery surface
+
+Control-plane build-order step 2.5, pulled forward out of step 8
+(`CONTROL_PLANE_ROADMAP.md` §7.5). The return path is how accumulated control-plane insight
+gets back into a coding agent, and its transport is an MCP server both Claude Code and Codex
+can call. v0 is **read-only**: it exposes machinery that already exists, adds no authority,
+and answers the "agents can see prior and concurrent sessions" request directly. It also
+proves the transport, identity, and restart decisions cheaply, before the Phase 7.5 memory
+tools depend on them.
+
+Depends on the Phase 3.5 status contract (a session status an agent reads must be the same
+one the UI reads) and on shipped history/transcript search. It does not depend on Phase 4.
+
+### Server placement and transport
+
+- [ ] Host the MCP endpoint **in the daemon, never in the PTY supervisor**. The supervisor
+  cannot be updated without killing live sessions (`SESSION_PRESERVING_RELOAD.md` §8), and a
+  tool surface is high-churn code by nature.
+- [ ] Prefer a streamable-HTTP endpoint on the existing daemon port over a stdio server: one
+  implementation, per-session auth as a header, nothing new to ship inside the frozen bundle,
+  and no server process inside the supervisor's reaper Job. Verify the targeted Codex version
+  accepts an HTTP `mcp_servers` entry first; if it is stdio-only, ship a thin stdio shim that
+  proxies to the daemon rather than a second implementation.
+- [ ] Auto-register the server into each spawned session's CLI configuration, per backend, so
+  the surface is available without user setup and cannot be pointed at a foreign daemon.
+- [ ] Tolerate daemon restarts: `POST /api/daemon/restart` and redeploy replace the daemon
+  while agents keep running, so an in-flight call must fail with a typed transient error the
+  agent may retry. Never return a partial or fabricated result. The listen port is stable, so
+  registered configuration is never rewritten by a reload.
+
+### Caller identity
+
+- [ ] Mint a per-session token at spawn and inject it into the session environment. The
+  daemon derives the caller from the token; no tool accepts a sender argument, because a
+  claimed sender makes budgets, allowlists, and cycle detection decorative.
+- [ ] Persist tokens. The daemon restarts under live sessions by design; an in-memory table
+  would invalidate every live session's credential on each reload.
+- [ ] Scope a token to its session's Project by default. Cross-project reads are a separate
+  explicit grant, consistent with per-project opt-in.
+
+### v0 tool surface (read-only)
+
+- [ ] List active, prior, and concurrent sessions with stable ids, Project, backend, and
+  current status; read session metadata and transcript; `searchHistory` over the existing
+  cross-vendor archive.
+- [ ] Return nothing rather than a weak match, per the return-path precision gate
+  (`CONTROL_PLANE_ROADMAP.md` §7). Empty is acceptable; plausible-but-wrong is corrosive and
+  teaches an agent to stop calling.
+- [ ] Redact the same material the diagnostics surface redacts: no secrets, credentials, or
+  provider tokens through tool output.
+- [ ] Rate-limit and bound every tool result; a tool call cannot pull an unbounded transcript
+  into an agent's context.
+
+### Phase 4.5 exit criteria
+
+- [ ] A live agent session can enumerate sibling sessions and search history through MCP with
+  no user setup, and every result is attributable to the calling session's token.
+- [ ] A daemon reload mid-call surfaces a retryable error and leaves no partial state; after
+  the reload the same token still works.
+- [ ] The surface is read-only end to end: no tool in v0 can enqueue, deliver, spawn, or write
+  to a PTY.
+
 ## Phase 5 — Gated auto-delivery, mailbox, and bounded agent communication
 
 Phase 5 authorizes narrowly scoped actuation after Phase 1 shadow evidence and Phase 4
@@ -537,15 +679,35 @@ auto-approval, arbitrary PTY writes, or uncontrolled relay chains.
 - [ ] Keep autonomous model-authored routing, worker spawning, approval decisions, command
   execution, and arbitrary network destinations outside this phase.
 
+### Agent-facing surface: mux MCP write tools
+
+Phase 5's A→B path is what an agent reaches through the Phase 4.5 MCP transport. The tools
+are thin callers over the typed queue operation defined above; they are not a second
+implementation of it (`CONTROL_PLANE_ROADMAP.md` §7.1–7.2).
+
+- [ ] Add `mux.notify(target, body)` as a caller over the same typed A→B operation the
+  browser and CLI use. It inherits target allowlists, size/expiry/rate limits, chain depth,
+  cycle detection, per-origin budgets, receiver-side readiness, and the kill switch by
+  construction, because those live in the daemon operation and not in the tool.
+- [ ] Derive the sender from the calling session's Phase 4.5 token, never from a tool
+  argument, so per-origin budgets and cycle detection are enforceable.
+- [ ] Add `mux.requestSpawn(...)` as a **draft producer only**: it writes an inert entry into
+  the observation inbox with the proposed target Project, prompt, and calling-session
+  provenance, and starts nothing. Approving the draft is an explicit human action (available
+  on mobile) and is what actually spawns the session.
+- [ ] Keep the queue path and the MCP path on one audit trail. A message that arrived through
+  MCP is distinguishable by sender provenance but is otherwise an ordinary queue item.
+
 Scope boundary (reconciling the `.swe-mux/notes/project.md` agent-to-agent request): the
 desire for "agent A finishes a task and notifies a specific agent B, and sometimes spawns a
-new session for B" splits across the trust line. **In scope for Phase 5:** user-authored or
-user-approved A→B messages into an existing target run through the same queue/readiness
-contract, carrying full provenance. **Not in scope — decision-gated:** an agent
-autonomously selecting a target and *spawning* a new session to receive the message; that is
-worker spawning behind the actuation gate (`CONTROL_PLANE_ROADMAP.md` §16) and requires a
-separate product decision (see "Decision-gated capabilities"). Phase 5 delivers bounded
-messaging between sessions that already exist; it does not let one agent create another.
+new session for B" splits across the trust line. **In scope for Phase 5:** user-authored,
+user-approved, or `mux.notify` A→B messages into an existing target run through the same
+queue/readiness contract, carrying full provenance. **Not in scope — decision-gated:** an
+agent autonomously selecting a target and *spawning* a new session to receive the message;
+that is worker spawning behind the actuation gate (`CONTROL_PLANE_ROADMAP.md` §16) and
+requires a separate product decision (see "Decision-gated capabilities"). Phase 5 delivers
+bounded messaging between sessions that already exist and a drafted request to create one; it
+does not let one agent create another.
 
 ### Phase 5 exit criteria
 
@@ -554,8 +716,47 @@ messaging between sessions that already exist; it does not let one agent create 
 - [ ] Human/device and approved A→B messages retain provenance, cannot loop indefinitely,
   and never silently retarget ended runs.
 - [ ] Disabling Phase 5 leaves the Phase 4 manual queue and ordinary agent sessions usable.
+- [ ] An MCP-originated message is indistinguishable in safety terms from a browser-originated
+  one: same readiness gate, same bounds, same audit trail, no separate delivery path.
+- [ ] `mux.requestSpawn` has produced no session without an explicit human approval, and
+  disabling the tool leaves the rest of Phase 5 intact.
+
+## Phase 5.5 — Control-plane project card and scan timeline
+
+Control-plane build-order steps 4–5 (`CONTROL_PLANE_ROADMAP.md` §5.4–5.5). The first
+model-cost layer of the control plane and the substrate every semantic consumer reads from.
+Capture-first: a readable per-session behavioral timeline before anything ranks or narrates
+on top of it. No dependency on Phases 4–5; it may proceed in parallel when capacity allows.
+
+- [ ] Project card (CP §5.4): distilled, cached architecture summary that feeds the scan
+  timeline and later Tier 2 analysis.
+- [ ] Scan timeline (CP §5.5): periodic and event-triggered cheap-model records forming a
+  per-session timeline, per-project opt-in, budgeted, and inert when disabled.
+- [ ] Instrument the rehydration rate from the first commit — it is the measurement that
+  decides whether a Tier 2 source expansion is ever justified.
+- [ ] Dead-end / negative-result memory (CP §6.2) and the continuous session title
+  (CP §6.11) as the first two consumers of the timeline. The continuous titler replaces the
+  current one-shot title call and its stale test assertions (CP §9 known gaps).
+- [ ] Ship the persistent spend/budget line (CP §9 UI work) with this phase; this is the
+  first feature whose cost is continuous rather than per-run.
+
+### Phase 5.5 exit criteria
+
+- [ ] Scan records are per-project opt-in, budget-bounded, and degrade to no records rather
+  than to guesses when a provider is unavailable.
+- [ ] The rehydration rate is measured and visible, not assumed.
+- [ ] Model spend for the timeline is visible in an always-on surface before the feature is
+  enabled by default anywhere.
 
 ## Phase 6 — Portable instructions and skills
+
+Cross-track note: canonical instruction rendering is **channel 2 of the control-plane return
+path** (`CONTROL_PLANE_ROADMAP.md` §7) — the durable, slow-moving half that a coding agent
+sees as standing context without querying. It is the right home for stable distilled insight
+(a mined convention, a recurring failure mode) and the wrong home for live facts, which
+belong behind the pull tools of Phases 4.5/7.5. Any control-plane output rendered into a
+provider file goes through the sentinel-delimited machinery below; nothing writes a whole
+file.
 
 ### Canonical instruction rendering
 
@@ -594,6 +795,30 @@ messaging between sessions that already exist; it does not let one agent create 
 - [ ] Skill portability preserves provider-specific validation and never claims unsupported
   equivalence.
 
+## Phase 6.5 — Control-plane model narration and attention ranking
+
+Control-plane build-order steps 6–7 (`CONTROL_PLANE_ROADMAP.md` §14, §6.7). Narration adds a
+cheap-model "why" on top of the deterministic detectors from Phase 3.7; attention ranking is
+last in the control-plane order because it needs every other signal. Depends on Phase 5.5
+substrate, Phase 2 telemetry, and the Phase 3 notification channels.
+
+- [ ] Model narration (CP §14): the `llm` action kind over normalized slices, stateless,
+  read-only, budgeted. A narration failure degrades to the deterministic detector's output,
+  never to silence and never to a fabricated cause.
+- [ ] Attention ranking / inbox (CP §6.7): fan-out estimate, a daily interrupt budget, the
+  four delivery channels, and breakpoint delivery.
+- [ ] Honor the interrupt budget as a hard bound. A usually-wrong signal is worse than no
+  signal; the same trust logic as the return-path precision gate.
+- [ ] Absence report / digest (CP §6.8) for the time the user was away.
+
+### Phase 6.5 exit criteria
+
+- [ ] Ranking never exceeds the configured daily interrupt budget, and suppressed items remain
+  inspectable rather than discarded.
+- [ ] Every ranked item traces to the deterministic facts and annotations behind it; narration
+  is presentation over evidence, not a substitute for it.
+- [ ] Disabling narration leaves the deterministic detectors and their annotations intact.
+
 ## Phase 7 — Windows product maturity, CLI control, and diagnostics
 
 This phase carries forward every incomplete item from original Roadmap Phase 8 and expands
@@ -611,8 +836,9 @@ its quality matrix with the Phase 1–6 contracts.
   explicit `MUX_URL` precedence.
 - [ ] Use stable ids, conflicts for ambiguous names, actionable exit codes, structured
   errors, human-readable tables, and `--json`; scripts never parse UI prose.
-- [ ] Route browser, CLI, mailbox, and future Telegram actions through shared typed daemon
-  operations.
+- [ ] Route browser, CLI, mailbox, mux MCP, and future Telegram actions through shared typed
+  daemon operations. The MCP surface (Phases 4.5/7.5) is one more consumer of these ops, never
+  a parallel implementation: authorization, readiness, bounds, and audit live in the op.
 - [ ] Add read-only CLI inspection for automation status, normalized capabilities, rules,
   firings, annotations, observer spend/budgets, provider health, delivery readiness,
   process anomalies, quota/reset evidence, and message delivery status.
@@ -659,6 +885,45 @@ its quality matrix with the Phase 1–6 contracts.
   tailnet, provider, telemetry, automation, and queue problems without mutation or leaks.
 - [ ] Windows desktop/mobile core workflows, delivery-safety cases, and forced cleanup pass
   the focused automated matrix; unresolved friction is explicitly scheduled or rejected.
+
+## Phase 7.5 — mux MCP v1 and cross-session memory
+
+Control-plane build-order step 8 (`CONTROL_PLANE_ROADMAP.md` §6.6, §6.8, §6.10, §7). This is
+the memory half of the return path: the tools that make swe-mux's third-person, all-time,
+all-sessions record queryable by a first-person agent mid-task. It sits here because it needs
+Phase 5.5 substrate underneath and the Phase 7 typed daemon operations to call through, and
+because it inherits the transport, identity, and restart contract already proven in Phase 4.5.
+
+### v1 tool surface
+
+- [ ] `mux.provenance(file)` — who touched this, at what hash, and what tests ran on it
+  (CP §6.1).
+- [ ] `mux.priorResolutions(error)` — normalized error signature to a previously verified fix
+  (CP §6.10).
+- [ ] `mux.deadEnds(subsystem)` — approaches tried, abandoned, and why (CP §6.2).
+- [ ] `mux.verifiedStatus(claim)` — is this actually tested or merely declared done (CP §6.3).
+- [ ] Cross-session interlocks (CP §6.6) and digests (CP §6.8) as the human-facing half of the
+  same substrate.
+
+### Retrieval precision gate
+
+- [ ] Enforce per-tool scope and confidence thresholds below which a tool returns **nothing**
+  rather than a weak match: same Project, exact normalized signature, verified provenance.
+  Empty is acceptable; plausible-but-wrong is corrosive, because an agent that acts on one bad
+  match either stops calling or propagates the error.
+- [ ] Tag every retrievable insight with confidence and scope so low-confidence items can be
+  withheld from the agent while still being shown, with a suppressed count, to the human.
+- [ ] Measure retrieval outcomes. A tool whose results are not being used, or are being
+  contradicted, is a defect to fix, not a feature to leave running.
+
+### Phase 7.5 exit criteria
+
+- [ ] Every v1 tool returns results traceable to specific Tier 0 facts, annotations, or scan
+  records, and returns empty in preference to a low-confidence match.
+- [ ] v1 adds no authority: the surface remains read-only, with writes still confined to the
+  Phase 5 queue callers.
+- [ ] Enabling v1 is per-project opt-in through the existing enablement DAG, and disabling it
+  leaves the Phase 4.5 v0 surface working.
 
 ## Phase 8 — Telegram multi-session control
 
@@ -827,8 +1092,12 @@ failure behavior:
   auto-approval, arbitrary command execution, or arbitrary HTTP/network destinations.
 - Alternate observer providers/base URLs that weaken the fixed-origin secret/network
   boundary.
-- Autonomous agent-to-agent routing beyond Phase 5 user-authored/user-approved messages and
-  bounded deterministic templates.
+- Autonomous agent-to-agent routing beyond Phase 5 user-authored/user-approved/`mux.notify`
+  messages and bounded deterministic templates.
+- Agent-held spawn authority. Phase 5 ships `mux.requestSpawn` as a **draft producer** only
+  (`CONTROL_PLANE_ROADMAP.md` §7.2, §16); letting a tool call actually create a session
+  without human approval remains a separate product decision, because it converts one prompt
+  injection into unbounded fan-out.
 - Automatic termination of suspected orphan processes.
 - Definitive identity attribution for shared-account quota usage.
 - Bidirectional whole-file instruction sync or blind cross-provider skill-directory sync.
