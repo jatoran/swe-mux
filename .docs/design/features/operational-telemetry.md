@@ -52,7 +52,10 @@ compaction summary columns without replacing existing history rows.
 2. Normal reconciliation keys each process by PID plus creation time and records parent
    lineage, command hash, owner, resource counters, and Job Object assignment outcome.
 3. A descendant outside the current tree is `escaped`. After its root session ends and the
-   configurable grace expires, a matching live fingerprint becomes `suspected_orphan`.
+   configurable grace expires, a matching live fingerprint becomes `suspected_orphan`. The
+   grace runs from a deadline stamped once, when the root is first observed ended; it is never
+   re-derived per pass from `last_seen`, which every pass refreshes and which therefore made
+   the window slide forever for a session already dropped by the manager.
 4. Startup restores candidates, then revalidates creation time and available fingerprints.
    PID reuse becomes `stale`; inaccessible startup evidence stays stale/unverifiable rather
    than attaching to the process.
@@ -105,6 +108,13 @@ translate transcript tokens into provider quota weighting.
   terminal visibility/attachment while durable telemetry is queued.
 - Provider-specific parser versions prevent stale coverage from being treated as current.
   Unknown records/tools and truncated-tail diagnostics remain visible in the dashboard.
+- If supervisor adoption repairs a session whose provider/transcript identity was
+  misattributed, its tool/compaction rows and coverage cursor are deleted and rebuilt from the
+  corrected native transcript. Process fingerprints are retained because they describe the
+  real PTY tree, but their run owner is restored to the root run.
+- Historical collision repair is narrower: it removes tool/compaction rows only for the proven
+  false run, clears the potentially borrowed per-session coverage row, and reassigns matching
+  process evidence to the canonical root.
 - Claude and Codex versioned fixtures cover explicit tools, failures, skills, compactions,
   and unknown records.
 

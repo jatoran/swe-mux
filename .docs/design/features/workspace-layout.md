@@ -6,7 +6,7 @@ One Project-owned mixed-view workspace. Desktop renders a recursive split tree w
 each own an independent ordered tab stack. Mobile presents every tab in one rail as a projection
 of that same tree; it does not maintain a second layout.
 
-## Layout-v6 model
+## Layout-v7 model
 
 ```text
 PaneLayout
@@ -20,26 +20,31 @@ PaneLeaf = terminal | note | preview | history
 - A stack is a pane even when it has one tab. A split contains exactly two child branches.
 - `terminal` identifies a live/ended session viewport; `preview` identifies a loopback preview;
   `history` identifies the searchable archive; `note` resource IDs encode Project note,
-  session note, Files, and individual file editors.
+  session note, and individual file editors.
 - Leaf IDs are globally unique inside a Project layout. Server validation caps layouts at 64
   leaves, nesting depth 24, and split ratios from 0.1 through 0.9.
-- Layout versions 1–5 migrate on read. A visible legacy resource dock becomes an adjacent pane;
+- Layout versions 1–6 migrate on read. A visible legacy resource dock becomes an adjacent pane;
   a hidden dock becomes closed. Deprecated presentation fields remain parseable only for
   compatibility.
+- A v6 `files:` leaf is **pruned**, not migrated: the Files browser is the utility drawer's Files
+  tab now, so no pane can render one. A pane it emptied disappears and the split above it
+  collapses into its surviving branch; a workspace that held nothing else becomes the empty
+  stage. Pruning is unconditional (both `layout.ts` and `layouts.py`) rather than version-gated,
+  so a stale client that still PATCHes a Files leaf is corrected rather than rejected.
 
 ## Placement and persistence
 
-- A never-arranged Project seeds its workspace on first browser open: a narrow Files column
-  beside a wider pane holding the Project note, which starts focused. Both leaves are viewports,
-  so a first open still spawns no process, and the first terminal joins the note's pane under the
-  ordinary focused-pane rule. Seeding requires layout revision 0 and an empty root together, so a
-  Project whose panes were all deliberately closed stays empty and is never re-seeded.
+- A never-arranged Project opens on the empty stage. Nothing is seeded: the two surfaces worth
+  seeding a pane with are the Project note and Files, and both are now one click away in the
+  utility drawer, so a seeded pane would cost pixels and a layout write to show what a panel
+  already shows.
 - New terminals and resources join the focused pane by default; explicit directional actions
   create a split left/right/above/below.
-- Placement never defaults a new view into a pane holding the Files browser: an unanchored open,
-  a Files-focused open, and companion-note reuse all skip Files panes and prefer the first
-  non-Files pane. An explicit drop or drag target is still honored exactly. Files is used as a
-  last resort only when it is the sole pane.
+- Placement has no per-resource exceptions and no implicit splits. Every open — terminal, note,
+  file editor, preview — is a tab in the anchor's pane, and an unanchored open lands in the
+  first pane. The two exceptions that used to exist are gone: skipping Files panes went with the
+  Files leaf, and session notes no longer split a pane off to sit beside their terminal. Nothing
+  rearranges the pane tree except an explicit split, drag, or move.
 - Every pane has its own tab strip and active tab. There is no global tab strip, dock/pop-out
   mode, detached layout, or separate resource workspace.
 - The active tab carries an accent outline, a thick accent underline, and a tinted fill. A bare
@@ -61,7 +66,7 @@ PaneLeaf = terminal | note | preview | history
 - Project Action steps join the pane containing the currently focused view as ordinary terminal
   tabs. A compound action does not create layout groups or import VS Code presentation/split
   hints; every returned session uses the same placement rule.
-- Closing notes, Files, editors, History, or previews is one click and closes only the view.
+- Closing notes, editors, History, or previews is one click and closes only the view.
   Closing a Preview leaf preserves its daemon registration/sidebar service row; reopening
   reattaches the same stable leaf beside the actual listener owner.
   Closing a terminal is an inline two-click confirmation: fixed-width `×` becomes `✓` without

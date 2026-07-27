@@ -56,6 +56,7 @@ import build_desktop  # noqa: E402 - sibling packaging module
 
 from swe_mux.config import load_config  # noqa: E402
 from swe_mux.spawn_contract import scrub_claude_session_markers  # noqa: E402
+from swe_mux.subprocess_flags import popen_outside_job  # noqa: E402
 from swe_mux.supervisor import discovery_path  # noqa: E402
 
 APP_DIST = ROOT / "dist" / "swe-mux"
@@ -63,6 +64,15 @@ APP_EXE = APP_DIST / "swe-mux.exe"
 APP_IMAGE_NAMES = {"swe-mux.exe"}
 ACTION_IMAGE_NAME = "swe-mux-action.exe"
 SUPERVISOR_IMAGE_NAME = "swe-mux-supervisor.exe"
+# `swe-mux.exe -m swe_mux.<module>` is a short-lived helper an agent session
+# spawned inside its OWN process tree -- hook_client is the one that matters, it
+# runs on every PreToolUse/PostToolUse. It shares the app's image name but is not
+# the shell or the daemon, and killing it reaches into a live session. A redeploy
+# once did exactly that (`taskkill /F /IM swe-mux.exe`, no filter) and took down
+# the only session that happened to be mid-tool-call. Helpers are therefore spared
+# by the ordinary stop and only swept if a lock actually blocks the swap.
+HELPER_MODULE_FLAG = "-m"
+HELPER_MODULE_PREFIX = "swe_mux."
 # Staged-build locations: the new bundle lands in .staging while the old app
 # keeps running; the previous bundle is retained for rollback.
 STAGING_ROOT = ROOT / "dist" / ".staging"
@@ -72,6 +82,12 @@ FAILED_APP = ROOT / "dist" / "swe-mux.failed"
 # How long a directory rename retries while the just-stopped exe releases its
 # locks (the old WinError 5/32 straggler, now confined to a cheap rename).
 SWAP_RETRY_SECONDS = 20.0
+# First launch of a freshly written PyInstaller tree can spend several minutes
+# in Windows image scanning before the tray reaches daemon startup. Rolling back
+# while that process is still alive converts a slow-but-valid deploy into an
+# outage, so give cold starts a realistic budget and fail early only when the
+# launched shell actually exits.
+APP_HEALTH_TIMEOUT_SECONDS = 300.0
 
 
 def log(message: str) -> None:
@@ -142,6 +158,77 @@ def processes_by_image(names: set[str]) -> list[tuple[int, str]]:
     return found
 
 
+def is_session_helper(process) -> bool:  # noqa: ANN001 - psutil.Process
+    """True for `swe-mux.exe -m swe_mux.<module>`, a helper inside a session tree."""
+    import psutil
+
+    try:
+        argv = [str(part) for part in process.cmdline()]
+    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+        # Unreadable argv cannot be proven safe to kill. Treating it as a helper
+        # only risks a lock straggler, which the swap escalation already handles;
+        # treating it as the shell risks killing a live session, which it does not.
+        return True
+    for flag, module in zip(argv, argv[1:], strict=False):
+        if flag == HELPER_MODULE_FLAG and module.startswith(HELPER_MODULE_PREFIX):
+            return True
+    return False
+
+
+def partition_app_processes() -> tuple[list[int], list[int]]:
+    """Split live `swe-mux.exe` processes into (shell/daemon, session helpers)."""
+    import psutil
+
+    shell: list[int] = []
+    helpers: list[int] = []
+    for pid, _ in processes_by_image(APP_IMAGE_NAMES):
+        try:
+            process = psutil.Process(pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        (helpers if is_session_helper(process) else shell).append(pid)
+    return shell, helpers
+
+
+def terminate_pids(pids: list[int], *, grace: float = 3.0) -> None:
+    """Terminate then kill specific pids, never a whole image name."""
+    import psutil
+
+    processes = []
+    for pid in pids:
+        try:
+            process = psutil.Process(pid)
+            process.terminate()
+            processes.append(process)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            continue
+    _, alive = psutil.wait_procs(processes, timeout=grace)
+    for process in alive:
+        try:
+            process.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            continue
+    if alive:
+        psutil.wait_procs(alive, timeout=grace)
+
+
+def force_stop_app_images() -> None:
+    """Last-resort image-wide kill, used only when a lock blocks the swap.
+
+    This is the blunt instrument: it reaches every `swe-mux.exe`, including the
+    in-session helpers deliberately spared above. It runs only when the choice is
+    between that and a failed redeploy, and it says so.
+    """
+    _, helpers = partition_app_processes()
+    if helpers:
+        log(
+            f"escalating to an image-wide kill; {len(helpers)} in-session helper(s) "
+            "will be terminated too"
+        )
+    subprocess.run(["taskkill", "/F", "/IM", "swe-mux.exe"], capture_output=True, check=False)
+    time.sleep(1.0)
+
+
 def stop_app_processes(config) -> None:  # noqa: ANN001
     if health(config) is not None:
         log("asking the daemon to shut down with detach intent (sessions stay up)")
@@ -151,14 +238,12 @@ def stop_app_processes(config) -> None:  # noqa: ANN001
                 time.sleep(0.25)
         else:
             log("daemon did not accept desktop shutdown (not desktop-managed?); continuing")
-    remaining = processes_by_image(APP_IMAGE_NAMES)
-    if remaining:
-        log(f"terminating {len(remaining)} swe-mux.exe process(es) (shell/daemon)")
-        subprocess.run(
-            ["taskkill", "/F", "/IM", "swe-mux.exe"],
-            capture_output=True,
-            check=False,
-        )
+    shell, helpers = partition_app_processes()
+    if helpers:
+        log(f"sparing {len(helpers)} in-session swe-mux helper(s) (hook clients)")
+    if shell:
+        log(f"terminating {len(shell)} swe-mux.exe process(es) (shell/daemon)")
+        terminate_pids(shell)
         time.sleep(1.0)
 
 
@@ -170,6 +255,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--hidden", action="store_true", help="relaunch minimized to tray")
     parser.add_argument("--no-launch", action="store_true", help="rebuild but do not relaunch")
     parser.add_argument("--skip-build", action="store_true", help="bounce processes only")
+    parser.add_argument(
+        "--skip-frontend",
+        action="store_true",
+        help="backend-only redeploy: bundle the already-built src/swe_mux/static as-is",
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -205,12 +295,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "will then preserve sessions."
             )
             return 2
+    # Legacy only: task steps are spawned as ordinary shells and no longer run any
+    # swe-mux binary, so nothing new can hold this lock. Terminals started by a
+    # pre-removal bundle still can, until they are closed.
     action_terminals = processes_by_image({ACTION_IMAGE_NAME})
     if action_terminals and not args.force:
         log(
-            f"ABORT: {len(action_terminals)} live task terminal(s) run "
-            f"{ACTION_IMAGE_NAME} from dist/swe-mux and would lock or die in a "
-            "rebuild. Let them finish or kill those sessions, or re-run with --force."
+            f"ABORT: {len(action_terminals)} task terminal(s) predating the action-runner "
+            f"removal still run {ACTION_IMAGE_NAME} from dist/swe-mux and would lock the "
+            "swap. Close those sessions (relaunching them after this redeploy is enough), "
+            "or re-run with --force."
         )
         return 2
 
@@ -225,11 +319,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "`uv run python packaging/build_desktop.py --supervisor-only`."
             )
             skip_supervisor = True
-        log("rebuilding frontend + app bundle into dist/.staging (old app stays up)")
+        built = "app bundle only" if args.skip_frontend else "frontend + app bundle"
+        log(f"rebuilding {built} into dist/.staging (old app stays up)")
         shutil.rmtree(STAGING_ROOT, ignore_errors=True)
         build_arguments = ["--app-distpath", str(STAGING_ROOT)]
         if skip_supervisor:
             build_arguments.append("--skip-supervisor")
+        if args.skip_frontend:
+            build_arguments.append("--skip-frontend")
         try:
             build_desktop.main(build_arguments)
         except (SystemExit, subprocess.CalledProcessError) as exc:
@@ -254,8 +351,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.skip_build:
         clear_slot(PREV_APP)
         if APP_DIST.exists() and not replace_dir(APP_DIST, PREV_APP):
-            log("ABORT: could not retire the old bundle; relaunching it unchanged")
-            return relaunch_and_report(config, args, note="old build (swap failed)")
+            # A lock straggler outlived the targeted stop. Only now is the blunt
+            # image-wide kill worth its cost: the alternative is a redeploy that
+            # fails outright. Sparing helpers first means the common path never
+            # pays it, and this path retries the rename once afterwards.
+            force_stop_app_images()
+            if not replace_dir(APP_DIST, PREV_APP):
+                log("ABORT: could not retire the old bundle; relaunching it unchanged")
+                return relaunch_and_report(config, args, note="old build (swap failed)")
         if not replace_dir(STAGED_APP, APP_DIST):
             log("ABORT: could not move the staged bundle into dist; restoring the old app")
             if PREV_APP.exists():
@@ -270,8 +373,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not APP_EXE.is_file():
         log(f"ABORT: {APP_EXE} does not exist after build")
         return 1
-    launch_app(config, hidden=args.hidden)
-    payload = wait_healthy(config)
+    launched = launch_app(config, hidden=args.hidden)
+    payload = wait_healthy(config, process=launched)
     if payload is not None:
         log(
             f"daemon healthy: supervisor={payload.get('supervisor')} "
@@ -281,7 +384,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     # -- rollback: the new build launched but never became healthy ----------
     if not args.skip_build and PREV_APP.is_dir():
         log(
-            "new app did not report healthy within 60s; rolling back to the previous "
+            f"new app did not report healthy within {APP_HEALTH_TIMEOUT_SECONDS:.0f}s; "
+            "rolling back to the previous "
             f"build (failed bundle kept at {FAILED_APP})"
         )
         stop_app_processes(config)
@@ -290,7 +394,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             log("ABORT: rollback swap failed; check dist/ by hand")
             return 1
         return relaunch_and_report(config, args, note="rolled-back previous build")
-    log("daemon did not report healthy within 60s; check <data_dir>/desktop-daemon.log")
+    log(
+        f"daemon did not report healthy within {APP_HEALTH_TIMEOUT_SECONDS:.0f}s; "
+        "check <data_dir>/desktop-daemon.log"
+    )
     return 1
 
 
@@ -342,7 +449,7 @@ def replace_dir(source: Path, target: Path, *, retry_seconds: float = SWAP_RETRY
             time.sleep(0.5)
 
 
-def launch_app(config, *, hidden: bool) -> None:  # noqa: ANN001 - Config
+def launch_app(config, *, hidden: bool) -> subprocess.Popen[bytes]:  # noqa: ANN001 - Config
     log(f"launching {APP_EXE}")
     command = [str(APP_EXE)] + (["--hidden"] if hidden else [])
     # cwd must stay OUT of dist/: the shell's cwd is inherited down the spawn
@@ -351,7 +458,10 @@ def launch_app(config, *, hidden: bool) -> None:  # noqa: ANN001 - Config
     # scrubbed of parent-Claude session markers: this script is designed to run
     # from an agent session, and leaked markers would make every `claude`
     # inside swe-mux think it is a nested child session (transcripts off).
-    subprocess.Popen(
+    # Breakaway spawn for the same reason: run from inside a session, this
+    # script sits in that session's kill-on-close Job, and a relaunched app
+    # that inherits it is silently terminated when the session is removed.
+    return popen_outside_job(
         command,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -362,12 +472,20 @@ def launch_app(config, *, hidden: bool) -> None:  # noqa: ANN001 - Config
     )
 
 
-def wait_healthy(config, seconds: float = 60.0):  # noqa: ANN001 - Config
+def wait_healthy(
+    config,
+    seconds: float = APP_HEALTH_TIMEOUT_SECONDS,
+    *,
+    process: subprocess.Popen[bytes] | None = None,
+):  # noqa: ANN001 - Config
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         payload = health(config, timeout=1.0)
         if payload is not None:
             return payload
+        if process is not None and process.poll() is not None:
+            log(f"launched app process exited with code {process.returncode} before health")
+            return None
         time.sleep(0.5)
     return None
 
@@ -377,8 +495,8 @@ def relaunch_and_report(config, args, *, note: str) -> int:  # noqa: ANN001
     if args.no_launch or not APP_EXE.is_file():
         log(f"{note}: not relaunched (missing exe or --no-launch); check dist/ by hand")
         return 1
-    launch_app(config, hidden=args.hidden)
-    payload = wait_healthy(config)
+    launched = launch_app(config, hidden=args.hidden)
+    payload = wait_healthy(config, process=launched)
     if payload is not None:
         log(
             f"{note} healthy again: supervisor={payload.get('supervisor')} "

@@ -29,12 +29,31 @@ ConPTY, exit code `0` ends as **completed**, and a nonzero root exit remains **c
 exit code retained. Interactive shells and agent terminals keep their separate long-lived
 lifecycle semantics.
 
+## Execution
+
+A step becomes one ordinary spawn request: `executable`, `argv`, the step's contained `cwd`, and
+its `env`. **No swe-mux binary appears in a task's process tree.** One did once, and a live task
+terminal then held `dist/swe-mux` open and blocked the frozen redeploy swap; keeping the tree
+free of them is what lets a task outlive a rebuild of the app that launched it.
+
+- `shell` steps: command and args are folded into one command line quoted for the target shell
+  (PowerShell single-quoting with `''` escapes and a call operator for a quoted command; cmd via
+  `list2cmdline` plus metacharacter quoting; POSIX via `shlex`), then handed to that shell. VS
+  Code semantics: the args array is quoted and appended, never dropped. A step with no args
+  passes its command string through untouched, so shell syntax such as `&&` still works.
+- `process` steps: resolved on `PATH` by the daemon. A `.cmd`/`.bat` shim (every npm-family entry
+  point on Windows) is routed through `%COMSPEC%`, since it is not a real executable.
+- Shell resolution for a step without an explicit `options.shell.executable` uses the Project's
+  non-interactive shell profile, resolved against the step's own cwd.
+
 ## Relaunch
 
 Task-launched terminals are marked **relaunchable** and carry a **Relaunch** action on their
 terminal rail (and the `session.relaunch` command). Relaunch is *from-record*: it replays the
-session's exact retained executable/argv — env is already baked into the Project Action payload —
-so no task file is re-read and no trust re-approval is required. `POST /api/sessions/{sid}/relaunch`
+session's exact retained executable, argv, `spawn_cwd`, and `spawn_env`, so no task file is
+re-read and no trust re-approval is required. All four are replayed because a step's directory
+and environment are spawn inputs in their own right and cannot be recovered from argv alone.
+`POST /api/sessions/{sid}/relaunch`
 spawns the fresh copy first (so a spawn failure leaves the original intact), then stops and removes
 the old session; the browser swaps the new session id into the old one's layout leaf, keeping the
 tab, split, and focus in place. It works on a still-running task (stop then restart) and on an
@@ -104,8 +123,7 @@ imported actions follow in source sections.
 ## Key files
 
 - `src/swe_mux/project_actions.py`
-- `src/swe_mux/action_runner.py`
-- `packaging/action_entry.py`
+- `src/swe_mux/spawn_contract.py`
 - `src/swe_mux/server.py`
 - `frontend/src/ProjectRunMenu.tsx`
 - `frontend/src/App.tsx`

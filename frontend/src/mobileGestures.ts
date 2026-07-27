@@ -107,6 +107,34 @@ export function classifyGesture(sample: GestureSample): GestureSlot | null {
   return null
 }
 
+export type OverlayPanels = { sidebarOpen: boolean; drawerOpen: boolean }
+
+// While a slide-in panel is open, the horizontal swipe pointing back toward the
+// edge it slid in from means "push it away". With the override enabled, that
+// swipe closes the panel instead of running its normal binding — so dismissing
+// the right-edge drawer can never open the left sidebar on top of it (and vice
+// versa). The override is keyed on the open panel, not the slot's binding, so it
+// also applies when the slot is unbound: an open panel with a scrim makes the
+// swipe-away motion unambiguous. Swipes toward an open panel keep their binding
+// (the drawer's own toggle direction already closes it from over the scrim).
+export function resolveGestureCommand(
+  slot: GestureSlot,
+  settings: MobileGestureSettings,
+  panels: OverlayPanels,
+  swipeAwayClose: boolean,
+): string {
+  if (swipeAwayClose) {
+    // The right-edge drawer overlays the sidebar, so it wins when both are open.
+    if (panels.drawerOpen && (slot === 'swipe_right' || slot === 'two_finger_swipe_right')) return 'drawer.toggle'
+    if (panels.sidebarOpen && (slot === 'swipe_left' || slot === 'two_finger_swipe_left')) return 'sidebar.close'
+  }
+  return settings[slot]
+}
+
+export function swipeAwayCloseEnabled(config: Record<string, unknown>): boolean {
+  return config.mobile_gesture_swipe_away_close !== false
+}
+
 export function mobileGestureSettings(config: Record<string, unknown>): MobileGestureSettings {
   const raw = config.mobile_gestures
   const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}

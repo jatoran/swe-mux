@@ -56,7 +56,8 @@ automatic fallback whenever the supervisor is unreachable.
 - `project_watcher.py`: leased, non-recursive watches for directories visible in open
   resource tabs.
 - `project_actions.py`: trusted discovery and normalization of VS Code, package, and native
-  Project Actions; `action_runner.py` executes one normalized step beneath a session root.
+  Project Actions into direct spawn requests (shell command line, contained cwd, env), so a
+  step runs as an ordinary supervisor-owned shell with no swe-mux binary in its process tree.
 - `session.py`: live registry, spawn/stop, scrollback, PTY fanout, supervisor-session adoption.
 - `supervisor.py`: standalone PTY supervisor process — ConPTY ownership, IPC server,
   authoritative scrollback, reaper Job, discovery file, single-instance mutex. Near-frozen.
@@ -119,15 +120,19 @@ automatic fallback whenever the supervisor is unreachable.
 14. Desktop window close/minimize hides the viewport; it never stops the daemon or PTYs. Tray
     Quit confirms live sessions and requests graceful daemon shutdown through a secret-gated
     loopback route. A desktop crash leaves the separate daemon process running.
+15. A session's root provider identity is immutable. Nested-agent promotion is a shell-only
+    state transition, live transcript paths/native IDs have one owner, and supervisor metadata
+    is revalidated against those facts before daemon reattachment publishes the session.
 
 ## Failure modes
 
 - Daemon crash closes the global job and terminates owned child processes — in-process PTY
   mode only. With the PTY supervisor, a daemon crash or restart leaves agents running; the
-  next daemon reattaches. Only a supervisor crash/kill (its Job closes) or an explicit quit /
-  `muxd --shutdown` takes agents down. The supervisor itself cannot be hot-updated without
-  killing sessions; it self-exits after a bounded idle window with no clients and no live
-  sessions.
+  next daemon reattaches and revalidates mirrored provider/transcript identity. Proven legacy
+  contamination is repaired before observation resumes and its false history owner is hidden.
+  Only a supervisor crash/kill (its Job closes) or an explicit quit / `muxd --shutdown` takes
+  agents down. The supervisor itself cannot be hot-updated without killing sessions; it
+  self-exits after a bounded idle window with no clients and no live sessions.
 - Browser disconnect removes subscribers while PTYs and bounded scrollback remain live.
 - Desktop/tray crash removes only the local desktop viewport. A new supervisor reconnects to a
   healthy daemon; an unmanaged daemon cannot be terminated through desktop control.

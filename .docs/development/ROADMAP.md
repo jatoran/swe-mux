@@ -46,6 +46,11 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
 - Durable Project registry/Groups/sidebar visibility/layouts, Project and terminal-owned session
   notes, lazy Project file tree, global/project ignores, bounded leased file watches,
   revision-checked editors, Git status/worktrees, process inspector, listeners, and previews.
+- Manual "send to agent" from every Continuity-backed Markdown view (project note, session note,
+  Markdown file): the selection, or the whole document, seeds a new Claude/Codex session through
+  the agent CLI's argv or is written into a live agent session over the input endpoint, targeted
+  by a Project/session picker that excludes shells and dead sessions. Delivery is per-message and
+  user-initiated; the durable queue behind it is Phase 4 (see that phase's sender items).
 - Settings draft/save/discard flow, terminal/profile configuration, themes, commands,
   per-pane mixed-view tab stacks, non-native pointer drag/drop, projection-only mobile controls,
   and browser-native Web Speech STT.
@@ -567,6 +572,37 @@ framework.
 - [ ] Record delivery attempt/result without duplicating prompt text into general event or
   automation logs.
 
+### Send-to-agent senders and coverage
+
+Note/Markdown "send to agent" already ships as a *direct* manual send (see
+`design/features/project-resources.md`): the selection either seeds a new session through the
+agent CLI's argv or is written to a live session over `POST /sessions/{id}/input`. It is the
+first non-trivial producer of agent-bound text outside a terminal, so it is the natural first
+caller of the queue rather than a second delivery path to maintain.
+
+- [ ] Make the dialog a queue sender: "add to queue" (draft/armed) alongside today's "send now",
+  so a message aimed at a busy session waits in one audited place instead of racing the
+  composer. Today's direct write becomes the queue's own "send next now" path.
+- [ ] Move the readiness decision into the queue. The dialog currently *reports* blocked/unknown
+  readiness and lets the user proceed; once the queue owns delivery, that becomes the queue's
+  confirmation rule so there is exactly one place where a not-safe target is overridden.
+- [ ] Extend the surface to the views that own no Continuity selection: plain-text file editors
+  (whole-document send) and the Files tree context menu, which already fetches file contents for
+  its copy action. Keep the shell exclusion — an agent composer holds a paste inert, a shell runs
+  it.
+- [ ] Replace the 20,000-character ceiling on a *new* session's seed prompt. argv is a Windows
+  command line, so a long body is currently refused with a pointer at the live-session route;
+  the durable fix is to stage the body (temp file or session note) and seed a prompt that reads
+  it, which also removes the quoting-inflation risk.
+- [ ] Finish or delete the reverse direction. `TerminalPane` handles a `captureSelection` action
+  and emits `mux:terminal-selection` with a `targetKey`, but nothing dispatches it and nothing
+  listens: terminal-selection-into-notes is a half-wired stub, and shipping the note→terminal
+  direction without resolving it leaves two incomplete halves of one idea.
+- [ ] Only if demand appears: make the note surface's actions configurable. They are two fixed
+  buttons today. The terminal's `RailItem` model (server-persisted, per-project overrides,
+  platform/backend filters) and Continuity's own rail (localStorage, enable/reorder only) do not
+  share a model, so unifying them is a real design task, not a settings row.
+
 ### Phase 4 exit criteria
 
 - [ ] Queue order/state survives daemon and browser restart without duplicate delivery.
@@ -654,6 +690,13 @@ auto-approval, arbitrary PTY writes, or uncontrolled relay chains.
   partial/unknown PTY delivery; require user reconciliation.
 - [ ] Provide pause-all, per-session enablement, expiry, maximum consecutive sends, quiet
   hours, audit view, and an emergency disable independent of provider availability.
+- [ ] Add time-based delivery — "send after N minutes" and "send at a time" — as a *delivery
+  constraint on a queue item*, never as a private timer in a sender's UI. A browser-side timer
+  dies with the tab and a daemon-side one is an unaudited second delivery path; both contradict
+  Phase 4's rule that every delivery is an explicit, auditable user action. This belongs here
+  and not in Phase 4 because a clock firing a send is auto-delivery: it inherits this phase's
+  readiness re-check, quiet hours, consecutive-send bound, and emergency disable. Recurring or
+  schedule-driven sends remain out of scope until those bounds are proven.
 
 ### Human/device mailbox
 

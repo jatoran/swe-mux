@@ -631,3 +631,380 @@ def test_daemon_resource_sample_excludes_session_attributed_descendants(
     assert (20, 2.0) not in seen
     assert (daemon_pid, 1.0) in seen
     assert (30, 3.0) in seen
+
+
+def test_orphan_grace_elapses_once_the_session_record_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A survivor of a vanished session must eventually escalate to suspected_orphan.
+
+    The grace used to be measured against ``last_seen``, which every pass refreshed to
+    ``now``, so the window slid forever and a real orphan stayed "grace pending"
+    indefinitely -- observed live on a process that had outlived its session by days.
+    """
+    from swe_mux import processes
+
+    class Survivor:
+        pid = 77
+
+        def create_time(self) -> float:
+            return 10.0
+
+        def oneshot(self) -> Survivor:
+            return self
+
+        def __enter__(self) -> Survivor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def ppid(self) -> int:
+            return 1
+
+        def name(self) -> str:
+            return "server.exe"
+
+        def cmdline(self) -> list[str]:
+            return ["server.exe"]
+
+        def memory_info(self) -> Any:
+            return SimpleNamespace(rss=2048)
+
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(
+            Process=lambda _pid: Survivor(),
+            NoSuchProcess=RuntimeError,
+            AccessDenied=PermissionError,
+        ),
+    )
+    inspector = ProcessInspector(
+        cast(Any, SimpleNamespace(sessions={})), EventBus(), orphan_grace_seconds=15
+    )
+    item = OwnedProcess(
+        77, 1, "gone-session", "server.exe", "", 10.0, None, 0, 0, [], [], first_seen=1_000.0
+    )
+    inspector.owned[(77, 10.0)] = item
+
+    # First pass after the session disappears: inside the grace window.
+    inspector._revalidate_unseen(set(), {}, 1_000.0, False)
+    assert item.evidence_state == "escaped"
+    assert item.root_ended_at == 1_000.0
+
+    # Later passes keep refreshing last_seen; the stamp must not move with it.
+    inspector._revalidate_unseen(set(), {}, 1_010.0, False)
+    assert item.evidence_state == "escaped"
+    assert item.root_ended_at == 1_000.0
+
+    inspector._revalidate_unseen(set(), {}, 1_020.0, False)
+    assert item.evidence_state == "suspected_orphan"
+    assert "suspected_orphan" in item.conditions
+
+
+def test_a_session_that_comes_back_clears_its_orphan_stamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from swe_mux import processes
+
+    class Live:
+        pid = 88
+
+        def create_time(self) -> float:
+            return 5.0
+
+        def oneshot(self) -> Live:
+            return self
+
+        def __enter__(self) -> Live:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def ppid(self) -> int:
+            return 1
+
+        def name(self) -> str:
+            return "worker.exe"
+
+        def cmdline(self) -> list[str]:
+            return ["worker.exe"]
+
+        def memory_info(self) -> Any:
+            return SimpleNamespace(rss=512)
+
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(
+            Process=lambda _pid: Live(),
+            NoSuchProcess=RuntimeError,
+            AccessDenied=PermissionError,
+        ),
+    )
+    record = SimpleNamespace(state="running", last_activity_ts=900.0)
+    sessions = SimpleNamespace(sessions={})
+    inspector = ProcessInspector(cast(Any, sessions), EventBus(), orphan_grace_seconds=15)
+    item = OwnedProcess(
+        88, 1, "session-a", "worker.exe", "", 5.0, None, 0, 0, [], [], first_seen=900.0
+    )
+    inspector.owned[(88, 5.0)] = item
+
+    inspector._revalidate_unseen(set(), {}, 1_000.0, False)
+    assert item.root_ended_at == 900.0
+
+    sessions.sessions["session-a"] = SimpleNamespace(record=record)
+    inspector._revalidate_unseen(set(), {}, 1_010.0, False)
+
+    assert item.root_ended_at is None
+    assert item.evidence_state == "escaped"
+
+
+def test_sampling_reuses_process_handles_across_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Handles and identity attributes are read once, not once per reconcile tick.
+
+    Constructing a psutil.Process and reading cmdline() are the two dominant costs of a
+    pass and neither changes for a live process, so repeating them every 5s only
+    starved the event loop (which surfaced as laggy terminal input).
+    """
+    from swe_mux import processes
+
+    constructed: list[int] = []
+    cmdline_reads: list[int] = []
+
+    class Fake:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            constructed.append(pid)
+
+        def create_time(self) -> float:
+            return 7.0
+
+        def oneshot(self) -> Fake:
+            return self
+
+        def __enter__(self) -> Fake:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def ppid(self) -> int:
+            return 1 if self.pid == 100 else 100
+
+        def name(self) -> str:
+            return f"proc-{self.pid}"
+
+        def cmdline(self) -> list[str]:
+            cmdline_reads.append(self.pid)
+            return [f"proc-{self.pid}"]
+
+        def cpu_times(self) -> Any:
+            return SimpleNamespace(user=1.0, system=0.0)
+
+        def memory_info(self) -> Any:
+            return SimpleNamespace(rss=1024)
+
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(
+            Process=Fake,
+            NoSuchProcess=RuntimeError,
+            AccessDenied=PermissionError,
+            _ppid_map=lambda: {100: 1, 101: 100},
+        ),
+    )
+    record = SimpleNamespace(
+        id="session-a",
+        pid=100,
+        project_id="project-a",
+        agent_run_id=None,
+        process_job_assignment="job",
+        last_activity_ts=0.0,
+    )
+    sessions = SimpleNamespace(sessions={"session-a": SimpleNamespace(record=record)})
+    inspector = ProcessInspector(cast(Any, sessions), EventBus())
+
+    inspector._refresh_tree()
+    first = inspector._collect_session(cast(Any, sessions.sessions["session-a"]), {})
+    assert {item.pid for item in first} == {100, 101}
+    assert sorted(constructed) == [100, 101]
+    assert sorted(cmdline_reads) == [100, 101]
+
+    inspector._refresh_tree()
+    second = inspector._collect_session(cast(Any, sessions.sessions["session-a"]), {})
+
+    assert {item.pid for item in second} == {100, 101}
+    # No handle rebuilt and no command line re-read on the second pass.
+    assert sorted(constructed) == [100, 101]
+    assert sorted(cmdline_reads) == [100, 101]
+    assert second[0].command_hash == first[0].command_hash
+
+
+def test_a_recycled_parent_link_cannot_splice_another_tree_into_a_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A descendant older than the root is a stale ppid, not a child.
+
+    Windows leaves a dead parent's pid in the child's ppid field and recycles pids, so
+    the raw parent map contains links that were never real. Trusting one made the PTY
+    supervisor look like a descendant of a single session; because the supervisor
+    parents every session, that session absorbed the entire fleet (34 processes, three
+    claude.exe, another session's listeners) while its siblings reported zero.
+    """
+    from swe_mux import processes
+
+    # 500 = session root. 501 = its real child. 900 = the supervisor, created long
+    # before the root, whose stale ppid now points at the recycled pid 501.
+    # 901/902 = other sessions' agents, real children of the supervisor.
+    created = {500: 1_000.0, 501: 1_001.0, 900: 10.0, 901: 20.0, 902: 30.0}
+    names = {500: "claude.exe", 501: "bash.exe", 900: "supervisor.exe", 901: "claude.exe",
+             902: "claude.exe"}
+
+    class Fake:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def create_time(self) -> float:
+            return created[self.pid]
+
+        def oneshot(self) -> Fake:
+            return self
+
+        def __enter__(self) -> Fake:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def ppid(self) -> int:
+            return 1
+
+        def name(self) -> str:
+            return names[self.pid]
+
+        def cmdline(self) -> list[str]:
+            return [names[self.pid]]
+
+        def cpu_times(self) -> Any:
+            return SimpleNamespace(user=0.0, system=0.0)
+
+        def memory_info(self) -> Any:
+            return SimpleNamespace(rss=1024)
+
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(
+            Process=Fake,
+            NoSuchProcess=RuntimeError,
+            AccessDenied=PermissionError,
+            _ppid_map=lambda: {500: 1, 501: 500, 900: 501, 901: 900, 902: 900},
+        ),
+    )
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+    inspector._refresh_tree()
+
+    handles = inspector._tree_handles(500, 256)
+
+    pids = {handle.pid for handle in handles}
+    assert pids == {500, 501}, "the supervisor and every session under it must be excluded"
+    # Excluding the stale link must also stop the walk there, or the other sessions'
+    # agents would still be pulled in through it.
+    assert 900 not in pids and 901 not in pids and 902 not in pids
+
+
+def test_an_unreadable_identity_is_retried_rather_than_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient AccessDenied must not pin a placeholder for the handle's lifetime."""
+    from swe_mux import processes
+
+    class Flaky:
+        pid = 61
+        attempts = 0
+
+        def name(self) -> str:
+            return "worker.exe"
+
+        def cmdline(self) -> list[str]:
+            Flaky.attempts += 1
+            if Flaky.attempts == 1:
+                raise PermissionError("denied")
+            return ["worker.exe", "--serve"]
+
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(
+            Process=lambda _pid: Flaky(), NoSuchProcess=RuntimeError, AccessDenied=PermissionError
+        ),
+    )
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+    handle = Flaky()
+
+    assert inspector._identity(handle, 61) == ("worker.exe", "", processes.command_hash(""))
+    assert 61 not in inspector._static
+
+    name, command, _ = inspector._identity(handle, 61)
+    assert (name, command) == ("worker.exe", "worker.exe --serve")
+    assert 61 in inspector._static
+
+
+def test_a_recycled_pid_rebuilds_its_cached_handle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A changed parent pid is proof of recycling, so the memoized identity is dropped."""
+    from swe_mux import processes
+
+    constructed: list[int] = []
+
+    class Fake:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            constructed.append(pid)
+
+        def create_time(self) -> float:
+            return 7.0
+
+        def oneshot(self) -> Fake:
+            return self
+
+        def __enter__(self) -> Fake:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def ppid(self) -> int:
+            return 1
+
+        def name(self) -> str:
+            return "proc"
+
+        def cmdline(self) -> list[str]:
+            return ["proc"]
+
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(
+            Process=Fake, NoSuchProcess=RuntimeError, AccessDenied=PermissionError
+        ),
+    )
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+
+    inspector._parents = {55: 10}
+    inspector._handle(55)
+    inspector._handle(55)
+    assert constructed == [55]
+
+    inspector._parents = {55: 11}
+    inspector._handle(55)
+
+    assert constructed == [55, 55]

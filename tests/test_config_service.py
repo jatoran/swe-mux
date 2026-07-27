@@ -239,6 +239,97 @@ def test_note_opening_default_is_hot_reloadable_and_validated(tmp_path: Path) ->
         update_config(config, {"notes_default_open": "window"})
 
 
+def test_note_editor_settings_are_hot_reloadable_and_validated(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+
+    assert config.note_spellcheck is False
+    assert config.note_syntax == "markdown"
+    assert config.note_tab_behavior == "indent"
+    assert config.note_shortcut_policy == "browser-safe"
+    assert config.note_command_rail == "auto"
+    # Zero/blank means "keep the editor's own default" rather than pinning one here.
+    assert config.note_font_family == ""
+    assert config.note_font_size_px == 0
+    assert config.note_line_height == 0.0
+    assert config.note_rail_button_size_px == 0
+
+    hot, restart = update_config(
+        config,
+        {
+            "note_spellcheck": True,
+            "note_syntax": "plain",
+            "note_tab_behavior": "focus",
+            "note_shortcut_policy": "editor-first",
+            "note_command_rail": "on",
+            "note_font_family": "Iosevka",
+            "note_font_size_px": 18,
+            "note_line_height": 1.8,
+            "note_rail_button_size_px": 56,
+        },
+    )
+
+    assert restart == set()
+    assert hot == {
+        "note_spellcheck",
+        "note_syntax",
+        "note_tab_behavior",
+        "note_shortcut_policy",
+        "note_command_rail",
+        "note_font_family",
+        "note_font_size_px",
+        "note_line_height",
+        "note_rail_button_size_px",
+    }
+    reloaded = load_config(path)
+    assert reloaded.note_syntax == "plain"
+    assert reloaded.note_font_family == "Iosevka"
+    assert reloaded.note_line_height == 1.8
+
+    with pytest.raises(ValueError, match="markdown or plain"):
+        update_config(config, {"note_syntax": "rich"})
+    with pytest.raises(ValueError, match="browser-safe, editor-first, or none"):
+        update_config(config, {"note_shortcut_policy": "editor-only"})
+    with pytest.raises(ValueError, match="between 8 and 48"):
+        update_config(config, {"note_font_size_px": 400})
+    with pytest.raises(ValueError, match="between 32 and 96"):
+        update_config(config, {"note_rail_button_size_px": 8})
+
+
+def test_note_shortcut_overrides_survive_a_round_trip_and_reject_junk(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+
+    # Reclaims the two chords the editor binds but flags non-browser-safe.
+    assert config.note_shortcut_overrides == {
+        "mod+r": "editor.toggle_bullet_at_line_start",
+        "mod+e": "markdown.toggle_task",
+    }
+
+    # A chord is not a bare TOML key, so the serializer has to quote dict keys.
+    hot, restart = update_config(
+        config,
+        {"note_shortcut_overrides": {"mod+shift+r": "editor.reverse_lines", "mod+k": ""}},
+    )
+    assert hot == {"note_shortcut_overrides"}
+    assert restart == set()
+    assert load_config(path).note_shortcut_overrides == {
+        "mod+shift+r": "editor.reverse_lines",
+        # "" is the released-chord marker: TOML has no null.
+        "mod+k": "",
+    }
+
+    with pytest.raises(ValueError, match="mod \\+r"):
+        update_config(config, {"note_shortcut_overrides": {"mod +r": "editor.undo"}})
+    with pytest.raises(ValueError, match="mod\\+q"):
+        update_config(config, {"note_shortcut_overrides": {"mod+q": "not a command"}})
+    with pytest.raises(ValueError, match="at most 128"):
+        update_config(
+            config,
+            {"note_shortcut_overrides": {f"alt+{index}": "editor.undo" for index in range(129)}},
+        )
+
+
 def test_project_ignore_defaults_are_hot_reloadable_and_bounded(tmp_path: Path) -> None:
     config = load_config(tmp_path / "config.toml")
     assert {".venv", ".mypy_cache", ".pytest_cache", "node_modules", "uv.lock"} <= set(
@@ -323,6 +414,20 @@ def test_mobile_gestures_default_and_are_hot_reloadable_and_validated(tmp_path: 
         update_config(config, {"mobile_gestures": {"swipe_left": "does.not.exist"}})
     with pytest.raises(ValueError, match="unknown gesture slots"):
         update_config(config, {"mobile_gestures": {"triple_tap": "palette.open"}})
+
+
+def test_swipe_away_close_defaults_on_and_is_hot_reloadable(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    assert config.mobile_gesture_swipe_away_close is True
+
+    hot, restart = update_config(config, {"mobile_gesture_swipe_away_close": False})
+    assert hot == {"mobile_gesture_swipe_away_close"}
+    assert restart == set()
+    assert config.mobile_gesture_swipe_away_close is False
+
+    reloaded = load_config(path)
+    assert reloaded.mobile_gesture_swipe_away_close is False
 
 
 def test_legacy_sidebar_gestures_migrate_to_toggle(tmp_path: Path) -> None:

@@ -58,6 +58,8 @@ from .keybindings import (
 )
 from .launchers import create_agent_shims, resolve_codex_pty_command, resolve_command
 from .layouts import attach_leaf, attach_terminal, stack_leaf
+from .lifecycle import HEARTBEAT_INTERVAL_SECONDS, daemon_clean_exit, daemon_started, heartbeat
+from .logsetup import current_log_level, set_log_level
 from .meta_hooks import MetaHookEngine, parse_hook_rules
 from .models import MuxEvent
 from .observation import apply_hook_observation, hook_event_scope
@@ -73,7 +75,7 @@ from .preview_capture import (
 )
 from .processes import PreviewRegistry, ProcessInspector
 from .profiles import profile_payload, resolve_profile
-from .project_actions import ProjectActionService, runner_spawn_body
+from .project_actions import ProjectActionService, action_spawn_body
 from .project_files import (
     append_observation,
     effective_project_ignores,
@@ -111,8 +113,8 @@ from .reconcile import reconcile_external_history
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import Session, SessionManager
 from .settings_store import SettingsStore
-from .spawn_contract import SpawnRequest, scrub_claude_session_markers
-from .subprocess_flags import background_creation_flags
+from .spawn_contract import SpawnRequest, resolve_contained_cwd, scrub_claude_session_markers
+from .subprocess_flags import background_creation_flags, popen_outside_job
 from .supervisor_client import SupervisorClient
 from .tailscale import (
     enable_mobile_voice_serve,
@@ -320,6 +322,8 @@ def create_app(
             web.get("/manifest.webmanifest", manifest),
             web.get("/sw.js", service_worker),
             web.get("/api/health", health),
+            web.get("/api/debug/log-level", get_log_level),
+            web.post("/api/debug/log-level", put_log_level),
             web.post("/api/desktop/shutdown", desktop_shutdown),
             web.post("/api/daemon/restart", daemon_restart),
             web.post("/api/daemon/redeploy", daemon_redeploy),
@@ -327,6 +331,7 @@ def create_app(
             web.get("/api/remote/status", remote_status),
             web.post("/api/remote/mobile-voice/enable", enable_mobile_voice),
             web.get("/api/config", get_config),
+            web.get("/api/settings/bundle", settings_bundle),
             web.patch("/api/config", patch_config),
             web.post("/api/config/reset", reset_config),
             web.get("/api/keybindings", get_keybindings),
@@ -517,8 +522,21 @@ def create_app(
     return app
 
 
+async def _lifecycle_heartbeat_loop(data_dir: Path) -> None:
+    while True:
+        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+        await asyncio.to_thread(heartbeat, data_dir)
+
+
 async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     config: Config = app["config"]
+    # Death forensics first: report a predecessor that vanished without a clean
+    # shutdown while this daemon is still barely started, then keep our own
+    # heartbeat fresh so the next daemon can do the same for us.
+    daemon_started(config.data_dir, log)
+    lifecycle_task = asyncio.create_task(
+        _lifecycle_heartbeat_loop(config.data_dir), name="lifecycle-heartbeat"
+    )
     history = HistoryIndex(config.database_path)
     events = EventBus(history.append_event)
     telemetry = OperationalTelemetryStore(
@@ -527,6 +545,23 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         process_retention_days=config.process_evidence_retention_days,
     )
     await telemetry.prune(process_retention_days=config.process_evidence_retention_days)
+    historical_identity_repairs = await history.reconcile_historical_provider_collisions()
+    for session_id, false_run_id, canonical_root_run_id in historical_identity_repairs:
+        await telemetry.quarantine_agent_run_provider_observations(
+            session_id, false_run_id, canonical_root_run_id
+        )
+        await events.emit(
+            "session_identity_history_reconciled",
+            session_id=session_id,
+            source="daemon",
+            false_agent_run_id=false_run_id,
+            root_agent_run_id=canonical_root_run_id,
+        )
+    if historical_identity_repairs:
+        log.warning(
+            "quarantined %d historical provider collision(s)",
+            len(historical_identity_repairs),
+        )
     tier0 = Tier0Store(
         config.database_path, retention_days=config.process_evidence_retention_days
     )
@@ -579,6 +614,16 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                 log.info("reattached %d live session(s) from the PTY supervisor", adopted)
         except Exception:
             log.exception("supervisor session adoption failed")
+        for repaired_session_id, root_run_id in sessions.identity_repairs:
+            try:
+                await telemetry.reset_session_provider_observations(
+                    repaired_session_id, root_run_id
+                )
+            except Exception:
+                log.exception(
+                    "could not reset misattributed provider telemetry for session %s",
+                    repaired_session_id,
+                )
     git_monitor = GitMonitor(sessions, events, config.git_poll_seconds)
     hooks = MetaHookEngine(config.data_dir / "hooks.toml", events, sessions)
     automation_store = AutomationStore(config.database_path)
@@ -775,6 +820,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     tier0.close()
     clipboard.close()
     reaper.close()
+    lifecycle_task.cancel()
+    await asyncio.gather(lifecycle_task, return_exceptions=True)
+    # Last so an exception anywhere above still reads as an unclean exit.
+    await asyncio.to_thread(daemon_clean_exit, config.data_dir, intent)
 
 
 async def _watch_config(app: web.Application) -> None:
@@ -811,6 +860,9 @@ async def _watch_config(app: web.Application) -> None:
 
 def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
     config: Config = app["config"]
+    if "log_level" in changed:
+        with suppress(ValueError):  # _validate already constrains the value
+            set_log_level(config.log_level)
     sessions: SessionManager | None = app.get("sessions")
     if sessions:
         if "scrollback_bytes" in changed:
@@ -903,6 +955,24 @@ async def health(request: web.Request) -> web.Response:
     )
 
 
+async def get_log_level(request: web.Request) -> web.Response:
+    return json_response({"level": current_log_level()})
+
+
+async def put_log_level(request: web.Request) -> web.Response:
+    """Runtime verbosity toggle: flip DEBUG on a live daemon, no restart.
+
+    Applies to the root logger (console + rotating daemon.log) for this daemon
+    process only; ``log_level`` in config remains the startup default.
+    """
+    body = await request.json()
+    if not isinstance(body, dict) or not isinstance(body.get("level"), str):
+        raise ValueError("body must be an object with a string 'level'")
+    level = set_log_level(body["level"])
+    log.info("log level set to %s via /api/debug/log-level", level)
+    return json_response({"level": level})
+
+
 async def desktop_shutdown(request: web.Request) -> web.Response:
     """Stop a desktop-managed daemon without exposing network shutdown authority.
 
@@ -940,8 +1010,10 @@ def _spawn_daemon_successor(command: list[str], log_path: Path) -> None:
     with log_path.open("ab", buffering=0) as log_file:
         # Returns immediately; the successor runs --relaunch-wait and starts
         # once this daemon has released its listeners. Detached from this
-        # process group so our exit never signals it.
-        subprocess.Popen(  # noqa: ASYNC220 - non-blocking Popen from a sync helper
+        # process group so our exit never signals it, and broken away from any
+        # Job this daemon inherited (a restart requested from inside a session
+        # must not leave the successor in that session's kill-on-close Job).
+        popen_outside_job(  # noqa: ASYNC220 - non-blocking Popen from a sync helper
             command,
             stdin=subprocess.DEVNULL,
             stdout=log_file,
@@ -1098,11 +1170,12 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
     ]
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("wb", buffering=0) as log_file:
-        # Detached from this daemon's process group and lifetime: the script
-        # stops this very daemon mid-run, so it must not die with it. cwd is
-        # the source root (never inside dist/, which would lock the rebuild)
-        # and the env is scrubbed of parent-Claude session markers.
-        process = subprocess.Popen(  # noqa: ASYNC220 - non-blocking Popen
+        # Detached from this daemon's process group, lifetime, and any Job it
+        # inherited: the script stops this very daemon mid-run, so it must not
+        # die with it. cwd is the source root (never inside dist/, which would
+        # lock the rebuild) and the env is scrubbed of parent-Claude session
+        # markers.
+        process = popen_outside_job(  # noqa: ASYNC220 - non-blocking Popen
             command,
             stdin=subprocess.DEVNULL,
             stdout=log_file,
@@ -1173,6 +1246,57 @@ async def get_config(request: web.Request) -> web.Response:
     return response
 
 
+async def settings_bundle(request: web.Request) -> web.Response:
+    """Everything the Settings panel needs on open, in one round trip.
+
+    The panel used to fan out nine GETs; each answered in well under 50ms, but
+    on a high-RTT client (phone over Tailscale) connection setup and RTT per
+    request dominated the perceived open delay. `config` is the one part the
+    panel cannot render without, so its failure fails the request; every other
+    part degrades to null with the reason under `errors`, and the client
+    decides which missing parts it can tolerate.
+    """
+    config: Config = request.app["config"]
+    cwd = request.query.get("cwd")
+    parts: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+
+    async def part(key: str, factory: Callable[[], Awaitable[Any]]) -> None:
+        try:
+            parts[key] = await factory()
+        except Exception as exc:  # noqa: BLE001 — each part degrades independently
+            parts[key] = None
+            errors[key] = str(exc)
+
+    async def keybindings() -> Any:
+        return _keybindings_payload(config)
+
+    async def rules() -> Any:
+        return _automation_rules_payload(request)
+
+    async def profiles() -> Any:
+        # Shell detection stats a handful of executables; keep it off the loop.
+        return await asyncio.to_thread(profile_payload, config)
+
+    async def usage() -> Any:
+        return request.app["usage"].snapshot()
+
+    async def project_config() -> Any:
+        return await read_project_config(cwd) if cwd else None
+
+    await asyncio.gather(
+        part("automation_rules", rules),
+        part("keybindings", keybindings),
+        part("profiles", profiles),
+        part("projects", lambda: _projects_payload(request)),
+        part("automation", lambda: _automation_status_payload(request)),
+        part("provider", lambda: _provider_status(request)),
+        part("usage", usage),
+        part("project_config", project_config),
+    )
+    return json_response({"config": config.public_dict(), **parts, "errors": errors})
+
+
 async def patch_config(request: web.Request) -> web.Response:
     config: Config = request.app["config"]
     supplied = request.headers.get("If-Match", "").strip('"')
@@ -1232,9 +1356,9 @@ async def reset_config(request: web.Request) -> web.Response:
     )
 
 
-async def get_keybindings(request: web.Request) -> web.Response:
+def _keybindings_payload(config: Config) -> dict[str, Any]:
     defaults = dict(DEFAULT_KEYBINDINGS)
-    path = request.app["config"].data_dir / "keybindings.json"
+    path = config.data_dir / "keybindings.json"
     rejected: dict[str, str] = {}
     if path.exists():
         try:
@@ -1259,15 +1383,17 @@ async def get_keybindings(request: web.Request) -> web.Response:
         {"id": command_id, "label": label, "category": category}
         for command_id, label, category in KEYBINDING_COMMANDS
     ]
-    return json_response(
-        {
-            "bindings": defaults,
-            "defaults": DEFAULT_KEYBINDINGS,
-            "commands": commands,
-            "policy": keybinding_policy(),
-            "rejected": rejected,
-        }
-    )
+    return {
+        "bindings": defaults,
+        "defaults": DEFAULT_KEYBINDINGS,
+        "commands": commands,
+        "policy": keybinding_policy(),
+        "rejected": rejected,
+    }
+
+
+async def get_keybindings(request: web.Request) -> web.Response:
+    return json_response(_keybindings_payload(request.app["config"]))
 
 
 async def put_keybindings(request: web.Request) -> web.Response:
@@ -1379,7 +1505,7 @@ def _load_repo_rule_entry(project_id: str, root: str) -> dict[str, Any] | None:
     return {**entry, "project_scope_id": project_id}
 
 
-async def get_automation_status(request: web.Request) -> web.Response:
+async def _automation_status_payload(request: web.Request) -> dict[str, Any]:
     automation: AutomationEngine = request.app["automation"]
     projects = await request.app["history"].project_scopes(include_hidden=True)
     entries = await asyncio.gather(
@@ -1389,30 +1515,34 @@ async def get_automation_status(request: web.Request) -> web.Response:
         )
     )
     repository_rules = [entry for entry in entries if entry is not None]
-    return json_response(
-        {
-            **automation.status(),
-            "legacy": {
-                "path": str(request.app["config"].data_dir / "hooks.toml"),
-                "active": bool(request.app["hooks"].rules),
-                "diagnostic": request.app["hooks"].diagnostic,
-                "migration": "explicit-save-required",
-            },
-            "repository_rules": repository_rules,
-        }
-    )
+    return {
+        **automation.status(),
+        "legacy": {
+            "path": str(request.app["config"].data_dir / "hooks.toml"),
+            "active": bool(request.app["hooks"].rules),
+            "diagnostic": request.app["hooks"].diagnostic,
+            "migration": "explicit-save-required",
+        },
+        "repository_rules": repository_rules,
+    }
+
+
+async def get_automation_status(request: web.Request) -> web.Response:
+    return json_response(await _automation_status_payload(request))
+
+
+def _automation_rules_payload(request: web.Request) -> dict[str, Any]:
+    path = request.app["config"].data_dir / "rules.toml"
+    return {
+        "version": 1,
+        "text": path.read_text(encoding="utf-8") if path.exists() else "version = 1\n",
+        "rules": [rule.snapshot() for rule in request.app["automation"].rules],
+        "diagnostic": request.app["automation"].diagnostic,
+    }
 
 
 async def get_automation_rules(request: web.Request) -> web.Response:
-    path = request.app["config"].data_dir / "rules.toml"
-    return json_response(
-        {
-            "version": 1,
-            "text": path.read_text(encoding="utf-8") if path.exists() else "version = 1\n",
-            "rules": [rule.snapshot() for rule in request.app["automation"].rules],
-            "diagnostic": request.app["automation"].diagnostic,
-        }
-    )
+    return json_response(_automation_rules_payload(request))
 
 
 async def put_automation_rules(request: web.Request) -> web.Response:
@@ -2708,7 +2838,14 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
         raise ValueError("one-shot completion is available only for shell sessions")
     if spec.profile_id and backend in {"claude", "codex"}:
         raise ValueError({"profile_id": "shell profiles cannot be used with agent backends"})
-    cwd = owning_project.root
+    # A spawn may target a subdirectory of its own project (a task that runs in
+    # ./frontend); the containment check is here because this is the only layer
+    # that knows which project owns the request.
+    cwd = (
+        resolve_contained_cwd(spec.cwd, Path(owning_project.root))
+        if spec.cwd
+        else owning_project.root
+    )
     executable = spec.executable
     argv = list(spec.argv)
     profile_id: str | None = None
@@ -2737,6 +2874,7 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
         args=argv,
         shell_profile_id=profile_id,
         profile_env=profile_env,
+        extra_env=dict(spec.env),
         project_label=owning_project.name,
     )
     if isinstance(manager, SessionManager):
@@ -2853,10 +2991,12 @@ async def delete_session(request: web.Request) -> web.Response:
 async def relaunch_session(request: web.Request) -> web.Response:
     """Replay a task-launched shell in place: spawn a fresh copy, retire the old.
 
-    Relaunch-from-record — the replacement re-runs the exact retained executable/argv
-    (env is baked into the Project Action payload), so no task file is re-read and no
-    trust re-approval is needed. Only sessions the daemon marked relaunchable qualify;
-    agent and plain shell sessions are rejected so this never touches their lifecycle.
+    Relaunch-from-record: the replacement re-runs the exact retained
+    executable/argv/cwd/env, so no task file is re-read and no trust re-approval is
+    needed. All four are replayed from the record because a task step's directory and
+    environment are spawn inputs in their own right, not something recoverable from
+    the argv. Only sessions the daemon marked relaunchable qualify; agent and plain
+    shell sessions are rejected so this never touches their lifecycle.
     """
     manager: SessionManager = request.app["sessions"]
     old = manager.resolve(request.match_info["sid"])
@@ -2869,7 +3009,10 @@ async def relaunch_session(request: web.Request) -> web.Response:
         "executable": old.record.exe,
         "argv": list(old.record.args),
         "completion_mode": old.record.completion_mode,
+        "env": dict(old.record.spawn_env),
     }
+    if old.record.spawn_cwd:
+        body["cwd"] = old.record.spawn_cwd
     # Spawn the replacement first: if it raises, the original is left fully intact.
     session = await _spawn_from_body(request.app, body)
     session.record.relaunchable = True
@@ -3252,13 +3395,15 @@ async def demote_session(request: web.Request) -> web.Response:
     return json_response(demoted.record.snapshot())
 
 
-async def list_projects(request: web.Request) -> web.Response:
+async def _projects_payload(request: web.Request) -> list[dict[str, Any]]:
     manager: ProjectManager = request.app["projects"]
-    return json_response(
-        await asyncio.gather(
-            *(_project_snapshot(request, item) for item in manager.ordered_projects())
-        )
+    return await asyncio.gather(
+        *(_project_snapshot(request, item) for item in manager.ordered_projects())
     )
+
+
+async def list_projects(request: web.Request) -> web.Response:
+    return json_response(await _projects_payload(request))
 
 
 async def _project_snapshot(request: web.Request, project) -> dict[str, Any]:  # type: ignore[no-untyped-def]
@@ -3438,7 +3583,7 @@ async def run_project_action(request: web.Request) -> web.Response:
             *(
                 _spawn_from_body(
                     request.app,
-                    runner_spawn_body(
+                    action_spawn_body(
                         step,
                         project_id=project.id,
                         config=request.app["config"],
@@ -4264,11 +4409,16 @@ async def remove_provider_account(request: web.Request) -> web.Response:
 async def list_processes(request: web.Request) -> web.Response:
     session_id = request.query.get("session")
     include_ended = request.query.get("include_ended", "").lower() in {"1", "true", "yes"}
+    # Opt-in because unique-set-size sampling walks every working set. Views the user
+    # opened ask for it; the background rail poll does not.
+    unique_memory = request.query.get("unique_memory", "").lower() in {"1", "true", "yes"}
     inspector: ProcessInspector = request.app["process_inspector"]
     return json_response(
         await inspector.snapshot(session_id, include_ended=include_ended)
         if session_id
-        else await inspector.snapshot_all(include_ended=include_ended)
+        else await inspector.snapshot_all(
+            include_ended=include_ended, unique_memory=unique_memory
+        )
     )
 
 
@@ -4430,6 +4580,11 @@ def _preview_runtime_bridge(prefix: str, project_routes: dict[str, str] | None =
     return f"""<script>(function(){{
 const prefix={encoded};
 const projectRoutes={encoded_routes};
+// A client-side router reads location.pathname directly and Location is not
+// patchable, so the mount point cannot be hidden from it the way asset URLs are.
+// Advertise it instead: an app passes this to its router's basename (React Router,
+// vue-router, SvelteKit) and falls back to "/" when it is not inside a preview.
+window.__MUX_PREVIEW_BASE__=prefix;
 const canonicalOrigin=function(url){{
   let protocol=url.protocol;
   if(protocol==="ws:")protocol="http:";
@@ -4470,6 +4625,12 @@ XMLHttpRequest.prototype.open=function(method,url){{
   const args=Array.prototype.slice.call(arguments);args[1]=route(url);
   return nativeOpen.apply(this,args);
 }};
+if(window.EventSource){{
+  const NativeEventSource=window.EventSource;
+  window.EventSource=class extends NativeEventSource{{
+    constructor(url,init){{super(route(url),init);}}
+  }};
+}}
 }})();</script>"""
 
 
@@ -4486,6 +4647,12 @@ def rewrite_preview_html(
         text,
         flags=re.IGNORECASE,
     )
+    # Inline module scripts carry specifiers no attribute rewrite can reach --
+    # @vitejs/plugin-react's refresh preamble imports "/@react-refresh" from an inline
+    # <script type="module">. Left alone it 404s on the mux origin, the preamble never
+    # runs, and every transformed module throws "can't detect preamble": a white page.
+    # Runs before the bridge is injected so the bridge's own source is never rewritten.
+    text = _rewrite_inline_scripts(text, prefix)
     bridge = _preview_runtime_bridge(prefix, project_routes)
     head = re.search(r"<head(?:\s[^>]*)?>", text, flags=re.IGNORECASE)
     if head:
@@ -4514,12 +4681,41 @@ def rewrite_preview_javascript(data: bytes, prefix: str) -> bytes:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return data
-    text = re.sub(
-        r"(?P<start>\b(?:from\s*|import\s*|import\s*\(\s*)[\"'])/",
-        rf"\g<start>{prefix}",
-        text,
-    )
-    return text.encode("utf-8")
+    return _rewrite_javascript_text(text, prefix).encode("utf-8")
+
+
+_JS_ROOT_SPECIFIER = re.compile(r"(?P<start>\b(?:from\s*|import\s*|import\s*\(\s*)[\"'])/")
+_SCRIPT_ELEMENT = re.compile(
+    r"(?P<open><script\b(?P<attrs>[^>]*)>)(?P<body>.*?)(?P<close></script\s*>)",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_SCRIPT_TYPE = re.compile(r"""\btype\s*=\s*["']?([^"'\s>]+)""", flags=re.IGNORECASE)
+_SCRIPT_SRC = re.compile(r"\bsrc\s*=", flags=re.IGNORECASE)
+
+
+def _rewrite_javascript_text(text: str, prefix: str) -> str:
+    return _JS_ROOT_SPECIFIER.sub(rf"\g<start>{prefix}", text)
+
+
+def _rewrite_inline_scripts(text: str, prefix: str) -> str:
+    """Prefix root-absolute module specifiers inside inline <script> bodies.
+
+    Only bodies that the browser executes as JavaScript are touched; a data block
+    (``application/json``, ``importmap``, ``text/template``) keeps its exact bytes.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        attrs = match.group("attrs")
+        if _SCRIPT_SRC.search(attrs):
+            return match.group(0)
+        declared = _SCRIPT_TYPE.search(attrs)
+        mime = declared.group(1).casefold() if declared else ""
+        if mime and mime != "module" and not ("javascript" in mime or "ecmascript" in mime):
+            return match.group(0)
+        body = _rewrite_javascript_text(match.group("body"), prefix)
+        return f"{match.group('open')}{body}{match.group('close')}"
+
+    return _SCRIPT_ELEMENT.sub(replace, text)
 
 
 def preview_target(item: Any, tail: str, query: str = "") -> tuple[str, str]:

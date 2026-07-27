@@ -1,8 +1,12 @@
+import type { JSX } from 'preact'
 import { ClipboardTab } from './ClipboardPanel'
 import { CommandsTab } from './CommandsTab'
 import { PromptsTab } from './PromptsTab'
+import { NotesTab } from './NotesTab'
+import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
-import { DRAWER_TABS, drawerTab, nextDrawerTab, type DrawerTabId } from './drawerTabs'
+import { drawerTab, nextDrawerTab, type DrawerTab, type DrawerTabId } from './drawerTabs'
+import { DRAWER_TAB_ICONS } from './railIcons'
 import type { Project, ProjectBackend, Session } from './types'
 
 // Host for the right-edge utility drawer. Two renderings, one component:
@@ -32,20 +36,39 @@ type Props = {
   onOpenSession: (sessionId: string) => void
   onOpenSettings: (section: string) => void
   onManagePrompts: () => void
+  /** Files: open a Project-relative path as a pane tab. */
+  onOpenFile: (path: string) => void
+  /** Files: desktop-only drag of a file row onto a pane. Omitted on mobile, where
+   *  the drawer is an overlay and there is no visible pane to drop onto. */
+  onFileDragStart?: (path: string, event: JSX.TargetedPointerEvent<HTMLElement>) => void
+  /** Notes: the listing's Project/all-Projects scope, owned by the caller so the
+   *  `notes.browse` and `notes.browseProject` commands can each pick one. */
+  notesAllProjects: boolean
+  onNotesAllProjects: (value: boolean) => void
+  focusedNote: { projectId: string; noteId: string; label: string } | null
+  onOpenProjectNote: (projectId: string) => void
+  onOpenSessionNote: (projectId: string, noteId: string) => void
+  /** Tabs in the user's arranged order, and the pointer-drag that rearranges them. Both come
+   *  from the caller because the desktop icon rail renders the same order and the same drag,
+   *  and the two must never disagree about it. */
+  tabs: DrawerTab[]
+  onTabDragStart: (event: JSX.TargetedPointerEvent<HTMLElement>, id: DrawerTabId) => void
+  /** True while a tab is being dragged, so the strip can suppress its own click. */
+  draggingTab: DrawerTabId | null
   /** Template handed off by a command-rail prompt button that needs its fields filled. */
   promptPreselect?: { key: string }
   /** Desktop only: pointer-drag handle for the column width. Typed as the plain
-   *  DOM event so this module needs no `JSX` import (which would shadow the
+   *  DOM event so this module needs no `JSX` import for it (which would shadow the
    *  global namespace the intrinsic elements below resolve through). */
   onResize?: (event: PointerEvent) => void
 }
 
 export function UtilityDrawer(props: Props) {
-  const { tab, onTab, onClose, mobile, session } = props
+  const { tab, onTab, onClose, mobile, session, project } = props
   const active = drawerTab(tab)
-  // Inserting closes the drawer on mobile (it covers the terminal you just typed
-  // into) and leaves it open on desktop, where the column is beside that terminal
-  // and a second insert is the common next action.
+  // Acting closes the drawer on mobile (it covers the surface just acted on) and
+  // leaves it open on desktop, where the column sits beside that surface and a
+  // second insert (or a second file) is the common next action.
   const onDone = () => { if (mobile) onClose() }
 
   const body = tab === 'clipboard'
@@ -53,8 +76,28 @@ export function UtilityDrawer(props: Props) {
     : tab === 'commands'
       ? <CommandsTab session={session} onDone={onDone} onOpenSettings={() => props.onOpenSettings('Command rail')} />
       : tab === 'prompts'
-        ? <PromptsTab project={props.project} backend={props.backend} onInsert={props.onInsert} onDone={onDone} onManage={props.onManagePrompts} preselect={props.promptPreselect} />
-        : <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} />
+        ? <PromptsTab project={project} backend={props.backend} onInsert={props.onInsert} onDone={onDone} onManage={props.onManagePrompts} preselect={props.promptPreselect} />
+        : tab === 'files'
+          ? (project
+            ? <ProjectResource
+              key={`drawer-files:${project.id}`}
+              project={project}
+              resource={{ kind: 'files', id: project.id }}
+              onOpenFile={path => { props.onOpenFile(path); onDone() }}
+              onFileDragStart={props.onFileDragStart}
+            />
+            : <p class="drawer-empty">Select a Project to browse its files.</p>)
+          : tab === 'notes'
+            ? <NotesTab
+              project={project}
+              allProjects={props.notesAllProjects}
+              onAllProjects={props.onNotesAllProjects}
+              focusedNote={props.focusedNote}
+              onOpenProjectNote={props.onOpenProjectNote}
+              onOpenSessionNote={props.onOpenSessionNote}
+              onDone={onDone}
+            />
+            : <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} />
 
   return <>
     {mobile && <button class="utility-drawer-scrim" aria-label="Close panel" onClick={onClose} />}
@@ -73,24 +116,35 @@ export function UtilityDrawer(props: Props) {
       onKeyDown={event => {
         if (event.key === 'Escape') { event.stopPropagation(); onClose(); return }
         // Tab cycling stays on the strip's own buttons so it cannot steal Tab from
-        // a filter field or a template's placeholder inputs.
+        // a filter field or a template's placeholder inputs. It walks the user's order,
+        // not the default one, or the keys would jump around a rearranged strip.
         if (event.key !== 'Tab' || !(event.target as Element | null)?.closest?.('.drawer-tabs')) return
         event.preventDefault()
-        onTab(nextDrawerTab(tab, event.shiftKey ? -1 : 1))
+        onTab(nextDrawerTab(tab, event.shiftKey ? -1 : 1, props.tabs.map(item => item.id)))
       }}
     >
+      {/* Icon-only, like the desktop rail and from the same icon map. Six labelled tabs
+          measured ~444px, which overflowed a phone drawer into a scrollbar-less scroller and
+          silently parked the last two tabs off-screen; six icons are ~234px. The label
+          survives as the accessible name and the title as the hover explanation. */}
       <div class="drawer-tabs" role="tablist" aria-label="Panel sections">
-        {DRAWER_TABS.map(item => <button
-          key={item.id}
-          role="tab"
-          aria-selected={item.id === tab}
-          class={item.id === tab ? 'active' : ''}
-          title={item.title}
-          onClick={() => onTab(item.id)}
-        >
-          <span aria-hidden="true">{item.glyph}</span>{item.label}
-          {item.id === 'notifications' && props.unread > 0 && <i class="drawer-badge">{props.unread > 99 ? '99+' : props.unread}</i>}
-        </button>)}
+        {props.tabs.map(item => {
+          const Icon = DRAWER_TAB_ICONS[item.id]
+          return <button
+            key={item.id}
+            role="tab"
+            data-reorder-id={item.id}
+            aria-selected={item.id === tab}
+            aria-label={item.label}
+            class={`${item.id === tab ? 'active' : ''} ${props.draggingTab === item.id ? 'dragging' : ''}`}
+            title={`${item.title} · drag to rearrange`}
+            onPointerDown={event => props.onTabDragStart(event, item.id)}
+            onClick={() => onTab(item.id)}
+          >
+            <Icon />
+            {item.id === 'notifications' && props.unread > 0 && <i class="drawer-badge">{props.unread > 99 ? '99+' : props.unread}</i>}
+          </button>
+        })}
         <button class="drawer-close" aria-label="Close panel" title="Close panel" onClick={onClose}>×</button>
       </div>
       <div class="drawer-body">{body}</div>

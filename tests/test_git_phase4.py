@@ -46,19 +46,25 @@ async def test_unique_git_poll_deduplicates_roots(monkeypatch: pytest.MonkeyPatc
 @pytest.mark.asyncio
 async def test_git_timeout_kills_and_reaps(monkeypatch: pytest.MonkeyPatch) -> None:
     class SlowProcess:
+        # A pid that cannot exist keeps reap_process_tree's psutil descendant
+        # scan a no-op instead of inspecting an unrelated live process.
+        pid = 2**22 + 12345
         returncode = None
         killed = False
-        calls = 0
+        reaped = False
 
         async def communicate(self):  # type: ignore[no-untyped-def]
-            self.calls += 1
-            if self.calls == 1:
-                await asyncio.sleep(1)
+            await asyncio.sleep(1)
             self.returncode = -9
             return b"", b""
 
         def kill(self) -> None:
             self.killed = True
+
+        async def wait(self) -> int:
+            self.reaped = True
+            self.returncode = -9
+            return -9
 
     process = SlowProcess()
 
@@ -71,7 +77,7 @@ async def test_git_timeout_kills_and_reaps(monkeypatch: pytest.MonkeyPatch) -> N
     assert code == 124
     assert "timed out" in message
     assert process.killed
-    assert process.calls == 2
+    assert process.reaped
 
 
 def test_worktree_porcelain_parser_preserves_registration_metadata() -> None:

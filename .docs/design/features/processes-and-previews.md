@@ -23,6 +23,13 @@
   unverifiable ownership stale. Startup restores only fingerprints that might still be
   running: an already-exited durable record cannot become live again, so republishing it
   would fill the fleet with a previous daemon run's dead processes.
+- The orphan grace is measured from a `root_ended_at` stamped **once**, on the first pass
+  that observes the root ended. Its value is the session record's last activity while that
+  record still exists, and otherwise the previous pass's `last_seen` (which after a restart
+  is the previous daemon run's). Deriving the deadline from `last_seen` on every pass — as
+  it once was — made it track the current time, so the window slid forever and a survivor of
+  a session the manager had already dropped could never leave `escaped`. A root that comes
+  back clears the stamp.
 - The fleet and session snapshots report running processes. Ended records are excluded
   unless `include_ended` is requested, and a session with no remaining process is dropped
   once it is no longer live. This is a display and payload boundary, not a retention change:
@@ -53,6 +60,61 @@
   attributed to a session, preventing double counting. Process Fleet totals use that same
   additive bucket, so its count and usage reconcile with the sidebar. The closed popover and
   detailed fleet rows reuse the existing sample and cause no additional process enumeration.
+
+## Sampling cost
+
+The reconcile loop runs on every live session tree every few seconds, so its cost is paid
+forever and lands on the daemon's event loop. Two properties keep it cheap:
+
+- **One parent map per pass.** `Process.children(recursive=True)` snapshots every process on
+  the machine, so calling it per session root re-walked the whole table N times a tick. A
+  single `psutil._ppid_map()` builds one parent/child index that serves every root and the
+  daemon tree. It is a private psutil API; if it disappears the walk falls back to
+  `children(recursive=True)` per root.
+- **A parent map is not a process tree.** Windows never clears a dead parent's pid from a
+  child's ppid field and recycles pids aggressively, so the map contains parent links that
+  were never real. The walk therefore rejects any descendant created *before* the root and
+  does not traverse through it — the same guard `children(recursive=True)` applies
+  internally, which is exactly why replacing that call means reproducing it. Skipping it is
+  not a stray extra row: one stale link made the PTY supervisor look like a descendant of a
+  single session, and since the supervisor parents *every* session, that session absorbed the
+  whole fleet (34 processes, three `claude.exe`, another session's listeners) while its
+  siblings reported zero. Any future change to this walk must keep the creation-time guard.
+- **Handles and identity are cached, not rebuilt.** Constructing a `psutil.Process` is the
+  most expensive single operation available (it re-queries the process to validate identity),
+  and `cmdline()` is a remote-PEB read. Neither a process's name nor its command line changes
+  while it lives, so both are read once per handle and reused; only `cpu_times` and
+  `memory_info` are re-read per pass. Handles for pids that left the tree are dropped, so a
+  pid always re-enters through fresh construction.
+
+Together these took a five-session pass from **~930-1110 ms to ~22 ms**. That is not merely a
+CPU saving: psutil's Windows calls hold the GIL, so the old pass starved the event loop for
+roughly a fifth of every 5-second cycle, and the visible symptom was terminal input that
+lagged and then caught up in a burst. Anything added to this loop must respect the same rule —
+per-tick work is restricted to attributes that actually change per tick.
+
+Identity safety does not depend on the cache. A pid whose parent changed between passes is
+proof of recycling and rebuilds its handle; `_revalidate_unseen` constructs fresh handles for
+everything that fell out of the walk; and every process action re-checks creation time against
+a freshly constructed handle before acting.
+
+## Memory reporting
+
+`memory_bytes` is RSS, which on Windows is the working set and therefore counts each shared
+page once per process mapping it. Summed across a session tree it overstates the real
+footprint substantially — a measured fleet read 5.07 GB summed RSS against 3.32 GB summed USS.
+Unique set size is the honest figure but costs roughly 200x an RSS read because it walks every
+working set, so it is never sampled on the reconcile cadence. `GET /api/processes?unique_memory=1`
+adds `memory_unique_bytes` per process, per daemon member, and in totals; the resource popover
+requests it only while open and the background rail poll never does. A total is reported only
+when every contributor supplied one, because a partial sum would read as a real but too-small
+number rather than as "not sampled".
+
+The popover also names **duplicated per-session tooling**: language servers are per-session, so
+N sessions open on one repo run N independent indexes of the same code. On a four-session
+project that was the largest addressable line item and invisible in a flat process list, where
+every copy is just another `node.exe` under its own session. The panel reports it and nothing
+more — swe-mux does not reap or share language servers.
 
 ## Preview contract
 
@@ -98,8 +160,19 @@
   origin is immutable per request and
   redirects to another origin are rejected, so the route cannot become a network proxy.
 - HTTP methods, bodies, queries, root-relative HTML/CSS/module paths, runtime fetch/XHR,
-  WebSocket messages, and negotiated HMR subprotocols traverse the bridge.
+  EventSource, WebSocket messages, and negotiated HMR subprotocols traverse the bridge.
   Browser Origin is replaced with the registered loopback origin for common dev servers.
+- Rewriting covers `src`/`href`/`action` attributes **and inline `<script>` bodies**, because a
+  module specifier inside an inline script is unreachable by attribute rewriting: the
+  `@vitejs/plugin-react` preamble imports `/@react-refresh` that way, and an unprefixed miss
+  leaves `window.$RefreshReg$` unset, which makes every transformed module throw and renders a
+  blank page. Data blocks (`application/json`, `importmap`, `text/template`) are passed through
+  byte-for-byte; only executable script types are rewritten.
+- What the bridge cannot fix, it advertises. `window.__MUX_PREVIEW_BASE__` carries the mount
+  path (`/preview/{registration}/`) for an app to pass to its router's `basename`. A
+  client-side router reads `location.pathname` directly and `Location` is not patchable, so a
+  root-mounted router matches no route under the prefix and renders nothing. Apps that ignore
+  the global keep working only if all their routes are relative.
 - HTTP requests/responses are capped at 10/20 MiB with a 10-second connect timeout,
   30-second per-read timeout, no wall-clock total, and 32 concurrent requests. WebSocket
   connects time out after 10 seconds; messages are capped at 4 MiB with 16 concurrent bridges,
@@ -142,6 +215,7 @@
 - Job boundary: `src/swe_mux/win_jobobj.py`, `src/swe_mux/session.py`
 - Inspector: `frontend/src/ProcessPanel.tsx`
 - Resource summary: `frontend/src/ResourceUsage.tsx`, `frontend/src/resourceTotals.ts`
+- Duplicate tooling classification: `frontend/src/resourceTooling.ts`
 - Preview leaf + capture/region UI: `frontend/src/PreviewPane.tsx`
 - Headless capture (optional Playwright): `src/swe_mux/preview_capture.py`
 - Terminal-link routing: `frontend/src/TerminalPane.tsx`, `frontend/src/previewLinks.ts`

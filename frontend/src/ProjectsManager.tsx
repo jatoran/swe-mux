@@ -1,29 +1,73 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
-import type { Project, ProjectGroup, Session } from './types'
+import { api } from './api'
+import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
+import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, ShellProfile } from './types'
+
+// The Projects registry is the ONLY per-Project editor. Settings holds global
+// options exclusively; anything scoped to one Project — its record and its
+// defaults — is edited here, reached from this modal or from a Project's context
+// menu. Two doors to two overlapping surfaces was the previous arrangement and it
+// left users hunting for which modal owned which field.
+export type ProjectsManagerTab = 'details' | 'settings'
+
+// A Project default can live in either of two layers, and users care about the
+// difference: `device` is a database override private to this machine, `repo` is
+// `.swe-mux/config.toml` and travels with the checkout. Precedence is
+// device > repo > global, so a value is only ever written to one of them.
+type Layer = 'device' | 'repo'
+
+type PortableValues = {
+  default_shell_profile?: string
+  preferred_backend?: ProjectBackend
+  prompt_library_scope?: PromptLibraryScope
+  notification_sounds_enabled?: boolean
+  ignore_patterns?: string[]
+}
+type ProjectConfig = {
+  project: { id: string; label: string; root: string }
+  path: string; status: string; revision: string; error?: string
+  values: PortableValues
+}
+
+export type ProjectPatch =
+  Partial<Pick<Project, 'name' | 'group_id' | 'sidebar_visible'>>
+  & { default_backend?: ProjectBackend | null; default_profile_id?: string | null }
+
+type Overrides = { default_backend?: ProjectBackend; default_profile_id?: string }
 
 type Props = {
   projects:Project[]
   groups:ProjectGroup[]
   sessions:Session[]
+  profiles:ShellProfile[]
+  initialProjectId?:string
+  initialTab?:ProjectsManagerTab
   onClose:()=>void
   onAdd:()=>void
   onAddGroup:()=>void
   onOpen:(project:Project)=>void
-  onSettings:(project:Project)=>void
   onNote:(project:Project)=>void
   onFiles:(project:Project)=>void
-  onPatch:(project:Project,changes:Partial<Pick<Project,'name'|'group_id'|'sidebar_visible'>>)=>Promise<Project>
+  onPatch:(project:Project,changes:ProjectPatch)=>Promise<Project>
   onDelete:(project:Project)=>Promise<void>
 }
 
-export function ProjectsManager({projects,groups,sessions,onClose,onAdd,onAddGroup,onOpen,onSettings,onNote,onFiles,onPatch,onDelete}:Props){
+const BACKENDS:ProjectBackend[]=['shell','claude','codex']
+const SCOPE_LABELS:Record<PromptLibraryScope,string>={off:'Off',global:'Global only',project:'Project only',both:'Global + Project'}
+
+export function ProjectsManager({projects,groups,sessions,profiles,initialProjectId,initialTab,onClose,onAdd,onAddGroup,onOpen,onNote,onFiles,onPatch,onDelete}:Props){
   const isVisible=(project:Project)=>project.sidebar_visible!==false
   const ordered=useMemo(()=>[...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)),[projects])
-  const [selectedId,setSelectedId]=useState(ordered[0]?.id||'')
+  const [selectedId,setSelectedId]=useState(initialProjectId||ordered[0]?.id||'')
+  const [tab,setTab]=useState<ProjectsManagerTab>(initialTab||'details')
   const [query,setQuery]=useState('')
   const [filter,setFilter]=useState<'all'|'visible'|'hidden'>('all')
   const [name,setName]=useState('')
   const [groupId,setGroupId]=useState('')
+  const [overrides,setOverrides]=useState<Overrides>({})
+  const [config,setConfig]=useState<ProjectConfig|null>(null)
+  const [values,setValues]=useState<PortableValues>({})
+  const [savedValues,setSavedValues]=useState<PortableValues>({})
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
   const [confirmDelete,setConfirmDelete]=useState(false)
@@ -35,11 +79,70 @@ export function ProjectsManager({projects,groups,sessions,onClose,onAdd,onAddGro
     return !needle||project.name.toLowerCase().includes(needle)||project.root.toLowerCase().includes(needle)
   })
   useEffect(()=>{if(!selected&&ordered[0])setSelectedId(ordered[0].id)},[selected,ordered])
-  useEffect(()=>{setName(selected?.name||'');setGroupId(selected?.group_id||'');setConfirmDelete(false);setError('')},[selected?.id,selected?.name,selected?.group_id])
+  useEffect(()=>{
+    setName(selected?.name||'');setGroupId(selected?.group_id||'')
+    setOverrides({default_backend:selected?.default_backend,default_profile_id:selected?.default_profile_id})
+    setConfirmDelete(false);setError('')
+  },[selected?.id,selected?.name,selected?.group_id,selected?.default_backend,selected?.default_profile_id])
+
+  // The portable layer lives in the checkout, so it is read per Project rather than
+  // taken from the registry payload — its revision is what guards the write.
+  useEffect(()=>{
+    if(!selected){setConfig(null);setValues({});setSavedValues({});return}
+    let stale=false
+    setConfig(null);setValues({});setSavedValues({})
+    api<ProjectConfig>('GET',`/api/project/config?cwd=${encodeURIComponent(selected.root)}`)
+      .then(result=>{if(stale)return;setConfig(result);setValues(result.values);setSavedValues(result.values)})
+      .catch(cause=>{if(!stale)setError(cause instanceof Error?cause.message:String(cause))})
+    return ()=>{stale=true}
+  },[selected?.id,selected?.root])
+
+  const effective=selected?.effective_options
+  const backendLayer:Layer=overrides.default_backend?'device':values.preferred_backend?'repo':'device'
+  const backendValue=overrides.default_backend||values.preferred_backend||''
+  const profileLayer:Layer=overrides.default_profile_id?'device':values.default_shell_profile?'repo':'device'
+  const profileValue=overrides.default_profile_id||values.default_shell_profile||''
+
+  // Writing a value always clears the other layer: leaving a stale override behind
+  // would silently win over the value the user just chose.
+  const setBackend=(value:string,layer:Layer)=>{
+    setOverrides(current=>({...current,default_backend:layer==='device'&&value?value as ProjectBackend:undefined}))
+    setValues(current=>({...current,preferred_backend:layer==='repo'&&value?value as ProjectBackend:undefined}))
+  }
+  const setProfile=(value:string,layer:Layer)=>{
+    setOverrides(current=>({...current,default_profile_id:layer==='device'&&value?value:undefined}))
+    setValues(current=>({...current,default_shell_profile:layer==='repo'&&value?value:undefined}))
+  }
+
+  const detailsDirty=!!selected&&(name.trim()!==selected.name||(groupId||null)!==(selected.group_id||null))
+  const overridesDirty=!!selected&&(
+    (overrides.default_backend||null)!==(selected.default_backend||null)
+    ||(overrides.default_profile_id||null)!==(selected.default_profile_id||null)
+  )
+  const portableDirty=!sameDraftValue(values,savedValues)
+  const dirty=detailsDirty||overridesDirty||portableDirty
+
   const save=async()=>{
     if(!selected||!name.trim())return
     setBusy(true);setError('')
-    try{await onPatch(selected,{name:name.trim(),group_id:groupId||null})}
+    try{
+      if(detailsDirty||overridesDirty){
+        await onPatch(selected,{
+          name:name.trim(),
+          group_id:groupId||null,
+          default_backend:overrides.default_backend||null,
+          default_profile_id:overrides.default_profile_id||null,
+        })
+      }
+      if(config&&portableDirty){
+        const payload:PortableValues={
+          ...values,
+          ...(values.ignore_patterns?{ignore_patterns:normalizeIgnorePatterns(values.ignore_patterns)}:{}),
+        }
+        const result=await api<ProjectConfig>('PUT','/api/project/config',{cwd:selected.root,values:payload,revision:config.revision})
+        setConfig(result);setValues(result.values);setSavedValues(result.values)
+      }
+    }
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy(false)}
   }
@@ -58,8 +161,14 @@ export function ProjectsManager({projects,groups,sessions,onClose,onAdd,onAddGro
     catch(cause){setError(cause instanceof Error?cause.message:String(cause));setConfirmDelete(false)}
     finally{setBusy(false)}
   }
-  const dirty=!!selected&&(name.trim()!==selected.name||(groupId||null)!==(selected.group_id||null))
   const liveCount=selected?sessions.filter(session=>session.project_id===selected.id&&!['exited','crashed'].includes(session.state)).length:0
+
+  const layerRow=(active:Layer,set:(layer:Layer)=>void,shownWhen:boolean)=>shownWhen&&<div class="project-setting-layer">
+    <button class={active==='device'?'active':''} disabled={busy} onClick={()=>set('device')}>this device</button>
+    <button class={active==='repo'?'active':''} disabled={busy||!config} title={config?undefined:'The Project’s .swe-mux/config.toml is not readable.'} onClick={()=>set('repo')}>repo</button>
+    <span class="project-setting-note">{active==='repo'?'stored in .swe-mux/config.toml, travels with the checkout':'stored in this machine’s database'}</span>
+  </div>
+
   return <div class="modal-layer projects-manager-layer" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
     <section class="projects-manager" role="dialog" aria-modal="true" aria-label="Manage projects">
       <header><div><span>PROJECTS::REGISTRY</span><h2>Projects</h2><small>Configured Projects keep their notes, files, settings, and history even when hidden from the sidebar.</small></div><div class="projects-manager-header-actions"><button onClick={onAddGroup}>New group</button><button data-tutorial="add-project" class="primary" onClick={onAdd}>+ Add project</button><button class="icon" aria-label="Close Projects" onClick={onClose}>×</button></div></header>
@@ -69,8 +178,38 @@ export function ProjectsManager({projects,groups,sessions,onClose,onAdd,onAddGro
         </aside>
         <main>{selected?<>
           <div class="projects-manager-title"><div><span>PROJECT::{selected.id.slice(0,8)}</span><h3>{selected.name}</h3><small>{liveCount} live session{liveCount===1?'':'s'} · {isVisible(selected)?'shown in sidebar':'configured, hidden from sidebar'}</small></div><button class={`sidebar-visibility-toggle ${isVisible(selected)?'active':''}`} disabled={busy} onClick={()=>void toggleVisible()}><span aria-hidden="true">{isVisible(selected)?'◉':'○'}</span>{isVisible(selected)?'Shown in sidebar':'Show in sidebar'}</button></div>
-          <div class="projects-manager-actions"><button data-tutorial="open-project" class="primary" onClick={()=>onOpen(selected)}>Open workspace</button><button onClick={()=>onSettings(selected)}>Project settings</button><button onClick={()=>onNote(selected)}>Project note</button><button onClick={()=>onFiles(selected)}>Files</button></div>
-          <div class="projects-manager-form"><label>Name<input value={name} onInput={event=>setName(event.currentTarget.value)}/></label><label>Folder<input value={selected.root} readOnly/></label><label>Group<div><select value={groupId} onChange={event=>setGroupId(event.currentTarget.value)}><option value="">Ungrouped</option>{groups.map(group=><option value={group.id}>{group.name}</option>)}</select><button onClick={onAddGroup}>+</button></div></label></div>
+          <div class="projects-manager-actions"><button data-tutorial="open-project" class="primary" onClick={()=>onOpen(selected)}>Open workspace</button><button onClick={()=>onNote(selected)}>Project note</button><button onClick={()=>onFiles(selected)}>Files</button></div>
+          <div class="projects-manager-tabs" role="tablist" aria-label="Project record and settings">
+            <button role="tab" aria-selected={tab==='details'} class={tab==='details'?'active':''} onClick={()=>setTab('details')}>Details</button>
+            <button role="tab" aria-selected={tab==='settings'} class={tab==='settings'?'active':''} onClick={()=>setTab('settings')}>Settings</button>
+          </div>
+          <div class="projects-manager-panel">
+            {tab==='details'&&<div class="projects-manager-form"><label>Name<input value={name} onInput={event=>setName(event.currentTarget.value)}/></label><label>Folder<input value={selected.root} readOnly/></label><label>Group<div><select value={groupId} onChange={event=>setGroupId(event.currentTarget.value)}><option value="">Ungrouped</option>{groups.map(group=><option value={group.id}>{group.name}</option>)}</select><button onClick={onAddGroup}>+</button></div></label></div>}
+            {tab==='settings'&&<div class="projects-manager-form">
+              <p>Blank inherits the global default. Each value is stored either on this device or in the Project's <code>.swe-mux/config.toml</code>; device wins where both are set.{config?` · .swe-mux/config.toml: ${config.status}${config.error?` · ${config.error}`:''}`:' · reading .swe-mux/config.toml…'}</p>
+              <div class="project-setting">
+                <label><span class="project-setting-name">Default backend{backendValue&&<em class="project-setting-chip">{backendLayer==='repo'?'repo':'device'}</em>}</span>
+                  <select value={backendValue} disabled={busy} onChange={event=>setBackend(event.currentTarget.value,backendLayer)}><option value="">Inherit ({effective?.backend||'shell'})</option>{BACKENDS.map(backend=><option value={backend}>{backend}</option>)}</select>
+                </label>
+                {layerRow(backendLayer,layer=>setBackend(backendValue,layer),!!backendValue)}
+              </div>
+              <div class="project-setting">
+                <label><span class="project-setting-name">Shell profile{profileValue&&<em class="project-setting-chip">{profileLayer==='repo'?'repo':'device'}</em>}</span>
+                  <select value={profileValue} disabled={busy} onChange={event=>setProfile(event.currentTarget.value,profileLayer)}><option value="">Inherit ({effective?.profile_id||'default'})</option>{profiles.map(profile=><option value={profile.id}>{profile.label}</option>)}</select>
+                </label>
+                {layerRow(profileLayer,layer=>setProfile(profileValue,layer),!!profileValue)}
+              </div>
+              <label><span class="project-setting-name">Prompt library scope<em class="project-setting-chip">repo</em></span>
+                <select value={values.prompt_library_scope||''} disabled={busy||!config} onChange={event=>setValues(current=>({...current,prompt_library_scope:(event.currentTarget.value||undefined) as PromptLibraryScope|undefined}))}><option value="">Inherit ({SCOPE_LABELS[effective?.prompt_library_scope||'both']})</option>{(Object.keys(SCOPE_LABELS) as PromptLibraryScope[]).map(scope=><option value={scope}>{SCOPE_LABELS[scope]}</option>)}</select>
+              </label>
+              <label class="check"><span class="project-setting-name">Allow device notification sounds<em class="project-setting-chip">repo</em></span><input type="checkbox" disabled={busy||!config} checked={values.notification_sounds_enabled!==false} onChange={event=>setValues(current=>({...current,notification_sounds_enabled:event.currentTarget.checked}))}/></label>
+              <label><span class="project-setting-name">Additional ignore patterns<em class="project-setting-chip">repo</em></span>
+                <textarea value={(values.ignore_patterns||[]).join('\n')} disabled={busy||!config} onInput={event=>setValues(current=>({...current,ignore_patterns:parseIgnorePatternDraft(event.currentTarget.value)}))}/>
+              </label>
+              <p>One glob per line, added to the global ignore list. A name such as <code>node_modules</code> matches that folder at any depth. These rules affect the file tree and resource watchers, not Git. Only typed presentation preferences are portable — never commands, hooks, credentials, or anything that runs.</p>
+              <div><button disabled={busy||!config} onClick={()=>setValues({})}>Reset repo options to inherited</button></div>
+            </div>}
+          </div>
           {error&&<p class="projects-manager-error" role="alert">{error}</p>}
           <footer><button class={confirmDelete?'danger confirming':'danger'} disabled={busy||liveCount>0} title={liveCount>0?'Stop this Project’s live sessions before deleting it.':undefined} onClick={()=>void remove()}>{confirmDelete?'Confirm delete':'Delete project'}</button><span>{liveCount>0?'Deletion is locked while sessions are live.':'Hiding is non-destructive; deletion may also be blocked by history.'}</span><button class="primary" disabled={!dirty||busy||!name.trim()} onClick={()=>void save()}>{busy?'Saving…':'Save changes'}</button></footer>
         </>:<div class="projects-manager-empty"><strong>No Projects configured</strong><p>Add a folder-backed Project to begin.</p><button data-tutorial="add-project" class="primary" onClick={onAdd}>+ Add project</button></div>}</main>

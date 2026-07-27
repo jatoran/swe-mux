@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from .config import Config
+from .shim_paths import path_without_shim_dirs, which_real
 
 
 def resolve_command(command: str) -> str:
@@ -14,14 +15,17 @@ def resolve_command(command: str) -> str:
 
     Older configs commonly contain ``codex.exe`` even though npm installs
     ``codex.cmd``. If the explicit value is not found, retry its basename so
-    Windows PATHEXT can select the installed command.
+    Windows PATHEXT can select the installed command. Resolution never returns
+    one of our own ``~/.mux/bin`` agent shims: a daemon whose PATH inherited a
+    session's shim directory would otherwise wire ``MUX_*_EXE`` back at the
+    shim and every launch would recurse through itself.
     """
-    resolved = shutil.which(command)
+    resolved = which_real(command)
     if resolved:
         return resolved
     path = Path(command)
     if path.suffix.casefold() == ".exe" and path.parent == Path("."):
-        resolved = shutil.which(path.stem)
+        resolved = which_real(path.stem)
         if resolved:
             return resolved
     return command
@@ -63,7 +67,9 @@ def create_agent_shims(config: Config, claude_settings: Path | None) -> dict[str
     claude_exe = resolve_command(config.claude_exe)
     codex_exe = resolve_command(config.codex_exe)
     result = {
-        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        # Strip inherited shim directories (ours or a stale data dir's) before
+        # prepending, so sessions see exactly one shim dir at the front.
+        "PATH": f"{bin_dir}{os.pathsep}{path_without_shim_dirs()}",
         "MUX_SHIM_DIR": str(bin_dir),
         "MUX_CLAUDE_EXE": claude_exe,
         "MUX_CODEX_EXE": codex_exe,

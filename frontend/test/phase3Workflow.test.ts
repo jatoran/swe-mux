@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import test from 'node:test'
+import { notifyPromptLibraryChanged, subscribeToPromptLibraryChanges } from '../src/promptLibraryEvents.ts'
 import { renderPromptTemplate } from '../src/promptTemplates.ts'
 import { itemsInOrder, reorderForHover, reorderTargetForPoint } from '../src/dragReorder.ts'
 import { classifySoundEvent, isQuietTime, normalizeSoundPreferences, satisfyingSounds, type SoundPreferences } from '../src/sessionSounds.ts'
@@ -8,6 +9,17 @@ import { classifySoundEvent, isQuietTime, normalizeSoundPreferences, satisfyingS
 test('prompt variables render as text without adding a submit action',()=>{
   assert.equal(renderPromptTemplate('Review {{target}} then {{ target }}.',{target:'src/app.ts'}),'Review src/app.ts then src/app.ts.')
   assert.equal(renderPromptTemplate('Keep {{missing}}.',{}),'Keep {{missing}}.')
+})
+
+test('prompt-library mutations invalidate an open prompt picker',()=>{
+  const target=new EventTarget()
+  let refreshes=0
+  const unsubscribe=subscribeToPromptLibraryChanges(()=>{refreshes+=1},target)
+  notifyPromptLibraryChanged(target)
+  assert.equal(refreshes,1)
+  unsubscribe()
+  notifyPromptLibraryChanged(target)
+  assert.equal(refreshes,1)
 })
 
 test('sound classification admits root events and excludes subagents',()=>{

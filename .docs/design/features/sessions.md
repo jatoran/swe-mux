@@ -9,6 +9,9 @@ and reattachable browser viewports.
 
 - A session is one adapter, one ConPTY process, bounded byte scrollback, and zero or more
   browser subscribers.
+- `spawn_backend` and `spawn_native_session_id` are immutable root-process facts.
+  `backend` and `native_session_id` may change only for a legitimate agent run promoted
+  inside a root shell. A provider launched as the root can never be demoted by a child CLI.
 - A session has one immutable canonical `project_id`. It cannot exist before a Project does.
 - The daemon starts every new, split, stacked, resumed, or review session at the owning
   Project's canonical root.
@@ -19,8 +22,9 @@ and reattachable browser viewports.
 
 - Direct shell creation uses the requested/profile/Project/global profile precedence.
 - Project Actions create ordinary shell-backed sessions. Every step is attributed to the
-  selected Project, appears as a normal terminal, and starts through a small runner that applies
-  the validated in-Project cwd/env before launching the imported command.
+  selected Project, appears as a normal terminal, and spawns the imported command directly with
+  its validated in-Project cwd/env carried as spawn fields. No swe-mux binary sits in the
+  resulting process tree, which is what lets a task terminal survive a frozen-app redeploy.
 - The browser inserts a client-only `starting terminal…` row/tab before the spawn request
   resolves. Temporary IDs never reach Project persistence or PTY routes; success atomically
   replaces the placeholder with the daemon session, while failure removes it and restores a
@@ -42,7 +46,9 @@ and reattachable browser viewports.
   columns and rows. The daemon resizes ConPTY before sending replay bytes; older clients may use
   their first `resize` frame or the bounded compatibility timeout. Messages received while
   readiness is pending are processed only after the replay boundary.
-- Desktop terminals default to WebGL with DOM fallback. The pinned xterm 6 WebGL addon carries
+- Desktop shell and Claude terminals default to WebGL with DOM fallback. Codex terminals always
+  use the built-in DOM renderer because its full-screen redraws can corrupt off-tail WebGL
+  scrollback. The pinned xterm 6 WebGL addon carries
   the upstream missing-buffer-line guard in its runtime bundles, preventing a resize/trim race
   from aborting a model update and leaving stale glyphs. Mobile remains DOM-only.
 - Agent startup state uses semantic evidence first. Claude normally becomes ready through its
@@ -76,12 +82,17 @@ and reattachable browser viewports.
   per-session/global reaper Jobs; the daemon mirrors scrollback from the subscription stream
   (attach replay, nested-agent detection, and the PTY-idle watchdog all read the mirror). Each
   session's record snapshot, hook secret, and transcript path are mirrored into the supervisor
-  (debounced, deduplicated) so a restarted daemon can rebuild the `Session`, reseed scrollback
-  from the supervisor snapshot, and restart its observer/detection tasks — agents mid-turn are
-  never touched. Shutdown intent decides the sessions' fate: quit stops and reaps everything as
-  before; detach (daemon restart) leaves supervised sessions running. If the supervisor is
-  unreachable at spawn time the daemon falls back to today's in-process ConPTY, whose lifetime
-  is daemon-bound as before.
+  (debounced, deduplicated) so a restarted daemon can rebuild the `Session`, reseed scrollback,
+  revalidate provider/transcript ownership, and restart its observer/detection tasks — agents
+  mid-turn are never touched. Legacy snapshots without immutable root fields are reconstructed
+  from the retained spawn executable/argv. If mutable metadata conflicts with that root identity
+  or another live session's transcript claim, adoption repairs the record before publishing it
+  and quarantines the misattributed history run. A direct agent returns to its root provider; a
+  shell whose promoted run claimed a live sibling returns conservatively to shell/detection.
+  Shutdown intent decides the sessions' fate: quit stops and reaps everything as before; detach
+  (daemon restart) leaves supervised sessions running. If the supervisor is unreachable at
+  spawn time the daemon falls back to today's in-process ConPTY, whose lifetime is daemon-bound
+  as before.
 
 ## Key files
 
@@ -95,7 +106,6 @@ and reattachable browser viewports.
 - `src/swe_mux/adapters/`
 - `frontend/src/App.tsx`
 - `frontend/src/TerminalPane.tsx`
-- `src/swe_mux/action_runner.py`
 
 ## Relates to
 

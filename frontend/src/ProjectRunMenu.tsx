@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { fitScrollingMenuInViewport } from './menuPosition'
 import type { Project, ProjectAction, ProjectActionCatalog, ProjectBackend, Session } from './types'
 
 type Anchor={x:number;y:number}
@@ -22,6 +23,7 @@ export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessi
   const [loading,setLoading]=useState(true)
   const [busy,setBusy]=useState('')
   const [pending,setPending]=useState<ProjectAction|null>(null)
+  const panel=useRef<HTMLElement|null>(null)
   const load=()=>{
     setLoading(true)
     void api<ProjectActionCatalog>('GET',`/api/projects/${project.id}/actions`)
@@ -34,6 +36,13 @@ export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessi
     window.addEventListener('keydown',close)
     return()=>window.removeEventListener('keydown',close)
   },[pending,onClose])
+  // Rotating the phone (or a soft keyboard opening) changes the viewport under a
+  // menu that was already fitted to the old one, so re-fit on resize as well.
+  useEffect(()=>{
+    const refit=()=>fitScrollingMenuInViewport(panel.current)
+    window.addEventListener('resize',refit)
+    return()=>window.removeEventListener('resize',refit)
+  },[])
 
   const execute=async(action:ProjectAction)=>{
     if(!catalog?.trusted){setPending(action);return}
@@ -66,7 +75,7 @@ export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessi
   const top=Math.min(anchor.y,Math.max(6,window.innerHeight-460))
   return <>
     <div class="run-menu-scrim" onPointerDown={onClose}/>
-    <section class="project-run-menu" role="menu" aria-label={`Run in ${project.name}`} style={{left,top}}>
+    <section ref={el=>{panel.current=el;fitScrollingMenuInViewport(el)}} class="project-run-menu" role="menu" aria-label={`Run in ${project.name}`} style={{left,top}}>
       <header><div><span>RUN</span><strong>{project.name}</strong></div><button aria-label="Close Run menu" onClick={onClose}>×</button></header>
       <div class="run-menu-section"><small>NEW SESSION</small>
         <button role="menuitem" aria-label="Start Claude session" disabled={!!busy} onClick={()=>onLaunch('claude')}><span aria-hidden="true">▶</span><div><strong>Claude</strong></div></button>

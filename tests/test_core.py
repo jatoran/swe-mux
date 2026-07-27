@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from swe_mux.server import (
     validate_session_media,
 )
 from swe_mux.session import terminal_exit_outcome
+from swe_mux.shim_paths import is_mux_shim, path_without_shim_dirs
 from swe_mux.transcript_view import parse_transcript
 
 
@@ -154,6 +157,12 @@ def test_agent_launchers_inject_mux_wiring(tmp_path: Path, monkeypatch: pytest.M
     assert exe == "real-codex.exe"
     assert args[:2] == ["-c", args[1]]
     assert "notify=" in args[1]
+    assert args[2:6] == [
+        "-c",
+        'tui.alternate_screen="never"',
+        "-c",
+        "tui.raw_output_mode=true",
+    ]
     assert args[-2:] == ["resume", "codex-native"]
     assert native_id == "codex-native"
 
@@ -206,7 +215,7 @@ def test_command_resolution_falls_back_from_exe_to_windows_shim(
 ) -> None:
     monkeypatch.setattr(
         "swe_mux.launchers.shutil.which",
-        lambda command: r"C:\npm\codex.cmd" if command == "codex" else None,
+        lambda command, path=None: r"C:\npm\codex.cmd" if command == "codex" else None,
     )
     assert resolve_command("codex.exe") == r"C:\npm\codex.cmd"
 
@@ -224,7 +233,7 @@ def test_codex_pty_resolution_bypasses_the_npm_batch_shim(
     node.write_bytes(b"fixture")
     monkeypatch.setattr(
         "swe_mux.launchers.shutil.which",
-        lambda command: str(shim) if command == "codex" else None,
+        lambda command, path=None: str(shim) if command == "codex" else None,
     )
 
     assert resolve_codex_pty_command("codex.exe", windows=True) == (
@@ -266,6 +275,145 @@ def test_agent_launcher_bypasses_npm_batch_for_structured_codex_args(
     notify = 'notify=["python.exe", "-m", "swe_mux.hook_client"]'
     assert agent_launcher._launch(str(shim), ["-c", notify]) == 0
     assert calls == [[str(node), str(script), "-c", notify]]
+
+
+def _write_mux_shim(directory: Path) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    shim = directory / "codex.cmd"
+    shim.write_text(
+        '@echo off\r\n"swe-mux.exe" -m swe_mux.agent_launcher codex %*\r\n', encoding="utf-8"
+    )
+    return shim
+
+
+def test_shim_detection_filters_only_mux_shim_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mux_shim = _write_mux_shim(tmp_path / "mux-bin")
+    npm = tmp_path / "npm"
+    npm.mkdir()
+    npm_shim = npm / "codex.cmd"
+    npm_shim.write_text("@echo off", encoding="utf-8")
+    monkeypatch.delenv("MUX_SHIM_DIR", raising=False)
+
+    assert is_mux_shim(mux_shim)
+    assert not is_mux_shim(npm_shim)
+    joined = f"{mux_shim.parent}{os.pathsep}{npm}"
+    assert path_without_shim_dirs(joined) == str(npm)
+
+
+def test_agent_launcher_escapes_a_poisoned_shim_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # MUX_CODEX_EXE ends up pointing at the mux's own shim when the daemon that
+    # wired it had ~/.mux/bin on PATH; launching must re-resolve to the real
+    # CLI instead of recursing shim -> swe-mux.exe -> shim.
+    mux_shim = _write_mux_shim(tmp_path / "mux-bin")
+    npm = tmp_path / "npm"
+    real = npm / "codex.cmd"
+    script = npm / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    node = npm / "node.exe"
+    script.parent.mkdir(parents=True)
+    real.write_text("@echo off", encoding="utf-8")
+    script.write_text("// fixture", encoding="utf-8")
+    node.write_bytes(b"fixture")
+    monkeypatch.delenv("MUX_SHIM_DIR", raising=False)
+    monkeypatch.setenv("PATH", f"{mux_shim.parent}{os.pathsep}{npm}")
+    searched: list[str | None] = []
+
+    def fake_which(command: str, path: str | None = None) -> str | None:
+        searched.append(path)
+        if path is None and command == str(mux_shim):
+            return str(mux_shim)
+        if command == "codex" and path is not None and str(mux_shim.parent) not in path:
+            return str(real)
+        return None
+
+    monkeypatch.setattr(agent_launcher.shutil, "which", fake_which)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        agent_launcher.subprocess, "call", lambda command: calls.append(command) or 0
+    )
+
+    assert agent_launcher._launch(str(mux_shim), ["--version"]) == 0
+    assert calls == [[str(node), str(script), "--version"]]
+
+
+def test_agent_launcher_refuses_the_shim_when_no_real_cli_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mux_shim = _write_mux_shim(tmp_path / "mux-bin")
+    monkeypatch.delenv("MUX_SHIM_DIR", raising=False)
+    monkeypatch.setenv("PATH", str(mux_shim.parent))
+    monkeypatch.setattr(
+        agent_launcher.shutil,
+        "which",
+        lambda command, path=None: str(mux_shim) if path is None else None,
+    )
+    monkeypatch.setattr(
+        agent_launcher.subprocess,
+        "call",
+        lambda command: pytest.fail("must not spawn the mux shim"),
+    )
+
+    with pytest.raises(SystemExit, match="refusing to relaunch the mux shim"):
+        agent_launcher._launch(str(mux_shim), ["login"])
+
+
+async def test_reap_process_tree_kills_grandchildren_and_never_hangs(tmp_path: Path) -> None:
+    # The deadlock shape: cmd.exe wrapper -> long-lived worker inheriting our
+    # pipes. Killing only cmd leaves the worker holding stdout open, and a bare
+    # process.wait() never returns. reap_process_tree must take the whole tree
+    # down and return promptly.
+    import psutil
+
+    from swe_mux.subprocess_flags import background_creation_flags, reap_process_tree
+
+    script = tmp_path / "sleeper.py"
+    script.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+    if os.name == "nt":
+        command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", sys.executable, str(script)]
+    else:
+        command = ["/bin/sh", "-c", f'"{sys.executable}" "{script}"']
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        creationflags=background_creation_flags(),
+    )
+    descendants: list[psutil.Process] = []
+    for _ in range(100):
+        try:
+            descendants = psutil.Process(process.pid).children(recursive=True)
+        except psutil.NoSuchProcess:
+            break
+        if any("python" in child.name().casefold() for child in descendants):
+            break
+        await asyncio.sleep(0.1)
+    assert any("python" in child.name().casefold() for child in descendants)
+
+    await asyncio.wait_for(reap_process_tree(process, timeout_seconds=10), 20)
+
+    assert process.returncode is not None
+    _gone, alive = psutil.wait_procs(descendants, timeout=5)
+    assert not alive
+
+
+def test_agent_shim_env_strips_inherited_shim_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stale = _write_mux_shim(tmp_path / "stale-bin").parent
+    other = tmp_path / "other"
+    other.mkdir()
+    cfg = Config(data_dir=tmp_path)
+    bin_dir = tmp_path / "bin"
+    sep = os.pathsep
+    monkeypatch.delenv("MUX_SHIM_DIR", raising=False)
+    monkeypatch.setenv("PATH", f"{bin_dir}{sep}{stale}{sep}{other}")
+
+    env = create_agent_shims(cfg, None)
+    assert env["PATH"] == f"{bin_dir}{sep}{other}"
 
 
 def test_windows_environment_override_is_case_insensitive() -> None:

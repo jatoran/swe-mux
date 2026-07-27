@@ -7,12 +7,12 @@ own localStorage (unshareable, invisible to the push sender that runs on the
 server), settings live here keyed by a device *class* — ``desktop`` or
 ``mobile`` — and every device can read and edit either profile.
 
-The ``sounds``, ``commandRail`` and ``fileTree`` domains are stored opaquely:
-the browser owns their schema and normalization (custom sound data URLs,
-per-event sound ids, the file-tree's ``{projectId: expandedPaths[]}`` blob).
-Only the ``notifications`` domain is interpreted server-side, because the Web
-Push sender must decide whether to deliver a push before any tab is alive to
-filter it.
+The ``sounds``, ``commandRail``, ``fileTree`` and ``drawerTabs`` domains are
+stored opaquely: the browser owns their schema and normalization (custom sound
+data URLs, per-event sound ids, the file-tree's ``{projectId: expandedPaths[]}``
+blob, the utility drawer's ``{order: tabId[]}``). Only the ``notifications``
+domain is interpreted server-side, because the Web Push sender must decide
+whether to deliver a push before any tab is alive to filter it.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from typing import Any
 
 SETTINGS_SCHEMA_VERSION = 1
 PROFILES: tuple[str, ...] = ("desktop", "mobile")
-DOMAINS: tuple[str, ...] = ("sounds", "notifications", "commandRail", "fileTree")
+DOMAINS: tuple[str, ...] = ("sounds", "notifications", "commandRail", "fileTree", "drawerTabs")
 NOTIFICATION_EVENTS: tuple[str, ...] = ("complete", "waiting", "attention", "failure", "reset")
 # Sound customization allows a base64 data URL up to 512 KiB, so a domain blob
 # can be large; bound it generously to reject only runaway or hostile payloads.

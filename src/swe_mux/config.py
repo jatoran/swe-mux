@@ -13,8 +13,36 @@ from .keybindings import is_command
 
 SCHEMA_VERSION = 17
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
-THEMES = {"light", "dark", "system", "solarized-dark", "tokyo-night", "custom"}
+THEMES = {
+    "light",
+    "dark",
+    "system",
+    "solarized-dark",
+    "tokyo-night",
+    "gruvbox-dark",
+    "catppuccin-mocha",
+    "catppuccin-latte",
+    "nord",
+    "dracula",
+    "everforest-dark",
+    "rose-pine",
+    "kanagawa",
+    "ayu-dark",
+    "tron",
+    "synthwave-84",
+    "cyberpunk-neon",
+    "amber-crt",
+    "green-phosphor",
+    "borland-dos",
+    "custom",
+}
 CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "accent", "error"}
+# The note editor's own grammars: a normalized chord (`mod+shift+r`) and a
+# command id (`markdown.toggle_task`). The daemon cannot know which commands the
+# vendored editor actually implements, so it checks shape only and the browser
+# drops anything the editor no longer recognizes.
+NOTE_SHORTCUT_CHORD = re.compile(r"^[a-z0-9+`\-=\[\]\\;',./]{1,40}$")
+NOTE_SHORTCUT_COMMAND = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
 RESTART_FIELDS = {
     "host",
     "port",
@@ -31,6 +59,21 @@ BUILTIN_THEME_PAIRS = {
     "light": ("#f5f2e9", "#252821"),
     "solarized-dark": ("#002b36", "#93a1a1"),
     "tokyo-night": ("#1a1b26", "#c0caf5"),
+    "gruvbox-dark": ("#282828", "#ebdbb2"),
+    "catppuccin-mocha": ("#1e1e2e", "#cdd6f4"),
+    "catppuccin-latte": ("#eff1f5", "#4c4f69"),
+    "nord": ("#2e3440", "#d8dee9"),
+    "dracula": ("#282a36", "#f8f8f2"),
+    "everforest-dark": ("#2d353b", "#d3c6aa"),
+    "rose-pine": ("#191724", "#e0def4"),
+    "kanagawa": ("#1f1f28", "#dcd7ba"),
+    "ayu-dark": ("#0b0e14", "#bfbdb6"),
+    "tron": ("#061014", "#b8e6ff"),
+    "synthwave-84": ("#262335", "#f4f4f8"),
+    "cyberpunk-neon": ("#000b1e", "#0abdc6"),
+    "amber-crt": ("#140d00", "#ffb000"),
+    "green-phosphor": ("#001100", "#33ff33"),
+    "borland-dos": ("#0000a8", "#ffff54"),
 }
 CCUSAGE_PACKAGE = "ccusage@latest"
 DEFAULT_PROJECT_IGNORE_PATTERNS = [
@@ -203,6 +246,10 @@ class Config:
     # live sessions survive a daemon restart. Off by default while the split
     # proves itself; in-process spawning remains the automatic fallback.
     pty_supervisor_enabled: bool = False
+    # Startup default for the daemon's root-logger level (rotating daemon.log +
+    # console). Runtime changes go through POST /api/debug/log-level or a
+    # config-file edit; neither requires a restart.
+    log_level: str = "INFO"
     terminal_renderer: str = "auto"
     git_poll_seconds: float = 5.0
     process_poll_seconds: float = 5.0
@@ -234,6 +281,9 @@ class Config:
     mobile_scroll_sensitivity: float = 1.0
     mobile_long_press: str = "context_menu"
     mobile_gestures: dict[str, str] = field(default_factory=default_mobile_gestures)
+    # While the sidebar or utility drawer is open, the horizontal swipe pointing back
+    # toward the edge it slid in from closes it instead of running that slot's binding.
+    mobile_gesture_swipe_away_close: bool = True
     terminal_auto_copy_selection: bool = True
     # Clipboard history (clipboard_store.py). Capture is in-app only — nothing
     # polls the OS clipboard — and the ring is memory-only unless `persist` is
@@ -245,6 +295,34 @@ class Config:
     clipboard_history_retention_hours: int = 24
     clipboard_history_redact_secrets: bool = True
     notes_default_open: str = "dock"
+    # Note editor (the vendored Continuity Markdown editor). Only what the
+    # editor genuinely exposes is here: element properties/attributes
+    # (`spellcheck`, `syntax`, `tab-behavior`, `shortcut-policy`,
+    # `command-rail`) and its `--continuity-*` custom properties. Colours are
+    # deliberately absent — style.css already maps the app palette onto the
+    # editor's colour variables, and a second source for them would fight it.
+    note_spellcheck: bool = False
+    note_syntax: str = "markdown"
+    note_tab_behavior: str = "indent"
+    note_shortcut_policy: str = "browser-safe"
+    # Empty/zero means "keep the editor's own default" rather than pinning a
+    # value here, so a Continuity upgrade can still move its defaults.
+    note_font_family: str = ""
+    note_font_size_px: int = 0
+    note_line_height: float = 0.0
+    note_command_rail: str = "auto"
+    note_rail_button_size_px: int = 0
+    # Chord → command overlay on the editor's built-in shortcut table, checked
+    # before the policy filter. The empty string carries the library's `null`
+    # (release the chord to the browser) because TOML has no null; the browser
+    # maps it back. The two defaults reclaim the bullet/task chords that
+    # `browser-safe` would otherwise hand to Chromium.
+    note_shortcut_overrides: dict[str, str] = field(
+        default_factory=lambda: {
+            "mod+r": "editor.toggle_bullet_at_line_start",
+            "mod+e": "markdown.toggle_task",
+        }
+    )
     ccusage_enabled: bool = False
     ccusage_refresh_minutes: int = 0
     ccusage_claude_command: list[str] = field(
@@ -335,8 +413,45 @@ def _validate(config: Config) -> None:
         errors["default_backend"] = "must be shell, claude, or codex"
     if config.terminal_renderer not in {"auto", "dom", "webgl"}:
         errors["terminal_renderer"] = "must be auto, dom, or webgl"
+    if str(config.log_level).strip().upper() not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
+        errors["log_level"] = "must be DEBUG, INFO, WARNING, or ERROR"
     if config.notes_default_open not in {"dock", "popout"}:
         errors["notes_default_open"] = "must be dock or popout"
+    if config.note_syntax not in {"markdown", "plain"}:
+        errors["note_syntax"] = "must be markdown or plain"
+    if config.note_tab_behavior not in {"indent", "focus"}:
+        errors["note_tab_behavior"] = "must be indent or focus"
+    if config.note_shortcut_policy not in {"browser-safe", "editor-first", "none"}:
+        errors["note_shortcut_policy"] = "must be browser-safe, editor-first, or none"
+    if config.note_command_rail not in {"auto", "on", "off"}:
+        errors["note_command_rail"] = "must be auto, on, or off"
+    if len(config.note_font_family) > 200:
+        errors["note_font_family"] = "must be 200 characters or fewer"
+    if config.note_font_size_px != 0 and not 8 <= config.note_font_size_px <= 48:
+        errors["note_font_size_px"] = "must be 0 (editor default) or between 8 and 48"
+    if config.note_line_height != 0 and not 1.0 <= config.note_line_height <= 3.0:
+        errors["note_line_height"] = "must be 0 (editor default) or between 1.0 and 3.0"
+    if config.note_rail_button_size_px != 0 and not 32 <= config.note_rail_button_size_px <= 96:
+        errors["note_rail_button_size_px"] = "must be 0 (editor default) or between 32 and 96"
+    if not isinstance(config.note_shortcut_overrides, dict):
+        errors["note_shortcut_overrides"] = "must be a mapping of chord to command"
+    elif len(config.note_shortcut_overrides) > 128:
+        errors["note_shortcut_overrides"] = "must hold at most 128 chords"
+    else:
+        bad_chords = sorted(
+            str(chord)
+            for chord, command in config.note_shortcut_overrides.items()
+            if not isinstance(chord, str)
+            or not NOTE_SHORTCUT_CHORD.match(chord)
+            or not isinstance(command, str)
+            # "" is the released-chord marker; anything else must name a command.
+            or (command != "" and not NOTE_SHORTCUT_COMMAND.match(command))
+        )
+        if bad_chords:
+            errors["note_shortcut_overrides"] = (
+                "each entry must map a normalized chord to a command id or \"\" "
+                "(release); invalid: " + ", ".join(bad_chords)
+            )
     if config.mobile_vertical_drag not in {"smart", "terminal", "application", "disabled"}:
         errors["mobile_vertical_drag"] = "must be smart, terminal, application, or disabled"
     if config.mobile_scroll_direction not in {"natural", "wheel"}:
@@ -550,8 +665,12 @@ def _toml_value(value: object) -> str:
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     if isinstance(value, dict):
+        # Keys are always quoted: a shortcut chord (`mod+r`) is not a valid bare
+        # TOML key, and quoting parses identically for the keys that are.
         return (
-            "{ " + ", ".join(f"{key} = {_toml_value(item)}" for key, item in value.items()) + " }"
+            "{ "
+            + ", ".join(f"{json.dumps(key)} = {_toml_value(item)}" for key, item in value.items())
+            + " }"
         )
     raise TypeError(f"cannot encode {type(value).__name__}")
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api } from './api'
+import { subscribeToPromptLibraryChanges } from './promptLibraryEvents'
 import { renderPromptTemplate } from './promptTemplates'
 import type { PromptTemplate } from './PromptLibrary'
 import type { Project, ProjectBackend } from './types'
@@ -33,10 +34,14 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, prese
   const [note, setNote] = useState('')
 
   useEffect(() => {
-    const scope = project ? `?project_id=${encodeURIComponent(project.id)}` : ''
-    api<Library>('GET', `/api/prompts${scope}`)
-      .then(library => setItems(library.items))
-      .catch(cause => setNote(cause instanceof Error ? cause.message : String(cause)))
+    const load = () => {
+      const scope = project ? `?project_id=${encodeURIComponent(project.id)}` : ''
+      return api<Library>('GET', `/api/prompts${scope}`)
+        .then(library => { setItems(library.items); setNote('') })
+        .catch(cause => setNote(cause instanceof Error ? cause.message : String(cause)))
+    }
+    void load()
+    return subscribeToPromptLibraryChanges(() => { void load() })
   }, [project?.id])
 
   // Arriving from a rail button: expand that template's fields and clear any filter

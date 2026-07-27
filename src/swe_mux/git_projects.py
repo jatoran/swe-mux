@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .subprocess_flags import background_creation_flags
+from .subprocess_flags import background_creation_flags, reap_process_tree
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,11 +60,7 @@ async def _git(cwd: Path, *args: str) -> str | None:
             return stdout.decode("utf-8", "replace").strip()
     except TimeoutError:
         if process is not None:
-            try:
-                process.kill()
-                await process.wait()
-            except (ProcessLookupError, OSError):
-                pass
+            await reap_process_tree(process)
     except (FileNotFoundError, OSError):
         pass
     return None

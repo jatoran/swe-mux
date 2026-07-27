@@ -15,7 +15,7 @@ import { api } from './api.ts'
 import { clearProjectRailBlob, railHasProjectOverride, railItemsFromBlob, writeRailBlob, type RailBlob, type RailItem } from './commandRail.ts'
 
 export type SettingsProfile = 'desktop' | 'mobile'
-export type SettingsDomain = 'sounds' | 'notifications' | 'commandRail' | 'fileTree'
+export type SettingsDomain = 'sounds' | 'notifications' | 'commandRail' | 'fileTree' | 'drawerTabs'
 type ProfileSettings = Partial<Record<SettingsDomain, Record<string, unknown>>>
 type AllSettings = Record<SettingsProfile, ProfileSettings>
 
@@ -119,6 +119,22 @@ export async function saveExpandedFolders(projectId: string, paths: string[]): P
   if (paths.length) next[projectId] = paths
   else delete next[projectId]
   await saveDomain(FILE_TREE_PROFILE, 'fileTree', next as Record<string, unknown>)
+}
+
+// The drawer's tab order is one arrangement shared by the strip and the desktop rail, and —
+// like the command rail and the file tree — it says which surfaces the user reaches for rather
+// than anything about screen size, so it lives in one canonical bucket instead of per device
+// class. The blob is `{order: DrawerTabId[]}`; validation is the browser's (`drawerTabOrder.ts`),
+// which is why the daemon stores it opaquely.
+const DRAWER_TAB_PROFILE: SettingsProfile = 'desktop'
+
+/** Persisted tab order, unvalidated. Callers normalize; an unloaded cache yields undefined. */
+export function loadDrawerTabOrder(): unknown {
+  return rawDomain(DRAWER_TAB_PROFILE, 'drawerTabs')?.order
+}
+
+export async function saveDrawerTabOrder(order: string[]): Promise<void> {
+  await saveDomain(DRAWER_TAB_PROFILE, 'drawerTabs', { order })
 }
 
 // One-time import of the pre-server sound blob into this device's profile, so an

@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import os
 import re
-import sys
+import shlex
+import shutil
+import subprocess
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .config import Config
 from .profiles import resolve_profile
+from .spawn_contract import parse_spawn_env, resolve_contained_cwd
 
 ACTION_FILES = (Path(".vscode/tasks.json"), Path("package.json"), Path(".swe-mux/actions.toml"))
 MAX_ACTIONS = 128
@@ -173,15 +175,7 @@ def _resolve_value(value: str, root: Path) -> str:
 
 
 def _cwd(value: str | None, root: Path) -> str:
-    target = root if not value else Path(_resolve_value(value, root))
-    if not target.is_absolute():
-        target = root / target
-    target = target.resolve(strict=False)
-    try:
-        target.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("action cwd must stay inside the Project root") from exc
-    return str(target)
+    return resolve_contained_cwd(_resolve_value(value, root) if value else "", root)
 
 
 def _strings(value: Any, field_name: str) -> tuple[str, ...]:
@@ -193,16 +187,9 @@ def _strings(value: Any, field_name: str) -> tuple[str, ...]:
 
 
 def _environment(value: Any, root: Path) -> dict[str, str]:
-    if value is None:
-        return {}
-    if not isinstance(value, dict) or len(value) > 64:
-        raise ValueError("action env must be an object with at most 64 entries")
-    result: dict[str, str] = {}
-    for key, item in value.items():
-        if not isinstance(key, str) or not isinstance(item, (str, int, float, bool)):
-            raise ValueError("action env values must be strings or scalar values")
-        result[key] = _resolve_value(str(item), root)
-    return result
+    # Shape and size are the spawn contract's rules (one implementation, one set of
+    # limits); only VS Code variable expansion is specific to a task file.
+    return {key: _resolve_value(item, root) for key, item in parse_spawn_env(value).items()}
 
 
 def _vscode_step(raw: dict[str, Any], root: Path) -> ActionStep | None:
@@ -454,54 +441,112 @@ class ProjectActionService:
         return catalog, action
 
 
-def runner_spawn_body(
+def action_spawn_body(
     step: ActionStep,
     *,
     project_id: str,
     config: Config,
     profile_id: str,
 ) -> dict[str, Any]:
+    """Build the spawn request that runs one Project Action step.
+
+    The step's directory and environment travel as first-class spawn fields, so the
+    supervisor launches the shell (or the resolved program) directly. Nothing from
+    the swe-mux bundle sits in the resulting process tree, which is what lets a task
+    terminal outlive a redeploy of the app it was launched from.
+    """
     command = step.command
     args = list(step.args)
     if step.kind == "shell":
         if step.shell_executable:
-            executable = step.shell_executable
+            executable = _resolved_executable(step.shell_executable)
             shell_args = list(step.shell_args)
+            line = _shell_command_line(executable, command, args)
             if not shell_args:
-                shell_args = _shell_command_args(executable, command)
+                shell_args = _shell_command_args(executable, line)
             else:
-                shell_args.append(command)
+                shell_args.append(line)
         else:
             profile = resolve_profile(config, profile_id, Path(step.cwd), interactive=False)
             executable = profile.executable
-            shell_args = [*profile.argv, *_shell_command_args(executable, command)]
+            line = _shell_command_line(executable, command, args)
+            shell_args = [*profile.argv, *_shell_command_args(executable, line)]
         command = executable
         args = shell_args
-    payload = base64.urlsafe_b64encode(
-        json.dumps(
-            {"cwd": step.cwd, "env": step.env, "command": command, "args": args},
-            separators=(",", ":"),
-        ).encode()
-    ).decode()
-    runner_executable, runner_prefix = action_runner_invocation()
+    else:
+        command, args = process_invocation(command, args)
     return {
         "project_id": project_id,
         "backend": "shell",
         "name": step.name,
-        "executable": runner_executable,
-        "argv": [*runner_prefix, payload],
+        "executable": command,
+        "argv": args,
+        "cwd": step.cwd,
+        "env": dict(step.env),
         "completion_mode": "one_shot",
     }
 
 
-def action_runner_invocation(
-    *, executable: str | None = None, frozen: bool | None = None
-) -> tuple[str, tuple[str, ...]]:
-    executable = executable or sys.executable
-    frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
-    if frozen:
-        return str(Path(executable).with_name("swe-mux-action.exe")), ()
-    return executable, ("-m", "swe_mux.action_runner")
+def _resolved_executable(command: str) -> str:
+    return shutil.which(command) or command
+
+
+def process_invocation(command: str, args: Sequence[str]) -> tuple[str, list[str]]:
+    """Resolve a ``process`` step to something CreateProcess can actually launch.
+
+    PATH lookup happens here rather than in the child because there is no longer a
+    child of ours to do it. A ``.cmd``/``.bat`` shim (every npm-family entry point on
+    Windows) is not a real executable, so it is handed to the command processor
+    instead of being exec'd directly.
+    """
+    resolved = _resolved_executable(command)
+    argv = [resolved, *args]
+    if os.name == "nt" and Path(resolved).suffix.casefold() in {".cmd", ".bat"}:
+        return (
+            os.environ.get("COMSPEC", "cmd.exe"),
+            ["/d", "/s", "/c", subprocess.list2cmdline(argv)],
+        )
+    return resolved, [str(item) for item in args]
+
+
+def _shell_command_line(executable: str, command: str, args: Sequence[str]) -> str:
+    """Fold a shell step's command and args into one command line for that shell.
+
+    VS Code runs `shell` tasks by quoting each entry of `args` and appending it to
+    `command`; a shell step whose args are dropped silently runs a bare `npm`/`uv`
+    and exits, so the join has to happen here, in the shell's own quoting dialect.
+    """
+    if not args:
+        return command
+    name = Path(executable).name.casefold()
+    if name in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}:
+        return " ".join((_powershell_command(command), *(_powershell_quote(a) for a in args)))
+    if name in {"cmd", "cmd.exe"}:
+        return " ".join(_cmd_quote(item) for item in (command, *args))
+    return shlex.join((command, *args))
+
+
+def _powershell_quote(value: str) -> str:
+    # Single-quoted PowerShell strings are literal; '' is the only escape inside them.
+    return "'{}'".format(value.replace("'", "''"))
+
+
+def _powershell_command(value: str) -> str:
+    # A quoted command is a string expression to PowerShell, not an invocation, so a
+    # command needing quotes (a path with spaces) also needs the call operator.
+    if re.fullmatch(r"[\w.:\\/-]+", value):
+        return value
+    return f"& {_powershell_quote(value)}"
+
+
+def _cmd_quote(value: str) -> str:
+    # list2cmdline applies the quoting the child's own parser expects; anything it
+    # leaves bare still has to be quoted against cmd's metacharacters. `%VAR%` stays
+    # expandable either way -- cmd offers no command-line escape for it.
+    quoted = subprocess.list2cmdline([value])
+    if quoted.startswith('"') or not re.search(r'[\s"&|<>^()]', quoted):
+        return quoted
+    return f'"{quoted}"'
 
 
 def _shell_command_args(executable: str, command: str) -> list[str]:

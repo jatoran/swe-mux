@@ -19,6 +19,10 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config, load_config
+from .lifecycle import ledger
+from .logsetup import enable_crash_tracebacks
+from .subprocess_flags import popen_outside_job
+from .win_jobobj import process_in_job
 
 CONTROL_TOKEN_ENV = "SWE_MUX_DESKTOP_CONTROL_TOKEN"
 CONTROL_TOKEN_NAME = "desktop-control.token"
@@ -61,6 +65,20 @@ def load_or_create_control_token(data_dir: Path) -> str:
         pass
     os.replace(temporary, path)
     return token
+
+
+def _rotate_console_log(path: Path) -> None:
+    """Keep the previous daemon's console output as ``.1`` instead of growing forever.
+
+    The redirect is a crash catcher, so the generation that matters is the one
+    from the daemon that just died; one rotated copy preserves it. Skipped when
+    the file is still held open (a predecessor that has not finished exiting).
+    """
+    try:
+        if path.is_file() and path.stat().st_size > 0:
+            os.replace(path, path.with_suffix(".log.1"))
+    except OSError:
+        pass
 
 
 def health_snapshot(url: str, *, timeout: float = 1.0) -> dict[str, object] | None:
@@ -225,6 +243,17 @@ class DesktopRuntime:
         assert config.config_path is not None
         self.instance = WindowsSingleInstance(instance_key(config.config_path))
         self.token = load_or_create_control_token(config.data_dir)
+        enable_crash_tracebacks(config.data_dir)
+        if process_in_job():
+            # The tray has no console; the ledger is the only place this
+            # warning can survive. A tray inside a session's kill-on-close Job
+            # dies (with its daemon) when that session is removed.
+            ledger(
+                config.data_dir,
+                f"tray pid {os.getpid()} started inside a Windows Job object "
+                "(launched from within a session?); it and its daemon may be "
+                "terminated when that Job closes",
+            )
 
     def ensure_daemon(self) -> None:
         if health_snapshot(self.url) is not None:
@@ -239,11 +268,14 @@ class DesktopRuntime:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         log_path = self.config.data_dir / "desktop-daemon.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_console_log(log_path)
         with log_path.open("ab", buffering=0) as log:
             # cwd anchors in the data dir: an Explorer launch inherits
             # cwd=dist/swe-mux, and any long-lived process anchored there locks
-            # the dist tree against session-preserving rebuilds.
-            self.child = subprocess.Popen(
+            # the dist tree against session-preserving rebuilds. Breakaway
+            # spawn: a tray relaunched from inside a session sits in that
+            # session's kill-on-close Job, and the daemon must not inherit it.
+            self.child = popen_outside_job(
                 daemon_command(self.config.config_path),
                 env=environment,
                 stdin=subprocess.DEVNULL,
@@ -252,6 +284,8 @@ class DesktopRuntime:
                 cwd=str(self.config.data_dir),
                 creationflags=flags,
             )
+        ledger(self.config.data_dir, f"tray spawned daemon pid {self.child.pid}")
+        self._watch_daemon_exit(self.child)
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             if health_snapshot(self.url, timeout=0.5) is not None:
@@ -263,6 +297,23 @@ class DesktopRuntime:
         raise RuntimeError(
             f"The swe-mux daemon did not start (exit {code}). See {log_path}."
         )
+
+    def _watch_daemon_exit(self, child: subprocess.Popen[bytes]) -> None:
+        """Ledger the daemon's exit code; external kills leave no other trace.
+
+        A daemon terminated by a closing Job object or taskkill writes nothing
+        of its own, so the tray — which holds the process handle — is the only
+        observer that can record how the child actually ended.
+        """
+
+        def wait() -> None:
+            code = child.wait()
+            ledger(
+                self.config.data_dir,
+                f"daemon pid {child.pid} exited with code {code}",
+            )
+
+        threading.Thread(target=wait, name="mux-daemon-exit-watch", daemon=True).start()
 
     def show(self, *_: object) -> None:
         if self.window is None or self.exiting:
@@ -466,32 +517,21 @@ def dispatch_internal_module(arguments: Sequence[str]) -> bool:
     if len(values) < 2 or values[0] != "-m":
         return False
     module_name = values[1]
-    if module_name not in {
-        "swe_mux.hook_client",
-        "swe_mux.agent_launcher",
-        "swe_mux.action_runner",
-    }:
+    if module_name not in {"swe_mux.hook_client", "swe_mux.agent_launcher"}:
         return False
     previous = sys.argv
     sys.argv = [module_name, *values[2:]]
     try:
-        result: int | None = None
         if module_name == "swe_mux.hook_client":
             from .hook_client import main as hook_main
 
             hook_main()
-        elif module_name == "swe_mux.agent_launcher":
+        else:
             from .agent_launcher import main as launcher_main
 
             launcher_main()
-        else:
-            from .action_runner import main as action_main
-
-            result = action_main()
     finally:
         sys.argv = previous
-    if isinstance(result, int):
-        raise SystemExit(result)
     return True
 
 

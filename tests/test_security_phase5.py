@@ -220,6 +220,38 @@ def test_preview_html_rewrites_root_resources_into_registration() -> None:
     assert b'import("/preview/preview-id/src/lazy.ts")' in rewritten_javascript
 
 
+def test_preview_html_rewrites_inline_module_specifiers() -> None:
+    # @vitejs/plugin-react's refresh preamble is an inline module: no src attribute to
+    # rewrite, and an unprefixed "/@react-refresh" 404s on the mux origin, which throws
+    # "can't detect preamble" in every transformed module and renders a white page.
+    source = (
+        b'<head><script type="module">import { injectIntoGlobalHook } from "/@react-refresh";\n'
+        b"injectIntoGlobalHook(window);</script>"
+        b'<script type="application/json">{"src": "/keep/me.json"}</script>'
+        b'<script type="module" src="/src/main.tsx"></script></head>'
+    )
+    rewritten = rewrite_preview_html(source, "/preview/preview-id/")
+
+    assert b'from "/preview/preview-id/@react-refresh"' in rewritten
+    assert b'import { injectIntoGlobalHook } from "/@react-refresh"' not in rewritten
+    # Data blocks are not JavaScript: their bytes stay exactly as the upstream sent them.
+    assert b'{"src": "/keep/me.json"}' in rewritten
+    assert b'src="/preview/preview-id/src/main.tsx"' in rewritten
+    # The injected bridge is appended after the rewrite, so its own source is untouched.
+    assert b"class extends NativeWebSocket" in rewritten
+
+
+def test_preview_bridge_routes_event_streams_and_publishes_its_mount_point() -> None:
+    rewritten = rewrite_preview_html(b"<html><head></head></html>", "/preview/preview-id/")
+
+    # SSE is the third transport an app reaches for; unrouted it 404s on the mux origin.
+    assert b"class extends NativeEventSource" in rewritten
+    assert b"const NativeEventSource=window.EventSource" in rewritten
+    # Location is not patchable, so a client-side router has to be told its basename.
+    assert b"window.__MUX_PREVIEW_BASE__=prefix" in rewritten
+    assert b'const prefix="/preview/preview-id/"' in rewritten
+
+
 def test_preview_html_routes_other_project_loopback_services_through_mux() -> None:
     rewritten = rewrite_preview_html(
         b"<html><head></head></html>",

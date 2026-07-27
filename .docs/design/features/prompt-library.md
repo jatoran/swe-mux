@@ -33,6 +33,8 @@ listing with no project returns global templates only, so a global rail cannot p
 template.
 Search covers title, tags, and body and filters by the focused backend. A template can be
 favorited, copied, edited, or filled through its `{{variable}}` fields with a read-only preview.
+Successful local creates, edits, deletes, favorites, and uses invalidate every open prompt list;
+the utility drawer refreshes in place even while the full library is open over it.
 Insert dispatches `insertText` to the focused xterm, which uses paste semantics. It never adds a
 newline, Enter, submit, or execute action. Editor changes use explicit Save/Discard and an
 in-app close confirmation.
@@ -41,4 +43,6 @@ in-app close confirmation.
 
 - `src/swe_mux/prompt_library.py`
 - `frontend/src/PromptLibrary.tsx`
+- `frontend/src/PromptsTab.tsx`
+- `frontend/src/promptLibraryEvents.ts`
 - `frontend/src/promptTemplates.ts`

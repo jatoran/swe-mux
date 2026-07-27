@@ -3,8 +3,10 @@
 ## What it is
 
 Safe access to Project and session notes, a bounded Project file tree, revision-checked text
-editing, ignore patterns, host file-manager reveal, and leased filesystem watches. All resource
-views participate in the same pane/tab layout as terminals and previews.
+editing, ignore patterns, host file-manager reveal, and leased filesystem watches. Editable
+resources (notes, file editors) are pane tabs alongside terminals and previews. The two
+*navigators* — the file tree and the notes index — are utility-drawer tabs: they open documents
+into panes rather than holding one, so they cost a panel instead of a permanent tab.
 
 ## Notes
 
@@ -18,17 +20,41 @@ views participate in the same pane/tab layout as terminals and previews.
   terminal's note. It reports three states: empty, written (the note holds text), and open (the
   note is the focused tab). `session.note` is the same action from the command palette and its
   default `Ctrl+Alt+N` binding.
-- A session note opens *beside* its terminal, never stacked over it: an already-open copy is
-  focused, otherwise an existing non-terminal pane hosts it, otherwise the anchor pane splits and
-  the note takes the smaller share. Every entry point (pane chip, context menu, palette, sidebar
-  row) uses this rule. The note context menu's explicit `Open in focused pane` is unaffected.
+- A session note opens as a tab in the pane you were last in — the focused view when it is still
+  in the layout, then the owning terminal's pane, then whatever the layout has. Every entry point
+  (pane chip, context menu, palette, sidebar row, Notes tab) uses this one rule, which is the same
+  rule the Project note and file editors already used.
+- It used to split a pane off so the note sat *beside* its terminal rather than over it. That
+  traded workspace geometry for a guess: it rearranged panes every time a note was opened, and
+  the split it chose was rarely the one wanted. Splitting is an explicit action — the tab menu's
+  split rows, or a drag onto a pane edge — not a side effect of opening something.
+- A note that is already open is activated **where it is**, never moved. Reopening it from a
+  different pane must not tear it out of the pane the user put it in. The note context menu's
+  explicit `Open in focused pane` is the deliberate way to move it.
 - The browser's per-session note signal is content, not file presence: a note created by a stray
   chip click stays readable and writable but earns no sidebar row until it holds text. Note
   authorization still keys on file existence, so an empty note is never locked out.
-- A session-notes browser lists every session note that holds text, filterable by Project and
-  searchable over owner, Project, and excerpt. It opens from a Project's sidebar context menu
-  (scoped to that Project), the main menu, or the `notes.browse` command. Selecting a row opens
-  that note through the ordinary companion placement rule.
+- The **Notes** drawer tab lists notes; it never edits one. The Project note is pinned first and
+  is always present even when empty (it is the one note every Project has). The focused terminal's
+  note is pinned second when it holds text. Below them sits every other session note with content,
+  searchable over owner, Project, and excerpt, scoped to this Project or to all of them.
+  Selecting any row opens that note through the ordinary placement rule above.
+- It is an index rather than a drawer-hosted editor for a concrete reason: the drawer unmounts a
+  tab body on every tab switch, so an editor there would lose cursor and undo history on each
+  switch, and `insertTarget` would drop its editor handle the moment you switched to Clipboard —
+  routing the insert to a terminal instead, silently. Editing stays in panes.
+- The tab replaced the session-notes modal and is reached from a Project's sidebar context menu
+  (scoped to that Project), the main menu, the `notes.browse`/`notes.browseProject` commands, and
+  its own icon on the desktop rail.
+- Scope follows how you arrived, the same rule the rest of the app's browsers use. Reaching the
+  tab from the rail icon, the tab strip, or `drawer.notes` says nothing about scope, so it means
+  *this Project* — the drawer sits beside that Project's workspace. Only the app menu's
+  deliberately unscoped `notes.browse` widens it to every Project. Without that reset the flag
+  would stick: one visit through the app menu would leave every later open showing all Projects.
+  The reset lives in `showDrawerTab`, so every scope-less entry point inherits it, while the two
+  scoped entry points go through `openNotesBrowser`, which is not on that path.
+- The scoped listing follows the active Project rather than pinning the one it opened with, so
+  switching Project with the tab open refetches instead of showing a stale Project's notes.
 - The listing is derived from the filesystem, not from history, so a note stays reachable after
   its terminal is dismissed, its history row is pruned, and the daemon restarts. Live sessions
   and history rows only supply display labels; a note whose owner left no record anywhere still
@@ -59,6 +85,77 @@ views participate in the same pane/tab layout as terminals and previews.
   echoed write from an external one. It therefore does not auto-reload an open Markdown file on a
   file-change event; a genuine out-of-band edit surfaces as a 409 conflict banner on the next
   save, with the same reload/overwrite choices as a note conflict.
+- A resource load or refresh that fails is transient state, never a dead tab: reads carry a
+  request timeout (so a request that hangs while a dormant client wakes fails instead of waiting
+  forever), failures retry on a backoff, and any resume signal retries at once. The banner offers
+  an immediate retry while one is queued. A retry on a note that already holds content goes
+  through the same clean-state live-follow check, so recovering a failed refresh can never
+  discard unsaved local typing. Autosave PUTs carry the same timeout, so a save that hangs cannot
+  leave the queue permanently in-flight (which would block every later save and every
+  live-follow); it fails into the existing retry, which a resume also short-circuits.
+
+### Editor preferences
+
+- Settings → Notes configures the one shared editor, so every Markdown surface moves together:
+  spellcheck, Markdown projection on/off (`plain` keeps undo, multi-cursor, list continuation,
+  and autosave and only stops the rendering), what `Tab` does, typography, the touch command
+  rail, and the editor's own keyboard shortcuts.
+- The knobs are exactly what the vendored editor exposes: element properties/attributes
+  (`spellcheck`, `syntax`, `tab-behavior`, `shortcut-policy`, `command-rail`) and its
+  `--continuity-*` custom properties. Nothing is emulated on top, so a setting either maps to
+  the editor or is not offered.
+- Colours are deliberately not among them. The theme already maps the app palette onto the
+  editor's colour variables, and a second source for them would fight the theme.
+- A blank/zero typography value means *keep the editor's default* rather than pinning today's
+  value here, so upgrading the vendored editor can still move its defaults.
+- Preferences reach a live editor as element configuration, never as a remount: remounting
+  would drop undo history and reseed from the last *loaded* text, discarding edits since. The
+  editor pins measured typography from a ResizeObserver on its own box, which a font change
+  does not move, so applying typography also nudges live editors into re-measuring rather than
+  leaving caret geometry stale until the next reflow.
+- Shortcuts are stored as an *overlay* on the editor's own table (chord → command, or released
+  to the browser), never as a copy of the table, so a chord left alone still follows the editor
+  across an upgrade. TOML has no null, so a released chord is stored as `""` and the browser
+  maps it back to the `null` the editor wants. Two chords the editor binds but flags
+  non-browser-safe (bullet and task toggles) are reclaimed by the shipped default.
+- The rail's *arrangement* — which buttons, in what order — stays owned by the editor, which
+  persists it per device from its own gear panel. Settings only offers a reset, which therefore
+  applies immediately and is not part of the Save/Cancel draft.
+
+### Sending a selection to an agent
+
+- Every Continuity-backed view (project note, session note, Markdown file) offers **send to
+  agent**: the highlighted text, or the whole document when nothing is highlighted, becomes the
+  first message of a new Claude/Codex session or is inserted into a live one. Plain-text files
+  and the file browser do not offer it; they own no selection.
+- The action has two hosts. A `→ agent` button in the pane header serves desktop (Continuity's
+  own rail is touch-only), and the same action is registered on that rail as `mux:send-to-agent`
+  for touch, where a tap keeps the keyboard and the selection in place. Both read the selection
+  from the engine snapshot, not from DOM focus, so taking focus to click cannot lose it.
+- The dialog captures the message when it opens, so editing the document underneath cannot
+  change what is about to be sent. The message is shown in full and stays editable: this is a
+  user-initiated send, and the text on screen is the text that leaves. It is prefixed with one
+  origin line naming the document, which is the agent's only context for a loose fragment.
+- Targets are the live Claude/Codex sessions of a chosen Project (any Project, defaulting to the
+  document's own), plus "new Claude session" and "new Codex session". Shell sessions are never
+  offered: an agent composer holds a paste inert until submitted, while a shell would run it.
+  Ended, crashed, and still-spawning sessions are excluded, and switching Project drops a target
+  that does not exist there rather than silently retargeting.
+- A new session is seeded through the agent CLI's own argv, the same mechanism as the
+  cross-vendor review spawn, and opens beside the pane the text came from. That avoids writing
+  into a TUI that is not ready for input yet. Because argv is a command line, the seeded prompt
+  is bounded (20,000 characters); a longer body is refused for a new session, with the live-session
+  route offered instead. A body starting with `-` is offset by one space so the CLI cannot read
+  it as a flag.
+- A live session is written to over `POST /api/sessions/{id}/input`, wrapped in bracketed paste
+  (newlines as CR) so a multi-line body does not submit at every line, and the Enter is a second
+  write a moment later so the composer has absorbed the paste first. Submitting is a checkbox,
+  on by default. That endpoint, not the in-page terminal action bus, is the delivery path
+  because it reaches a target whose pane is not mounted.
+- When the target's delivery readiness is `blocked` or `unknown`, the dialog names the reason and
+  the button becomes "Send anyway"; nothing is auto-forced. Delivery here is manual and
+  per-message — the durable queue, ordering, and retargeting semantics remain Phase 4 work
+  (`development/ROADMAP.md`), and this dialog is one of its future senders, not a substitute.
 
 ### Known nested-Project gap
 
@@ -71,16 +168,19 @@ include a registered Project nested below another Git root.
 
 ## Files and ignores
 
-- The file browser is lazily expanded from the canonical Project root. Traversal and symlink
-  escapes are rejected; one directory response is capped at 2,000 entries.
-- A debounced search box at the top of the Files pane filters recursively by file name, file
+- The file browser is the utility drawer's **Files** tab, scoped to the active Project. It is
+  lazily expanded from the canonical Project root. Traversal and symlink escapes are rejected;
+  one directory response is capped at 2,000 entries. Its header carries the Project root, which
+  is the only thing naming which tree this is once it stopped being a labelled pane tab.
+- A debounced search box at the top of the Files tab filters recursively by file name, file
   content, or both (a scope toggle). A non-empty query replaces the lazy tree with a flat,
   path-ordered result list (content matches show the first matching line); clearing it restores
   the tree. Results and the tree share the same open, context-menu, and drag behavior.
-- Clicking a file opens it as a tab in the next available pane, never inside the Files pane
-  itself; only when Files is the sole pane does the file open there. A file row can also be
-  dragged out of the tree or results and dropped onto any pane as a tab or a new edge split,
-  reusing the ordinary workspace-tab drop targets.
+- Clicking a file opens it as a tab in the focused pane and, on mobile, closes the drawer that
+  was covering it. A file row can also be dragged out of the tree or results and dropped onto any
+  pane as a tab or a new edge split, reusing the ordinary workspace-tab drop targets — desktop
+  only, because the drawer is an in-flow column there and an overlay on mobile, where there is no
+  visible pane to drop onto.
 - The Project-folder chooser (Add project) has an equivalent debounced name filter over the
   listed folders; contents/both do not apply to a folder chooser.
 - UTF-8 files up to 2 MiB open in revision-checked editor tabs. Binary and larger files remain
@@ -121,10 +221,15 @@ include a registered Project nested below another Git root.
 
 ## View lifetime
 
-Project note, session notes, Files, and file editors are ordinary `note`-kind layout leaves with
-typed resource IDs. They can share a pane, move between panes, or create a pane-edge split.
-Closing a resource tab closes only the viewport: it never deletes the underlying file. Moving a
-file editor or Files tab preserves its unsaved draft or expanded-tree state.
+Project note, session notes, and file editors are ordinary `note`-kind layout leaves with typed
+resource IDs. They can share a pane, move between panes, or create a pane-edge split. Closing a
+resource tab closes only the viewport: it never deletes the underlying file. Moving a file editor
+preserves its unsaved draft.
+
+The file browser is not a leaf. Its expanded-folder set was never layout state anyway — it
+persists per Project in the shared `fileTree` settings domain, so it survives the move to the
+drawer, a reload, and a different device. A `files:` leaf persisted by an older client is pruned
+on read (`workspace-layout.md`).
 
 ## Key files
 
@@ -133,10 +238,13 @@ file editor or Files tab preserves its unsaved draft or expanded-tree state.
 - `src/swe_mux/file_manager.py`
 - `frontend/src/ProjectResource.tsx`
 - `frontend/src/ProjectNoteEditor.tsx`
-- `frontend/src/SessionNotesBrowser.tsx`
-- `frontend/src/layout.ts` (`placeCompanionLeaf`)
+- `frontend/src/NotesTab.tsx` (the notes index; hosted by `UtilityDrawer.tsx`)
+- `frontend/src/layout.ts` (`openAnchorId`, `openTab`)
 - `frontend/src/editorText.ts`
 - `frontend/src/noteSaveQueue.ts`
+- `frontend/src/noteSelection.ts` (selection slicing, message composition, delivery payloads)
+- `frontend/src/agentTargets.ts` (which sessions may receive a send)
+- `frontend/src/SendToAgentPicker.tsx`
 
 ## Relates to
 

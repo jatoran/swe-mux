@@ -12,7 +12,7 @@ from typing import Any
 
 from .config import CCUSAGE_PACKAGE, Config
 from .event_bus import EventBus
-from .subprocess_flags import background_creation_flags
+from .subprocess_flags import background_creation_flags, reap_process_tree
 
 MAX_USAGE_OUTPUT_BYTES = 10 * 1024 * 1024
 USAGE_TIMEOUT_SECONDS = 30.0
@@ -325,8 +325,7 @@ class UsageManager:
                 process.communicate(), timeout=USAGE_TIMEOUT_SECONDS
             )
         except TimeoutError:
-            process.kill()
-            await process.communicate()
+            await reap_process_tree(process)
             raise UsageAdapterError("ccusage refresh timed out") from None
         if len(stdout) > MAX_USAGE_OUTPUT_BYTES:
             raise UsageAdapterError("ccusage output exceeded 10 MiB")

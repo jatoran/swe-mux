@@ -103,7 +103,6 @@ def build_app_bundle(distpath: Path | None = None) -> None:
         check=True,
     )
     print(f"Built {output_root / 'swe-mux' / 'swe-mux.exe'}")
-    print(f"Built {output_root / 'swe-mux' / 'swe-mux-action.exe'}")
 
 
 def build_supervisor_bundle(*, force: bool = False) -> bool:
@@ -159,6 +158,11 @@ def parser() -> argparse.ArgumentParser:
         help="never touch the supervisor bundle in this run",
     )
     result.add_argument(
+        "--skip-frontend",
+        action="store_true",
+        help="bundle the already-built src/swe_mux/static as-is (backend-only redeploy)",
+    )
+    result.add_argument(
         "--app-distpath",
         type=Path,
         default=None,
@@ -174,7 +178,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.supervisor_only:
         build_supervisor_bundle(force=args.force_supervisor)
         return
-    build_frontend()
+    if not args.skip_frontend:
+        build_frontend()
     build_app_bundle(distpath=args.app_distpath)
     if not args.skip_supervisor:
         build_supervisor_bundle(force=args.force_supervisor)

@@ -9,6 +9,7 @@
 ## Key concepts
 
 - Mux ID: stable for one PTY lifetime.
+- Spawn backend/native ID: immutable identity of the process that owns the PTY.
 - Native ID: Claude/Codex transcript identity used for history and resume.
 - Promotion: authenticated `shell → claude|codex` in the same PTY, preserving mux ID,
   pane, cwd, scrollback, and any user-assigned name.
@@ -22,12 +23,24 @@
 - Shell child PATH begins with generated shims that resolve the real executable before
   PATH modification, assign/retain the native ID, inject hooks, then POST promotion
   with the inherited per-session secret.
+- Promotion is accepted only while the root session is a shell (plus exact idempotent
+  repeats). A direct Claude/Codex root owns its provider for the entire PTY lifetime, and an
+  already-promoted shell owns its active lifecycle until the matching demotion. Therefore
+  diagnostic or nested `claude`/`codex` invocations cannot promote and then demote their
+  parent agent session.
 - Executable resolution supports native binaries and package-manager shims. A stale
   configured `codex.exe` falls back through Windows PATHEXT to an installed `codex.cmd`;
   direct ConPTY sessions and nested shell launches resolve npm Codex shims to their underlying
   `node.exe` + `codex.js` entrypoint so JSON config remains one exact argv value. Other
   `.cmd`/`.bat` targets use `COMSPEC`, while `.exe` targets remain direct argv launches.
-  Resolution excludes the mux shim directory, preventing recursive self-launch.
+  Resolution never returns a mux agent shim (identified by content marker, `shim_paths.py`):
+  a daemon relaunched from inside a session inherits the session's shim-first PATH, which
+  would otherwise wire `MUX_*_EXE` and account login/status commands back at the shim and
+  recurse shim → swe-mux.exe → shim, flashing a console window per cycle. The launcher
+  re-resolves a shim target to the real CLI and refuses to run it as a last resort. The
+  frozen windowed swe-mux.exe also attaches to the invoking shim's console and forwards
+  its std streams before spawning the agent, so children run in the caller's terminal
+  instead of fresh visible console windows.
 - Claude receives atomically generated per-session hook settings for `SessionStart`,
   `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
   `PermissionRequest`, `Notification`, `Stop`, and `SessionEnd`.
@@ -35,9 +48,13 @@
 - Claude executes hook commands through Bash even on Windows. Generated commands use
   Bash-safe executable paths (for example `/d/.../python.exe` under Git Bash/MSYS), are
   written by atomic replacement, and must never use raw Windows `list2cmdline` output.
-- Codex explicit spawn receives a `notify` program; resume uses `codex resume`. The Project Run
-  menu and custom launcher both use this same direct adapter spawn path; neither types an agent
-  command into an intermediate shell.
+- Codex explicit spawn receives a `notify` program; resume uses `codex resume`. Direct and
+  shim-launched Codex sessions default `tui.alternate_screen="never"` and
+  `tui.raw_output_mode=true`, keeping the transcript in native xterm scrollback instead of
+  asking its full-screen TUI to repaint history while the viewport is off-tail. An explicit
+  `codex_args` or per-launch config value wins for either key. The Project Run menu and custom
+  launcher both use this same direct adapter spawn path; neither types an agent command into an
+  intermediate shell.
 - Hooks provide low-latency state changes. Native transcripts are authoritative fallbacks,
   including when an agent is launched outside a shim or an agent mode omits a hook. Source
   priority arbitrates conflicting evidence within one root turn and is released at the next
@@ -67,6 +84,10 @@
 - If the observed transcript goes quiet while another transcript for the same run cwd is being
   actively written and is not owned by another live session, observation retargets to it
   (in-CLI `/resume` or new-conversation switches), re-entering historical catch-up.
+- Initial observation and fallback detection apply the same live ownership rule: provider/native
+  pairs and normalized transcript paths claimed by another live session are ineligible. Multiple
+  unclaimed candidates remain ambiguous and do not promote; newest-file mtime is not ownership
+  evidence.
 - Normalized lifecycle events carry `scope=root|subagent`. Claude sidechains and Agent/Task
   tool lifecycles, Codex `sub_agent_activity`, and Codex child rollouts are child evidence;
   none can make the root idle or ready.
@@ -89,7 +110,9 @@
   fallback above covers exits whose shim demotion never arrives.
 - Adapters own recent-transcript discovery and native-ID extraction. Codex matches the
   exact native ID when available and uses bounded cwd/time correlation only for new
-  sessions whose CLI chooses the native ID internally.
+  sessions whose CLI chooses the native ID internally. Daemon reattachment revalidates this
+  observational metadata against immutable root identity before it can drive provider-specific
+  status, tokens, context, history, resume, or frontend rendering.
 - Claude project directories use the CLI's current non-alphanumeric-to-hyphen cwd encoding.
   Codex reads the active `CODEX_HOME` (falling back to `~/.codex`). Child rollouts with
   `parent_thread_id` are excluded from promotion and external-history reconciliation.

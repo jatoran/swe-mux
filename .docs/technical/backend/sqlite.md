@@ -71,6 +71,10 @@ gets the same guarantee.
   then submit serialized batches.
 - Do not share a connection across worker threads or create feature-local database locks.
 - Schema migrations and retention jobs obey the same wrapper and transaction rules.
+- A proven session-identity repair may atomically delete that session's rebuildable
+  tool/compaction/coverage rows and reassign its retained process fingerprints. This remains an
+  operational-telemetry transaction through the shared coordinator; History does not mutate
+  another store's tables.
 
 ## Verification
 

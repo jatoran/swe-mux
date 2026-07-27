@@ -6,8 +6,13 @@
   layout revision, and default backend/profile. A deprecated resource-presentation field may
   still be loaded from older records but has no browser behavior.
 - `ProjectGroupRecord`: stable ID, name, and position. It has no behavioral ownership.
-- `SessionRecord.project_id`: immutable canonical Project ownership. `cwd`/`spawn_cwd` begin
-  at the Project root; validated runtime cwd remains telemetry.
+- `SessionRecord.project_id`: immutable canonical Project ownership. `cwd`/`spawn_cwd` default
+  to the Project root and may be a containment-checked subdirectory of it; validated runtime cwd
+  remains telemetry. `spawn_env` retains a task step's declared environment beside them, so a
+  relaunch reproduces the spawn even after a daemon restart adopts the record.
+- `SessionRecord.spawn_backend` and `spawn_native_session_id`: immutable root-process identity.
+  The compatibility `backend`/`native_session_id` pair may describe a promoted agent only when
+  the root is a shell.
 - Git `repository_id`, project scope, root, and repository group fields are derived metadata,
   separate from canonical Project ownership.
 
@@ -30,7 +35,8 @@
   review (`manual_usage | discarded`, timestamp); `quota_attributions` retains correlation
   estimates.
 - `context_compactions`, `tool_events`, and `transcript_telemetry_coverage`: deduplicated
-  explicit provider evidence plus versioned parser coverage.
+  explicit provider evidence plus versioned parser coverage. These are rebuildable for one
+  session after a proven identity repair; its process evidence is retained and re-attributed.
 - `tier0_facts`: deterministic no-model fact capture (file writes, commands, tests, git, tools)
   with `content_hash`, canonical `fingerprint`, and a `source_seq` pointer into the event log.
   Command text is never stored beyond bounded detail. Per-project opt-in and gated; see

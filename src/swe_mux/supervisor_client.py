@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .subprocess_flags import background_creation_flags
+from .subprocess_flags import background_creation_flags, popen_outside_job
 from .supervisor import (
     PROTOCOL_VERSION,
     discovery_path,
@@ -40,7 +40,11 @@ CONNECT_TIMEOUT_SECONDS = 3.0
 SPAWN_DEADLINE_SECONDS = 20.0
 RPC_TIMEOUT_SECONDS = 60.0
 META_FLUSH_DELAY_SECONDS = 0.5
-SUPERVISOR_LOG_NAME = "supervisor.log"
+# Console-output redirect (crash catcher) for a supervisor spawned by this
+# daemon. Distinct from supervisor.log, which the supervisor's own rotating
+# handler owns: the child inherits this redirect handle for its lifetime, so
+# rotation of the same file would never succeed.
+SUPERVISOR_LOG_NAME = "supervisor-console.log"
 
 
 class SupervisorUnavailable(RuntimeError):
@@ -315,8 +319,10 @@ class SupervisorClient:
             # never waited on here), so it does not block the loop. cwd is the
             # data dir (the supervisor also chdirs itself): inheriting a cwd
             # inside dist/ would lock the app tree against rebuilds for as long
-            # as the supervisor lives.
-            process = subprocess.Popen(  # noqa: ASYNC220
+            # as the supervisor lives. Breakaway spawn: a daemon relaunched from
+            # inside a session sits in that session's kill-on-close Job, and the
+            # supervisor must never inherit it — it outlives every session.
+            process = popen_outside_job(  # noqa: ASYNC220
                 command,
                 stdin=subprocess.DEVNULL,
                 stdout=log_file,

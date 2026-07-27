@@ -216,6 +216,8 @@ async def test_codex_demotes_by_stable_launcher_id_after_native_id_discovery(
     record = SessionRecord(
         "pty", "codex", "default", "codex", "codex-native", str(tmp_path), "pwsh", []
     )
+    record.spawn_backend = "shell"
+    record.spawn_native_session_id = record.id
     record.agent_run_id = "run"
     record.run_cwd = str(tmp_path)
     pty = SimpleNamespace(graceful_exit="", isalive=lambda: True)

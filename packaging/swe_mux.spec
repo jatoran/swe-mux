@@ -16,7 +16,7 @@ for package in ("PIL", "pystray", "webview", "winpty"):
     hiddenimports += package_hidden
 
 analysis = Analysis(
-    [str(ROOT / "desktop_entry.py"), str(ROOT / "action_entry.py")],
+    [str(ROOT / "desktop_entry.py")],
     pathex=[str(PROJECT / "src")],
     binaries=binaries,
     datas=datas,
@@ -29,13 +29,10 @@ analysis = Analysis(
     optimize=0,
 )
 pyz = PYZ(analysis.pure)
-runtime_scripts = analysis.scripts[:-2]
-desktop_scripts = runtime_scripts + analysis.scripts[-2:-1]
-action_scripts = runtime_scripts + analysis.scripts[-1:]
 
 executable = EXE(
     pyz,
-    desktop_scripts,
+    analysis.scripts,
     [],
     exclude_binaries=True,
     name="swe-mux",
@@ -52,28 +49,11 @@ executable = EXE(
     icon=str(ROOT / "swe-mux.ico"),
 )
 
-action_runner = EXE(
-    pyz,
-    action_scripts,
-    [],
-    exclude_binaries=True,
-    name="swe-mux-action",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    console=True,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=str(ROOT / "swe-mux.ico"),
-)
-
+# No second executable: Project Action steps are spawned by the supervisor as
+# ordinary shells, so nothing from this bundle runs inside a task terminal and a
+# live task cannot lock dist/swe-mux against a redeploy swap.
 bundle = COLLECT(
     executable,
-    action_runner,
     analysis.binaries,
     analysis.datas,
     strip=False,

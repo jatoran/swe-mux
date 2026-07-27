@@ -11,8 +11,11 @@ from pathlib import Path
 from aiohttp import web
 
 from .config import LOOPBACK_HOSTS, Config, load_config
+from .lifecycle import ledger
+from .logsetup import enable_crash_tracebacks, setup_daemon_logging
 from .server import create_app
 from .tailscale import enable_mobile_voice_serve, listener_hosts
+from .win_jobobj import process_in_job
 
 
 def parser() -> argparse.ArgumentParser:
@@ -161,12 +164,29 @@ def wait_for_port_free(host: str, port: int, timeout_seconds: float = 90.0) -> N
     )
 
 
+def _warn_if_inside_job(config: Config) -> None:
+    """Loud breadcrumb for the poisoned-launch state while the daemon is healthy.
+
+    A daemon inside a Job object was almost certainly (re)launched from a shell
+    inside a session; it will be silently terminated when that session's
+    kill-on-close Job goes down. Breakaway spawns prevent this for the standard
+    relaunch paths, so hitting it means an old Job (pre-BREAKAWAY_OK) or an
+    unusual launch route.
+    """
+    if not process_in_job():
+        return
+    message = (
+        "daemon is running inside a Windows Job object (launched from within a "
+        "session?); it may be terminated when that Job closes. Relaunch it from "
+        "the desktop app or a terminal outside swe-mux."
+    )
+    logging.getLogger(__name__).warning(message)
+    ledger(config.data_dir, f"daemon pid {os.getpid()}: {message}")
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     config, args = load_daemon_config(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.dev else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    setup_daemon_logging(config.data_dir, level="DEBUG" if args.dev else config.log_level)
     if args.shutdown:
         from .supervisor_client import kill_server
 
@@ -177,6 +197,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             else "No PTY supervisor is running for this config."
         )
         return
+    enable_crash_tracebacks(config.data_dir)
+    _warn_if_inside_job(config)
     if args.relaunch_wait:
         wait_for_port_free(config.host, config.port)
     token = os.environ.get("SWE_MUX_DESKTOP_CONTROL_TOKEN") or None

@@ -5,6 +5,8 @@ import {
   defaultMobileGestureSettings,
   GESTURE_SLOTS,
   mobileGestureSettings,
+  resolveGestureCommand,
+  swipeAwayCloseEnabled,
 } from '../src/mobileGestures.ts'
 
 test('single-finger horizontal swipes map to tab navigation slots', () => {
@@ -63,4 +65,37 @@ test('gesture settings fall back to opinionated defaults and accept overrides', 
   assert.equal(overridden.swipe_right, defaultMobileGestureSettings.swipe_right)
   assert.equal(GESTURE_SLOTS.length, 7)
   assert.equal(overridden.two_finger_swipe_down, defaultMobileGestureSettings.two_finger_swipe_down)
+})
+
+test('swipe-away override closes the open panel instead of running the binding', () => {
+  const closed = { sidebarOpen: false, drawerOpen: false }
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, closed, true), 'mobileTab.previous')
+  const drawer = { sidebarOpen: false, drawerOpen: true }
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, drawer, true), 'drawer.toggle')
+  assert.equal(resolveGestureCommand('two_finger_swipe_right', defaultMobileGestureSettings, drawer, true), 'drawer.toggle')
+  // Swipes toward an open panel keep their binding (the drawer's own toggle
+  // direction already closes it from over the scrim).
+  assert.equal(resolveGestureCommand('swipe_left', defaultMobileGestureSettings, drawer, true), 'mobileTab.next')
+  const sidebar = { sidebarOpen: true, drawerOpen: false }
+  assert.equal(resolveGestureCommand('swipe_left', defaultMobileGestureSettings, sidebar, true), 'sidebar.close')
+  assert.equal(resolveGestureCommand('two_finger_swipe_left', defaultMobileGestureSettings, sidebar, true), 'sidebar.close')
+  assert.equal(resolveGestureCommand('two_finger_swipe_right', defaultMobileGestureSettings, sidebar, true), 'sidebar.toggle')
+  // Non-horizontal slots are never overridden.
+  assert.equal(resolveGestureCommand('two_finger_tap', defaultMobileGestureSettings, drawer, true), 'palette.open')
+})
+
+test('swipe-away override covers unbound slots, prefers the drawer when both are open, and can be turned off', () => {
+  const drawer = { sidebarOpen: false, drawerOpen: true }
+  const unbound = { ...defaultMobileGestureSettings, swipe_right: '' }
+  assert.equal(resolveGestureCommand('swipe_right', unbound, drawer, true), 'drawer.toggle')
+  const both = { sidebarOpen: true, drawerOpen: true }
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, both, true), 'drawer.toggle')
+  assert.equal(resolveGestureCommand('swipe_left', defaultMobileGestureSettings, both, true), 'sidebar.close')
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, drawer, false), 'mobileTab.previous')
+})
+
+test('swipe-away close is on unless the config explicitly disables it', () => {
+  assert.equal(swipeAwayCloseEnabled({}), true)
+  assert.equal(swipeAwayCloseEnabled({ mobile_gesture_swipe_away_close: true }), true)
+  assert.equal(swipeAwayCloseEnabled({ mobile_gesture_swipe_away_close: false }), false)
 })

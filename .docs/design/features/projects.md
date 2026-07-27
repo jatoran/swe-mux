@@ -23,6 +23,18 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
 
 - The Projects manager lists every configured Project and is the only catalog-management UI.
   It can add, rename, group, open, show/hide, configure, and delete registrations.
+- It is also the **only per-Project editor**. Its detail pane has two tabs: `Details` (name,
+  folder, group, sidebar visibility, delete) and `Settings` (default backend, shell profile,
+  prompt-library scope, notification sounds, additive ignore patterns). Settings holds global
+  options exclusively and has no per-Project section; `Project settings…` on a Project's context
+  menu opens this registry preselected to that Project's Settings tab (`project.settings`).
+  Splitting these across two modals meant three doors to two overlapping surfaces, one of which
+  bounced the user back out to the other.
+- Both storage layers are edited in one form. A dual-layer field (backend, shell profile) shows
+  one control plus a `this device` / `repo` selector saying where the value is stored; writing a
+  value always clears the other layer, since a stale database override would silently outrank
+  the value just chosen. Repo-only fields carry a static `repo` chip. Users pick a value and a
+  home for it, never a layer to hunt through.
 - Hiding a Project removes it from desktop/mobile navigation and numeric Project shortcuts. It
   preserves the registration, `.swe-mux/` content, layout, history, settings, and live sessions.
 - The sidebar renders only visible Projects, ordered by Group and normalized Project position.
@@ -53,7 +65,12 @@ PATCH|DELETE /api/projects/{project_id}
 PUT /api/projects/order
 GET|POST /api/project-groups
 PATCH|DELETE /api/project-groups/{group_id}
+GET|PUT /api/project/config?cwd=<root>
 ```
+
+The registry reads and writes both layers directly: `PATCH /api/projects/{id}` for the database
+override (`default_backend`, `default_profile_id`, sent as `null` to clear) and revision-checked
+`PUT /api/project/config` for the portable file.
 
 Project layout writes are revision checked. Whole-order reorder writes are validated as a
 complete permutation of every registered Project ID and normalized transactionally.

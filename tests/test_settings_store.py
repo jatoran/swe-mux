@@ -46,6 +46,21 @@ def test_file_tree_domain_is_stored_opaquely(tmp_path: Path) -> None:
     assert store.all()["profiles"]["desktop"]["fileTree"] == payload
 
 
+def test_drawer_tab_domain_is_stored_opaquely(tmp_path: Path) -> None:
+    """The browser owns tab-order validation, so the daemon must not reshape the blob.
+
+    Order is stored server-side rather than in localStorage because it says which surfaces the
+    user reaches for, not anything about a device, so a phone should inherit a desktop's
+    arrangement. An unknown id here is the browser's problem to normalize, not a rejection.
+    """
+    store = SettingsStore(tmp_path)
+    payload = {"order": ["files", "notes", "clipboard", "commands", "prompts", "notifications"]}
+    store.update("desktop", {"drawerTabs": payload})
+    assert store.all()["profiles"]["desktop"]["drawerTabs"] == payload
+    store.update("desktop", {"drawerTabs": {"order": ["retired-tab"]}})
+    assert store.all()["profiles"]["desktop"]["drawerTabs"] == {"order": ["retired-tab"]}
+
+
 def test_update_persists_across_instances(tmp_path: Path) -> None:
     SettingsStore(tmp_path).update("desktop", {"sounds": {"volume": 0.2}})
     assert SettingsStore(tmp_path).all()["profiles"]["desktop"] == {"sounds": {"volume": 0.2}}

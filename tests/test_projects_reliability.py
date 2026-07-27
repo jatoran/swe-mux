@@ -64,9 +64,9 @@ async def test_project_note_seeding_never_overwrites_existing_text(tmp_path: Pat
     project = await projects.create("  Main   Repo  ", str(root))
     assert note.read_text(encoding="utf-8") == "existing text\n"
 
-    # A never-arranged Project stays structurally empty; the browser seeds its first
-    # layout on open, so revision 0 with an empty root stays the "untouched" signal.
-    assert project.layout == {"version": 6, "root": None}
+    # A new Project's workspace starts empty: Files and Notes live in the utility
+    # drawer, so there is nothing worth seeding a pane with.
+    assert project.layout == {"version": 7, "root": None}
     assert project.layout_revision == 0
 
     other = tmp_path / "second"
@@ -146,7 +146,7 @@ def test_recursive_layout_validates_splits_ratios_and_unique_resources() -> None
             },
         }
     )
-    assert layout["version"] == 6
+    assert layout["version"] == 7
     assert layout_terminal_ids(layout) == ["left"]
     assert layout["root"]["second"]["first"]["children"] == [
         {"type": "leaf", "kind": "note", "id": "notes"}
@@ -225,14 +225,92 @@ def test_visible_legacy_resource_workspace_migrates_into_an_adjacent_pane() -> N
             "note_workspace": {
                 "visible": True,
                 "open_ids": ["note:project-a", "files:project-a"],
-                "active_id": "files:project-a",
+                "active_id": "note:project-a",
                 "size": 0.4,
                 "mode": "popout",
             },
         }
     )
 
-    assert migrated["version"] == 6
+    assert migrated["version"] == 7
     assert migrated["root"]["type"] == "split"
     assert migrated["root"]["ratio"] == 0.6
-    assert migrated["root"]["second"]["active_child_id"] == "files:project-a"
+    # `files:project-a` is dropped on the way through: the Files browser is now the
+    # utility drawer's Files tab, not a leaf any pane can render.
+    assert migrated["root"]["second"]["children"] == [
+        {"type": "leaf", "kind": "note", "id": "note:project-a"}
+    ]
+    assert migrated["root"]["second"]["active_child_id"] == "note:project-a"
+
+
+def test_v6_files_leaves_are_pruned_rather_than_rejected() -> None:
+    """Files moved to the utility drawer, so a persisted `files:` leaf is dropped on read.
+
+    Pruning, not rejecting: a v6 layout is a user's real workspace and a stale client can
+    still PATCH one, and neither should fail — the Files browser still exists, just not as
+    a pane tab.
+    """
+    pruned = normalize_layout(
+        {
+            "version": 6,
+            "root": {
+                "type": "split",
+                "direction": "horizontal",
+                "ratio": 0.22,
+                "first": {
+                    "type": "stack",
+                    "id": "files-pane",
+                    "active_child_id": "files:project-a",
+                    "children": [{"type": "leaf", "kind": "note", "id": "files:project-a"}],
+                },
+                "second": {
+                    "type": "stack",
+                    "id": "note-pane",
+                    "active_child_id": "note:project-a",
+                    "children": [
+                        {"type": "leaf", "kind": "note", "id": "note:project-a"},
+                        {"type": "leaf", "kind": "terminal", "id": "terminal-a"},
+                    ],
+                },
+            },
+        }
+    )
+    # The pane that held only Files is gone, and the split collapsed into the survivor.
+    assert pruned["version"] == 7
+    assert pruned["root"]["type"] == "stack"
+    assert [child["id"] for child in pruned["root"]["children"]] == [
+        "note:project-a",
+        "terminal-a",
+    ]
+
+    # A Files tab sharing a pane leaves that pane standing, and the active tab moves off it.
+    shared = normalize_layout(
+        {
+            "version": 6,
+            "root": {
+                "type": "stack",
+                "id": "pane-a",
+                "active_child_id": "files:project-a",
+                "children": [
+                    {"type": "leaf", "kind": "terminal", "id": "terminal-a"},
+                    {"type": "leaf", "kind": "note", "id": "files:project-a"},
+                ],
+            },
+        }
+    )
+    assert layout_terminal_ids(shared) == ["terminal-a"]
+    assert shared["root"]["active_child_id"] == "terminal-a"
+
+    # A workspace whose only leaf was Files becomes the empty stage rather than an error.
+    emptied = normalize_layout(
+        {
+            "version": 6,
+            "root": {
+                "type": "stack",
+                "id": "pane-a",
+                "active_child_id": "files:project-a",
+                "children": [{"type": "leaf", "kind": "note", "id": "files:project-a"}],
+            },
+        }
+    )
+    assert emptied == {"version": 7, "root": None}

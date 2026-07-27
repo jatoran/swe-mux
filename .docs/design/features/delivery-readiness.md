@@ -24,6 +24,13 @@ Native hooks and transcripts normalize to root-scoped lifecycle/tool events or e
 subagent-scoped activity. Child stops never complete a root turn. Hook/transcript duplicates
 coalesce, while completion boundaries remain tied to a stable `agent_run_id`.
 
+Provider identity and transcript ownership are prerequisites for interpreting that evidence.
+Root-process provider identity is immutable; nested launcher hooks cannot replace it. A
+transcript/native pair claimed by another live session is rejected, and multiple unowned
+candidates remain unknown rather than being selected by recency. Adoption repairs legacy
+supervisor metadata before restarting observers, so sibling state, model, token, context, and
+delivery facts cannot become authoritative for the wrong session.
+
 The browser reports xterm's active `normal|alternate` buffer after input ownership, on buffer
 changes, and periodically. Terminal protocol responses are labeled separately and do not
 count as human input; keystrokes and bracketed paste advance an in-memory input revision.

@@ -64,6 +64,71 @@ async def test_nested_agent_history_keeps_the_owning_terminal_note_id(tmp_path: 
     history.close()
 
 
+async def test_identity_repair_quarantines_false_run_and_reopens_root(
+    tmp_path: Path,
+) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    root = agent("root", "codex", tmp_path)
+    await history.session_started(root, str(tmp_path / "root.jsonl"))
+    await history.session_ended(root, "incorrect_demotion")
+    false_run = agent("terminal", "claude", tmp_path)
+    false_run.agent_run_id = "false-run"
+    await history.session_promoted(false_run, str(tmp_path / "sibling.jsonl"))
+
+    await history.quarantine_misattributed_agent_run(
+        "false-run", "root_identity_reconciled"
+    )
+    await history.session_promoted(root, str(tmp_path / "root.jsonl"))
+    await history.reopen_agent_run(root.id)
+
+    assert [row["id"] for row in await history.history()] == ["root"]
+    quarantined = await history.history_entry("false-run")
+    assert quarantined is not None
+    assert quarantined["agent_visible"] == 0
+    assert quarantined["exit_reason"] == "root_identity_reconciled"
+    assert quarantined["transcript_path"] is None
+    reopened = await history.history_entry("root")
+    assert reopened is not None
+    assert reopened["exited_at"] is None
+    assert reopened["exit_reason"] is None
+    assert reopened["final_state"] is None
+    history.close()
+
+
+async def test_historical_provider_collision_is_repaired_after_session_exit(
+    tmp_path: Path,
+) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    root = agent("root", "codex", tmp_path)
+    root.exe = "node.exe"
+    root.args = [r"C:\npm\node_modules\@openai\codex\bin\codex.js"]
+    root.native_session_id = "codex-native"
+    await history.session_started(root, str(tmp_path / "codex.jsonl"))
+
+    sibling = agent("sibling", "claude", tmp_path)
+    sibling.native_session_id = "claude-native"
+    await history.session_started(sibling, str(tmp_path / "claude.jsonl"))
+
+    contaminated = agent("root", "claude", tmp_path)
+    contaminated.exe = root.exe
+    contaminated.args = root.args
+    contaminated.native_session_id = sibling.native_session_id
+    contaminated.agent_run_id = "false-run"
+    await history.session_promoted(contaminated, str(tmp_path / "claude.jsonl"))
+
+    assert await history.reconcile_historical_provider_collisions() == [
+        ("root", "false-run", "root")
+    ]
+    assert {row["id"] for row in await history.history()} == {"root", "sibling"}
+    false_row = await history.history_entry("false-run")
+    assert false_row is not None
+    assert false_row["agent_visible"] == 0
+    assert false_row["exit_reason"] == "historical_provider_collision_reconciled"
+    assert false_row["transcript_path"] is None
+    assert await history.reconcile_historical_provider_collisions() == []
+    history.close()
+
+
 async def test_history_filters_pages_context_and_safe_deletion(tmp_path: Path) -> None:
     history = HistoryIndex(tmp_path / "mux.db")
     transcript = tmp_path / "native.jsonl"

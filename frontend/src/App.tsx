@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
 import { api, openWebSocket } from './api'
+import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness } from './liveness'
 import { TerminalPane } from './TerminalPane'
 import type { TerminalRendererPreference } from './terminalRenderer'
 import { ProjectResource } from './ProjectResource'
+import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentTarget } from './SendToAgentPicker'
+import { argvPrompt, pastePayload, SUBMIT_SEQUENCE } from './noteSelection'
 import { ContinuityBanner } from './ContinuityBanner'
 import { DirectoryPicker } from './DirectoryPicker'
 import { folderNameFromPath } from './pathNames'
 import { ProcessPanel, type FleetSnapshot, type Preview, type ProcessItem } from './ProcessPanel'
 import { ResourceUsageSummary } from './ResourceUsage'
-import { ProjectsManager } from './ProjectsManager'
+import { ProjectsManager, type ProjectPatch, type ProjectsManagerTab } from './ProjectsManager'
+import { MenuGroup } from './MenuGroup'
 import { detectedServers, type DetectedServer } from './sessionProcesses'
 import { PreviewPane } from './PreviewPane'
 import { Observations } from './Observations'
@@ -21,19 +25,24 @@ import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
 import { UtilityDrawer } from './UtilityDrawer'
 import {
-  DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY, clampDrawerWidth, parseDrawerTab, storedDrawerWidth,
+  DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY, clampDrawerWidth, drawerTab, parseDrawerTab, storedDrawerWidth,
   type DrawerTabId,
 } from './drawerTabs'
+import {
+  isDefaultDrawerTabOrder, normalizeDrawerTabOrder, orderedDrawerTabs as orderedTabsFor,
+  sameDrawerTabOrder, DEFAULT_DRAWER_TAB_ORDER,
+} from './drawerTabOrder'
+import { DRAWER_TAB_ICONS } from './railIcons'
 import { CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture } from './clipboardHistory'
 import { insertIntoFocusedSurface } from './insertTarget'
-import { SessionNotesBrowser, type SessionNoteSummary } from './SessionNotesBrowser'
+import type { SessionNoteSummary } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
 import { VoicePlayer } from './VoicePlayer'
 import { ConversationControl } from './ConversationControl'
 import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, unlockPlayback } from './voice'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
-import { currentProfile, loadSettings, refreshSettings } from './deviceSettings'
+import { currentProfile, loadDrawerTabOrder, loadSettings, refreshSettings, saveDrawerTabOrder } from './deviceSettings'
 import { initPush } from './push'
 import type { Project, ProjectGroup, Session, ShellProfile, VoiceClip, VoiceMode, VoiceStatus } from './types'
 import { keyChord } from './keys'
@@ -41,6 +50,7 @@ import { Settings } from './Settings'
 import { GuidedTutorial, type TutorialStepId } from './GuidedTutorial'
 import { completeTutorial, emitTutorialAction, resetTutorial, shouldStartTutorial } from './tutorial'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
+import { applyNoteEditorConfig } from './noteEditorSettings'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command } from './commands'
 import { copyPreparedText } from './terminalClipboard'
 import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from './fileClipboard'
@@ -48,9 +58,9 @@ import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { MOBILE_TAB_ORDER_KEY, moveMobileTab, parseMobileTabOrder, pruneMobileTabOrder, serializeMobileTabOrder, type MobileTabOrder } from './mobileTabOrder'
-import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, type MobileGestureSettings } from './mobileGestures'
+import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
-import { reorderForHover, reorderTargetFromContainer, type DropSide } from './dragReorder'
+import { reorderForHover, reorderTargetFromContainer, type DropSide, type ReorderAxis } from './dragReorder'
 import {
   COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
   projectInitials, projectOpenWork, serializeCollapsedProjects, toggleCollapsed,
@@ -58,11 +68,15 @@ import {
 import { reconcileSeen, isUnread, projectRailStatus, type ProjectRailActivity, type SeenMap } from './sessionAttention'
 import { sessionStatus, stateDotClass } from './sessionStatus'
 import {
-  browserUuid, defaultProjectLayout, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf,
+  browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
-  activateContainingStack, activateStackChild, addLeafToStack, addToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, openAnchorId, openTab, paneNeighborIds, paneStacks, placeCompanionLeaf, reorderStack, resolveLayout, spawnAnchorId, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
+  activateContainingStack, activateStackChild, addLeafToStack, addToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, openAnchorId, openTab, paneNeighborIds, paneStacks, reorderStack, resolveLayout, spawnAnchorId, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
   type PaneDirection, type PaneLeaf, type PaneLeafKind, type PaneNode, type SplitDirection,
 } from './layout'
+
+// Gap between writing a pasted body into an agent composer and pressing Enter on it. Short
+// enough to feel immediate, long enough that a multi-line paste has been laid out first.
+const AGENT_SUBMIT_DELAY_MS=180
 
 const paneDirectionOptions:Array<{id:PaneDirection;glyph:string;direction:SplitDirection;position:'before'|'after'}>=[
   {id:'left',glyph:'←',direction:'horizontal',position:'before'},
@@ -112,7 +126,7 @@ type SidebarContext = { x:number;y:number } | null
 type NoteContext = { resourceId:string;projectId:string;x:number;y:number } | null
 type TabContext = { leaf:PaneLeaf;label:string;projectId:string;x:number;y:number;source:'tab'|'mobile' } | null
 type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; project: Project }
-type NoteTarget={projectId:string;terminalSessionId:string|null;kind:'note'|'session-note'|'files'|'file';ownerLabel:string}
+type NoteTarget={projectId:string;terminalSessionId:string|null;kind:'note'|'session-note'|'file';ownerLabel:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
 type PendingSpawnPlacement = {
@@ -210,6 +224,9 @@ export function App() {
   const [promptScope,setPromptScope]=useState<Project|null>(null)
   const [reviewState,setReviewState]=useState<ReviewState|null>(null)
   const [handoffState,setHandoffState]=useState<HandoffState|null>(null)
+  // A note/markdown selection waiting for a target. The message is captured when the dialog
+  // opens, so editing the document underneath cannot change what is about to be sent.
+  const [sendToAgent,setSendToAgent]=useState<SendToAgentRequest|null>(null)
   const [contextMenu, setContextMenu] = useState<ContextState>(null)
   const [projectMenu, setProjectMenu] = useState<ProjectContext>(null)
   const [sidebarMenu,setSidebarMenu]=useState<SidebarContext>(null)
@@ -238,13 +255,20 @@ export function App() {
   const [projectCreate,setProjectCreate]=useState<{name:string;root:string;group_id:string}>({name:'',root:'',group_id:''})
   const [projectCreateOpen,setProjectCreateOpen]=useState(false)
   const [projectsManagerOpen,setProjectsManagerOpen]=useState(false)
+  // Which Project the registry should land on, and whether on its record or its
+  // settings. Projects is the only per-Project editor, so every "project settings"
+  // entry point is a preselection of it rather than a second surface.
+  const [projectsManagerFocus,setProjectsManagerFocus]=useState<{projectId:string;tab:ProjectsManagerTab}|null>(null)
   // null closed; a string scopes the browser to one project, '' shows every project.
-  const [sessionNotesScope,setSessionNotesScope]=useState<string|null>(null)
+  // The Notes drawer tab lists the active Project by default; the app menu's unscoped
+  // entry point flips it to every Project. Device-local UI state, not a modal.
+  const [notesAllProjects,setNotesAllProjects]=useState(false)
   const [folderPickerOpen,setFolderPickerOpen]=useState(false)
   const [groupEdit,setGroupEdit]=useState<{id?:string;name:string}|null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState('General')
-  const [settingsCwd,setSettingsCwd]=useState<string|null>(null)
+  // Which MenuGroup is expanded in the app menu; null collapses every group.
+  const [menuGroup,setMenuGroup]=useState<string|null>(null)
   const [tutorialOpen,setTutorialOpen]=useState(()=>shouldStartTutorial())
   const [processSession, setProcessSession] = useState<Session | null>(null)
   const [processViewerOpen,setProcessViewerOpen]=useState(false)
@@ -271,7 +295,9 @@ export function App() {
   const setDragStackTab=(next:StackTabDrag|null)=>{dragStackTabRef.current=next;setDragStackTabState(next)}
   const previewDragStackTab=(next:StackTabDrag)=>{dragStackTabRef.current=next}
   const [promptLibraryOpen,setPromptLibraryOpen]=useState(false)
-  const [observationsOpen,setObservationsOpen]=useState(false)
+  // The inbox is per-Project, so it carries its Project rather than following the
+  // active one — it opens from a Project's own context menu.
+  const [observationsProject,setObservationsProject]=useState<Project|null>(null)
   // The utility drawer: open state, which tab, and (desktop) the docked column's
   // width. All three are device-local UI preferences, like sidebar width, so the
   // drawer reopens where you left it on this device.
@@ -281,11 +307,20 @@ export function App() {
   // inject yet, so it hands the template to the Prompts tab to be filled in.
   const [promptPreselect,setPromptPreselect]=useState<{key:string}|undefined>()
   const [drawerWidth,setDrawerWidth]=useState(()=>storedDrawerWidth(localStorage.getItem(DRAWER_WIDTH_KEY)))
+  // The drawer's tab arrangement. Unlike width and last-used tab (localStorage, genuinely
+  // per-device) this is server-persisted, so a phone inherits what a desktop arranged.
+  const [drawerOrder,setDrawerOrder]=useState<DrawerTabId[]>(()=>normalizeDrawerTabOrder(loadDrawerTabOrder()))
+  const [dragDrawerTab,setDragDrawerTab]=useState<DrawerTabId|null>(null)
+  const dragDrawerOrderRef=useRef<DrawerTabId[]|null>(null)
+  const drawerOrderRef=useRef(drawerOrder)
+  drawerOrderRef.current=drawerOrder
+  const orderedDrawerTabs=useMemo(()=>orderedTabsFor(drawerOrder),[drawerOrder])
   const [clipboardEnabled,setClipboardEnabled]=useState(true)
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [terminalRenderer, setTerminalRenderer] = useState<TerminalRendererPreference>('auto')
   const [mobileInput, setMobileInput] = useState<MobileInputSettings>(defaultMobileInputSettings)
   const [mobileGestures, setMobileGestures] = useState<MobileGestureSettings>(defaultMobileGestureSettings)
+  const [swipeAwayClose, setSwipeAwayClose] = useState(true)
   const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
   // On a phone the navigation sidebar and the clipboard panel are both full-height
   // drawers over the workspace, entering from opposite edges. Two open at once leave
@@ -308,11 +343,69 @@ export function App() {
     localStorage.setItem(DRAWER_TAB_KEY,tab)
     setDrawerTabId(tab)
     setClipboardOpen(!(clipboardOpen&&drawerTabId===tab))
+    // Reaching Notes from the rail, the tab strip, or `drawer.notes` says nothing about scope,
+    // so it means "this Project" — the drawer sits beside that Project's workspace. Only the
+    // app menu's deliberately unscoped `notes.browse` widens it, and it goes through
+    // `openNotesBrowser`, which sets the scope after this and is not on this path.
+    if(tab==='notes')setNotesAllProjects(false)
+    setMainMenuOpen(false);setProjectMenu(null);setContextMenu(null)
+  }
+  /** Same, but never toggling shut. A menu row or chip that names a surface ("Browse
+   *  files…", "Session notes…") has already said "show me this"; closing the drawer on
+   *  it is perverse, and worse when the click also switched Project — the panel would
+   *  vanish instead of retargeting. */
+  const openDrawerTab=(tab:DrawerTabId)=>{
+    localStorage.setItem(DRAWER_TAB_KEY,tab)
+    setDrawerTabId(tab)
+    setClipboardOpen(true)
     setMainMenuOpen(false);setProjectMenu(null);setContextMenu(null)
   }
   const persistDrawerWidth=(value:number)=>{
     const next=clampDrawerWidth(value)
     setDrawerWidth(next);localStorage.setItem(DRAWER_WIDTH_KEY,String(Math.round(next)))
+  }
+  // Optimistic like every other settings write: `saveDrawerTabOrder` updates the shared cache
+  // before its PUT, so the adopt listener below reads back what we just set rather than
+  // fighting it. A failed PUT surfaces rather than silently reverting the strip under a cursor.
+  const commitDrawerTabOrder=async(nextIds:string[])=>{
+    const normalized=normalizeDrawerTabOrder(nextIds)
+    if(sameDrawerTabOrder(normalized,drawerOrderRef.current))return
+    setDrawerOrder(normalized)
+    try{await saveDrawerTabOrder(normalized)}
+    catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+  }
+  const resetDrawerTabOrder=()=>{setMainMenuOpen(false);void commitDrawerTabOrder(DEFAULT_DRAWER_TAB_ORDER)}
+  // Adopt the persisted order when the settings cache first loads and whenever another device
+  // edits it. Both arrive as the same event, and both are just "the stored order changed".
+  useEffect(()=>{
+    const adopt=()=>{
+      const next=normalizeDrawerTabOrder(loadDrawerTabOrder())
+      setDrawerOrder(current=>sameDrawerTabOrder(next,current)?current:next)
+    }
+    window.addEventListener('mux:settings-changed',adopt)
+    return()=>window.removeEventListener('mux:settings-changed',adopt)
+  },[])
+  /** Drag a drawer tab to rearrange it, from either the strip (horizontal) or the rail
+   *  (vertical). One handler for both: they render one order, so they reorder one list.
+   *  Follows the app's pointer-drag contract — no native DnD, refs and one DOM attribute
+   *  during the move, commit on pointer-up. */
+  const beginDrawerTabDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,id:DrawerTabId)=>{
+    const container=event.currentTarget.closest<HTMLElement>('.drawer-tabs,.utility-rail')
+    const axis:ReorderAxis=container?.classList.contains('utility-rail')?'vertical':'horizontal'
+    beginPointerDrag(event,drawerTab(id).label,`drawer-tab:${id}`,
+      ()=>{cancelLongPress();dragDrawerOrderRef.current=drawerOrderRef.current;setDragDrawerTab(id)},
+      pointer=>{
+        const current=dragDrawerOrderRef.current
+        if(!current||!container){showPointerDropIndicator(null);return}
+        const target=reorderTargetFromContainer(container,id,axis,axis==='horizontal'?pointer.clientX:pointer.clientY)
+        if(!target){showPointerDropIndicator(null);return}
+        dragDrawerOrderRef.current=reorderForHover(current,id,target.id,target.side) as DrawerTabId[]
+        const element=Array.from(container.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).find(item=>item.dataset.reorderId===target.id)||null
+        showPointerDropIndicator(element,`insert-${target.side}`)
+      },
+      ()=>{const next=dragDrawerOrderRef.current;dragDrawerOrderRef.current=null;setDragDrawerTab(null);if(next)void commitDrawerTabOrder(next)},
+      ()=>{dragDrawerOrderRef.current=null;setDragDrawerTab(null)},
+    )
   }
   // Mirrors the sidebar resizer, mirrored: dragging left widens the dock. Every
   // width change reflows the pane tree and refits its terminals, which is why the
@@ -412,6 +505,9 @@ export function App() {
   // When the Run menu's scrim dismissed it, so the trigger's own click can tell
   // "reopen" from "the closing half of a toggle tap".
   const runMenuClosedAt = useRef(0)
+  // Set when an outside pointer-down closed a context menu, so the menu's focus
+  // teardown knows not to reclaim focus from whatever that pointer landed on.
+  const menuDismissedByPointer = useRef(false)
   const notificationIds = useRef<Set<string>>(new Set())
   const paletteInput = useRef<HTMLInputElement>(null)
   const refreshInFlight = useRef<Promise<void> | null>(null)
@@ -421,7 +517,6 @@ export function App() {
   const layoutRevisions = useRef<Record<string,number>>({})
   const layoutWriteChains = useRef<Record<string,Promise<boolean>>>({})
   const layoutWriteGeneration = useRef<Record<string,number>>({})
-  const seededLayouts = useRef<Set<string>>(new Set())
   const requestedView = useRef(parseViewPreference(location.search))
   const focusMemory = useRef(parseFocusMemory(localStorage.getItem('mux.focus.v1')))
   const [focusHydrated,setFocusHydrated]=useState(false)
@@ -540,7 +635,7 @@ export function App() {
 
   useEffect(() => {
     void refresh()
-    void api<{theme:ThemeName;custom_theme:CustomTheme;xterm_scrollback_lines:number;terminal_renderer:TerminalRendererPreference}&Record<string,unknown>>('GET','/api/config').then(config => { configureCustomTheme(config.custom_theme); applyTheme(config.theme); setXtermScrollback(config.xterm_scrollback_lines);setTerminalRenderer(config.terminal_renderer);setMobileInput(mobileInputSettings(config));setMobileGestures(mobileGestureSettings(config));setClipboardEnabled(config.clipboard_history_enabled!==false) })
+    void api<{theme:ThemeName;custom_theme:CustomTheme;xterm_scrollback_lines:number;terminal_renderer:TerminalRendererPreference}&Record<string,unknown>>('GET','/api/config').then(config => { configureCustomTheme(config.custom_theme); applyTheme(config.theme); applyNoteEditorConfig(config); setXtermScrollback(config.xterm_scrollback_lines);setTerminalRenderer(config.terminal_renderer);setMobileInput(mobileInputSettings(config));setMobileGestures(mobileGestureSettings(config));setSwipeAwayClose(swipeAwayCloseEnabled(config));setClipboardEnabled(config.clipboard_history_enabled!==false) })
     void loadProfiles()
     void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>setVoiceStatus(null))
     void loadNotifications()
@@ -638,7 +733,13 @@ export function App() {
     let socket: WebSocket | null = null
     let retry: number | undefined
     let refreshTimer: number | undefined
-    let hiddenAt: number | null = document.hidden ? Date.now() : null
+    // Attempt bookkeeping for the liveness watcher (see liveness.ts): a handshake started
+    // while a dormant PWA wakes can hang without ever failing, and the backoff timer that
+    // should retry it may have been frozen along with the page.
+    let attemptStartedAt: number | null = null
+    let nextAttemptAt: number | null = null
+    let handshakeTimer: number | undefined
+    let attempt = 0
     const queueRefresh = () => {
       if (refreshTimer !== undefined) return
       refreshTimer = window.setTimeout(() => {
@@ -646,11 +747,45 @@ export function App() {
         void refresh()
       }, 100)
     }
+    const clearHandshakeWatchdog = () => {
+      if (handshakeTimer === undefined) return
+      window.clearTimeout(handshakeTimer)
+      handshakeTimer = undefined
+    }
+    const scheduleRetry = () => {
+      if (retry !== undefined) return
+      const delay = retryDelay(attempt)
+      attempt += 1
+      nextAttemptAt = Date.now() + delay
+      retry = window.setTimeout(() => { retry = undefined; nextAttemptAt = null; connect() }, delay)
+    }
     const connect = () => {
       if(retry){clearTimeout(retry);retry=undefined}
-      socket = openWebSocket('/events')
-      socket.onopen = () => window.dispatchEvent(new CustomEvent('mux:events-connected'))
-      socket.onmessage = message => {
+      nextAttemptAt = null
+      clearHandshakeWatchdog()
+      attemptStartedAt = Date.now()
+      let next: WebSocket
+      // Constructing a socket can throw outright (no route, blocked scheme). That must feed
+      // the retry path rather than escape into the caller's timer.
+      try { next = openWebSocket('/events') } catch { socket = null; scheduleRetry(); return }
+      socket = next
+      handshakeTimer = window.setTimeout(() => {
+        handshakeTimer = undefined
+        if (socket !== next || next.readyState === WebSocket.OPEN) return
+        next.onclose = null; next.onerror = null; next.onmessage = null
+        try { next.close() } catch { /* already tearing down */ }
+        socket = null
+        scheduleRetry()
+      }, HANDSHAKE_TIMEOUT_MS)
+      next.onopen = () => {
+        if (socket !== next) return
+        clearHandshakeWatchdog()
+        attempt = 0
+        window.dispatchEvent(new CustomEvent('mux:events-connected'))
+      }
+      next.onerror = () => { if (socket === next) next.close() }
+      next.onmessage = message => {
+        if (socket !== next) return
         queueRefresh()
         try {
           const event = JSON.parse(String(message.data))
@@ -681,31 +816,31 @@ export function App() {
             void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>{})
             // Clipboard capture is gated client-side, so a change made from another
             // device (or the config file) has to reach this tab's gate too.
-            void api<Record<string,unknown>>('GET','/api/config').then(config=>{setClipboardEnabled(config.clipboard_history_enabled!==false);setMobileGestures(mobileGestureSettings(config))}).catch(()=>{})
+            void api<Record<string,unknown>>('GET','/api/config').then(config=>{setClipboardEnabled(config.clipboard_history_enabled!==false);setMobileGestures(mobileGestureSettings(config));setSwipeAwayClose(swipeAwayCloseEnabled(config))}).catch(()=>{})
           }
           if(event.type==='project_files_changed')window.dispatchEvent(new CustomEvent('mux:project-files-changed',{detail:{projectId:event.payload?.project_id,paths:event.payload?.paths||[]}}))
           if(event.type==='project_note_changed'||event.type==='session_note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{projectId:String(event.payload?.project_id||''),kind:event.type==='session_note_changed'?'session-note':'note',noteId:event.type==='session_note_changed'?String(event.payload?.note_id||''):null,revision:String(event.payload?.revision||'')}}))
         } catch { /* malformed events are ignored */ }
       }
-      socket.onclose = () => { retry = window.setTimeout(connect, 1500) }
+      next.onclose = () => { if (socket !== next) return; socket = null; scheduleRetry() }
     }
     const reconnect = () => {
-      if(socket&&(socket.readyState===WebSocket.OPEN||socket.readyState===WebSocket.CONNECTING)){socket.onclose=null;socket.close()}
+      clearHandshakeWatchdog()
+      if(socket){socket.onclose=null;socket.onerror=null;socket.onmessage=null;socket.close();socket=null}
+      attempt = 0
       connect()
+      // The socket only carries changes, so a stream that was dead for a while leaves the
+      // REST-backed state stale too; refresh alongside the fresh attach.
+      queueRefresh()
     }
-    const onVisibility = () => {
-      if(document.hidden){hiddenAt=Date.now();return}
-      const slept=hiddenAt!==null&&Date.now()-hiddenAt>5000
-      hiddenAt=null
-      if(slept||!socket||socket.readyState!==WebSocket.OPEN)reconnect()
-    }
-    const onPageShow = (event:PageTransitionEvent) => { if(event.persisted)reconnect() }
-    const onOnline = () => { if(!socket||socket.readyState!==WebSocket.OPEN)reconnect() }
     connect()
-    document.addEventListener('visibilitychange',onVisibility)
-    window.addEventListener('pageshow',onPageShow)
-    window.addEventListener('online',onOnline)
-    return () => { if (retry) clearTimeout(retry); if(refreshTimer)clearTimeout(refreshTimer);if(socket){socket.onclose=null;socket.close()}document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('online',onOnline) }
+    const stopLivenessWatch = watchLiveness({
+      phase: () => socket ? (socket.readyState === WebSocket.OPEN ? 'open' : socket.readyState === WebSocket.CONNECTING ? 'connecting' : 'closed') : 'closed',
+      attemptStartedAt: () => attemptStartedAt,
+      nextAttemptAt: () => nextAttemptAt,
+      reconnect,
+    })
+    return () => { stopLivenessWatch(); clearHandshakeWatchdog(); if (retry) clearTimeout(retry); if(refreshTimer)clearTimeout(refreshTimer);if(socket){socket.onclose=null;socket.close()} }
   }, [])
 
   useEffect(()=>{if(!notificationToast)return;const timer=window.setTimeout(()=>setNotificationToast(null),5000);return()=>clearTimeout(timer)},[notificationToast])
@@ -809,7 +944,9 @@ export function App() {
       }))
     }
   }, [focusHydrated,sessions, projectId, activeId, focusedViewId, zoomedId, layoutMap])
-  const openSettings = (section='General',cwdOverride?:string) => { setSettingsSection(section);setSettingsCwd(cwdOverride||null); setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null) }
+  // Settings is global-only. Anything scoped to one Project lives in the Projects
+  // registry (`openProjectsManager`), which is the single per-Project editor.
+  const openSettings = (section='General') => { setSettingsSection(section); setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null) }
   const projectNoteTarget=(value:Project|Session):NoteTarget=>{
     const project='root' in value?value:projects.find(item=>item.id===value.project_id)
     return {projectId:project?.id||value.id,terminalSessionId:'backend' in value&&!isEndedSession(value)?value.id:null,kind:'note',ownerLabel:project?.name||'Project note'}
@@ -835,19 +972,26 @@ export function App() {
     if(!entry.project_id||!entry.note_id){setError('This historical session is not linked to a Project note owner.');return}
     void initializeAndOpenSessionNote({projectId:entry.project_id,terminalSessionId:null,kind:'session-note',ownerLabel:entry.note_id})
   }
-  // The browser lists notes from disk, so an owner may be long gone. Route through
+  // The Notes tab lists notes from disk, so an owner may be long gone. Route through
   // the same initialize-then-open path: initialization is idempotent and keeps a
   // note whose file was removed underneath the listing from opening onto nothing.
-  const openBrowsedSessionNote=(note:SessionNoteSummary)=>{
-    setSessionNotesScope(null)
+  const openBrowsedSessionNote=(targetProject:string,noteId:string)=>{
     void initializeAndOpenSessionNote({
-      projectId:note.project_id,
-      terminalSessionId:sessions.some(item=>item.id===note.note_id&&!isEndedSession(item))?note.note_id:null,
+      projectId:targetProject,
+      terminalSessionId:sessions.some(item=>item.id===noteId&&!isEndedSession(item))?noteId:null,
       kind:'session-note',
-      ownerLabel:note.note_id,
+      ownerLabel:noteId,
     })
   }
-  const openProjectFiles=(project:Project)=>openNoteDefault({projectId:project.id,terminalSessionId:null,kind:'files',ownerLabel:project.id})
+  // Files is a drawer tab, not a pane tab: it is a navigator that opens documents into
+  // the workspace, so it costs a panel rather than a permanent tab. Its view follows the
+  // active Project, which is why every entry point selects that Project first.
+  const openProjectFiles=(project:Project)=>{setProjectId(project.id);openDrawerTab('files')}
+  const openNotesBrowser=(scope:Project|null)=>{
+    if(scope)setProjectId(scope.id)
+    setNotesAllProjects(!scope)
+    openDrawerTab('notes')
+  }
   const openProjectFile=(project:Project,path:string,targetViewId?:string)=>void showResourceForTarget({projectId:project.id,terminalSessionId:null,kind:'file',ownerLabel:path},targetViewId)
   // Notifications are a drawer tab, not a modal: checking what fired should not be
   // a full-screen interruption. Opening the tab is what marks them read.
@@ -932,6 +1076,10 @@ export function App() {
     )
   }
 
+  // A MenuGroup left expanded would reopen with the menu next time; the app menu is
+  // dismissed from a dozen places, so collapse from its state rather than each one.
+  useEffect(() => { if (!mainMenuOpen) setMenuGroup(null) }, [mainMenuOpen])
+
   useEffect(() => {
     if (!contextMenu && !projectMenu && !sidebarMenu && !noteMenu && !tabMenu && !emptyMenu && !mainMenuOpen && !renameTarget) return
     const dismissEscape = (event: KeyboardEvent) => {
@@ -954,6 +1102,7 @@ export function App() {
   useEffect(() => {
     if (!contextMenu && !projectMenu && !sidebarMenu && !noteMenu && !tabMenu && !emptyMenu && !mainMenuOpen) return
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    menuDismissedByPointer.current = false
     const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>('.context-menu button:not(:disabled)')?.focus())
     const navigate = (event: KeyboardEvent) => {
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
@@ -966,7 +1115,19 @@ export function App() {
       buttons[next].focus()
     }
     window.addEventListener('keydown', navigate, true)
-    return () => { cancelAnimationFrame(frame); window.removeEventListener('keydown', navigate, true); previous?.focus() }
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', navigate, true)
+      // Return focus only on the keyboard path (Escape, or activating an item),
+      // where landing back where you were is what you want. Preact runs this
+      // cleanup after the dismissing click has fully settled, so reclaiming focus
+      // unconditionally yanked it off whatever the user had just clicked and sent
+      // their next keystrokes to the menu's old trigger instead.
+      const active = document.activeElement
+      const claimed = menuDismissedByPointer.current || (!!active && active !== document.body)
+      menuDismissedByPointer.current = false
+      if (!claimed) previous?.focus()
+    }
   }, [contextMenu, projectMenu, sidebarMenu, noteMenu, tabMenu, emptyMenu, mainMenuOpen])
 
   useEffect(() => {
@@ -977,7 +1138,11 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [confirmKillId])
 
-  const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after', backend:'shell'|'claude'|'codex'='shell') => {
+  // `options.argv` seeds an agent with a first prompt through the CLI's own argv, the same way
+  // the cross-vendor review spawn does. That is deliberately not an inject-then-Enter dance: a
+  // freshly spawned TUI is not ready for input for seconds, and anything written before it is
+  // would be swallowed.
+  const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after', backend:'shell'|'claude'|'codex'='shell', options?:{argv?:string[]}) => {
     if (spawning.current) return
     const target=projectsRef.current.find(item=>item.id===targetProject)
     if(!target){setError('Project is not available yet.');return}
@@ -1008,6 +1173,7 @@ export function App() {
       const next = await api<Session>('POST', '/api/sessions', {
         backend, project_id: targetProject,
         profile_id: backend==='shell' ? profileId || undefined : undefined,
+        ...(options?.argv?.length ? { argv: options.argv } : {}),
       })
       startupOrigins.current[next.id]=startupOrigin
       const browserTiming={api_response:performance.now()-startupOrigin}
@@ -1098,7 +1264,8 @@ export function App() {
     setProjectCreateOpen(true)
   }
 
-  const openProjectsManager=()=>{
+  const openProjectsManager=(focus?:{project:Project;tab?:ProjectsManagerTab})=>{
+    setProjectsManagerFocus(focus?{projectId:focus.project.id,tab:focus.tab||'details'}:null)
     setProjectsManagerOpen(true);setMainMenuOpen(false);setSidebarMenu(null);setProjectMenu(null)
   }
 
@@ -1129,7 +1296,7 @@ export function App() {
       setProjectCreateOpen(false);setFolderPickerOpen(false);setProjectsManagerOpen(false);openSettings('Accounts');return
     }
     if(['run','run-choice','workspace','new-tab','tabs','splits','resources','features','feature-menu','ready'].includes(step)){
-      setSettingsOpen(false);setSettingsCwd(null);setProjectsManagerOpen(false);setProjectCreateOpen(false);setFolderPickerOpen(false)
+      setSettingsOpen(false);setProjectsManagerOpen(false);setProjectCreateOpen(false);setFolderPickerOpen(false)
       const first=projectsRef.current[0]
       if(first&&!projectsRef.current.some(project=>project.id===projectId))setProjectId(first.id)
       if(mobileWorkspace&&(step==='resources'||step==='features'||step==='feature-menu'))setSidebarOpen(true)
@@ -1210,7 +1377,7 @@ export function App() {
     if (projectId === project.id) setProjectId(projects.find(item=>item.id!==project.id)?.id||'')
   }
 
-  const patchManagedProject=async(project:Project,changes:Partial<Pick<Project,'name'|'group_id'|'sidebar_visible'>>)=>{
+  const patchManagedProject=async(project:Project,changes:ProjectPatch)=>{
     const updated=await api<Project>('PATCH',`/api/projects/${project.id}`,changes)
     setProjects(items=>items.map(item=>item.id===updated.id?updated:item))
     if(changes.sidebar_visible===false&&projectId===project.id){
@@ -1349,39 +1516,23 @@ export function App() {
     return persisted
   }
 
-  // A Project's first open seeds Files beside its Project note instead of a bare stage.
-  // Revision 0 with a null root is the only state that means "never arranged", so a user
-  // who later closes every pane keeps their empty workspace rather than being re-seeded.
-  // Neither leaf spawns anything; the note's pane is simply where the first terminal lands.
-  useEffect(()=>{
-    if(!focusHydrated||!activeProject||activeLayout.root)return
-    const project=activeProject
-    if(seededLayouts.current.has(project.id))return
-    if((layoutRevisions.current[project.id]??project.layout_revision)!==0)return
-    seededLayouts.current.add(project.id)
-    setFocusedViewId(noteResourceId('note',project.id))
-    void updateLayout(project.id,defaultProjectLayout(project.id))
-      .then(persisted=>{if(!persisted)seededLayouts.current.delete(project.id)})
-  },[focusHydrated,activeProject,activeLayout])
-
   const showResourceForTarget = async (target:NoteTarget,targetViewId?:string) => {
     const resourceId=noteIdForTarget(target)
     const targetProject=projects.some(project=>project.id===target.projectId)?target.projectId:(activeProject?.id||projects[0]?.id)
     if(!resourceId||!targetProject){setError('A live Project is required to open this resource.');return}
     const current=resolveLayout(layoutMap[targetProject],projects.find(project=>project.id===targetProject)?.layout)
-    // An explicit target (drag/drop, session-note anchor) is honored exactly; an implicit open
-    // (clicking a file, a menu) is steered to the next available pane, never a Files pane.
+    // An explicit target (drag/drop) is honored exactly. Everything else lands in the pane
+    // you were last in: the focused view when it is still in this layout, then the owning
+    // terminal, then whatever the layout has.
     const preferredAnchor=(targetProject===projectId&&focusedViewId&&stackForView(current,focusedViewId)?focusedViewId:null)||target.terminalSessionId||terminalIds(current)[0]||leaves(current)[0]?.id||null
     const focused=targetViewId||openAnchorId(current,preferredAnchor)
     setProjectId(targetProject);if(target.terminalSessionId)setActiveId(target.terminalSessionId);setFocusedViewId(resourceId)
     setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setMainMenuOpen(false);setEmptyMenu(null)
-    // A session note accompanies its terminal, so it opens beside it rather than
-    // as a tab covering it. An explicit target (drag, file open) still wins.
-    const leaf=resourceLeaf('note',resourceId)
-    const next=target.kind==='session-note'&&!targetViewId
-      ?placeCompanionLeaf(current,target.terminalSessionId&&stackForView(current,target.terminalSessionId)?target.terminalSessionId:focused,leaf)
-      :openTab(current,focused,leaf)
-    await updateLayout(targetProject,next)
+    // Every resource opens the same way: a tab in the anchor's pane. Session notes used to
+    // split a pane off to sit beside their terminal, which spent workspace geometry on a
+    // guess — splitting is an explicit action (the tab menu, a drag), not something an
+    // ordinary open should do on your behalf.
+    await updateLayout(targetProject,openTab(current,focused,resourceLeaf('note',resourceId)))
   }
 
   const showNoteResource=(resourceId:string,targetProject:string)=>{
@@ -1457,6 +1608,36 @@ export function App() {
       return
     }
     await updateLayout(session.project_id,isPaned?activateContainingStack(current,session.id):openTab(current,focusedViewId,terminalLeaf(session.id)))
+  }
+
+  /**
+   * Deliver a note/markdown selection. A new session is seeded through argv (see
+   * `spawnTerminal`) and opens beside the pane the text came from; a live session is written
+   * to over `POST /api/sessions/{id}/input`, which is the only path that reaches a target whose
+   * pane is not mounted — the `mux:terminal-action` bus only reaches rendered panes.
+   *
+   * The paste and the Enter are two writes with a gap between them: a large body has to be
+   * absorbed by the agent's composer before the submit lands, and one combined write has the
+   * TUI reflowing and reading a carriage return in the same tick.
+   */
+  const deliverToAgent = async (target: SendToAgentTarget, message: string): Promise<string> => {
+    if (target.kind === 'new') {
+      setSendToAgent(null)
+      // spawnTerminal reports its own failures through the toast and unwinds the layout.
+      await spawnTerminal(target.projectId,'horizontal',undefined,undefined,'after',target.backend,{argv:[argvPrompt(message)]})
+      return ''
+    }
+    try {
+      await api('POST',`/api/sessions/${target.session.id}/input`,{data:pastePayload(message)})
+      if (target.submit) {
+        await new Promise(resolve=>window.setTimeout(resolve,AGENT_SUBMIT_DELAY_MS))
+        await api('POST',`/api/sessions/${target.session.id}/input`,{data:SUBMIT_SEQUENCE})
+      }
+    } catch (cause) {
+      return cause instanceof Error?cause.message:String(cause)
+    }
+    await selectSession(target.session)
+    return ''
   }
 
   const openInSplit = async (session: Session, direction: SplitDirection = 'horizontal', position:'before'|'after'='after', targetId=activeId) => {
@@ -1724,25 +1905,24 @@ export function App() {
     { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(value => !value) },
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
-    { id:'observations.open',label:'Open observation inbox',category:'input',available:!!activeProject,disabledReason:'No active project',run:()=>{setObservationsOpen(true);setMainMenuOpen(false)} },
+    { id:'observations.open',label:'Open selected project’s observation inbox',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setObservationsProject(commandProject||null);setMainMenuOpen(false);setProjectMenu(null)} },
     { id: 'session.spawnShell', label: 'New terminal in current project', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => void spawnTerminal() },
     { id: 'session.quickLaunch', label: 'New terminal custom…', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => openLauncher() },
     // `project.create` predates this and opens the registry; adding a Project is
     // the common intent, so it gets its own direct entry.
     { id: 'project.add', label: 'Add project', category: 'project', available: true, run: () => { setSidebarMenu(null);setMainMenuOpen(false);setProjectMenu(null);void createProject() } },
-    { id: 'project.create', label: 'Manage projects', category: 'project', available: true, run: openProjectsManager },
+    { id: 'project.create', label: 'Manage projects', category: 'project', available: true, run: () => openProjectsManager() },
     { id: 'history.open', label: 'Browse session history', category: 'view', available: true, run: () => void showHistory() },
     { id: 'history.openProject', label: 'Browse selected project’s session history', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => void showHistory(commandProject||null) },
     { id: 'project.files', label: 'Browse current project files', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectFiles(activeProject) },
     { id: 'settings.open', label: 'Open Settings', category: 'view', available: true, run: () => openSettings() },
-    { id: 'settings.project', label: 'Open current project settings', category: 'view', available: !!activeProject, disabledReason: 'No project is selected', run: () => activeProject&&openSettings('Current project',activeProject.root) },
     { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => {setUsageOpen(true);setMainMenuOpen(false)} },
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {setAutomationOpen(true);setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
     { id: 'notes.open', label: 'Open current project note', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectNotes(activeProject) },
     { id: 'session.note', label: 'Open selected session note', category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession&&openSessionNotes(commandSession) },
-    { id: 'notes.browse', label: 'Browse session notes', category: 'view', available: true, run: () => { setMainMenuOpen(false);setProjectMenu(null);setSessionNotesScope('') } },
-    { id: 'notes.browseProject', label: 'Browse this project’s session notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => { setMainMenuOpen(false);setProjectMenu(null);setSessionNotesScope(activeProject?.id||'') } },
+    { id: 'notes.browse', label: 'Browse session notes', category: 'view', available: true, run: () => openNotesBrowser(null) },
+    { id: 'notes.browseProject', label: 'Browse this project’s session notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
     { id: 'project.note', label: 'Open selected project note', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => commandProject&&openProjectNotes(commandProject) },
     { id: 'processes.open', label: 'Inspect selected session processes and previews', category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => {if(commandSession)openProcessViewer(commandSession)} },
     { id: 'processes.all', label: 'Open unified process viewer', category: 'view', available: true, run: () => openProcessViewer() },
@@ -1760,6 +1940,9 @@ export function App() {
       id: `drawer.${tab.id}`, label: `Side panel: ${tab.label}`, category: tab.id === 'notifications' ? 'view' : 'clipboard',
       available: true, run: () => showDrawerTab(tab.id),
     })),
+    // Tab order is persistent state a drag can scramble, so it needs a way back that is not
+    // "drag five tabs into place from memory".
+    { id: 'drawer.resetTabs', label: 'Reset side panel tab order', category: 'view', available: !isDefaultDrawerTabOrder(drawerOrder), disabledReason: 'Side panel tabs are already in their default order', run: resetDrawerTabOrder },
     { id: 'clipboard.open', label: 'Open clipboard history', category: 'clipboard', available: true, run: () => showDrawerTab('clipboard') },
     { id: 'clipboard.clear', label: 'Clear unpinned clipboard history', category: 'clipboard', available: true, run: () => void clearClipboardHistory().then(removed => { window.dispatchEvent(new CustomEvent(CLIPBOARD_CHANGED_EVENT)); setError(`Cleared ${removed} clipboard entr${removed===1?'y':'ies'}.`) }).catch(cause => setError(cause instanceof Error?cause.message:String(cause))) },
     ...(['copy', 'paste', 'selectAll', 'clear'] as const).map((action): Command => ({
@@ -1791,7 +1974,7 @@ export function App() {
     { id: 'project.rename', label: 'Rename selected project', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => commandProject && openRename({ kind: 'project', project: commandProject }) },
     { id:'project.moveUp',label:'Move selected Project up',category:'project',available:!!commandProject&&orderedProjects.filter(item=>(item.group_id||null)===(commandProject.group_id||null))[0]?.id!==commandProject.id,disabledReason:'Project is already first in its Group',run:()=>commandProject&&moveProjectRelative(commandProject,-1) },
     { id:'project.moveDown',label:'Move selected Project down',category:'project',available:!!commandProject&&orderedProjects.filter(item=>(item.group_id||null)===(commandProject.group_id||null)).at(-1)?.id!==commandProject.id,disabledReason:'Project is already last in its Group',run:()=>commandProject&&moveProjectRelative(commandProject,1) },
-    { id: 'project.settings', label: 'Edit selected project defaults', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => openSettings('Project defaults') },
+    { id: 'project.settings', label: 'Open selected project settings', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => commandProject && openProjectsManager({ project: commandProject, tab: 'settings' }) },
     { id: 'project.delete', label: 'Delete selected project…', category: 'project', available: !!commandProject&&!sessions.some(session=>session.project_id===commandProject.id), disabledReason: 'Remove this project’s sessions first', run: () => { if (commandProject) { setConfirmProjectDeleteId(commandProject.id); setProjectMenu(current => current || { project: commandProject, x: innerWidth / 2, y: innerHeight / 2 }) } } },
     ...unpanned.map((session): Command => ({
       id: `session.attach(${session.id})`, label: `Attach live session: ${sessionName(session)}`, category: 'pane', available: true,
@@ -1857,6 +2040,8 @@ export function App() {
       // would close on pointer-down and let the trigger's click reopen, which is
       // indistinguishable from "the menu never closes".
       if (target instanceof Element && target.closest('.context-menu,.menu-trigger,[data-menu-toggle]')) return
+      // This pointer, not the menu, decides where focus goes next.
+      menuDismissedByPointer.current = true
       setContextMenu(null)
       setProjectMenu(null)
       setSidebarMenu(null)
@@ -1898,6 +2083,10 @@ export function App() {
   // ignore horizontal drags and second fingers, so we only claim what they discard.
   // Gestures dispatch through the shared `mux:command` bus, keeping this effect
   // decoupled from the per-render `commands` array.
+  // Panel-open state rides in a ref so toggling a panel doesn't re-register the
+  // touch listeners (and can't drop a gesture already in flight).
+  const overlayPanels = useRef({ sidebarOpen: false, drawerOpen: false })
+  overlayPanels.current = { sidebarOpen, drawerOpen: clipboardOpen }
   useEffect(() => {
     if (!mobileWorkspace) return
     let state: { startX:number; startY:number; lastX:number; lastY:number; maxPointers:number; start:number; axis:'?'|'h'|'v' } | null = null
@@ -1958,7 +2147,7 @@ export function App() {
       const slot = classifyGesture({ pointerCount: state.maxPointers, dx: state.lastX - state.startX, dy: state.lastY - state.startY, durationMs: Date.now() - state.start })
       state = null
       if (!slot) return
-      const command = mobileGestures[slot]
+      const command = resolveGestureCommand(slot, mobileGestures, overlayPanels.current, swipeAwayClose)
       // A short tick on recognition: without it a swipe that lands on an empty
       // command, or a tab change the eye misses, reads as "nothing happened".
       if (command) { navigator.vibrate?.(12); window.dispatchEvent(new CustomEvent('mux:command', { detail: command })) }
@@ -1973,7 +2162,7 @@ export function App() {
       window.removeEventListener('touchend', onEnd)
       window.removeEventListener('touchcancel', onEnd)
     }
-  }, [mobileWorkspace, mobileGestures])
+  }, [mobileWorkspace, mobileGestures, swipeAwayClose])
 
   const updateSession = (next: Session) => setSessions(items => items.map(item => item.id === next.id ? next : item))
   const recordClientStartupTiming=(sessionId:string,milestone:StartupMilestone,elapsedMs:number)=>{
@@ -2186,7 +2375,7 @@ export function App() {
     if(node.kind==='note'){
       const identity=parseNoteResourceId(node.id)
       if(!identity||!activeProject)return <section class="workspace-leaf-placeholder note-unavailable"><strong>resource unavailable</strong><span>{node.id}</span><button onClick={()=>void removeWorkspaceNote(projectId,node.id)}>close tab</button></section>
-      return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>{if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}openProjectFile(activeProject,path)}} onFileDragStart={(path,event)=>beginFileTabDrag(event,path)}/>
+      return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>{if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}openProjectFile(activeProject,path)}} onFileDragStart={(path,event)=>beginFileTabDrag(event,path)} onSendToAgent={setSendToAgent}/>
     }
     if(node.kind==='history')return <section class="workspace-leaf-placeholder"><strong>History moved</strong><span>Session history is now a full-screen overlay.</span><button onClick={()=>{setHistoryOpen(true);void updateLayout(projectId,removeLeaf(layoutValues.current[projectId]||emptyLayout(),'history',node.id))}}>Open History</button></section>
     if (node.kind === 'preview') {
@@ -2298,25 +2487,28 @@ export function App() {
     const noteLayout=resolveLayout(layoutMap[targetProject],projects.find(item=>item.id===targetProject)?.layout)
     const workspaceOpen=workspaceNoteIds(targetProject).includes(resourceId)
     const selected=targetProject===projectId&&stackForView(noteLayout,resourceId)?.active_child_id===resourceId
-    const label=identity.kind==='note'?'Project note':identity.kind==='session-note'?'Session note':identity.kind==='files'?'Files':identity.id.split('/').pop()||'File'
+    const label=identity.kind==='note'?'Project note':identity.kind==='session-note'?'Session note':identity.id.split('/').pop()||'File'
     return <button data-tutorial={identity.kind==='note'?'project-note':undefined} class={`sidebar-note-row ${selected?'active':''} ${workspaceOpen?'open':''}`} title={`${label} · opens in the focused pane`} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openNoteContext(resourceId,targetProject,event.clientX,event.clientY)}} onClick={event=>{event.stopPropagation();showNoteResource(resourceId,targetProject);setSidebarOpen(false)}}>
       <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>{label}</strong></span>
     </button>
   }
-  // Project note and Files share one nested row (single guideline, divider between them)
-  // so each project costs one line instead of two in the sidebar. Each chip keeps its own
-  // selected/open state, click target, and context menu.
+  // Note and Files share one nested row (single guideline, divider between them) so each
+  // project costs one line instead of two. They now open different kinds of surface: the
+  // note is a pane tab (a document you edit), Files is the drawer's navigator tab. Each
+  // chip therefore reads its "active" state from where its surface actually lives.
   const sidebarProjectResourceRow=(targetProject:string)=>{
     const noteLayout=resolveLayout(layoutMap[targetProject],projects.find(item=>item.id===targetProject)?.layout)
-    const chip=(kind:'note'|'files',label:string)=>{
-      const resourceId=noteResourceId(kind,targetProject)
-      const workspaceOpen=workspaceNoteIds(targetProject).includes(resourceId)
-      const selected=targetProject===projectId&&stackForView(noteLayout,resourceId)?.active_child_id===resourceId
-      return <button data-tutorial={kind==='note'?'project-note':undefined} class={`note-resource-chip ${selected?'active':''} ${workspaceOpen?'open':''}`} title={`${label} · opens in the focused pane`} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openNoteContext(resourceId,targetProject,event.clientX,event.clientY)}} onClick={event=>{event.stopPropagation();showNoteResource(resourceId,targetProject);setSidebarOpen(false)}}><strong>{label}</strong></button>
-    }
+    const noteId=noteResourceId('note',targetProject)
+    const noteOpen=workspaceNoteIds(targetProject).includes(noteId)
+    const noteSelected=targetProject===projectId&&stackForView(noteLayout,noteId)?.active_child_id===noteId
+    const filesShowing=clipboardOpen&&drawerTabId==='files'&&targetProject===projectId
     return <div class="sidebar-note-row note-files-row">
       <span class="note-branch" aria-hidden="true">└</span>
-      <span class="note-resource-group">{chip('note','Note')}<span class="note-resource-divider" aria-hidden="true"></span>{chip('files','Files')}</span>
+      <span class="note-resource-group">
+        <button data-tutorial="project-note" class={`note-resource-chip ${noteSelected?'active':''} ${noteOpen?'open':''}`} title="Project note · opens in the focused pane" onContextMenu={event=>{event.preventDefault();event.stopPropagation();openNoteContext(noteId,targetProject,event.clientX,event.clientY)}} onClick={event=>{event.stopPropagation();showNoteResource(noteId,targetProject);setSidebarOpen(false)}}><strong>Note</strong></button>
+        <span class="note-resource-divider" aria-hidden="true"></span>
+        <button class={`note-resource-chip ${filesShowing?'active open':''}`} title="Files · browse this project in the side panel" onClick={event=>{event.stopPropagation();const project=projects.find(item=>item.id===targetProject);if(project)openProjectFiles(project);setSidebarOpen(false)}}><strong>Files</strong></button>
+      </span>
     </div>
   }
   // A server a session spawned lives beside it: nested under its sidebar row and
@@ -2394,7 +2586,6 @@ export function App() {
       const owner=sessions.find(session=>(session.note_id||session.id)===identity.id)
       return owner?`Note · ${sessionName(owner)}`:'Session note'
     }
-    if(identity?.kind==='files')return 'Files'
     return identity?.id.split('/').pop()||'File'
   }
   const projectPreviewIds=dragProject?.previewIds||orderedProjects.map(project=>project.id)
@@ -2477,7 +2668,7 @@ export function App() {
     {mobileProjection.tabs.length>0&&<div data-tutorial="tab-strip" class="stack-tabs mobile-unified-tabs" role="tablist" aria-label="All Project tabs">
       {mobileProjection.tabs.map(mobileTab)}
     </div>}
-    <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Open a terminal, Project note, Files, or a preview to begin.</p></div>}</div>
+    <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open the Project note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>}</div>
   </section>
 
   return <div class="app-shell">
@@ -2528,7 +2719,7 @@ export function App() {
       </header>
       <aside class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         <div class="project-tree">
-          {visibleProjects.length===0&&<button data-tutorial="empty-project" class="empty-project-cta" onClick={openProjectsManager}><strong>{projects.length?'No Projects shown':'Create your first Project'}</strong><small>{projects.length?'Open Projects to show or add an active Project.':'Open Projects to add a canonical folder.'}</small></button>}
+          {visibleProjects.length===0&&<button data-tutorial="empty-project" class="empty-project-cta" onClick={()=>openProjectsManager()}><strong>{projects.length?'No Projects shown':'Create your first Project'}</strong><small>{projects.length?'Open Projects to show or add an active Project.':'Open Projects to add a canonical folder.'}</small></button>}
           {projectBuckets.map(bucket=>{const peerIds=bucket.items.map(item=>item.id);return <section class="sidebar-project-bucket" key={bucket.id}><header><span>{bucket.name}</span>{bucket.id!=='ungrouped'&&<><button title="Rename group" onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)setGroupEdit({id:group.id,name:group.name})}}>✎</button><button title="Remove group (projects become ungrouped)" onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)void deleteGroup(group)}}>×</button></>}</header>{bucket.items.map(project => {
             const children = sessions
               .filter(session => session.project_id === project.id)
@@ -2555,7 +2746,7 @@ export function App() {
           <AccountSwitcher onManage={()=>openSettings('Accounts')}/>
           <ResourceUsageSummary snapshot={processFleet} sessions={sessions} projects={projects} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
         </div>
-        <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button data-tutorial="projects" class="project-trigger" onClick={openProjectsManager}><span>◇</span> projects</button></div>
+        <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button data-tutorial="projects" class="project-trigger" onClick={()=>openProjectsManager()}><span>◇</span> projects</button></div>
       </aside>
       {/* The collapsed strip keeps the sidebar's own controls reachable rather
           than forcing an expand round-trip for menu, projects, or status. */}
@@ -2583,7 +2774,7 @@ export function App() {
             a new-tab button. */}
         <button data-tutorial="run" class="rail-button rail-run" aria-haspopup="menu" aria-expanded={!!activeProject&&runMenu?.project.id===activeProject.id} aria-label={activeProject?`Run in ${activeProject.name}`:'Run'} title={activeProject?`Run in ${activeProject.name}`:'Run'} disabled={!activeProject} onClick={event=>activeProject&&toggleRunMenu(activeProject,event.currentTarget)}>▶</button>
         <button class="rail-button" aria-label="Open swe-mux menu" title="Menu" onClick={()=>setMainMenuOpen(value=>!value)}>:</button>
-        <button class="rail-button" aria-label="Manage projects" title="Projects" onClick={openProjectsManager}>◇</button>
+        <button class="rail-button" aria-label="Manage projects" title="Projects" onClick={()=>openProjectsManager()}>◇</button>
       </nav>}
       <div class="sidebar-resizer" role="separator" tabindex={0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={190} aria-valuemax={480} aria-valuenow={Math.round(sidebarWidth)} title="Drag to resize · arrow keys adjust · double-click to reset" onPointerDown={beginSidebarResize} onDblClick={()=>persistSidebarWidth(254)} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();persistSidebarWidth(event.key==='Home'?190:event.key==='End'?480:sidebarWidth+(event.key==='ArrowLeft'?-10:10))}} />
 
@@ -2593,7 +2784,12 @@ export function App() {
           scrim, which is why both renderings share one component. */}
       {clipboardOpen&&<UtilityDrawer
         tab={drawerTabId}
-        onTab={showDrawerTab}
+        // The drag ghost's pointer-up also fires a click on the tab it started from, which
+        // would switch to the tab the user was only moving.
+        onTab={tab=>{
+          if(suppressDragClickRef.current===`drawer-tab:${tab}`){suppressDragClickRef.current=null;return}
+          showDrawerTab(tab)
+        }}
         onClose={()=>setClipboardOpen(false)}
         mobile={mobileWorkspace}
         session={active||null}
@@ -2604,6 +2800,22 @@ export function App() {
         onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('That session is no longer live.');return}void selectSession(session)}}
         onOpenSettings={section=>{if(mobileWorkspace)setClipboardOpen(false);openSettings(section)}}
         onManagePrompts={()=>{if(mobileWorkspace)setClipboardOpen(false);setPromptLibraryOpen(true)}}
+        onOpenFile={path=>{
+          // The drag ghost's pointer-up also fires a click on the row it started from.
+          if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}
+          if(activeProject)openProjectFile(activeProject,path)
+        }}
+        // Desktop only: the drawer is an in-flow column there, so a file row can be dragged
+        // onto a visible pane. On mobile it is an overlay with nothing to drop onto.
+        onFileDragStart={mobileWorkspace?undefined:(path,event)=>beginFileTabDrag(event,path)}
+        notesAllProjects={notesAllProjects}
+        onNotesAllProjects={setNotesAllProjects}
+        focusedNote={active?.note_exists?{projectId:active.project_id,noteId:active.note_id||active.id,label:sessionName(active)}:null}
+        onOpenProjectNote={targetProject=>{const project=projects.find(item=>item.id===targetProject);if(project)openProjectNotes(project)}}
+        onOpenSessionNote={openBrowsedSessionNote}
+        tabs={orderedDrawerTabs}
+        onTabDragStart={beginDrawerTabDrag}
+        draggingTab={dragDrawerTab}
         promptPreselect={promptPreselect}
         onResize={beginDrawerResize}
         onInsert={text=>{
@@ -2616,21 +2828,29 @@ export function App() {
           discoverable without a menu or a chord. Mobile reaches the same tabs
           through the drawer's own tab strip after a two-finger swipe. */}
       {!mobileWorkspace&&<nav class="utility-rail" aria-label="Side panel">
-        {DRAWER_TABS.map(tab=><button
-          key={tab.id}
-          class={clipboardOpen&&drawerTabId===tab.id?'active':''}
-          aria-pressed={clipboardOpen&&drawerTabId===tab.id}
-          aria-label={tab.title}
-          title={tab.title}
-          onClick={()=>showDrawerTab(tab.id)}
-        ><span aria-hidden="true">{tab.glyph}</span>{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}</button>)}
+        {orderedDrawerTabs.map(tab=>{
+          const Icon=DRAWER_TAB_ICONS[tab.id]
+          return <button
+            key={tab.id}
+            data-reorder-id={tab.id}
+            class={`${clipboardOpen&&drawerTabId===tab.id?'active':''} ${dragDrawerTab===tab.id?'dragging':''}`}
+            aria-pressed={clipboardOpen&&drawerTabId===tab.id}
+            aria-label={tab.title}
+            title={`${tab.title} · drag to rearrange`}
+            onPointerDown={event=>beginDrawerTabDrag(event,tab.id)}
+            onClick={()=>{
+              if(suppressDragClickRef.current===`drawer-tab:${tab.id}`){suppressDragClickRef.current=null;return}
+              showDrawerTab(tab.id)
+            }}
+          ><Icon/>{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}</button>
+        })}
       </nav>}
 
       <main data-tutorial="workspace" class="main-stage" onContextMenu={event => { if (!activeLayout.root) { event.preventDefault(); setEmptyMenu({ x: event.clientX, y: event.clientY }) } }}>
         <div class="project-workspace unified-workspace">
           <div class="terminal-workspace">
             {mobileWorkspace?mobileUnifiedWorkspace:(activeLayout.root||focusedOutsideLayout) ? <div class="pane-tree">{renderPaneNode(zoomedId ? stackForView(activeLayout,zoomedId)||activeLayout.root! : focusedOutsideLayout&&activeId ? paneStack([terminalLeaf(activeId)],activeId) : activeLayout.root!)}</div> : <div class="pane-tree"><section data-tutorial="workspace-pane" class="pane-stack empty-workspace-pane">
-              <div class="stack-active empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Open a terminal, Project note, Files, or a preview to begin.</p></div>
+              <div class="stack-active empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open the Project note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>
             </section></div>}
           </div>
         </div>
@@ -2698,14 +2918,16 @@ export function App() {
 
     {projectMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Project actions for ${projectMenu.project.name}`} style={{ left: clampContextMenuLeft(projectMenu.x, innerWidth), top: Math.max(4, Math.min(projectMenu.y, innerHeight - 470)) }}>
       <div class="context-title"><strong>{projectMenu.project.name}</strong></div>
-      <button onClick={() => runNamedCommand('project.newTerminal')}>New terminal</button>
-      <button onClick={() => runNamedCommand('project.newTerminalCustom')}>New terminal custom…</button>
+      {/* Starting work belongs to the Run button (sidebar header, every Project row,
+          and the mobile rail), which offers the same backends plus Project tasks —
+          duplicating it here left two doors to one action. */}
       {/* The same surfaces the app menu opens globally, prefiltered to this Project. */}
       <div class="context-subtitle">BROWSE THIS PROJECT</div>
       <button onClick={() => runNamedCommand('history.openProject')}>Session history…</button>
-      <button onClick={()=>{const target=projectMenu.project;setProjectMenu(null);setSessionNotesScope(target.id)}}>Session notes…</button>
+      <button onClick={()=>{const target=projectMenu.project;setProjectMenu(null);openNotesBrowser(target)}}>Session notes…</button>
       <button onClick={() => runNamedCommand('processes.project')}>Processes…</button>
       <button onClick={() => runNamedCommand('prompts.openProject')}>Prompt library…</button>
+      <button onClick={() => runNamedCommand('observations.open')}>Observation inbox…</button>
       <button onClick={()=>{openProjectFiles(projectMenu.project);setProjectMenu(null)}}>Browse files…</button>
       <div class="context-subtitle">PROJECT</div>
       <button onClick={() => runNamedCommand('project.reveal')}>Reveal in Explorer</button>
@@ -2721,7 +2943,7 @@ export function App() {
       <button onClick={() => runNamedCommand('project.rename')}>Rename project</button>
       <button disabled={!commands.find(item=>item.id==='project.moveUp')?.available} onClick={()=>runNamedCommand('project.moveUp')}>Move Project up</button>
       <button disabled={!commands.find(item=>item.id==='project.moveDown')?.available} onClick={()=>runNamedCommand('project.moveDown')}>Move Project down</button>
-      <button onClick={() => runNamedCommand('project.settings')}>Project defaults in Settings…</button>
+      <button onClick={() => runNamedCommand('project.settings')}>Project settings…</button>
       {confirmProjectDeleteId !== projectMenu.project.id && <button class="danger" disabled={sessions.some(session=>session.project_id===projectMenu.project.id)} onClick={() => runNamedCommand('project.delete')}>Delete project…</button>}
       {confirmProjectDeleteId === projectMenu.project.id && <>
         <div class="context-subtitle">DELETE PROJECT REGISTRATION</div>
@@ -2785,9 +3007,10 @@ export function App() {
 
     {mainMenuOpen && <div data-tutorial="main-menu" class="context-menu main-menu" role="menu" aria-label="swe-mux menu">
       <div class="context-title"><strong>swe-mux menu</strong></div>
-      {/* Everything under BROWSE opens across every Project. Right-clicking a
-          Project row opens the same surfaces prefiltered to it. */}
-      <div class="context-subtitle">BROWSE ALL PROJECTS</div>
+      {/* The lead block needs no heading: these are the app's general-purpose
+          surfaces, opened across everything. Right-clicking a Project row opens the
+          Project-scoped ones prefiltered to it. Anything that acts on one Project
+          lives there, not here. */}
       <button onClick={() => runNamedCommand('history.open')}>Session history</button>
       <button onClick={() => runNamedCommand('notes.browse')}>Session notes…</button>
       <button onClick={() => runNamedCommand('processes.all')}>Process fleet…</button>
@@ -2795,23 +3018,23 @@ export function App() {
       <button onClick={()=>runNamedCommand('clipboard.open')}>Clipboard history…</button>
       <button onClick={() => runNamedCommand('usage.open')}>Usage analytics…</button>
       <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
-      <div class="context-subtitle">CURRENT PROJECT{activeProject?`::${activeProject.name}`:''}</div>
-      <button disabled={!activeProject} onClick={() => { setMainMenuOpen(false); runNamedCommand('session.spawnShell') }}>New terminal</button>
-      <button disabled={!activeProject} onClick={() => { setMainMenuOpen(false); runNamedCommand('session.quickLaunch') }}>New terminal custom…</button>
-      <button disabled={!activeProject} onClick={() => runNamedCommand('settings.project')}>Project settings…</button>
-      <button disabled={!activeProject} onClick={() => runNamedCommand('observations.open')}>Observation inbox…</button>
-      <button onClick={() => { setMainMenuOpen(false); runNamedCommand('broadcast.toggle') }}>{broadcast ? 'Stop broadcast input' : 'Start broadcast input'}</button>
       <div class="context-subtitle">CONFIGURATION</div>
-      <button onClick={() => runNamedCommand('project.add')}>Add project…</button>
+      {/* Adding a Project lives in the registry and the empty-sidebar menu; this
+          menu keeps only the surfaces that act across the whole app. */}
       <button onClick={() => runNamedCommand('project.create')}>Manage projects…</button>
       <button onClick={() => runNamedCommand('hooks.open')}>Automation…</button>
-      <button onClick={() => runNamedCommand('settings.open')}>All Settings…</button>
-      <div class="context-subtitle">MAINTENANCE</div>
-      <button onClick={() => runNamedCommand('daemon.reload')}>Reload daemon (keep sessions)</button>
-      <button onClick={() => runNamedCommand('app.redeploy')}>Rebuild + redeploy app (keep sessions)</button>
-      <button onClick={() => runNamedCommand('ui.reload')}>Reload UI</button>
-      <div class="context-subtitle">SHORTCUTS</div>
+      <MenuGroup id="maintenance" label="Maintenance" openId={menuGroup} onOpenChange={setMenuGroup} hint="Reload and rebuild without reaping live sessions">
+        <button onClick={() => runNamedCommand('daemon.reload')}>Reload daemon (keep sessions)</button>
+        <button onClick={() => runNamedCommand('app.redeploy')}>Rebuild + redeploy app (keep sessions)</button>
+        <button onClick={() => runNamedCommand('ui.reload')}>Reload UI</button>
+      </MenuGroup>
+      <div class="context-rule"/>
+      {/* Broadcast is an app-wide input mode, not a Project action: membership is
+          per-session, set from a session's own context menu. */}
+      <button onClick={() => { setMainMenuOpen(false); runNamedCommand('broadcast.toggle') }}>{broadcast ? 'Stop broadcasting input' : 'Start broadcasting input'}</button>
       <button onClick={() => { setMainMenuOpen(false); runNamedCommand('palette.open') }}>Command palette <span class="menu-hint">ctrl alt p</span></button>
+      <div class="context-rule"/>
+      <button onClick={() => runNamedCommand('settings.open')}>All Settings…</button>
     </div>}
 
     {sidebarOpen && <button class="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
@@ -2828,11 +3051,9 @@ export function App() {
     {redeploying&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App redeploying"><div class="modal daemon-reload-modal"><h2>Rebuilding + redeploying app…</h2><p>The new bundle builds while the current app keeps running, then the app restarts around your live sessions. This takes a few minutes; the page reloads automatically. A failed build leaves the current app untouched.</p></div></div>}
     {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions (a few minutes). A failed build leaves the current app running.</p><div class="modal-actions"><button onClick={()=>void startRedeploy()}>Rebuild + redeploy</button><button onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button></div></div></div>}
 
-    {sessionNotesScope!==null&&<SessionNotesBrowser projects={orderedProjects} initialProjectId={sessionNotesScope||null} onClose={()=>setSessionNotesScope(null)} onOpen={openBrowsedSessionNote}/>}
-
     {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSessionNote={openHistorySessionNote} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
 
-    {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} onClose={()=>setProjectsManagerOpen(false)} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onSettings={project=>{setProjectsManagerOpen(false);openSettings('Current project',project.root)}} onNote={project=>{setProjectsManagerOpen(false);openProjectNotes(project)}} onFiles={project=>{setProjectsManagerOpen(false);openProjectFiles(project)}} onPatch={patchManagedProject} onDelete={deleteProject}/>}
+    {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} initialTab={projectsManagerFocus?.tab} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onNote={project=>{setProjectsManagerOpen(false);openProjectNotes(project)}} onFiles={project=>{setProjectsManagerOpen(false);openProjectFiles(project)}} onPatch={patchManagedProject} onDelete={deleteProject}/>}
 
     {projectCreateOpen&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setProjectCreateOpen(false)}><form data-tutorial="project-form" class="modal" onSubmit={event=>{event.preventDefault();void submitProject()}}><div class="modal-heading"><div><span>PROJECT::CREATE</span><h2>Add a project</h2></div><button type="button" onClick={()=>setProjectCreateOpen(false)}>×</button></div><label>Name<input value={projectCreate.name} onInput={event=>setProjectCreate(value=>({...value,name:event.currentTarget.value}))} autofocus /></label><label>Folder<div class="project-folder-field"><input value={projectCreate.root} onInput={event=>setProjectCreate(value=>({...value,root:event.currentTarget.value}))} placeholder="D:\\projects\\horizon" /><button type="button" onClick={()=>setFolderPickerOpen(true)}>Browse…</button></div></label><label>Group<select value={projectCreate.group_id} onChange={event=>setProjectCreate(value=>({...value,group_id:event.currentTarget.value}))}><option value="">Ungrouped</option>{projectGroups.map(group=><option value={group.id}>{group.name}</option>)}</select></label><p class="modal-note">Creating the project initializes .swe-mux in this folder. Every session starts at this exact root.</p><div class="modal-footer"><button type="button" onClick={()=>setProjectCreateOpen(false)}>Cancel</button><button class="primary" type="submit" disabled={!projectCreate.name.trim()||!projectCreate.root.trim()}>Create project</button></div></form></div>}
     {folderPickerOpen&&<DirectoryPicker initialPath={projectCreate.root} onCancel={()=>setFolderPickerOpen(false)} onSelect={root=>{setProjectCreate(value=>({...value,root,name:folderNameFromPath(root)}));setFolderPickerOpen(false)}} />}
@@ -2843,11 +3064,13 @@ export function App() {
 
     {handoffState&&<div class="modal-layer control-plane-modal-layer" role="dialog" aria-modal="true" aria-label="Handoff export" onMouseDown={event=>event.target===event.currentTarget&&setHandoffState(null)}><section class="modal control-plane-modal"><div class="modal-heading"><div><span>HANDOFF::EXPORT</span><h2>{historyName(handoffState.entry)}</h2></div><button aria-label="Close handoff" onClick={()=>setHandoffState(null)}>×</button></div><div class="control-plane-modal-body"><p>{handoffState.message}</p><textarea class="handoff-export" readOnly value={handoffState.markdown}/></div><div class="modal-footer"><span>read-only annotation export</span><button onClick={()=>{const blob=new Blob([handoffState.markdown],{type:'text/markdown'});const url=URL.createObjectURL(blob);const anchor=document.createElement('a');anchor.href=url;anchor.download=`handoff-${handoffState.entry.id}.md`;anchor.click();URL.revokeObjectURL(url)}}>Download</button><button class="primary" onClick={()=>void navigator.clipboard.writeText(handoffState.markdown).then(()=>setHandoffState(current=>current?{...current,message:'Copied to clipboard.'}:current)).catch(()=>setHandoffState(current=>current?{...current,message:'Clipboard blocked. Select the text and copy it manually.'}:current))}>Copy</button></div></section></div>}
 
-    {settingsOpen && <Settings cwd={settingsCwd||activeProject?.root} initialSection={settingsSection} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false);setSettingsCwd(null); void refresh(); void loadProfiles(); void api<{xterm_scrollback_lines:number;terminal_renderer:TerminalRendererPreference}&Record<string,unknown>>('GET','/api/config').then(config=>{setXtermScrollback(config.xterm_scrollback_lines);setTerminalRenderer(config.terminal_renderer);setMobileInput(mobileInputSettings(config));setMobileGestures(mobileGestureSettings(config));setClipboardEnabled(config.clipboard_history_enabled!==false)}) }} />}
+    {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
+
+    {settingsOpen && <Settings initialSection={settingsSection} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void api<{xterm_scrollback_lines:number;terminal_renderer:TerminalRendererPreference}&Record<string,unknown>>('GET','/api/config').then(config=>{applyNoteEditorConfig(config);setXtermScrollback(config.xterm_scrollback_lines);setTerminalRenderer(config.terminal_renderer);setMobileInput(mobileInputSettings(config));setMobileGestures(mobileGestureSettings(config));setSwipeAwayClose(swipeAwayCloseEnabled(config));setClipboardEnabled(config.clipboard_history_enabled!==false)}) }} />}
 
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={active?.backend} onClose={()=>setPromptLibraryOpen(false)} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}}))}/>}
 
-    {observationsOpen&&activeProject&&<Observations project={activeProject} onClose={()=>setObservationsOpen(false)} onInsertBatch={activeId?text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}})):undefined}/>}
+    {observationsProject&&<Observations project={observationsProject} onClose={()=>setObservationsProject(null)} onInsertBatch={activeId?text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}})):undefined}/>}
 
     {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}
     {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}

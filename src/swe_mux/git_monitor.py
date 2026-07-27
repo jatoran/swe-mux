@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from .event_bus import EventBus
 from .models import GitState
 from .session import Session, SessionManager
-from .subprocess_flags import background_creation_flags
+from .subprocess_flags import background_creation_flags, reap_process_tree
 
 GIT_TIMEOUT_SECONDS = 4.0
 GIT_CONCURRENCY = 4
@@ -33,8 +33,7 @@ async def _git(
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
         except TimeoutError:
-            process.kill()
-            await process.communicate()
+            await reap_process_tree(process)
             return 124, f"git timed out after {timeout_seconds:g}s"
         output = stdout if process.returncode == 0 else stderr or stdout
         return process.returncode or 0, output.decode("utf-8", "replace").strip()

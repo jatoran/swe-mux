@@ -12,6 +12,10 @@ project-owned resource file. Vision: `../../development/CONTROL_PLANE_ROADMAP.md
   done, delete, reorder) replace the whole list under a revision check.
 - **Batch handoff**: open (not-done) items are inserted into the focused agent's composer
   (terminal paste semantics, never submitted) or copied to the clipboard.
+- **Entry point**: a Project's own context menu (sidebar right-click, or the mobile top-bar
+  Project title) under `BROWSE THIS PROJECT`. The inbox carries the Project it was opened for
+  rather than following the active one, so it cannot drift onto a different Project's file. It
+  is not in the app menu: the app menu holds nothing that acts on a single Project.
 
 ## Data model
 

@@ -19,9 +19,11 @@ import argparse
 import asyncio
 import contextlib
 import ctypes
+import faulthandler
 import hashlib
 import json
 import logging
+import logging.handlers
 import os
 import secrets
 import struct
@@ -31,11 +33,11 @@ import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from .pty_host import PtyHost
 from .scrollback import ScrollbackBuffer
-from .win_jobobj import ReaperJob
+from .win_jobobj import ReaperJob, process_in_job
 
 log = logging.getLogger(__name__)
 
@@ -540,18 +542,51 @@ class SupervisorServer:
                     entry.subscribers.discard(connection)
 
 
+def _setup_logging(data_dir: Path) -> IO[str] | None:
+    """Console + rotating supervisor.log, and faulthandler into crash.log.
+
+    Deliberately stdlib-only (the supervisor's source closure is hash-gated;
+    pulling in daemon-side modules would churn it). The console stream still
+    reaches the ``supervisor-console.log`` redirect held by whichever daemon
+    spawned this process; the rotating file is the one that cannot grow
+    unbounded. Returns the crash-log handle so it stays open for the process
+    lifetime.
+    """
+    log_format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    with contextlib.suppress(OSError):
+        data_dir.mkdir(parents=True, exist_ok=True)
+        handlers.append(
+            logging.handlers.RotatingFileHandler(
+                data_dir / "supervisor.log",
+                maxBytes=5 * 1024 * 1024,
+                backupCount=3,
+                encoding="utf-8",
+                delay=True,
+            )
+        )
+    logging.basicConfig(level=logging.INFO, format=log_format, handlers=handlers)
+    crash_log: IO[str] | None = None
+    with contextlib.suppress(OSError):
+        crash_log = (data_dir / "crash.log").open("a", encoding="utf-8")
+        faulthandler.enable(file=crash_log)
+    return crash_log
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="swe-mux-supervisor", description="swe-mux PTY supervisor"
     )
     parser.add_argument("--config", type=Path, required=True)
     args = parser.parse_args(argv)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
     config_path = args.config
     data_dir = resolve_data_dir(config_path)
+    _crash_log = _setup_logging(data_dir)  # noqa: F841 - keeps faulthandler's target open
+    if process_in_job():
+        log.warning(
+            "supervisor is running inside a Windows Job object (launched from "
+            "within a session?); every supervised session dies if that Job closes"
+        )
     # A process's cwd locks that directory on Windows. Anchor in the data dir
     # so a supervisor spawned from (or inside) dist/ never blocks an app
     # rebuild, and so a deleted spawn directory cannot break relative resolution.

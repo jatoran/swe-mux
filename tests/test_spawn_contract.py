@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from swe_mux.spawn_contract import SpawnRequest, scrub_claude_session_markers
+from swe_mux.spawn_contract import (
+    MAX_SPAWN_ENV,
+    SpawnRequest,
+    resolve_contained_cwd,
+    scrub_claude_session_markers,
+)
 
 
 def test_scrub_drops_parent_claude_markers_but_keeps_user_configuration() -> None:
@@ -48,6 +55,40 @@ def test_spawn_contract_accepts_one_shot_shell_completion() -> None:
     assert request.completion_mode == "one_shot"
 
 
+def test_spawn_contract_carries_a_working_directory_and_environment() -> None:
+    request = SpawnRequest.parse(
+        {
+            "backend": "shell",
+            "project_id": "dev",
+            "cwd": " frontend ",
+            "env": {"PORT": 45603, "DEBUG": True},
+        }
+    )
+    assert request.cwd == "frontend"
+    # Scalars are stringified here so every consumer sees the same shape.
+    assert request.env == {"PORT": "45603", "DEBUG": "True"}
+
+
+def test_spawn_contract_env_is_bounded() -> None:
+    oversized = {f"K{index}": "1" for index in range(MAX_SPAWN_ENV + 1)}
+    with pytest.raises(ValueError) as error:
+        SpawnRequest.parse({"backend": "shell", "project_id": "dev", "env": oversized})
+    assert "env" in error.value.args[0]
+
+
+def test_contained_cwd_resolves_inside_and_refuses_outside(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    (root / "frontend").mkdir(parents=True)
+
+    assert resolve_contained_cwd("frontend", root) == str(root / "frontend")
+    assert resolve_contained_cwd(str(root / "frontend"), root) == str(root / "frontend")
+    assert resolve_contained_cwd("", root) == str(root)
+    # Traversal is caught after resolution, so ".." inside an absolute path is too.
+    for escape in ("..", str(tmp_path), str(root / ".." / "elsewhere")):
+        with pytest.raises(ValueError, match="must stay inside"):
+            resolve_contained_cwd(escape, root)
+
+
 @pytest.mark.parametrize(
     "body,field",
     [
@@ -55,7 +96,12 @@ def test_spawn_contract_accepts_one_shot_shell_completion() -> None:
         ({"profile_id": "pwsh", "executable": "pwsh"}, "executable"),
         ({"argv": "--bad"}, "argv"),
         ({"backend": "shell"}, "project_id"),
-        ({"backend": "shell", "project_id": "dev", "cwd": "elsewhere"}, "cwd"),
+        ({"backend": "shell", "project_id": "dev", "cwd": "   "}, "cwd"),
+        ({"backend": "shell", "project_id": "dev", "cwd": 7}, "cwd"),
+        ({"backend": "shell", "project_id": "dev", "env": ["PORT=1"]}, "env"),
+        ({"backend": "shell", "project_id": "dev", "env": {"PORT": {"nested": 1}}}, "env"),
+        ({"backend": "shell", "project_id": "dev", "env": {"A=B": "1"}}, "env"),
+        ({"backend": "shell", "project_id": "dev", "env": {"": "1"}}, "env"),
         (
             {"backend": "shell", "project_id": "dev", "completion_mode": "eventually"},
             "completion_mode",

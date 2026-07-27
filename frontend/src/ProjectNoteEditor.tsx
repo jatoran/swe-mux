@@ -1,14 +1,20 @@
-import { useCallback, useRef } from 'preact/hooks'
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import type {
   ContinuityChangeDetail,
   ContinuityEditorElement,
   ContinuityRequestDetail,
+  RailAction,
   ScrollState,
 } from '@continuity-editor/editor'
 import { ContinuityEditor } from '@continuity-editor/editor/react'
 import { noteQueueKey, noteSaveQueue } from './noteSaveQueue'
 import { forgetEditorFocus, noteEditorFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
+import {
+  currentNoteEditorSettings,
+  NOTE_EDITOR_EVENT,
+  type NoteEditorSettings,
+} from './noteEditorSettings'
 
 // Tab switches unmount the whole resource view (only the active stack child renders), so the
 // editor instance is destroyed and a fresh one cannot know its previous viewport. Keep the
@@ -21,17 +27,36 @@ type Props = {
   resourceId: string
   initialText: string
   label?: string
+  /** Host command-rail actions (Continuity shows its rail on touch); see `railActions` below. */
+  railActions?: readonly RailAction[]
+  /** Mirror of the live element so the pane header can read the engine's selection. */
+  elementRef?: { current: ContinuityEditorElement | null }
 }
 
-// Continuity's defaults bind these to bullet / task toggles but flag them
-// non-browser-safe, so `browser-safe` policy releases them to the browser
-// (Ctrl+R reload, etc.). An explicit binding overlay is checked before that
-// filter, so these two are handled (and preventDefault'd) while every other
-// browser shortcut stays with the browser.
-const NOTE_SHORTCUTS = {
-  'mod+r': 'editor.toggle_bullet_at_line_start',
-  'mod+e': 'markdown.toggle_task',
-} as const
+/**
+ * Track the user's note-editor preferences (Settings → Notes). They arrive as a
+ * whole immutable object, so an editor re-renders only when one actually
+ * changes — and `shortcutBindings` keeps its identity between changes, which
+ * matters because the adapter re-assigns the binding overlay whenever that prop
+ * is a new object.
+ *
+ * The two chords Continuity flags non-browser-safe but binds to the bullet and
+ * task toggles are reclaimed by the default overlay (`config.py`): under
+ * `browser-safe` policy an explicit override is checked before the release
+ * filter, so those two are handled here while every other browser shortcut
+ * (Ctrl+R reload, Ctrl+K, …) stays with the browser.
+ */
+function useNoteEditorSettings(): NoteEditorSettings {
+  const [settings, setSettings] = useState(currentNoteEditorSettings)
+  useEffect(() => {
+    // Re-read on mount: the config fetch may have landed before this mounted.
+    setSettings(currentNoteEditorSettings())
+    const onChange = (event: Event) => setSettings((event as CustomEvent<NoteEditorSettings>).detail)
+    window.addEventListener(NOTE_EDITOR_EVENT, onChange)
+    return () => window.removeEventListener(NOTE_EDITOR_EVENT, onChange)
+  }, [])
+  return settings
+}
 
 /** Route the editor's host requests through the app's ordinary browser policies. */
 function routeRequest(detail: ContinuityRequestDetail): void {
@@ -112,20 +137,30 @@ async function handlePasteRequest(element: ContinuityEditorElement | null): Prom
 export function ContinuityMarkdownEditor({
   initialText,
   label,
-  spellcheck = false,
   scrollKey,
+  railActions,
+  hostRef,
   onCommit,
 }: {
   initialText: string
   label: string
-  spellcheck?: boolean
   /** Stable per-resource identity for viewport restoration across unmounts; omit to disable. */
   scrollKey?: string
+  /** Host actions appended to Continuity's own command rail (touch-primary devices show it).
+   *  Assigning replaces the whole host set, so pass a stable array. */
+  railActions?: readonly RailAction[]
+  /** Mirror of the live element for hosts that need to read the engine's snapshot/selection
+   *  from outside the editor (a header button takes DOM focus; the selection is engine state,
+   *  so it survives that). Cleared on detach with the internal ref. */
+  hostRef?: { current: ContinuityEditorElement | null }
   onCommit: (text: string) => void
 }) {
   const elementRef = useRef<ContinuityEditorElement | null>(null)
+  const hostRefTarget = useRef(hostRef)
+  hostRefTarget.current = hostRef
   const scrollKeyRef = useRef(scrollKey)
   scrollKeyRef.current = scrollKey
+  const settings = useNoteEditorSettings()
   // Capture the viewport at ref detach: Preact nulls refs before removing the DOM node, so
   // the textarea scroll offsets are still live here (they read 0 once detached).
   const attachRef = useCallback((element: ContinuityEditorElement | null) => {
@@ -137,6 +172,7 @@ export function ContinuityMarkdownEditor({
       forgetEditorFocus(elementRef.current)
     }
     elementRef.current = element
+    if (hostRefTarget.current) hostRefTarget.current.current = element
     // Focus inside the editor makes it the target for inserted text (clipboard
     // history, terminal selections) even after an overlay takes DOM focus.
     if (element) element.addEventListener('focusin', () => noteEditorFocus(element))
@@ -158,9 +194,19 @@ export function ContinuityMarkdownEditor({
       // `replaceValue()` for our own edits — see the block comment above.
       value={initialText}
       revision={0}
-      spellcheck={spellcheck}
-      shortcutPolicy="browser-safe"
-      shortcutBindings={NOTE_SHORTCUTS}
+      // User preferences (Settings → Notes). Unlike `value`/`revision` these are
+      // live element configuration: the adapter re-applies them in place, so a
+      // change never costs a remount (which would drop undo history and, worse,
+      // reseed from a stale `initialText`).
+      spellcheck={settings.spellcheck}
+      syntax={settings.syntax}
+      tabBehavior={settings.tabBehavior}
+      shortcutPolicy={settings.shortcutPolicy}
+      shortcutBindings={settings.shortcutBindings}
+      // Attribute rather than an adapter prop; `auto` is Continuity's own
+      // touch-only default, so it is passed as undefined to leave it alone.
+      command-rail={settings.commandRail === 'auto' ? undefined : settings.commandRail}
+      railActions={railActions}
       onChange={(detail: ContinuityChangeDetail) => {
         // Uncontrolled: persist the committed snapshot, but never echo it back into `value`.
         // (`hostReplacement` cannot occur here since we issue no host replacements.)
@@ -183,13 +229,22 @@ export function ContinuityMarkdownEditor({
 
 /** Project/session note surface: Continuity committing through the resource-scoped autosave
  *  queue. Remounted (keyed by project/resource/load-generation) when a different note loads. */
-export function ProjectNoteEditor({ projectId, resourceId, initialText, label = 'Project note' }: Props) {
+export function ProjectNoteEditor({
+  projectId,
+  resourceId,
+  initialText,
+  label = 'Project note',
+  railActions,
+  elementRef,
+}: Props) {
   const key = noteQueueKey(projectId, resourceId)
   return (
     <ContinuityMarkdownEditor
       initialText={initialText}
       label={label}
       scrollKey={key}
+      railActions={railActions}
+      hostRef={elementRef}
       onCommit={text => noteSaveQueue.submit(key, text)}
     />
   )

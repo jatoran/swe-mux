@@ -6,13 +6,16 @@ import { keyChord } from './keys'
 import { AccountSettings } from './ProviderAccounts'
 import { NotificationSoundSettings } from './NotificationSoundSettings'
 import { NotificationPushSettings } from './NotificationPushSettings'
-import { comparableProjectDefaults, normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
+import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
+import { listShortcutBindings, type ShortcutPolicy } from '@continuity-editor/editor'
+import { applyNoteEditorConfig, DEFAULT_NOTE_SHORTCUT_OVERRIDES, resetNoteRailArrangement } from './noteEditorSettings'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { enableMobileVoice } from './mobileVoice'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { clearProjectRail, loadRailItems, projectRailIsCustom, saveRailItems } from './deviceSettings'
 import { ALL_BACKENDS, ALL_PLATFORMS, DEFAULT_CUSTOM_PLACEMENT, isBuiltinRailId, railItemPlacement, railPayload, type RailBackend, type RailItem, type RailItemType, type RailPlacement, type RailPlacementSetting, type RailPlatform } from './commandRail'
 import { fetchPromptTemplates, promptItemSummary } from './promptRail'
+import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
 import type { PromptTemplate } from './PromptLibrary'
 import type { ShellProfile, Project } from './types'
 
@@ -31,10 +34,16 @@ type Config = {
   mobile_scroll_direction:'natural'|'wheel';mobile_scroll_sensitivity:number
   mobile_long_press:'context_menu'|'disabled'
   mobile_gestures:Record<string,string>
+  mobile_gesture_swipe_away_close:boolean
   terminal_auto_copy_selection:boolean
   clipboard_history_enabled:boolean;clipboard_history_persist:boolean
   clipboard_history_limit:number;clipboard_history_entry_max_chars:number
   clipboard_history_retention_hours:number;clipboard_history_redact_secrets:boolean
+  note_spellcheck:boolean;note_syntax:'markdown'|'plain'
+  note_tab_behavior:'indent'|'focus';note_shortcut_policy:ShortcutPolicy
+  note_font_family:string;note_font_size_px:number;note_line_height:number
+  note_command_rail:'auto'|'on'|'off';note_rail_button_size_px:number
+  note_shortcut_overrides:Record<string,string>
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
   ccusage_claude_command:string[]; ccusage_codex_command:string[]
   custom_theme:CustomTheme
@@ -77,10 +86,6 @@ type UsageStatus = {
   cache?:{updated_at?:number;providers?:Record<string,{totals?:Record<string,number>}>}
 }
 
-type ProjectConfig = {
-  project:{id:string;label:string;root:string};path:string;status:string;revision:string;error?:string
-  values:{default_shell_profile?:string;preferred_backend?:'shell'|'claude'|'codex';prompt_library_scope?:'off'|'global'|'project'|'both';notification_sounds_enabled?:boolean;ignore_patterns?:string[]}
-}
 type RemoteStatus = {
   mode:string;listen_url:string;available:boolean;serve_configured:boolean
   serve_url?:string|null;funnel_detected:boolean;setup_command:string;diagnostic:string
@@ -95,10 +100,25 @@ type KeybindingsResponse = {
 }
 type CloseIntent = 'close'|'usage'|'automation'|'tutorial'
 
+// One round trip for everything the panel needs on open. `config` is required;
+// every other part arrives null when its section failed server-side, with the
+// reason under `errors`.
+type SettingsBundle = {
+  config:Config
+  automation_rules:{text:string}|null
+  keybindings:KeybindingsResponse|null
+  profiles:{detected:ShellProfile[]}|null
+  projects:Project[]|null
+  automation:AutomationStatus|null
+  provider:ProviderStatus|null
+  usage:UsageStatus|null
+  errors:Record<string,string>
+}
+
 const settingsTabs = [
   {id:'general',label:'General'},
   {id:'terminals',label:'Terminals'},
-  {id:'workspace',label:'Projects'},
+  {id:'workspace',label:'Git & processes'},
   {id:'notes',label:'Notes'},
   {id:'agents',label:'Agents'},
   {id:'accounts',label:'Accounts'},
@@ -112,12 +132,31 @@ const settingsTabs = [
   {id:'appearance',label:'Appearance'},
 ] as const
 type SettingsTab = typeof settingsTabs[number]['id']
+// Search entries harvested from a tab's real DOM while it was on screen. Module
+// scope, not component state: a tab visited in one Settings session stays fully
+// searchable in the next one, for as long as the page lives.
+const liveTabEntries = new Map<SettingsTab,SettingsSearchEntry[]>()
 const tabForSection = (section:string):SettingsTab => ({
-  Terminals:'terminals','Project defaults':'workspace','Current project':'workspace',
+  Terminals:'terminals',
   Agents:'agents',Accounts:'accounts',Input:'input','Command rail':'commandrail','Git and history':'workspace','Usage analytics':'usage',
   Notes:'notes',
   Automation:'automation','Hooks and notifications':'notifications',Notifications:'notifications',Voice:'voice','Remote and security':'remote',Appearance:'appearance',
 }[section] as SettingsTab|undefined)||'general'
+
+// The note editor's own binding table, enumerated from the editor package so the
+// list can never drift from what it actually binds. `isBrowserSafe` is false for
+// the chords Chromium claims first (Ctrl+R, Ctrl+K, …): the default browser-safe
+// policy releases those unless an explicit override reclaims one.
+const NOTE_CHORDS = listShortcutBindings()
+const CHORD_PARTS:Record<string,string> = {mod:'Mod',ctrl:'Ctrl',meta:'Meta',alt:'Alt',shift:'Shift'}
+const noteChordLabel = (chord:string) => chord.split('+').map(part=>
+  CHORD_PARTS[part] ?? (part.length===1?part.toUpperCase():part.replace(/^arrow/,'').replace(/^./,head=>head.toUpperCase()))
+).join('+')
+// A chord is on the editor's policy default, bound to its command explicitly, or
+// released to the browser. '' is how a release survives TOML (see config.py).
+type NoteChordState = 'default'|'bind'|'release'
+const noteChordState = (overrides:Record<string,string>,chord:string):NoteChordState =>
+  !(chord in overrides) ? 'default' : overrides[chord]===''?'release':'bind'
 
 // Canonical order + labels for the configurable conversation commands. The action
 // set is fixed (each is wired to code in ConversationControl); only the wake words
@@ -138,7 +177,7 @@ const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
   stop:{label:'Stop listening',hint:'turn conversation mode off (releases the mic)'},
 }
 
-export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, cwd, initialSection='General' }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; cwd?:string; initialSection?:string }) {
+export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection='General' }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
   // Command-rail editor state. The rail is its own device-settings domain, so
@@ -243,25 +282,27 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   const [claudeArgs, setClaudeArgs] = useState('[]')
   const [codexArgs, setCodexArgs] = useState('[]')
   const [detectedProfiles, setDetectedProfiles] = useState<ShellProfile[]>([])
-  const [projectDefaults, setProjectDefaults] = useState<Project[]>([])
-  const [savedProjectDefaults, setSavedProjectDefaults] = useState<Project[]>([])
   const [usage, setUsage] = useState<UsageStatus | null>(null)
   const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
   const [usageRefreshMessage, setUsageRefreshMessage] = useState('')
   const [remote, setRemote] = useState<RemoteStatus | null>(null)
   const [mobileVoiceBusy,setMobileVoiceBusy]=useState(false)
   const [mobileVoiceMessage,setMobileVoiceMessage]=useState('')
-  const [projectConfig, setProjectConfig] = useState<ProjectConfig | null>(null)
-  const [projectValues, setProjectValues] = useState<ProjectConfig['values']>({})
-  const [savedProjectValues, setSavedProjectValues] = useState<ProjectConfig['values']>({})
   const [savedRules, setSavedRules] = useState('version = 1\n')
   const [savedBindings, setSavedBindings] = useState<Record<string,string>>({})
   const [status, setStatus] = useState('loading…')
   const [errors, setErrors] = useState<Record<string,string>>({})
   const [activeTab,setActiveTab] = useState<SettingsTab>(()=>tabForSection(initialSection))
   const [selectedProfileId,setSelectedProfileId] = useState<string|null>(null)
+  const [noteChordQuery,setNoteChordQuery] = useState('')
   const [closeIntent,setCloseIntent] = useState<CloseIntent|null>(null)
+  const [query,setQuery] = useState('')
+  const [highlight,setHighlight] = useState(0)
+  const [jump,setJump] = useState<{entry:SettingsSearchEntry}|null>(null)
   const panel = useRef<HTMLElement>(null)
+  const searchInput = useRef<HTMLInputElement>(null)
+  const searchIndex = useRef<{source:Config|null;entries:SettingsSearchEntry[]}|null>(null)
+  const wasSearching = useRef(false)
   const confirmPanel = useRef<HTMLElement>(null)
   const themeFile = useRef<HTMLInputElement>(null)
   const restoreFocus = useRef<HTMLElement | null>(document.activeElement as HTMLElement | null)
@@ -269,29 +310,27 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   useEffect(() => {
     api<RemoteStatus>('GET','/api/remote/status').then(setRemote).catch(()=>setRemote(null))
     api<VoiceStatusInfo>('GET','/api/voice').then(setVoiceInfo).catch(()=>setVoiceInfo(null))
-    Promise.all([
-      api<Config>('GET','/api/config'),
-      api<{text:string}>('GET','/api/automation/rules'),
-      api<KeybindingsResponse>('GET','/api/keybindings'),
-      api<{detected:ShellProfile[]}>('GET','/api/profiles'),
-      api<Project[]>('GET','/api/projects'),
-      api<AutomationStatus>('GET','/api/automation'),
-      api<ProviderStatus>('GET','/api/automation/provider'),
-      api<UsageStatus>('GET','/api/usage'),
-      cwd ? api<ProjectConfig>('GET',`/api/project/config?cwd=${encodeURIComponent(cwd)}`) : Promise.resolve(null),
-    ]).then(([next, rulesData, keyData, profileData, projects, automationStatus,providerStatus, usageStatus, project]) => {
+    // One bundled request instead of nine — on a high-RTT client (phone over
+    // Tailscale) per-request connection setup dominated the panel's open delay.
+    api<SettingsBundle>('GET','/api/settings/bundle').then(bundle => {
+      const { config: next, automation_rules: rulesData, keybindings: keyData } = bundle
+      // Saving unconditionally PUTs rules + keybindings back; rendering without
+      // them would let a Save overwrite their files with empty defaults.
+      if (!rulesData || !keyData) {
+        setStatus(['automation_rules','keybindings'].filter(key=>bundle.errors[key]).map(key=>`${key}: ${bundle.errors[key]}`).join(' · ')||'settings payload incomplete')
+        return
+      }
       setConfig(next); setDraft(next); setRules(rulesData.text);setSavedRules(rulesData.text)
       setClaudeArgs(JSON.stringify(next.claude_args)); setCodexArgs(JSON.stringify(next.codex_args))
       setBindings(keyData.bindings);setSavedBindings(keyData.bindings);setBindingDefaults(keyData.defaults||{})
       setBindingCommands(keyData.commands||[]);setBindingPolicy(keyData.policy||{browser_reserved:[],terminal_reserved:[],rules:[]})
       if(Object.keys(keyData.rejected||{}).length)setBindingError(`Ignored saved shortcuts · ${Object.entries(keyData.rejected).map(([chord,message])=>`${displayChord(chord)}: ${message}`).join(' · ')}`)
       setStatus('ready')
-      setDetectedProfiles(profileData.detected); setProjectDefaults(projects);setSavedProjectDefaults(projects)
-      setAutomation(automationStatus);setProvider(providerStatus); setUsage(usageStatus)
-      setProjectConfig(project);setProjectValues(project?.values||{});setSavedProjectValues(project?.values||{})
+      if(bundle.profiles)setDetectedProfiles(bundle.profiles.detected)
+      setAutomation(bundle.automation);setProvider(bundle.provider); setUsage(bundle.usage)
       configureCustomTheme(next.custom_theme); applyTheme(next.theme)
     }).catch(error => setStatus(error.message))
-  }, [cwd])
+  }, [])
 
   useEffect(() => {
     setActiveTab(tabForSection(initialSection))
@@ -303,12 +342,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
     ||codexArgs!==JSON.stringify(config.codex_args)
     ||rules!==savedRules
     ||!sameDraftValue(bindings,savedBindings)
-    ||!sameDraftValue(comparableProjectDefaults(projectDefaults),comparableProjectDefaults(savedProjectDefaults))
-    ||!sameDraftValue(projectValues,savedProjectValues)
-  )),[
-    config,draft,claudeArgs,codexArgs,rules,savedRules,bindings,savedBindings,
-    projectDefaults,savedProjectDefaults,projectValues,savedProjectValues,
-  ])
+  )),[config,draft,claudeArgs,codexArgs,rules,savedRules,bindings,savedBindings])
 
   const leaveSettings = useCallback((intent:CloseIntent) => {
     setCloseIntent(null)
@@ -344,6 +378,41 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
 
   useEffect(() => () => restoreFocus.current?.focus(),[])
 
+  // Index what the tab on screen actually rendered, shortly after it settles —
+  // a child component's own fetches land after the switch. Doing this on every
+  // tab visit rather than only when a search starts is what lets a search from
+  // one tab find a control that lives inside another tab's child component.
+  useEffect(() => {
+    if(!draft)return
+    const timer=window.setTimeout(()=>{
+      const mounted=panel.current?.querySelectorAll('.settings-content > *:not(.settings-errors)')
+      if(!mounted?.length)return
+      const index=settingsTabs.findIndex(tab=>tab.id===activeTab)
+      const label=settingsTabs[index]?.label||activeTab
+      liveTabEntries.set(activeTab,[...mounted].flatMap(node=>harvestSettings(domVNode(node),activeTab,label,index)))
+    },450)
+    return()=>window.clearTimeout(timer)
+  },[activeTab,draft!==null])
+
+  // Reveal a picked search result once its tab has rendered. Landing on the right
+  // tab is not enough on the long ones — the control is often several screens
+  // down, so it is scrolled to and flashed. `jump` is a fresh object per pick so
+  // choosing the same result twice still re-runs this.
+  useEffect(() => {
+    if(!jump)return
+    const root=panel.current?.querySelector('.settings-content')
+    if(!root)return
+    const candidates=[...root.querySelectorAll<HTMLElement>(kindSelector[jump.entry.kind])]
+    const index=matchIndex(candidates.map(item=>item.textContent||''),jump.entry.key,jump.entry.occurrence)
+    const target=index>=0?candidates[index]:null
+    if(!target)return
+    for(let node=target.parentElement;node;node=node.parentElement)if(node instanceof HTMLDetailsElement)node.open=true
+    target.scrollIntoView({block:'center'})
+    target.classList.add('settings-search-hit')
+    const timer=window.setTimeout(()=>target.classList.remove('settings-search-hit'),1800)
+    return()=>{window.clearTimeout(timer);target.classList.remove('settings-search-hit')}
+  },[jump])
+
   useEffect(() => {
     if (!capturingCommand) return
     const capture = (event:KeyboardEvent) => {
@@ -362,7 +431,18 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         event.preventDefault()
         event.stopImmediatePropagation()
         if(closeIntent){setCloseIntent(null);return}
+        // Escape unwinds one layer at a time: an open result list first, the
+        // panel only once search is out of the way.
+        if(query){setQuery('');return}
         requestClose()
+      }
+      // Find-in-settings takes over the browser's find while the panel owns the
+      // screen; its own find cannot see the tabs that are not mounted anyway.
+      if ((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='f'&&!closeIntent&&!capturingCommand) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        searchInput.current?.focus()
+        searchInput.current?.select()
       }
       const focusRoot=closeIntent?confirmPanel.current:panel.current
       if (event.key === 'Tab' && focusRoot) {
@@ -375,7 +455,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
     }
     window.addEventListener('keydown', close, true)
     return () => window.removeEventListener('keydown', close, true)
-  }, [requestClose,closeIntent,capturingCommand])
+  }, [requestClose,closeIntent,capturingCommand,query])
 
   async function captureBinding(event:KeyboardEvent,commandId:string) {
     const chord=keyChord(event)
@@ -404,6 +484,15 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   }
 
   const change = <K extends keyof Config>(key: K, value: Config[K]) => setDraft(current => current ? {...current,[key]:value} : current)
+  // Only the overlay is stored, never the whole table: a chord left on the
+  // editor's default keeps following the editor, so a Continuity upgrade that
+  // rebinds something is not frozen out by a copy saved here.
+  const setNoteChord=(overrides:Record<string,string>,chord:string,command:string,state:NoteChordState)=>{
+    const next={...overrides}
+    if(state==='default')delete next[chord]
+    else next[chord]=state==='release'?'':command
+    change('note_shortcut_overrides',next)
+  }
   const save = async ():Promise<boolean> => {
     if (!draft || !config) return false
     let savingDraft: Config
@@ -421,16 +510,6 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
       if (!['revision','host','port','data_dir','requires_auth'].includes(key) && savingDraft[key] !== config[key]) body[key] = savingDraft[key]
     }
     try {
-      const projectPatch=(project:Project):Record<string,unknown>=>({
-        default_backend:project.default_backend||null,
-        default_profile_id:project.default_profile_id||null,
-      })
-      const savingProjectValues:ProjectConfig['values']={
-        ...projectValues,
-        ...(projectValues.ignore_patterns
-          ? {ignore_patterns:normalizeIgnorePatterns(projectValues.ignore_patterns)}
-          : {}),
-      }
       await Promise.all([
         api('PUT','/api/automation/rules?validate=1',{text:rules}),
         api('PUT','/api/keybindings?validate=1',{bindings}),
@@ -439,15 +518,11 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         api<Config & {hot_applied:string[];restart_required:string[]}>('PATCH','/api/config',body),
         api('PUT','/api/automation/rules',{text:rules}),
         api('PUT','/api/keybindings',{bindings}),
-        ...projectDefaults.map(project=>api('PATCH',`/api/projects/${project.id}`,projectPatch(project))),
-        ...(projectConfig&&cwd?[api<ProjectConfig>('PUT','/api/project/config',{cwd,values:savingProjectValues,revision:projectConfig.revision}).then(result=>{setProjectConfig(result);setProjectValues(result.values)})]:[]),
       ])
       setConfig(next); setDraft(next);setClaudeArgs(JSON.stringify(next.claude_args));setCodexArgs(JSON.stringify(next.codex_args));setErrors({})
-      setSavedRules(rules);setSavedBindings(bindings);setSavedProjectValues(savingProjectValues)
-      const refreshedProjects=await api<Project[]>('GET','/api/projects')
-      setProjectDefaults(refreshedProjects);setSavedProjectDefaults(refreshedProjects)
+      setSavedRules(rules);setSavedBindings(bindings)
       setStatus(next.restart_required.length ? `saved · restart required: ${next.restart_required.join(', ')}` : 'saved · hot applied')
-      configureCustomTheme(next.custom_theme); applyTheme(next.theme)
+      configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next)
       return true
     } catch (error) {
       const typed = error as Error & {fields?:Record<string,string>}
@@ -457,7 +532,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   }
   const reset = async () => {
     const next = await api<Config>('POST','/api/config/reset',{})
-    setConfig(next); setDraft(next); configureCustomTheme(next.custom_theme); applyTheme(next.theme); setStatus('defaults restored')
+    setConfig(next); setDraft(next); configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); setStatus('defaults restored')
   }
   const exportConfig = () => {
     if (!draft) return
@@ -529,28 +604,49 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   }
   const selectedProfileIndex=draft?.shell_profiles.findIndex(profile=>profile.id===selectedProfileId)??-1
   const selectedProfile=selectedProfileIndex>=0?draft?.shell_profiles[selectedProfileIndex]:undefined
-  if (!draft) return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel">{status}</section></div>
-  const modelOptions=(selected:string)=>{const items=[...(provider?.models.models||[])];if(selected&&!items.some(item=>item.id===selected))items.unshift({id:selected,name:'Configured model (catalog unavailable)'});return items}
-  return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent} aria-hidden={Boolean(closeIntent)} aria-label="Settings">
-    <header><div><span>CONFIG::V6</span><h2>Settings</h2></div><button aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
+  // Before the bundle lands the panel renders its full chrome — header, tab
+  // rail, footer — with a placeholder in the content area, so opening Settings
+  // paints immediately and the chosen tab can be selected while data loads.
+  if (!draft) return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal="true" aria-label="Settings">
+    <header><div><span>CONFIG::V6</span><h2>Settings</h2></div>
+      {/* Disabled twin of the real search box: the index needs the config, and a
+          control that appears late would shift the header out from under a tap. */}
+      <div class="settings-search"><input type="search" disabled placeholder="Search settings…" aria-label="Search settings (loading)" /></div>
+      <button aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
     <main class="settings-body">
       <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
         {settingsTabs.map(tab=><button role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>setActiveTab(tab.id)}>{tab.label}</button>)}
       </nav>
-      <div class="settings-content">
-        {Object.keys(errors).length > 0 && <section class="settings-errors" aria-live="assertive"><h3>Validation errors</h3>{Object.entries(errors).map(([field,message])=><p><strong>{field}</strong> — {message}</p>)}</section>}
-
+      <div class="settings-content"><section class="settings-loading" role="status" aria-live="polite">{status}</section></div>
+    </main>
+    <footer><span aria-live="polite">{status}</span><button onClick={()=>requestClose()}>Cancel</button></footer>
+  </section></div>
+  const modelOptions=(selected:string)=>{const items=[...(provider?.models.models||[])];if(selected&&!items.some(item=>item.id===selected))items.unshift({id:selected,name:'Configured model (catalog unavailable)'});return items}
+  // One function renders every tab, and it takes the tab id as an argument
+  // instead of reading `activeTab` from state, so the search index can build the
+  // vnode tree of a tab that is not mounted. Building vnodes only allocates plain
+  // objects — no DOM, no effects, no child-component bodies run — which is what
+  // lets the index be derived from the same JSX that renders the form rather than
+  // from a hand-maintained duplicate list of every setting.
+  const tabContent = (activeTab: SettingsTab) => <Fragment>
         {activeTab==='general'&&<section><h3>General</h3>
           <label>Startup directory<input value={draft.startup_cwd} onInput={e=>change('startup_cwd',e.currentTarget.value)} /></label>
           <label>Default backend<select value={draft.default_backend} onChange={e=>change('default_backend',e.currentTarget.value)}><option value="shell">Shell</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label>
           <label>Scrollback bytes<input type="number" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} /></label>
           <label>History limit<input type="number" value={draft.history_limit} onInput={e=>change('history_limit',Number(e.currentTarget.value))} /></label>
           <div class="settings-tutorial-reset"><div><strong>Getting started tutorial</strong><p>Replay the guided tour of Projects, provider accounts, tabs, pane splits, resources, and the main navigation.</p></div><button onClick={()=>requestClose('tutorial')}>Reset &amp; run tutorial</button></div>
+          {/* Config-file actions live here rather than in the footer: they act on the
+              whole configuration, not the visible tab, so repeating them under every
+              tab implied a per-tab scope they never had — and on a phone they pushed
+              Cancel/Save into a horizontally scrolling footer. */}
+          <div class="settings-config-actions"><div><strong>Configuration file</strong><p>Stored in <code>{draft.data_dir}</code>. The export is sanitized of credentials. Restoring defaults rewrites the saved configuration at once — it is not staged behind <em>Save changes</em>, and it discards unsaved edits.</p></div>
+            <div><button onClick={()=>void api('POST','/api/reveal',{path:draft.data_dir})}>Reveal config directory</button><button onClick={exportConfig}>Export sanitized</button><button class="danger" onClick={()=>void reset()}>Restore defaults</button></div>
+          </div>
         </section>}
 
         {activeTab==='terminals'&&<section class="profile-settings"><h3>Terminals</h3>
           <label>Renderer<select value={draft.terminal_renderer} onChange={e=>change('terminal_renderer',e.currentTarget.value as Config['terminal_renderer'])}><option value="auto">Auto (WebGL with DOM fallback)</option><option value="webgl">Prefer WebGL</option><option value="dom">DOM compatibility mode</option></select></label>
-          <p>Mobile viewports always use the built-in DOM renderer for reliable low-overhead rendering.</p>
+          <p>Mobile viewports and Codex sessions always use the built-in DOM renderer for reliable scrollback rendering.</p>
           <label>Global default profile<select value={draft.default_shell_profile} onChange={e=>change('default_shell_profile',e.currentTarget.value)}>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label>
           <div class="profile-browser">
             <div class="profile-index" aria-label="Configured terminal profiles">
@@ -575,13 +671,62 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           </div>
         </section>}
 
+        {/* Per-Project options are NOT here: the Projects registry is the single
+            per-Project editor (menu → Manage projects, or a Project's context menu →
+            Project settings…). This tab is the global half only. */}
         {activeTab==='workspace'&&<Fragment>
-          <section><h3>Project defaults</h3><p>Database overrides take precedence over portable Project options, then global defaults. Choosing inherit removes the override.</p>{projectDefaults.map((project,index)=><article class="project-default"><strong>{project.name}</strong><small>{project.root}</small><label>Backend<select value={project.default_backend||''} onChange={e=>setProjectDefaults(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,default_backend:(e.currentTarget.value||undefined) as Project['default_backend']}:item))}><option value="">Inherit ({project.effective_options?.backend||draft.default_backend})</option><option value="shell">Shell</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label><label>Profile<select value={project.default_profile_id||''} onChange={e=>setProjectDefaults(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,default_profile_id:e.currentTarget.value||undefined}:item))}><option value="">Inherit ({project.effective_options?.profile_id||draft.default_shell_profile})</option>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label></article>)}</section>
           <section><h3>Git, history, and process evidence</h3><label>Git poll seconds<input type="number" step=".25" value={draft.git_poll_seconds} onInput={e=>change('git_poll_seconds',Number(e.currentTarget.value))} /></label><label>Process inspector poll seconds<input type="number" min=".5" max="60" step=".5" value={draft.process_poll_seconds} onInput={e=>change('process_poll_seconds',Number(e.currentTarget.value))}/></label><label>Suspected-orphan grace seconds<input type="number" min="1" max="3600" value={draft.process_orphan_grace_seconds} onInput={e=>change('process_orphan_grace_seconds',Number(e.currentTarget.value))}/></label><label>Process evidence retention days<input type="number" min="1" max="3650" value={draft.process_evidence_retention_days} onInput={e=>change('process_evidence_retention_days',Number(e.currentTarget.value))}/></label><p>Process evidence uses PID plus creation time and command fingerprint. Surviving descendants are flagged after the grace period and are never killed automatically.</p><label>Global project ignores<textarea value={draft.project_ignore_patterns.join('\n')} onInput={e=>change('project_ignore_patterns',parseIgnorePatternDraft(e.currentTarget.value))}/></label><p>One glob per line. A name such as <code>node_modules</code> matches that folder at any depth. These rules affect the file tree and resource watchers, not Git.</p></section>
-          {projectConfig&&<section><h3>Portable current-Project options</h3><p>{projectConfig.project.root}</p><p aria-live="polite">.swe-mux/config.toml: {projectConfig.status}{projectConfig.error?` · ${projectConfig.error}`:''}</p><p>Only typed presentation preferences live here—never commands, hooks, credentials, network authority, or automatic actions. Blank values inherit database/global defaults.</p><label>Preferred backend<select value={projectValues.preferred_backend||''} onChange={e=>setProjectValues(values=>({...values,preferred_backend:(e.currentTarget.value||undefined) as ProjectConfig['values']['preferred_backend']}))}><option value="">Inherit</option><option value="shell">Shell</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label><label>Shell profile<select value={projectValues.default_shell_profile||''} onChange={e=>setProjectValues(values=>({...values,default_shell_profile:e.currentTarget.value||undefined}))}><option value="">Inherit</option>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label><label>Prompt library scope<select value={projectValues.prompt_library_scope||''} onChange={e=>setProjectValues(values=>({...values,prompt_library_scope:(e.currentTarget.value||undefined) as ProjectConfig['values']['prompt_library_scope']}))}><option value="">Inherit (global + Project)</option><option value="off">Off</option><option value="global">Global only</option><option value="project">Project only</option><option value="both">Global + Project</option></select></label><label class="check"><span>Allow device notification sounds for this Project</span><input type="checkbox" checked={projectValues.notification_sounds_enabled!==false} onChange={e=>setProjectValues(values=>({...values,notification_sounds_enabled:e.currentTarget.checked}))}/></label><button onClick={()=>setProjectValues({})}>Reset all portable options to inherited</button><label>Additional project ignores<textarea value={(projectValues.ignore_patterns||[]).join('\n')} onInput={e=>setProjectValues(values=>({...values,ignore_patterns:parseIgnorePatternDraft(e.currentTarget.value)}))}/></label><p>Project rules extend the global list. The folder is initialized when the project is created.</p></section>}
         </Fragment>}
 
-        {activeTab==='notes'&&<section><h3>Project resources</h3><p>Project notes, Files, file editors, terminals, and previews all open as tabs in the focused pane. Drag any tab between panes or onto a pane edge to create a split.</p></section>}
+        {/* One editor renders every Markdown surface (Project note, session notes,
+            Markdown files from Files), so everything here applies to all of them.
+            Colours are absent on purpose: the theme already drives the editor's
+            colour variables, and a second source for them would fight it. */}
+        {activeTab==='notes'&&<Fragment>
+          <section><h3>Note editor</h3>
+            <label class="check"><span>Spellcheck</span><input type="checkbox" checked={draft.note_spellcheck} onChange={e=>change('note_spellcheck',e.currentTarget.checked)}/></label>
+            <p>The browser's own spellchecker, on the editor's text input. Notes are prose, so it is worth more here than in a terminal — but it also underlines code, paths, and identifiers.</p>
+            <label>Markdown<select value={draft.note_syntax} onChange={e=>change('note_syntax',e.currentTarget.value as Config['note_syntax'])}><option value="markdown">Render Markdown</option><option value="plain">Show raw text</option></select></label>
+            <p>Raw text keeps every editing feature — undo, multi-cursor, list continuation, autosave — and only stops the Markdown projection, so headings, emphasis, links, and task markers stay as the characters you typed.</p>
+            <label>Tab key<select value={draft.note_tab_behavior} onChange={e=>change('note_tab_behavior',e.currentTarget.value as Config['note_tab_behavior'])}><option value="indent">Indent and outdent lines</option><option value="focus">Move focus out of the editor</option></select></label>
+            <p>Indenting is the default; Escape then Tab still leaves the editor either way, so the keyboard is never trapped.</p>
+            <label>Font family<input value={draft.note_font_family} placeholder="editor default: ui-monospace, Cascadia Mono, Consolas" onInput={e=>change('note_font_family',e.currentTarget.value)}/></label>
+            <label>Font size<input type="number" min="0" max="48" value={draft.note_font_size_px} onInput={e=>change('note_font_size_px',Number(e.currentTarget.value))}/></label>
+            <label>Line height<input type="number" min="0" max="3" step="0.05" value={draft.note_line_height} onInput={e=>change('note_line_height',Number(e.currentTarget.value))}/></label>
+            <p>Pixels and a multiplier. Zero keeps the editor's own default (16px, 1.55) so a future editor update can still move it. Saving re-measures open notes in place; nothing is remounted, so no undo history is lost.</p>
+          </section>
+
+          <section><h3>Touch command rail</h3>
+            <p>The editor's bottom quick-action strip — undo, indent, bullet, task, bold, heading, and this app's <code>→ agent</code> action — which runs each one without dismissing the on-screen keyboard.</p>
+            <label>Show the rail<select value={draft.note_command_rail} onChange={e=>change('note_command_rail',e.currentTarget.value as Config['note_command_rail'])}><option value="auto">Automatic: touch devices only</option><option value="on">Always</option><option value="off">Never</option></select></label>
+            <label>Button size<input type="number" min="0" max="96" value={draft.note_rail_button_size_px} onInput={e=>change('note_rail_button_size_px',Number(e.currentTarget.value))}/></label>
+            <p>Pixels, zero for the default 48px button in a 56px rail; the rail's height and the content inset above it follow the button size together. It is deliberately not sized in <code>rem</code>, so a dense page font cannot shrink a touch target.</p>
+            <div class="keybinding-heading"><div><strong>RAIL::ARRANGEMENT</strong><p>Which buttons appear, and in what order, is chosen from the gear button on the rail itself and saved by the editor per device — not in this config, so it is not part of this draft and Cancel does not undo a reset.</p></div><button type="button" onClick={resetNoteRailArrangement}>Reset rail arrangement</button></div>
+          </section>
+
+          <section><h3>Editor shortcuts</h3>
+            <label>Policy<select value={draft.note_shortcut_policy} onChange={e=>change('note_shortcut_policy',e.currentTarget.value as ShortcutPolicy)}><option value="browser-safe">Browser-safe: leave browser chords alone</option><option value="editor-first">Editor first: claim every chord</option><option value="none">None: no editor shortcuts</option></select></label>
+            <p>Browser-safe releases the chords Chromium claims for itself (reload, search, DevTools) so they keep doing what they do everywhere else. Editor-first suits the desktop app, where those chords are not wanted. Either way the browser may still swallow an accelerator before the page sees it.</p>
+            <div class="keybinding-heading"><div><strong>EDITOR::CHORDS</strong><p>Per-chord overrides on top of that policy. <em>Run the command</em> reclaims a chord the policy would release; <em>leave to the browser</em> gives one back. These apply inside a note only, and are separate from this app's own shortcuts on the Input tab.</p></div><button type="button" onClick={()=>change('note_shortcut_overrides',{...DEFAULT_NOTE_SHORTCUT_OVERRIDES})}>Restore editor shortcut defaults</button></div>
+            <input class="note-chord-filter" type="search" value={noteChordQuery} placeholder="Filter chords and commands…" aria-label="Filter editor shortcuts" spellcheck={false} onInput={e=>setNoteChordQuery(e.currentTarget.value)}/>
+            <div class="note-chord-list">
+              {NOTE_CHORDS.filter(binding=>{
+                const needle=noteChordQuery.trim().toLowerCase()
+                return !needle||binding.chord.includes(needle)||binding.command.includes(needle)
+              }).map(binding=><article key={binding.chord}>
+                <span class="note-chord"><kbd>{noteChordLabel(binding.chord)}</kbd>{!binding.isBrowserSafe&&<em title="A chord the browser claims first; the browser-safe policy releases it unless it is reclaimed here">browser chord</em>}</span>
+                <small title={binding.command}>{binding.command}</small>
+                <select aria-label={`Behaviour of ${noteChordLabel(binding.chord)} in the note editor`} value={noteChordState(draft.note_shortcut_overrides,binding.chord)} onChange={e=>setNoteChord(draft.note_shortcut_overrides,binding.chord,binding.command,e.currentTarget.value as NoteChordState)}>
+                  <option value="default">Policy default</option>
+                  <option value="bind">Run the command</option>
+                  <option value="release">Leave to the browser</option>
+                </select>
+              </article>)}
+            </div>
+          </section>
+
+          <section><h3>Project resources</h3><p>Project notes, Files, file editors, terminals, and previews all open as tabs in the focused pane. Drag any tab between panes or onto a pane edge to create a split.</p></section>
+        </Fragment>}
 
         {activeTab==='agents'&&<section><h3>Agents</h3><label>Claude executable<input value={draft.claude_exe} onInput={e=>change('claude_exe',e.currentTarget.value)} /></label><label>Claude default args<input value={claudeArgs} onInput={e=>setClaudeArgs(e.currentTarget.value)} /></label><label>Codex executable<input value={draft.codex_exe} onInput={e=>change('codex_exe',e.currentTarget.value)} /></label><label>Codex default args<input value={codexArgs} onInput={e=>setCodexArgs(e.currentTarget.value)} /></label><label class="check"><span>Reconcile native history</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label></section>}
 
@@ -606,6 +751,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <p>Longer copies are skipped rather than stored truncated, so a history entry never pastes a silently partial payload. Turning history off clears the ring; turning saving off deletes what was already written. Pinned entries survive eviction, retention, and Clear.</p>
           <div class="keybinding-heading"><div><strong>TOUCH::GESTURES</strong><p>Map mobile swipe and multi-finger gestures to commands. Vertical <em>single</em>-finger drags stay reserved for terminal scrolling, but two-finger vertical swipes are mappable; edge swipes are left to the OS (back / home).</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>Restore gesture defaults</button></div>
           {GESTURE_SLOTS.map(slot=><label>{GESTURE_LABELS[slot]}<select value={draft.mobile_gestures?.[slot]??''} onChange={e=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:e.currentTarget.value})}><option value="">Disabled</option>{bindingCommands.map(command=><option value={command.id}>{command.label}</option>)}</select></label>)}
+          <label class="check"><span>Swipe-away closes an open panel: while the sidebar or side panel is open, swiping back toward the edge it slid in from dismisses it instead of running that swipe's binding</span><input type="checkbox" checked={draft.mobile_gesture_swipe_away_close!==false} onChange={e=>change('mobile_gesture_swipe_away_close',e.currentTarget.checked)}/></label>
           <div class="keybinding-heading"><div><strong>KEYBOARD::SHORTCUTS</strong><p>Click a command, then press the new shortcut. Changes apply when Settings is saved.</p></div><button onClick={()=>{setBindings({...bindingDefaults});setCapturingCommand(null);setBindingError('')}}>Restore shortcut defaults</button></div>
           {capturingCommand&&<div class="keybinding-capture" role="status"><span>PRESS KEYS FOR</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label||capturingCommand}</strong><button onClick={()=>{setCapturingCommand(null);setBindingError('')}}>Cancel</button></div>}
           {bindingError&&<p class="keybinding-error" role="alert">{bindingError}</p>}
@@ -776,10 +922,73 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <p>No public Funnel access is enabled. Regular mobile access remains available at the direct 100.x tailnet URL; Tailscale access policy controls which devices can connect.</p>
         </section>}
 
-        {activeTab==='appearance'&&<section><h3>Appearance</h3><label>Theme<select value={draft.theme} onChange={e=>{const value=e.currentTarget.value as ThemeName;change('theme',value);applyTheme(value)}}><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option><option value="solarized-dark">Solarized Dark</option><option value="tokyo-night">Tokyo Night</option><option value="custom">Custom</option></select></label>{draft.theme==='custom' && <div class="theme-tokens">{Object.entries(draft.custom_theme).map(([key,value])=><label>{key}<input value={value} onInput={e=>{const custom={...draft.custom_theme,[key]:e.currentTarget.value};change('custom_theme',custom);configureCustomTheme(custom);applyTheme('custom')}} /></label>)}</div>}<input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} /><div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div><p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p></section>}
+        {activeTab==='appearance'&&<section><h3>Appearance</h3><label>Theme<select value={draft.theme} onChange={e=>{const value=e.currentTarget.value as ThemeName;change('theme',value);applyTheme(value)}}><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option><option value="solarized-dark">Solarized Dark</option><option value="tokyo-night">Tokyo Night</option><option value="gruvbox-dark">Gruvbox Dark</option><option value="catppuccin-mocha">Catppuccin Mocha</option><option value="catppuccin-latte">Catppuccin Latte</option><option value="nord">Nord</option><option value="dracula">Dracula</option><option value="everforest-dark">Everforest Dark</option><option value="rose-pine">Rosé Pine</option><option value="kanagawa">Kanagawa</option><option value="ayu-dark">Ayu Dark</option><option value="tron">Tron</option><option value="synthwave-84">Synthwave '84</option><option value="cyberpunk-neon">Cyberpunk Neon</option><option value="amber-crt">Amber CRT</option><option value="green-phosphor">Green Phosphor</option><option value="borland-dos">Borland DOS</option><option value="custom">Custom</option></select></label>{draft.theme==='custom' && <div class="theme-tokens">{Object.entries(draft.custom_theme).map(([key,value])=><label>{key}<input value={value} onInput={e=>{const custom={...draft.custom_theme,[key]:e.currentTarget.value};change('custom_theme',custom);configureCustomTheme(custom);applyTheme('custom')}} /></label>)}</div>}<input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} /><div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div><p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p></section>}
+  </Fragment>
+
+  // Rebuilt on the first keystroke of a search and then reused until the search
+  // ends or the config changes under it: typing costs a scan of a few hundred
+  // pre-normalized strings, not fourteen vnode trees per keystroke, while state
+  // that arrived after the last search (loaded prompts, edited keybindings) is
+  // still picked up the next time someone looks for it.
+  const searching=query.trim().length>0
+  if(searching&&(searchIndex.current?.source!==draft||!wasSearching.current)){
+    // The tab on screen is indexed from its live DOM instead of its vnodes, which
+    // is the only way what a child component rendered (`<AccountSettings/>`, the
+    // notification panels) becomes searchable — a component vnode is a function
+    // reference, not markup. Those harvests are kept for the page session, so a
+    // tab reached once stays fully searchable from every other tab afterwards.
+    const mounted=panel.current?.querySelectorAll('.settings-content > *:not(.settings-errors)')
+    if(mounted?.length){
+      const index=settingsTabs.findIndex(tab=>tab.id===activeTab)
+      const label=settingsTabs[index]?.label||activeTab
+      liveTabEntries.set(activeTab,[...mounted].flatMap(node=>harvestSettings(domVNode(node),activeTab,label,index)))
+    }
+    // Building a tab's vnodes evaluates the expressions inside its JSX, and those
+    // now run for tabs nobody opened. A latent throw in one tab must cost that
+    // tab's entries, not the whole panel — this runs during render.
+    searchIndex.current={source:draft,entries:settingsTabs.flatMap((tab,index)=>{
+      const own=liveTabEntries.get(tab.id)
+      if(own)return [tabEntry(tab.id,tab.label,index),...own]
+      try{return [tabEntry(tab.id,tab.label,index),...harvestSettings(tabContent(tab.id),tab.id,tab.label,index)]}
+      catch{return [tabEntry(tab.id,tab.label,index)]}
+    })}
+  }
+  wasSearching.current=searching
+  const searchResults=searching?searchSettings(searchIndex.current?.entries||[],query):[]
+  const activeResult=Math.min(highlight,Math.max(0,searchResults.length-1))
+  const openResult=(entry:SettingsSearchEntry)=>{
+    setActiveTab(entry.tab as SettingsTab)
+    setJump({entry})
+    setQuery('')
+    setHighlight(0)
+  }
+  const onSearchKey=(event:{key:string;preventDefault:()=>void})=>{
+    if(!searchResults.length)return
+    if(event.key==='ArrowDown'){event.preventDefault();setHighlight((activeResult+1)%searchResults.length)}
+    else if(event.key==='ArrowUp'){event.preventDefault();setHighlight((activeResult-1+searchResults.length)%searchResults.length)}
+    else if(event.key==='Enter'){event.preventDefault();openResult(searchResults[activeResult])}
+  }
+  return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent} aria-hidden={Boolean(closeIntent)} aria-label="Settings">
+    <header><div><span>CONFIG::V6</span><h2>Settings</h2></div>
+      <div class="settings-search">
+        <input ref={searchInput} type="search" value={query} placeholder="Search settings…" aria-label="Search settings" role="combobox" aria-expanded={searchResults.length>0} aria-controls="settings-search-results" autocomplete="off" spellcheck={false} onInput={event=>{setQuery(event.currentTarget.value);setHighlight(0)}} onKeyDown={onSearchKey} />
+        {!!query.trim()&&<div id="settings-search-results" class="settings-search-results" role="listbox" aria-label="Search results">
+          {searchResults.length?searchResults.map((entry,index)=><button type="button" role="option" aria-selected={index===activeResult} class={index===activeResult?'active':''} key={`${entry.tab}:${entry.kind}:${entry.key}:${entry.occurrence}`} onPointerDown={event=>event.preventDefault()} onClick={()=>openResult(entry)}><strong>{entry.label}</strong><small>{entry.tabLabel}{entry.section?` · ${entry.section}`:''}</small></button>):<p>No setting matches “{query.trim()}”.</p>}
+        </div>}
+      </div>
+      <button aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
+    {!!query.trim()&&<div class="settings-search-scrim" onPointerDown={()=>setQuery('')} />}
+    <main class="settings-body">
+      <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
+        {settingsTabs.map(tab=><button role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>setActiveTab(tab.id)}>{tab.label}</button>)}
+      </nav>
+      <div class="settings-content">
+        {Object.keys(errors).length > 0 && <section class="settings-errors" aria-live="assertive"><h3>Validation errors</h3>{Object.entries(errors).map(([field,message])=><p><strong>{field}</strong> — {message}</p>)}</section>}
+
+        {tabContent(activeTab)}
       </div>
     </main>
-    <footer><span aria-live="polite">{status==='saving…'?status:dirty?'unsaved changes':status}</span><button onClick={()=>void api('POST','/api/reveal',{path:draft.data_dir})}>Reveal config directory</button><button onClick={exportConfig}>Export sanitized</button><button onClick={()=>void reset()}>Restore defaults</button><button onClick={()=>requestClose()}>Cancel</button><button class={`primary${dirty?' unsaved':''}`} disabled={!dirty||status==='saving…'} onClick={()=>void save()}>{status==='saving…'?'Saving…':dirty?'Save changes':'Saved'}</button></footer>
+    <footer><span aria-live="polite">{status==='saving…'?status:dirty?'unsaved changes':status}</span><button onClick={()=>requestClose()}>Cancel</button><button class={`primary${dirty?' unsaved':''}`} disabled={!dirty||status==='saving…'} onClick={()=>void save()}>{status==='saving…'?'Saving…':dirty?'Save changes':'Saved'}</button></footer>
   </section>
   {closeIntent&&<div class="modal-layer settings-confirm-layer" onMouseDown={event=>event.target===event.currentTarget&&setCloseIntent(null)}>
     <section class="modal settings-confirm" ref={confirmPanel} role="alertdialog" aria-modal="true" aria-label="Unsaved settings" onMouseDown={event=>event.stopPropagation()}>

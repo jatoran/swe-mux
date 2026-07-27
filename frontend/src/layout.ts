@@ -11,9 +11,9 @@ export type PaneSplit = {
   first: PaneNode; second: PaneNode
 }
 export type PaneNode = PaneStack | PaneSplit
-export type PaneLayout = { version: 6; root: PaneNode | null }
+export type PaneLayout = { version: 7; root: PaneNode | null }
 
-export type NoteLeafIdentity = { kind: 'note' | 'session-note' | 'files' | 'file'; id: string }
+export type NoteLeafIdentity = { kind: 'note' | 'session-note' | 'file'; id: string }
 
 type BrowserCrypto = Pick<Crypto, 'getRandomValues'> & Partial<Pick<Crypto, 'randomUUID'>>
 
@@ -33,7 +33,7 @@ export function browserUuid(cryptoApi: BrowserCrypto | undefined = globalThis.cr
 
 const groupId = () => `group-${browserUuid().slice(0, 12)}`
 const clampRatio=(ratio:number)=>Math.max(.1,Math.min(.9,Math.round(ratio*10000)/10000))
-export const emptyLayout = (): PaneLayout => ({ version: 6, root: null })
+export const emptyLayout = (): PaneLayout => ({ version: 7, root: null })
 export const terminalLeaf = (id: string): PaneLeaf => ({ type: 'leaf', kind: 'terminal', id })
 export const resourceLeaf = (kind: PaneLeafKind, id: string): PaneLeaf => ({ type: 'leaf', kind, id })
 export const paneStack=(children:PaneLeaf[],activeId=children[0]?.id||'',id=groupId()):PaneStack=>({type:'stack',id,children,active_child_id:children.some(child=>child.id===activeId)?activeId:children[0]?.id||''})
@@ -46,7 +46,7 @@ export function parseNoteResourceId(resourceId: string): NoteLeafIdentity | null
   const separator = resourceId.indexOf(':')
   if (separator < 1) return null
   const kind = resourceId.slice(0, separator)
-  if (kind !== 'note' && kind !== 'sessions' && kind !== 'files' && kind !== 'file') return null
+  if (kind !== 'note' && kind !== 'sessions' && kind !== 'file') return null
   try {
     const id = decodeURIComponent(resourceId.slice(separator + 1))
     return id ? { kind: kind === 'sessions' ? 'session-note' : kind, id } as NoteLeafIdentity : null
@@ -61,10 +61,17 @@ const isLeaf=(value:unknown):value is PaneLeaf=>{
   return leaf.type==='leaf'&&['terminal','note','preview','history'].includes(String(leaf.kind))&&typeof leaf.id==='string'&&!!leaf.id
 }
 
+/** The Files browser was a `files:` resource leaf through layout v6. It is now the utility
+ *  drawer's Files tab, so a persisted layout carrying one is pruned on read: the browser is
+ *  still there, just not as a tab. Pruning is unconditional rather than version-gated —
+ *  `files:` is no longer a resource identity any pane can render. */
+const isRetiredFilesLeaf=(leaf:PaneLeaf):boolean=>leaf.kind==='note'&&leaf.id.startsWith('files:')
+
 function parseNode(value:unknown,seen:Set<string>,legacy=false):PaneNode|null{
   if(!value||typeof value!=='object')return null
   const node=value as Record<string,unknown>
   if(legacy&&isLeaf(value)){
+    if(isRetiredFilesLeaf(value))return null
     const key=value.id
     if(seen.has(key))return null
     seen.add(key)
@@ -75,6 +82,7 @@ function parseNode(value:unknown,seen:Set<string>,legacy=false):PaneNode|null{
     const children:PaneLeaf[]=[]
     for(const value of node.children){
       if(!isLeaf(value))return null
+      if(isRetiredFilesLeaf(value))continue
       const key=value.id
       if(seen.has(key))continue
       seen.add(key);children.push({...value})
@@ -108,7 +116,9 @@ function migrateResourceWorkspace(raw:unknown,seen:Set<string>):{pane:PaneStack|
     if(typeof id!=='string'||!id)continue
     const key=id
     if(seen.has(key))continue
-    seen.add(key);children.push(resourceLeaf('note',id))
+    const leaf=resourceLeaf('note',id)
+    if(isRetiredFilesLeaf(leaf))continue
+    seen.add(key);children.push(leaf)
   }
   const size=typeof workspace.size==='number'&&Number.isFinite(workspace.size)?Math.max(.2,Math.min(.7,workspace.size)):.38
   const active=typeof workspace.active_id==='string'?workspace.active_id:children[0]?.id
@@ -118,69 +128,45 @@ function migrateResourceWorkspace(raw:unknown,seen:Set<string>):{pane:PaneStack|
 export function parseLayout(value:unknown):PaneLayout{
   if(!value||typeof value!=='object')return emptyLayout()
   const raw=value as {version?:number;root?:unknown;panes?:unknown;note_dock?:unknown;note_workspace?:unknown}
-  if(raw.version===6){
+  // v6 and v7 share one tree shape; v6 differs only in that it could hold a `files:` leaf,
+  // which `parseNode` prunes, so the two read through the same path.
+  if(raw.version===7||raw.version===6){
     if(raw.root===null||raw.root===undefined)return emptyLayout()
     const root=parseNode(raw.root,new Set())
-    return root?{version:6,root}:emptyLayout()
+    return root?{version:7,root}:emptyLayout()
   }
   if([2,3,4,5].includes(raw.version||0)){
     const seen=new Set<string>()
     let root=raw.root===null||raw.root===undefined?null:parseNode(raw.root,seen,true)
     const workspace=migrateResourceWorkspace(raw.version===5?raw.note_workspace:raw.version===4?{...(raw.note_dock as object||{}),visible:true}:null,seen)
     if(workspace.pane)root=root?{type:'split',id:groupId(),direction:'horizontal',ratio:clampRatio(1-workspace.size),first:root,second:workspace.pane}:workspace.pane
-    return {version:6,root}
+    return {version:7,root}
   }
   if(Array.isArray(raw.panes)){
     const ids=[...new Set(raw.panes.filter((id):id is string=>typeof id==='string'&&!!id))]
-    return {version:6,root:legacyTree(ids)}
+    return {version:7,root:legacyTree(ids)}
   }
   return emptyLayout()
 }
 
 export function resolveLayout(cached:PaneLayout|undefined,persisted:unknown):PaneLayout{return cached??parseLayout(persisted)}
 
-/** Share of the workspace given to the seeded Files column. */
-export const DEFAULT_FILES_RATIO=.22
-
-/** Seed a never-arranged Project with a narrow Files column beside its Project note.
- *
- * Both leaves are pure viewports: `project.md` already exists from Project creation and
- * Files reads on demand, so a first open still costs no process. The note's stack is
- * deliberately the wide one, because new terminals open as a tab in the focused stack and
- * therefore land there without any placement special case.
- */
-export function defaultProjectLayout(projectId:string):PaneLayout{
-  const files=paneStack([resourceLeaf('note',noteResourceId('files',projectId))])
-  const note=paneStack([resourceLeaf('note',noteResourceId('note',projectId))])
-  return {version:6,root:{type:'split',id:groupId(),direction:'horizontal',ratio:clampRatio(DEFAULT_FILES_RATIO),first:files,second:note}}
-}
-
 /** Anchor a terminal spawned into a Project the browser is not currently viewing.
  *
- * There is no focused view to inherit, and the first leaf in tree order is the seeded
- * Files column, so a naive anchor buries terminals in a narrow sidebar-width pane.
- * Prefer an existing terminal, then any pane that is not a file browser.
+ * There is no focused view to inherit, so prefer an existing terminal and fall back to
+ * whatever the first leaf is.
  */
 export function spawnAnchorId(layout:PaneLayout):string|null{
   const all=leaves(layout)
-  return all.find(leaf=>leaf.kind==='terminal')?.id
-    ??all.find(leaf=>leaf.kind!=='note'||parseNoteResourceId(leaf.id)?.kind!=='files')?.id
-    ??all[0]?.id
-    ??null
+  return all.find(leaf=>leaf.kind==='terminal')?.id??all[0]?.id??null
 }
 
-/** A Files browser leaf is a `note`-kind leaf whose resource id decodes to kind `files`. */
-export function isFilesLeaf(leaf:PaneLeaf):boolean{return leaf.kind==='note'&&parseNoteResourceId(leaf.id)?.kind==='files'}
-export function stackHasFiles(stack:PaneStack):boolean{return stack.children.some(isFilesLeaf)}
-
-/** A leaf id to anchor a newly opened view, honoring the caller's preference but never a Files
- *  pane: prefer the preferred leaf's stack when it is not a Files pane, then the first non-Files
- *  pane, and only when Files is the sole pane fall back to it. Returns null for an empty layout. */
+/** A leaf id to anchor a newly opened view: the caller's preference when it is still in this
+ *  layout, otherwise the first pane's active tab. Returns null for an empty layout. */
 export function openAnchorId(layout:PaneLayout,preferredId:string|null):string|null{
   const stacks=paneStacks(layout)
-  const preferred=preferredId?stacks.find(stack=>stack.children.some(child=>child.id===preferredId)):null
-  if(preferred&&!stackHasFiles(preferred))return preferredId
-  return (stacks.find(stack=>!stackHasFiles(stack))||stacks[0])?.active_child_id??null
+  if(preferredId&&stacks.some(stack=>stack.children.some(child=>child.id===preferredId)))return preferredId
+  return stacks[0]?.active_child_id??null
 }
 
 export function leaves(layout:PaneLayout,kind?:PaneLeafKind):PaneLeaf[]{
@@ -223,9 +209,7 @@ export function openTab(layout:PaneLayout,targetId:string|null,next:PaneLeaf):Pa
   const existing=leaves(layout).find(leaf=>leaf.id===next.id)
   if(existing)return activateContainingStack(layout,existing.id)
   if(!layout.root)return {...layout,root:paneStack([next])}
-  const target=targetId?stackForView(layout,targetId):null
-  // Never default into a Files pane: an unanchored open lands in the first non-Files pane.
-  const pane=target||paneStacks(layout).find(stack=>!stackHasFiles(stack))||paneStacks(layout)[0]
+  const pane=(targetId?stackForView(layout,targetId):null)||paneStacks(layout)[0]
   if(!pane)return {...layout,root:paneStack([next])}
   return {...layout,root:mapPanes(layout.root,item=>item.id===pane.id?{...item,children:[...item.children,next],active_child_id:next.id}:item)}
 }
@@ -253,7 +237,7 @@ export function splitView(layout:PaneLayout,targetId:string|null,next:PaneLeaf,d
   if(!layout.root)return {...layout,root:paneStack([next])}
   const existing=leaves(layout).find(leaf=>leaf.id===next.id)
   if(existing&&existing.id===targetId)return activateContainingStack(layout,targetId!)
-  const targetPane=(targetId&&stackForView(layout,targetId))||paneStacks(layout).find(stack=>!stackHasFiles(stack))||paneStacks(layout)[0]
+  const targetPane=(targetId&&stackForView(layout,targetId))||paneStacks(layout)[0]
   if(!targetPane)return openTab(layout,null,next)
   const without=existing?removeLeaf(layout,next.kind,next.id):layout
   if(!without.root)return {...without,root:paneStack([next])}
@@ -286,45 +270,11 @@ export function addLeafToStack(layout:PaneLayout,stackId:string,next:PaneLeaf):P
   return {...layout,root:mapPanes(layout.root,pane=>pane.id===stackId?{...pane,children:[...pane.children,next],active_child_id:next.id}:pane)}
 }
 
-function setSplitRatioContaining(layout:PaneLayout,leafId:string,ratio:number):PaneLayout{
-  if(!layout.root)return layout
-  const visit=(node:PaneNode):PaneNode=>{
-    if(node.type==='stack')return node
-    const first=visit(node.first),second=visit(node.second)
-    const owns=(branch:PaneNode)=>branch.type==='stack'&&branch.children.some(child=>child.id===leafId)
-    const next={...node,first,second}
-    if(owns(node.first))return {...next,ratio:clampRatio(ratio)}
-    if(owns(node.second))return {...next,ratio:clampRatio(1-ratio)}
-    return next
-  }
-  return {...layout,root:visit(layout.root)}
-}
-
-/** Place a companion view (a session note) beside its anchor rather than over it.
- *
- * Stacking a note onto the terminal that opened it hides the terminal, which
- * defeats jotting while an agent works. Preference order: an already-open copy,
- * then an existing non-terminal pane, then a new split beside the anchor.
- */
-export function placeCompanionLeaf(
-  layout:PaneLayout,
-  anchorId:string|null,
-  next:PaneLeaf,
-  direction:SplitDirection='horizontal',
-  ratio=1/3,
-):PaneLayout{
-  if(leaves(layout).some(leaf=>leaf.id===next.id))return activateContainingStack(layout,next.id)
-  if(!layout.root)return {...layout,root:paneStack([next])}
-  const anchorPane=anchorId?stackForView(layout,anchorId):null
-  const others=paneStacks(layout).filter(pane=>pane.id!==anchorPane?.id&&!stackHasFiles(pane))
-  const companion=others.find(pane=>pane.children.every(child=>child.kind!=='terminal'))||others[0]
-  if(companion)return addLeafToStack(layout,companion.id,next)
-  const anchor=anchorPane?.children.find(child=>child.id===anchorId)?.id
-    ||anchorPane?.active_child_id
-    ||paneStacks(layout)[0]?.active_child_id
-    ||null
-  return setSplitRatioContaining(splitView(layout,anchor,next,direction),next.id,ratio)
-}
+// Session notes used to open through a `placeCompanionLeaf` helper that split a pane off so
+// the note sat beside its terminal rather than over it. It is gone: an ordinary open now
+// lands as a tab in the anchor's pane like every other resource. Rearranging the workspace
+// is an explicit action (the tab menu's split rows, a drag onto a pane edge), not something
+// opening a note decides for you.
 
 export function moveLeafToStack(layout:PaneLayout,kind:PaneLeafKind,id:string,targetStackId:string,orderedIds?:string[]):PaneLayout{
   const leaf=leaves(layout).find(item=>item.kind===kind&&item.id===id)

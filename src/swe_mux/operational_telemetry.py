@@ -905,6 +905,60 @@ class OperationalTelemetryStore:
 
         await self._run(op)
 
+    async def reset_session_provider_observations(
+        self, session_id: str, root_agent_run_id: str | None
+    ) -> None:
+        """Discard provider evidence after root-identity reconciliation.
+
+        Tool/compaction evidence and transcript coverage are rebuildable from
+        the repaired native transcript. Process fingerprints describe the real
+        PTY tree, so they are retained and re-attributed to its root run.
+        """
+
+        def op() -> None:
+            with self._db:
+                self._db.execute("DELETE FROM tool_events WHERE session_id=?", (session_id,))
+                self._db.execute(
+                    "DELETE FROM context_compactions WHERE session_id=?", (session_id,)
+                )
+                self._db.execute(
+                    "DELETE FROM transcript_telemetry_coverage WHERE session_id=?",
+                    (session_id,),
+                )
+                self._db.execute(
+                    "UPDATE process_evidence SET agent_run_id=? WHERE session_id=?",
+                    (root_agent_run_id, session_id),
+                )
+
+        await self._run(op)
+
+    async def quarantine_agent_run_provider_observations(
+        self, session_id: str, false_agent_run_id: str, root_agent_run_id: str
+    ) -> None:
+        """Remove only telemetry attributed to a proven historical false run."""
+
+        def op() -> None:
+            with self._db:
+                self._db.execute(
+                    "DELETE FROM tool_events WHERE session_id=? AND agent_run_id=?",
+                    (session_id, false_agent_run_id),
+                )
+                self._db.execute(
+                    "DELETE FROM context_compactions WHERE session_id=? AND agent_run_id=?",
+                    (session_id, false_agent_run_id),
+                )
+                self._db.execute(
+                    "DELETE FROM transcript_telemetry_coverage WHERE session_id=?",
+                    (session_id,),
+                )
+                self._db.execute(
+                    "UPDATE process_evidence SET agent_run_id=? "
+                    "WHERE session_id=? AND agent_run_id=?",
+                    (root_agent_run_id, session_id, false_agent_run_id),
+                )
+
+        await self._run(op)
+
     async def process_candidates(self) -> list[dict[str, Any]]:
         def op() -> list[dict[str, Any]]:
             rows = self._db.execute(

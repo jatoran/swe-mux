@@ -36,6 +36,7 @@ import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { currentProfile, loadRailItems } from './deviceSettings'
 import { redrawVisibleTerminal, refitVisibleTerminal } from './terminalViewport'
 import { localPreviewUrl } from './previewLinks'
+import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness, type ConnectionPhase } from './liveness'
 import {
   shouldLoadWebgl,
   terminalAttachReadyFrame,
@@ -158,6 +159,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // Set inside the mount effect; lets a layout change outside the ResizeObserver's reach
   // (the voice strip appearing/vanishing under the terminal) force an xterm re-fit.
   const scheduleFitRef=useRef<()=>void>(()=>{})
+  // Set inside the mount effect; lets the connection overlay force an immediate attempt
+  // instead of leaving the user waiting on a backoff they cannot see.
+  const reconnectNowRef=useRef<()=>void>(()=>{})
   const lastAutoCopiedSelectionRef=useRef('')
   const clipboardStatusTimerRef=useRef<number|null>(null)
   const stateRef=useRef(session.state)
@@ -328,7 +332,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let reconnectReplay=false
     let disposed=false
     let replyRefreshTimer:number|undefined
-    let hiddenAt:number|null=document.hidden?Date.now():null
+    // Connection-attempt bookkeeping for the liveness watcher: when the current attempt
+    // started, when the backoff retry is due, and the watchdog that fails a handshake
+    // which never completes (see liveness.ts for why that is the important case).
+    let attemptStartedAt:number|null=null
+    let nextAttemptAt:number|null=null
+    let handshakeTimer:number|undefined
     let replaying = false
     let replayEndReceived = false
     let replayAllowsTerminalResponses = false
@@ -432,7 +441,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // its emulated pixel ratio, leaving xterm interactive but visually blank.
     // The built-in renderer is reliable for the single full-screen mobile pane.
     const mobileRenderer = window.matchMedia('(max-width:760px)').matches
-    if (shouldLoadWebgl(rendererPreference, mobileRenderer)) {
+    // Codex's full-screen redraws can corrupt WebGL scrollback while the
+    // viewport is off-tail. Its DOM renderer remains stable for old sessions;
+    // new sessions also start Codex in raw scrollback mode on the backend.
+    if (shouldLoadWebgl(rendererPreference, mobileRenderer, session.backend)) {
       try {
         const addon = new WebglAddon()
         webgl = addon
@@ -468,12 +480,18 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // history, prompt templates) once an overlay has taken DOM focus away.
       noteTerminalFocus(session.id)
     }
+    const clearHandshakeWatchdog=()=>{
+      if(handshakeTimer===undefined)return
+      window.clearTimeout(handshakeTimer)
+      handshakeTimer=undefined
+    }
     const scheduleReconnect=()=>{
       if(disposed||['exited','crashed'].includes(stateRef.current)||reconnectTimer!==undefined)return
       setConnectionState('reconnecting')
-      const delay=Math.min(1000*2**reconnectAttempt,10000)
+      const delay=retryDelay(reconnectAttempt)
       reconnectAttempt+=1
-      reconnectTimer=window.setTimeout(()=>{reconnectTimer=undefined;connect(true)},delay)
+      nextAttemptAt=Date.now()+delay
+      reconnectTimer=window.setTimeout(()=>{reconnectTimer=undefined;nextAttemptAt=null;connect(true)},delay)
     }
     const sendInput = (data: string, protocolResponse: boolean, broadcast: boolean) => {
       if (socket?.readyState !== WebSocket.OPEN) return
@@ -541,13 +559,30 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const connect=(reconnecting:boolean)=>{
       if(disposed||['exited','crashed'].includes(stateRef.current))return
       if(reconnectTimer!==undefined){clearTimeout(reconnectTimer);reconnectTimer=undefined}
+      nextAttemptAt=null
+      clearHandshakeWatchdog()
       reconnectReplay=reconnecting
       setConnectionState(reconnecting?'reconnecting':'connecting')
-      const next=openWebSocket(`/pty/${session.id}`)
+      attemptStartedAt=Date.now()
+      let next:WebSocket
+      // Constructing a socket can throw outright (no route, blocked scheme). That must feed
+      // the retry path rather than escape into the caller's timer.
+      try{next=openWebSocket(`/pty/${session.id}`)}catch{socket=null;scheduleReconnect();return}
       next.binaryType='arraybuffer'
       socket=next
+      // A handshake that stalls (resumed PWA, route gone) never fires close or error, so
+      // without this the pane would sit on "reconnecting…" forever.
+      handshakeTimer=window.setTimeout(()=>{
+        handshakeTimer=undefined
+        if(socket!==next||next.readyState===WebSocket.OPEN)return
+        next.onclose=null;next.onerror=null;next.onmessage=null
+        try{next.close()}catch{/* already tearing down */}
+        socket=null
+        scheduleReconnect()
+      },HANDSHAKE_TIMEOUT_MS)
       next.onopen=()=>{
         if(socket!==next)return
+        clearHandshakeWatchdog()
         reconnectAttempt=0
         setConnectionState('connected')
         if(!reconnecting)reportStartup('socket_open')
@@ -573,8 +608,22 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     const reconnect=()=>{
       if(disposed||['exited','crashed'].includes(stateRef.current))return
-      if(socket){socket.onclose=null;socket.close();socket=null}
+      clearHandshakeWatchdog()
+      if(socket){socket.onclose=null;socket.onerror=null;socket.onmessage=null;socket.close();socket=null}
       connect(true)
+    }
+    // Forced by the liveness watcher (and by tapping the overlay): the user is back, so
+    // drop any pending backoff and try immediately.
+    const reconnectNow=()=>{
+      if(disposed||['exited','crashed'].includes(stateRef.current))return
+      reconnectAttempt=0
+      reconnect()
+    }
+    reconnectNowRef.current=reconnectNow
+    const socketPhase=():ConnectionPhase=>{
+      if(!socket)return 'closed'
+      if(socket.readyState===WebSocket.OPEN)return 'open'
+      return socket.readyState===WebSocket.CONNECTING?'connecting':'closed'
     }
     const input = term.onData(data => {
       if (shouldSuppressTerminalProtocolResponse(data, backendRef.current)) return
@@ -880,24 +929,26 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     })
     intersection?.observe(host.current)
     window.addEventListener('resize', scheduleFit)
-    const onVisibility=()=>{
-      if(document.hidden){hiddenAt=Date.now();return}
-      const slept=hiddenAt!==null&&Date.now()-hiddenAt>5000
-      hiddenAt=null
-      if(slept||!socket||socket.readyState!==WebSocket.OPEN)reconnect()
-      scheduleFullRedraw()
-    }
-    const onPageShow=(event:PageTransitionEvent)=>{if(event.persisted)reconnect();scheduleFullRedraw()}
+    // Redraw only: reconnect decisions all belong to the liveness watcher below, which
+    // owns the attempt bookkeeping and can also recover from a stalled handshake.
+    const onVisibility=()=>{if(!document.hidden)scheduleFullRedraw()}
+    const onPageShow=()=>scheduleFullRedraw()
     const onWindowFocus=()=>scheduleFullRedraw()
-    const onOnline=()=>{if(!socket||socket.readyState!==WebSocket.OPEN)reconnect()}
     document.addEventListener('visibilitychange',onVisibility)
     window.addEventListener('pageshow',onPageShow)
     window.addEventListener('focus',onWindowFocus)
-    window.addEventListener('online',onOnline)
+    const stopLivenessWatch=watchLiveness({
+      phase:socketPhase,
+      attemptStartedAt:()=>attemptStartedAt,
+      nextAttemptAt:()=>nextAttemptAt,
+      // An exited or crashed session has nothing left to attach to.
+      enabled:()=>!disposed&&!['exited','crashed'].includes(stateRef.current),
+      reconnect:reconnectNow,
+    })
     window.visualViewport?.addEventListener('resize',scheduleFit)
     loadLatestReply()
     connect(false)
-    return () => { disposed=true;stopSelectionScroll();if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('online',onOnline);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{} }
+    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, mobileInput])
 
   const copy = async () => {
@@ -1110,7 +1161,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     <button class={findCase ? 'active' : ''} title="Match case" aria-pressed={findCase} onClick={() => { setFindCase(value => !value); setFindResult('') }}>Aa</button>
     <span class={findResult === 'no match' ? 'missing' : ''}>{findResult}</span>
     <button title="Close find" onClick={closeFind}>×</button>
-  </div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status">{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
+  </div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
     const data=event.clipboardData
     const image=data&&clipboardImage(Array.from(data.items))
     if(image){event.preventDefault();void insertTerminalImage(termRef.current!,session,image).then(()=>{setManualPaste(false);showClipboardStatus('Pasted')}).catch(cause=>reportError(cause instanceof Error?cause.message:'Clipboard image paste failed.'));return}

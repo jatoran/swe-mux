@@ -13,20 +13,22 @@ rendering and local interaction; pure helpers own transformations that need dete
 | Workspace composition | `App.tsx` | fetch/coordinate Projects, sessions, layouts, menus, overlays |
 | Layout algebra | `layout.ts` | parse/migrate and pure stack/split/leaf transforms |
 | Mobile projection | `mobileWorkspace.ts` | pure flatten/select/adjacent-close rules; no persistence |
-| Terminal viewport | `TerminalPane.tsx`, `terminalProtocol.ts`, `terminalViewport.ts`, `terminalRenderer.ts`, `terminalRenderDiagnostics.ts` | xterm/WS lifecycle, pre-replay attach sizing, renderer policy/fallback, replay, device-response classification/Codex late-color suppression, input, responsive fitting, dev-only render diagnostics |
-| Project resources | `ProjectResource.tsx`, `ProjectNoteEditor.tsx`, `noteSaveQueue.ts`, `fileClipboard.ts` | file tree/editors, note-specific save isolation, and the pure path-joining/clipboard-truncation rules behind the tree's copy actions |
+  | Terminal viewport | `TerminalPane.tsx`, `terminalProtocol.ts`, `terminalViewport.ts`, `terminalRenderer.ts`, `terminalRenderDiagnostics.ts` | xterm/WS lifecycle, pre-replay attach sizing, renderer policy/fallback (DOM-only for mobile and Codex), replay, device-response classification/Codex late-color suppression, input, responsive fitting, dev-only render diagnostics |
+| Project resources | `ProjectResource.tsx`, `ProjectNoteEditor.tsx`, `noteSaveQueue.ts`, `noteEditorSettings.ts`, `fileClipboard.ts` | file tree/editors, note-specific save isolation, the pure config → editor-configuration resolution (element props vs `--continuity-*` properties, chord-overlay sanitizing), and the pure path-joining/clipboard-truncation rules behind the tree's copy actions |
+| Send a selection to an agent | `noteSelection.ts`, `agentTargets.ts`, `SendToAgentPicker.tsx` | pure Continuity-snapshot slicing (UTF-8 byte offsets → UTF-16), message composition, argv/bracketed-paste payload rules, and which sessions may receive a send; the dialog only presents them, and `App.tsx` owns the spawn/write |
 | History | `HistoryBrowser.tsx` | filters, transcript review, backfill progress/actions |
-| Projects | `ProjectsManager.tsx` | configured catalog UI, not workspace placement |
+| Projects | `ProjectsManager.tsx` | configured catalog UI plus the single per-Project settings editor (both storage layers), not workspace placement |
 | Project actions | `ProjectRunMenu.tsx` | Run catalog, trust, and launch interaction |
 | Preview links/views | `previewLinks.ts`, `PreviewPane.tsx`, `TerminalPane.tsx` | loopback normalization, link dispatch, sandboxed registered viewport |
-| Accounts/resources | `ProviderAccounts.tsx`, `ResourceUsage.tsx` | anchored viewport popovers and summaries |
-| Settings | `Settings.tsx`, `settingsDraft.ts` | explicit draft/save/discard lifecycle |
+| Accounts/resources | `ProviderAccounts.tsx`, `ResourceUsage.tsx`, `resourceTotals.ts`, `resourceTooling.ts` | anchored viewport popovers and summaries; the rail shows working set from the shared poll, while the open popover fetches `?unique_memory=1` on its own timer because that sample is far too costly for a background poll; `resourceTooling.ts` classifies language servers so per-session duplication is named rather than hidden among identical `node.exe` rows |
+| Settings | `Settings.tsx`, `settingsDraft.ts`, `settingsSearch.ts` | global options only — per-Project options belong to `ProjectsManager.tsx`; explicit draft/save/discard lifecycle; search indexes the vnode tree of every tab (`Settings.tsx` renders each tab through one id-taking function so unmounted tabs can be built without effects), keeping the index self-maintaining rather than a second list to update |
 | Guided onboarding | `GuidedTutorial.tsx`, `tutorial.ts` | action gates, coach-mark geometry, product-event matching, and device-local completion |
 | Voice conversation | `ConversationControl.tsx`, `conversation.ts`, `VoicePlayer.tsx`, `voice.ts`, `mobileVoice.ts` | one-device capture ownership, VAD/WAV encoding, wake commands, playback queue/barge-in, direct private-HTTPS redirect |
 | Automation/usage/processes | feature-named panels | feature-local navigation and presentation |
 | Utility drawer | `UtilityDrawer.tsx`, `drawerTabs.ts`, `ClipboardPanel.tsx`, `CommandsTab.tsx`, `PromptsTab.tsx`, `Notifications.tsx` | one host, two renderings (mobile overlay / desktop docked column + icon rail); tab registry, width/tab persistence, and per-tab bodies. Tab bodies own their own data and never place the host |
 | Clipboard capture | `clipboardHistory.ts`, `insertTarget.ts` | boot-installed copy capture (writeText wrapper + capture-phase copy/cut) with client-side dedupe, and pure last-focused-surface insert routing shared by every injecting surface |
-| Shared interaction | `dragReorder.ts`, `menuPosition.ts`, `modalFocus.ts`, `keys.ts`, `sidebarProjects.ts`, `sessionAttention.ts` | pure or narrowly stateful reusable behavior, including collapsed-Project labels and live/read aggregation |
+| Shared interaction | `dragReorder.ts`, `menuPosition.ts`, `modalFocus.ts`, `keys.ts`, `sidebarProjects.ts`, `sessionAttention.ts`, `MenuGroup.tsx` | pure or narrowly stateful reusable behavior, including collapsed-Project labels, live/read aggregation, and the collapsible menu group (desktop flyout / touch accordion) any `.context-menu` can host |
+| Connection liveness | `liveness.ts`, `api.ts` | one recovery policy (attempt deadlines, resume signals, backoff) for every long-lived socket and load, plus the `fetch` wrapper's request timeout |
 
 ## Extraction rule
 
@@ -52,10 +54,12 @@ if (mobile) updateLayout(projectId, flattenIntoOneStack(layout))
 - Daemon snapshots are refreshed/coalesced at the composition root.
 - Project layout is optimistic durable state; focus, sidebar size/collapse, audio unlock, and
   responsive mode are device-local state.
-- First-open layout seeding lives in `App.tsx` over the pure `defaultProjectLayout` helper, because
-  `note:`/`files:` resource IDs are a browser encoding that `layouts.py` only stores opaquely. It
-  runs once per Project per session, guarded by revision 0 plus an empty root, and releases its
-  guard when the layout PATCH fails.
+- A never-arranged Project opens on the empty stage. There is no first-open seeding: the two
+  things worth seeding a pane with (Files, the Project note) are now one drawer tab and one
+  click away, so seeding would only cost pixels and a layout write.
+- `layouts.py` stores `note:`/`file:` resource IDs opaquely — they are a browser encoding — with
+  one exception it must know about: a `files:` leaf from layout v6 is pruned rather than stored,
+  in both `layout.ts` and `layouts.py`, because no pane can render one any more.
 - File/note drafts remain with their resource components/queues and survive view reparenting.
 - Popovers that can escape a narrow sidebar use viewport portals. Modal focus/backdrop behavior
   is centralized rather than reimplemented per dialog.
@@ -68,6 +72,17 @@ if (mobile) updateLayout(projectId, flattenIntoOneStack(layout))
   second Project, account, session, layout, or Settings state authority.
 - High-frequency pointer movement updates refs and one DOM indicator, not component state. See
   `workspace-state.md`.
+- Nothing that reaches the daemon may end in a state only a remount can leave. A resumed PWA can
+  hang a WebSocket handshake or a `fetch` indefinitely without erroring, so `liveness.ts` owns one
+  policy for all of it: every attempt carries a deadline (`HANDSHAKE_TIMEOUT_MS` for sockets,
+  `REQUEST_TIMEOUT_MS` passed to `api`), failures back off, and `watchResume`/`watchLiveness`
+  re-check on visibility, `pageshow`, `online`, focus, and a visible-only poll. `shouldForceReconnect`
+  is the single pure decision (stalled handshake, backoff due, or an attempt older than a
+  suspension long enough to have killed it silently), so the `/events` socket (`App.tsx`), each
+  `/pty` socket (`TerminalPane.tsx`), resource loads (`ProjectResource.tsx`), and autosave retries
+  (`noteSaveQueue.ts`) all recover the same way instead of each inventing a rule. A resume burst
+  (visibility + focus + online together) collapses to one attempt; a failure surfaced to the user
+  always offers an immediate retry.
 
 ## Related design
 

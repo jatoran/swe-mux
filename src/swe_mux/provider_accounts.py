@@ -16,7 +16,8 @@ from typing import Any, Literal
 import aiohttp
 
 from .event_bus import EventBus
-from .subprocess_flags import background_creation_flags
+from .shim_paths import which_real
+from .subprocess_flags import background_creation_flags, reap_process_tree
 
 Provider = Literal["claude", "codex"]
 CurrentAccountState = Literal["saved", "external", "signed_out", "unreadable"]
@@ -1271,11 +1272,14 @@ class ProviderAccountManager:
 
     def _spawn_command(self, provider: Provider, args: list[str]) -> list[str]:
         configured = self.executables[provider]
-        executable = shutil.which(configured)
+        # which_real: never resolve to the mux's own ~/.mux/bin agent shim — a
+        # daemon whose PATH inherited a session's shim dir would otherwise run
+        # login/status through the shim, which recurses into itself.
+        executable = which_real(configured)
         if executable is None and os.name == "nt" and Path(configured).suffix.casefold() == ".exe":
             # npm-installed CLIs commonly expose only codex.cmd/claude.cmd even
             # when the mux's compatibility default still names an .exe.
-            executable = shutil.which(str(Path(configured).with_suffix("")))
+            executable = which_real(str(Path(configured).with_suffix("")))
         executable = executable or configured
         if os.name == "nt" and Path(executable).suffix.casefold() in {".cmd", ".bat"}:
             return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", executable, *args]
@@ -1298,8 +1302,7 @@ class ProviderAccountManager:
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout_seconds)
         except TimeoutError as exc:
-            process.kill()
-            await process.wait()
+            await reap_process_tree(process)
             raise ProviderAccountError(f"{provider} login timed out") from exc
         output = stdout.decode(errors="replace").strip()
         diagnostic = stderr.decode(errors="replace").strip()
@@ -1641,7 +1644,12 @@ class ProviderAccountManager:
     async def _fetch_codex_rpc(
         self, auth: dict[str, Any], account_id: str
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        with tempfile.TemporaryDirectory(prefix="swe-mux-codex-quota-") as temporary:
+        # ignore_cleanup_errors: a straggler from the killed app-server tree can
+        # briefly hold auth.json open; a leaked temp dir must not turn a
+        # completed quota read into a WinError 32 refresh failure.
+        with tempfile.TemporaryDirectory(
+            prefix="swe-mux-codex-quota-", ignore_cleanup_errors=True
+        ) as temporary:
             codex_home = Path(temporary)
             _atomic_write(
                 codex_home / "auth.json",
@@ -1669,8 +1677,7 @@ class ProviderAccountManager:
             stdin = process.stdin
             stdout = process.stdout
             if stdin is None or stdout is None:
-                process.kill()
-                await process.wait()
+                await reap_process_tree(process)
                 return None, None
 
             async def send(message: dict[str, Any]) -> None:
@@ -1712,8 +1719,10 @@ class ProviderAccountManager:
             except TimeoutError:
                 return None, None
             finally:
-                process.kill()
-                await process.wait()
+                # The app-server never exits on its own (it waits on our stdin),
+                # so this must take the whole cmd->node->codex tree down or the
+                # refresh coroutine deadlocks holding the refresh lock.
+                await reap_process_tree(process)
             if message.get("error"):
                 return None, None
             wrapper = _record(message.get("result"))

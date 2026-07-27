@@ -875,8 +875,8 @@ def test_account_commands_resolve_npm_batch_shims(
 ) -> None:
     manager = ProviderAccountManager(tmp_path, EventBus(), codex_exe="codex.exe")
     monkeypatch.setattr(
-        "swe_mux.provider_accounts.shutil.which",
-        lambda command: r"C:\npm\codex.cmd" if command == "codex" else None,
+        "swe_mux.shim_paths.shutil.which",
+        lambda command, path=None: r"C:\npm\codex.cmd" if command == "codex" else None,
     )
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
 

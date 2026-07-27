@@ -3,11 +3,15 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-LAYOUT_VERSION = 6
+LAYOUT_VERSION = 7
 MAX_LAYOUT_LEAVES = 64
 MAX_LAYOUT_DEPTH = 24
 LEAF_KINDS = {"terminal", "note", "preview", "history"}
 SPLIT_DIRECTIONS = {"horizontal", "vertical"}
+# The Files browser was a `files:` resource leaf through layout v6; it is now the utility
+# drawer's Files tab. A persisted (or stale-client) layout carrying one is pruned rather than
+# rejected: the browser still exists, just not as a pane tab.
+RETIRED_LEAF_PREFIXES = ("files:",)
 
 
 def _leaf(kind: str, resource_id: str) -> dict[str, Any]:
@@ -55,6 +59,13 @@ def _balanced_terminals(ids: list[str]) -> dict[str, Any] | None:
     }
 
 
+def _is_retired_leaf(value: object) -> bool:
+    if not isinstance(value, dict) or value.get("kind") != "note":
+        return False
+    resource_id = value.get("id")
+    return isinstance(resource_id, str) and resource_id.startswith(RETIRED_LEAF_PREFIXES)
+
+
 def _validated_leaf(value: object, seen: set[str], leaves: list[dict[str, Any]]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("layout pane children must be leaves")
@@ -83,35 +94,55 @@ def _validate_node(
     seen: set[str],
     leaves: list[dict[str, Any]],
     legacy: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
+    """Validate one node, or return None when pruning empties it.
+
+    None is not an error: a pane whose only tab was a retired Files leaf disappears, and a
+    split with one surviving branch collapses into that branch.
+    """
     if depth > MAX_LAYOUT_DEPTH:
         raise ValueError(f"layout exceeds maximum depth {MAX_LAYOUT_DEPTH}")
     if not isinstance(node, dict):
         raise ValueError("layout node must be an object")
     node_type = node.get("type")
     if legacy and node_type == "leaf":
+        if _is_retired_leaf(node):
+            return None
         return _pane([_validated_leaf(node, seen, leaves)])
     if node_type == "stack":
         children = node.get("children")
         if not isinstance(children, list) or not children:
             raise ValueError("layout pane requires at least one tab")
-        normalized = [_validated_leaf(child, seen, leaves) for child in children]
+        normalized = [
+            _validated_leaf(child, seen, leaves)
+            for child in children
+            if not _is_retired_leaf(child)
+        ]
+        if not normalized:
+            return None
         return _pane(normalized, node.get("active_child_id"), node.get("id"))
     if node_type == "split":
         direction = node.get("direction")
         if direction not in SPLIT_DIRECTIONS:
             raise ValueError("layout split direction must be horizontal or vertical")
+        ratio = _ratio(node.get("ratio", 0.5))
+        first = _validate_node(
+            node.get("first"), depth=depth + 1, seen=seen, leaves=leaves, legacy=legacy
+        )
+        second = _validate_node(
+            node.get("second"), depth=depth + 1, seen=seen, leaves=leaves, legacy=legacy
+        )
+        if first is None:
+            return second
+        if second is None:
+            return first
         return {
             "type": "split",
             "id": _group_id(node.get("id")),
             "direction": direction,
-            "ratio": _ratio(node.get("ratio", 0.5)),
-            "first": _validate_node(
-                node.get("first"), depth=depth + 1, seen=seen, leaves=leaves, legacy=legacy
-            ),
-            "second": _validate_node(
-                node.get("second"), depth=depth + 1, seen=seen, leaves=leaves, legacy=legacy
-            ),
+            "ratio": ratio,
+            "first": first,
+            "second": second,
         }
     raise ValueError("layout node type must be stack or split")
 
@@ -130,7 +161,10 @@ def _migrate_resource_workspace(
             raise ValueError("layout note workspace ids must be non-empty strings")
         if resource_id in seen:
             continue
-        children.append(_validated_leaf(_leaf("note", resource_id), seen, leaves))
+        leaf = _leaf("note", resource_id)
+        if _is_retired_leaf(leaf):
+            continue
+        children.append(_validated_leaf(leaf, seen, leaves))
     raw_size = workspace.get("size", 0.38)
     if not isinstance(raw_size, (int, float)) or isinstance(raw_size, bool):
         raise ValueError("layout note workspace size must be numeric")
@@ -139,7 +173,7 @@ def _migrate_resource_workspace(
 
 
 def normalize_layout(layout: object) -> dict[str, Any]:
-    """Validate layout v6 or migrate v1-v5 into one mixed-view pane tree."""
+    """Validate layout v7 or migrate v1-v6 into one mixed-view pane tree."""
     if layout is None:
         return {"version": LAYOUT_VERSION, "root": None}
     if not isinstance(layout, dict):
@@ -153,17 +187,17 @@ def normalize_layout(layout: object) -> dict[str, Any]:
         if len(unique) > MAX_LAYOUT_LEAVES:
             raise ValueError(f"layout exceeds maximum leaf count {MAX_LAYOUT_LEAVES}")
         return {"version": LAYOUT_VERSION, "root": _balanced_terminals(unique)}
-    if version not in {2, 3, 4, 5, LAYOUT_VERSION}:
+    if version not in {2, 3, 4, 5, 6, LAYOUT_VERSION}:
         raise ValueError(f"unsupported layout version {version}")
     root = layout.get("root")
     seen: set[str] = set()
     leaves: list[dict[str, Any]] = []
+    # v6 and v7 share one tree shape and differ only in whether a `files:` leaf may appear,
+    # which is pruned either way. Only v2-v5 can hold a bare leaf where a node belongs.
     normalized = (
         None
         if root is None
-        else _validate_node(
-            root, depth=0, seen=seen, leaves=leaves, legacy=version != LAYOUT_VERSION
-        )
+        else _validate_node(root, depth=0, seen=seen, leaves=leaves, legacy=version < 6)
     )
     if version in {4, 5}:
         raw_workspace = layout.get("note_workspace") if version == 5 else layout.get("note_dock")

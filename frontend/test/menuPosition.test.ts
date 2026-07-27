@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { clampContextMenuLeft, fitMenuInViewport } from '../src/menuPosition.ts'
+import { clampContextMenuLeft, fitMenuInViewport, fitScrollingMenuInViewport } from '../src/menuPosition.ts'
 
-type FakeMenu = { rect: { top: number; left: number; width: number; height: number }; style: { top: string; left: string } }
+type FakeMenu = {
+  rect: { top: number; left: number; width: number; height: number }
+  style: { top: string; left: string; maxHeight: string }
+}
 
 function fakeMenu(rect: FakeMenu['rect']): FakeMenu {
-  return { rect, style: { top: `${rect.top}px`, left: `${rect.left}px` } }
+  return { rect, style: { top: `${rect.top}px`, left: `${rect.left}px`, maxHeight: '' } }
 }
 
 function withViewport(width: number, height: number, run: () => void): void {
@@ -69,4 +72,38 @@ test('a menu overflowing the right edge is nudged left', () => {
 
 test('fitMenuInViewport ignores an unmounted (null) menu', () => {
   fitMenuInViewport(null)
+})
+
+test('a long Run menu is capped to the viewport and pinned to the top gutter', () => {
+  withViewport(390, 700, () => {
+    // Project with a pile of VS Code tasks, opened from a sidebar row halfway down.
+    const menu = fakeMenu({ top: 380, left: 6, width: 378, height: 900 })
+    fitScrollingMenuInViewport(asElement(menu))
+    assert.equal(menu.style.maxHeight, '688px') // 700 - 6 * 2
+    assert.equal(menu.style.top, '6px') // capped height fills the viewport
+  })
+})
+
+test('a Run menu shorter than the viewport is lifted, not shrunk', () => {
+  withViewport(390, 700, () => {
+    const menu = fakeMenu({ top: 500, left: 6, width: 378, height: 400 })
+    fitScrollingMenuInViewport(asElement(menu))
+    assert.equal(menu.style.maxHeight, '') // no cap needed
+    assert.equal(menu.style.top, '294px') // 700 - 400 - 6
+  })
+})
+
+test('re-fitting an already capped menu does not ratchet it smaller', () => {
+  withViewport(390, 700, () => {
+    const menu = fakeMenu({ top: 380, left: 6, width: 378, height: 900 })
+    fitScrollingMenuInViewport(asElement(menu))
+    menu.rect.top = 6
+    fitScrollingMenuInViewport(asElement(menu))
+    assert.equal(menu.style.maxHeight, '688px')
+    assert.equal(menu.style.top, '6px')
+  })
+})
+
+test('fitScrollingMenuInViewport ignores an unmounted (null) menu', () => {
+  fitScrollingMenuInViewport(null)
 })

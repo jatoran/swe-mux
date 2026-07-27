@@ -23,9 +23,15 @@ continues to own every terminal.
 
 - One instance exists per resolved config path. A second visible launch signals the existing
   instance to restore/focus; a duplicate hidden login launch exits silently.
-- Startup probes `/api/health`. A healthy daemon is reused; otherwise the supervisor starts a
-  consoleless child and waits up to 30 seconds. Daemon logs use
-  `<data_dir>/desktop-daemon.log`.
+- Startup probes `/api/health`. A healthy daemon is reused; otherwise the tray starts a
+  consoleless child and waits up to 30 seconds. The daemon is spawned via
+  `popen_outside_job` (breakaway from any inherited Job object) so a tray relaunched from
+  inside a session cannot hand the daemon that session's kill-on-close Job; the tray also
+  checks `process_in_job()` at startup and records a warning in the lifecycle ledger.
+- The daemon's console output redirects to `<data_dir>/desktop-daemon.log` (rotated to `.1`
+  at each spawn; it is a crash catcher — structured logs live in the rotating
+  `<data_dir>/daemon.log` / `access.log`). The tray watches the daemon child and appends its
+  exit code to `<data_dir>/lifecycle.log`, the only record an externally-killed daemon leaves.
 - Daemon-owned maintenance commands (Git, Tailscale, usage/account probes, hooks, profile
   discovery, forced cleanup, and SAPI) use Windows no-window process creation. Interactive
   shells and agents remain attached only through ConPTY; background work never flashes a console.
@@ -57,9 +63,10 @@ continues to own every terminal.
 - `packaging/build_desktop.py` builds the frontend in `.runtime/`, publishes hashed assets before
   `index.html`, generates the ICO, and runs PyInstaller. It never empties the live static tree;
   locked content-addressed stale assets may remain harmlessly until a later build.
-- `packaging/swe_mux.spec` emits windowed `dist/swe-mux/swe-mux.exe`, console-subsystem
-  `dist/swe-mux/swe-mux-action.exe`, and `_internal/`. The complete `onedir` folder is the
-  distributable unit; neither executable is standalone.
+- `packaging/swe_mux.spec` emits windowed `dist/swe-mux/swe-mux.exe` and `_internal/`. The
+  complete `onedir` folder is the distributable unit; the executable is not standalone. It is
+  deliberately the *only* executable here: a second one (`swe-mux-action.exe`) used to root
+  task terminals, and a live task then locked this directory against the redeploy swap.
 - `packaging/swe_mux_supervisor.spec` emits the dedicated PTY supervisor bundle
   `dist/swe-mux-supervisor/` — a separate artifact precisely so rebuilding `dist/swe-mux`
   never collides with a running supervisor's file image (Windows locks running
@@ -69,8 +76,9 @@ continues to own every terminal.
   bundle is absent, and `SWE_MUX_SUPERVISOR_EXE` overrides resolution in any mode.
 - `packaging/redeploy_desktop.py` is the frozen update workflow (usable by an agent from
   inside a supervised session, or via `POST /api/daemon/redeploy` behind the UI's
-  "Rebuild + redeploy app" menu entry): preflight (dedicated supervisor running, no live
-  `swe-mux-action.exe` task terminals), then a **staged** cycle — build frontend + app bundle
+  "Rebuild + redeploy app" menu entry): preflight (dedicated supervisor running; plus a
+  legacy check for `swe-mux-action.exe` terminals left over from a pre-removal bundle, which
+  nothing creates any more), then a **staged** cycle — build frontend + app bundle
   into `dist/.staging` while the old app keeps serving, detach-stop the daemon and shell only
   after the build succeeded, swap (`dist/swe-mux` → `dist/swe-mux.prev`, staging in; renames
   retry through lock stragglers), relaunch; the fresh daemon reattaches every live session.
@@ -86,9 +94,10 @@ continues to own every terminal.
   uses `python -m swe_mux`. Packaged `--supervisor-child` mirrors the same split for the PTY
   supervisor; source mode uses `python -m swe_mux.supervisor`. The daemon discovers-or-spawns
   the supervisor itself, so the desktop shell never needs to know it exists.
-- Frozen Project Actions use the sibling console executable as their ConPTY root. It shares the
-  package but inherits the pseudoconsole correctly, so build tools cannot detach into a visible
-  external CMD window. Source mode uses `python -m swe_mux.action_runner`.
+- Project Actions have no swe-mux ConPTY root of their own in either mode: the step's shell (or
+  its PATH-resolved program) is the root, spawned with the step's cwd and env as spawn fields.
+  A `.cmd`/`.bat` shim goes through `%COMSPEC%`, which inherits the pseudoconsole correctly, so
+  build tools still cannot detach into a visible external CMD window.
 - The windowed executable emulates only allowlisted internal `-m` entrypoints for hook delivery
   and nested-agent launch. Arbitrary module dispatch is rejected.
 
@@ -98,8 +107,7 @@ continues to own every terminal.
 - Daemon runner: `src/swe_mux/__main__.py`
 - Shutdown boundary: `src/swe_mux/server.py`
 - Package metadata: `pyproject.toml`, `uv.lock`
-- Bundle entries/spec: `packaging/desktop_entry.py`, `packaging/action_entry.py`,
-  `packaging/swe_mux.spec`
+- Bundle entries/spec: `packaging/desktop_entry.py`, `packaging/swe_mux.spec`
 - Reproducible build: `packaging/build_desktop.py`
 - Lifecycle tests: `tests/test_desktop.py`
 

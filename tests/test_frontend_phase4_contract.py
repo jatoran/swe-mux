@@ -103,7 +103,7 @@ def test_project_resources_share_unified_mixed_view_panes() -> None:
     assert "openTab" in app
     assert "splitNoteResource" in app
     assert "moveLeafToSplit" in app
-    assert "version:6" in layout
+    assert "version: 7" in layout
     assert "showNoteWorkspace" not in app
     assert not (ROOT / "frontend" / "src" / "NotesWorkspace.tsx").exists()
     assert "/api/projects/${project.id}/note" in resource
@@ -123,7 +123,7 @@ def test_project_resources_share_unified_mixed_view_panes() -> None:
     assert ".notes-workspace-shell.popout" not in css
 
 
-def test_session_note_is_one_click_from_the_pane_bar_and_opens_beside_the_terminal() -> None:
+def test_session_note_is_one_click_from_the_pane_bar_and_opens_in_the_anchor_pane() -> None:
     app = source("App.tsx")
     layout = source("layout.ts")
     css = source("style.css")
@@ -135,30 +135,174 @@ def test_session_note_is_one_click_from_the_pane_bar_and_opens_beside_the_termin
     assert ".pane-tools .note-chip.written" in css
     assert ".pane-tools .note-chip.open" in css
 
-    # A session note accompanies its terminal instead of covering it.
-    assert "export function placeCompanionLeaf" in layout
-    assert "placeCompanionLeaf" in app
-    assert "target.kind==='session-note'&&!targetViewId" in app
+    # Opening a resource is not a layout command. Every kind lands as a tab in the anchor's
+    # pane; nothing splits the workspace on the user's behalf.
+    assert "openTab(current,focused,resourceLeaf('note',resourceId))" in app
+    # (`layout.ts` still names the retired helper in a comment saying why it is gone.)
+    assert "export function placeCompanionLeaf" not in layout
+    assert "placeCompanionLeaf(" not in app
+    assert "target.kind==='session-note'&&!targetViewId" not in app
 
 
-def test_session_notes_browser_lists_written_notes_and_filters_by_project() -> None:
+def test_notes_tab_indexes_written_notes_without_hosting_an_editor() -> None:
+    """Notes are found in the drawer and edited in a pane, never edited in the drawer.
+
+    The drawer unmounts a tab body on every tab switch, which would cost the editor's
+    cursor/undo history and detach it from the insert routing that Clipboard and Prompts
+    depend on. So the Notes tab is an index: it opens a note into the workspace.
+    """
     app = source("App.tsx")
-    browser = source("SessionNotesBrowser.tsx")
+    notes = source("NotesTab.tsx")
+    drawer = source("UtilityDrawer.tsx")
     css = source("style.css")
 
-    assert "/api/session-notes" in browser
-    assert "project_id=${encodeURIComponent(projectId)}" in browser
-    assert "Filter session notes by project" in browser
-    assert "Search session notes" in browser
-    assert "All projects" in browser
-    assert ".session-notes-modal" in css
+    assert "/api/session-notes" in notes
+    assert "project_id=${encodeURIComponent(scopeId)}" in notes
+    assert "Filter session notes by project" in notes
+    assert "Search session notes" in notes
+    assert "All projects" in notes
+    assert ".session-note-row" in css and ".notes-tab" in css
+    # An index, not an editor: no Continuity editor and no save queue live here.
+    assert "ProjectNoteEditor" not in notes
+    assert "noteSaveQueue" not in notes
+    # The Project note is pinned and unconditional; the focused terminal's note is
+    # pinned only when it holds text, which is the "only if one exists" rule.
+    assert "note-pin-row" in notes
+    assert "focusedNote&&" in notes
+    assert "focusedNote={active?.note_exists?" in app
 
-    # Reachable from the project context menu, the main menu, and the palette.
-    assert "SessionNotesBrowser" in app
-    assert "setSessionNotesScope(target.id)" in app
+    # The retired modal is gone, and its three entry points now open the drawer tab.
+    assert not (ROOT / "frontend" / "src" / "SessionNotesBrowser.tsx").exists()
+    assert "SessionNotesBrowser" not in app
+    assert "tab === 'notes'" in drawer
+    assert "openNotesBrowser" in app
     assert "id: 'notes.browse'" in app
     assert "runNamedCommand('notes.browse')" in app
     assert "openBrowsedSessionNote" in app
+
+    # Scope follows how you arrived. Every scope-less entry point (rail, strip, drawer.notes)
+    # goes through showDrawerTab and means "this Project"; only the app menu's unscoped
+    # notes.browse widens it, via openNotesBrowser, which is not on that path.
+    assert "if(tab==='notes')setNotesAllProjects(false)" in app
+    assert "setNotesAllProjects(!scope)" in app
+    show_tab = app[app.index("const showDrawerTab=") : app.index("const openDrawerTab=")]
+    open_tab = app[app.index("const openDrawerTab=") : app.index("const persistDrawerWidth=")]
+    assert "setNotesAllProjects" not in open_tab
+    assert "setNotesAllProjects(false)" in show_tab
+
+
+def test_files_is_a_drawer_navigator_rather_than_a_workspace_tab() -> None:
+    """Files opens documents into panes, so it costs a drawer tab, not a permanent one.
+
+    The layout used to carry a Files leaf and route every placement rule around it. That
+    special-casing is gone with the leaf: a persisted `files:` leaf is pruned on read.
+    """
+    app = source("App.tsx")
+    layout = source("layout.ts")
+    drawer = source("UtilityDrawer.tsx")
+    tabs = source("drawerTabs.ts")
+
+    assert "'files'" in tabs and "'notes'" in tabs
+    assert "tab === 'files'" in drawer
+    assert "resource={{ kind: 'files', id: project.id }}" in drawer
+    # Opened, never toggled: a click that names a surface and switches Project must not
+    # close the panel it was asking for.
+    assert "openDrawerTab('files')" in app
+    assert "openDrawerTab('notes')" in app
+
+    # No Files leaf, and no placement rule that has to dodge one.
+    assert "isRetiredFilesLeaf" in layout
+    for retired in ("stackHasFiles", "isFilesLeaf", "defaultProjectLayout", "DEFAULT_FILES_RATIO"):
+        assert retired not in layout, retired
+        assert retired not in app, retired
+    # A never-arranged Project is left empty rather than seeded with a Files column.
+    assert "seededLayouts" not in app
+
+    # Dragging a file row onto a pane survives the move, but only on desktop: the mobile
+    # drawer is an overlay with no visible pane to drop onto.
+    assert "onFileDragStart={mobileWorkspace?undefined:" in app
+
+
+def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
+    """Six labelled tabs overflowed a phone drawer; six icons do not.
+
+    `drawerTabs.ts` stays JSX-free so it can be unit-tested under plain type-stripping, which
+    is why the icon map lives in `railIcons.tsx` and why this cross-file invariant — every tab
+    id has a mark — is checked here rather than there.
+    """
+    tabs = source("drawerTabs.ts")
+    icons = source("railIcons.tsx")
+    drawer = source("UtilityDrawer.tsx")
+    app = source("App.tsx")
+    css = source("style.css")
+
+    ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
+    assert len(ids) == 6, ids
+    icon_map = icons[icons.index("DRAWER_TAB_ICONS") :]
+    for tab_id in ids:
+        assert re.search(rf"^  {tab_id}: \w+Icon,$", icon_map, re.MULTILINE), tab_id
+
+    # No text glyph survives on either surface, and neither renders a label.
+    assert "glyph" not in tabs
+    assert "glyph" not in drawer
+    # The label is the accessible name only; it is never rendered as a child of the button.
+    assert ">{item.label}" not in drawer and "{item.label}<" not in drawer
+    assert "<Icon />" in drawer and "<Icon/>" in app
+
+    # Icon-only means the accessible name can no longer come from visible text.
+    assert "aria-label={item.label}" in drawer
+    assert "aria-label={tab.title}" in app
+
+    # Sized in CSS on both surfaces: these run a 9-12px font, so `1em` would be unreadable.
+    assert ".drawer-tabs button svg{width:17px" in css
+    assert ".utility-rail button svg{width:16px" in css
+    # Touch has no rail, so the strip is the only tab control and gets a 44px target.
+    assert ".drawer-tabs button{min-height:44px;min-width:44px" in css
+
+
+def test_drawer_tabs_are_user_arrangeable_and_the_order_persists() -> None:
+    """One arrangement, two surfaces, one drag contract, stored on the daemon.
+
+    The strip and the rail are two renderings of one control, so they render one order and
+    share one drag handler; a per-surface order would let them disagree about what "third"
+    means. The order is server-persisted (unlike drawer width and last-used tab, which are
+    genuinely per-device) so a phone inherits what a desktop arranged.
+    """
+    app = source("App.tsx")
+    drawer = source("UtilityDrawer.tsx")
+    settings = source("deviceSettings.ts")
+    order = source("drawerTabOrder.ts")
+    css = source("style.css")
+
+    # One ordered list feeds both surfaces, and one handler reorders from either.
+    assert "tabs={orderedDrawerTabs}" in app
+    assert "orderedDrawerTabs.map(tab=>{" in app
+    assert "props.tabs.map(item => {" in drawer
+    assert "onTabDragStart={beginDrawerTabDrag}" in app
+    assert "onPointerDown={event=>beginDrawerTabDrag(event,tab.id)}" in app
+    assert "props.onTabDragStart(event, item.id)" in drawer
+
+    # The app's pointer-drag contract, not native DnD: no `draggable` attribute, refs plus one
+    # DOM indicator during the move, commit on pointer-up.
+    assert "beginPointerDrag(event,drawerTab(id).label" in app
+    assert "draggable" not in drawer
+    assert 'data-reorder-id={item.id}' in drawer and "data-reorder-id={tab.id}" in app
+    assert "reorderTargetFromContainer(container,id,axis" in app
+    assert ".drawer-tabs button[data-pointer-drop-indicator" in css
+    assert ".utility-rail button[data-pointer-drop-indicator" in css
+    # The drag's pointer-up also clicks the tab it started from; both surfaces suppress it.
+    assert app.count("suppressDragClickRef.current===`drawer-tab:") == 2
+
+    # Server-persisted in one canonical bucket, like the command rail and the file tree.
+    assert "'drawerTabs'" in settings
+    assert "const DRAWER_TAB_PROFILE: SettingsProfile = 'desktop'" in settings
+    assert "saveDrawerTabOrder" in app and "loadDrawerTabOrder" in app
+    # Another device editing the order is the same event as the cache first loading.
+    assert "window.addEventListener('mux:settings-changed',adopt)" in app
+
+    # Arranging can never lose a tab, and persistent state a drag can scramble needs a way back.
+    assert "export function normalizeDrawerTabOrder" in order
+    assert "id: 'drawer.resetTabs'" in app
 
 
 def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
@@ -167,11 +311,21 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     panel = source("ProcessPanel.tsx")
 
     main_menu = app[app.index('aria-label="swe-mux menu"') : app.index('class="sidebar-scrim"')]
-    assert "BROWSE ALL PROJECTS" in main_menu
+    # The lead block carries no heading: it is the app's general-purpose surfaces,
+    # not a "browse projects" section. Nothing that acts on a single Project lives
+    # in the app menu at all — that belongs to the Project's own context menu.
+    assert "BROWSE ALL PROJECTS" not in main_menu
+    assert "CURRENT PROJECT" not in main_menu
     # The app menu opens each browser unscoped, never its project-scoped variant.
     for command in ("history.open", "notes.browse", "processes.all", "prompts.open"):
         assert f"runNamedCommand('{command}')" in main_menu
-    for scoped in ("history.openProject", "processes.project", "prompts.openProject"):
+    for scoped in (
+        "history.openProject",
+        "processes.project",
+        "prompts.openProject",
+        "observations.open",
+        "project.settings",
+    ):
         assert scoped not in main_menu
 
     project_menu = app[
@@ -180,7 +334,7 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     assert "BROWSE THIS PROJECT" in project_menu
     for scoped in ("history.openProject", "processes.project", "prompts.openProject"):
         assert f"runNamedCommand('{scoped}')" in project_menu
-    assert "setSessionNotesScope(target.id)" in project_menu
+    assert "openNotesBrowser(target)" in project_menu
 
     # Scope is a visible, clearable control rather than a hidden mode.
     assert "process-scope-select" in panel

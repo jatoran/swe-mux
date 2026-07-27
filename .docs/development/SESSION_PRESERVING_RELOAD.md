@@ -305,11 +305,29 @@ user/agent-facing triggers:
   `curl -s http://127.0.0.1:<port>/` against `src/swe_mux/static/index.html`.
 - **Frozen redeploy** (`uv run python packaging/redeploy_desktop.py [--hidden|--no-launch|
   --skip-build|--force]`): preflights that a supervisor is running *outside* `dist/swe-mux`
-  and that no `swe-mux-action.exe` task terminals hold the dist tree, then runs a **staged**
+  and that no legacy `swe-mux-action.exe` task terminals hold the dist tree (task steps no
+  longer run any swe-mux binary, so only pre-removal terminals can), then runs a **staged**
   cycle: build frontend + app bundle into `dist/.staging` while the old app keeps running,
   detach-stop the daemon (control token) and kill the shell only after the build succeeded,
   swap (`dist/swe-mux` → `dist/swe-mux.prev`, staging → `dist/swe-mux`, with a bounded rename
-  retry for lock stragglers), relaunch, and report reattached sessions. The rollback slot is
+  retry for lock stragglers), relaunch, and report reattached sessions. The health wait allows
+  up to five minutes because Windows can spend several minutes scanning a newly written
+  PyInstaller tree on its first launch; it still fails immediately if the launched shell
+  exits. This prevents a healthy-but-slow bundle from being killed and falsely rolled back.
+
+  **The stop is pid-targeted, not image-wide.** `swe-mux.exe -m swe_mux.<module>` is a helper
+  an agent session spawns inside its *own* process tree — `hook_client` runs on every
+  PreToolUse/PostToolUse — and it shares the app's image name while being neither the shell
+  nor the daemon. A bare `taskkill /F /IM swe-mux.exe` therefore reaches into live sessions;
+  it once killed the only session that happened to be mid-tool-call (recorded as
+  `exit_reason=killed`, versus `agent_exit` for a clean finish), which is precisely the
+  guarantee this whole flow exists to provide. So `partition_app_processes` splits the two by
+  argv and the ordinary stop signals only the shell/daemon pids. A process whose argv cannot
+  be read counts as a helper: an unkilled straggler costs a bounded rename retry, an
+  over-eager kill costs a session. The blunt image-wide `taskkill` still exists but fires
+  **only** if the `dist/swe-mux` → `dist/swe-mux.prev` rename then fails, where the
+  alternative is an aborted redeploy; it logs how many helpers it is about to take with it,
+  and the rename is retried once afterwards. The rollback slot is
   cleared *before* the app is stopped, and never with a bare `rmtree(ignore_errors=True)`:
   Windows will not unlink an exe/DLL whose image is still mapped, so a partially removed
   `swe-mux.prev` survives and blocks every later rename onto it (WinError 183). Removal is
@@ -332,6 +350,44 @@ user/agent-facing triggers:
   so the UI detects an early build failure (lock cleared, daemon never dropped) and shows the
   log instead of waiting out the reconnect window; once the daemon drops it polls health and
   reloads when the successor (or rolled-back predecessor) answers.
+
+## 7.6 Addendum: Job breakaway for relaunches + death forensics (implemented)
+
+Root-caused 2026-07-26 from "kill a session → UI freezes → daemon dead, no traceback":
+Windows **Job membership is inherited by every descendant**, and the supervisor puts each
+session root in a nested kill-on-close Job. So a redeploy (or any app relaunch) run from a
+shell *inside* a session left the new tray + daemon inside that session's Job —
+`CREATE_NEW_PROCESS_GROUP` does not escape a Job — and removing the session later
+(`_remove_and_reply` → `ownership_job.close()`) silently terminated the daemon. The poison
+persisted across `/api/daemon/restart` because the successor inherits the old daemon's Jobs;
+it cleared only on a fresh Explorer/tray launch. Fixes:
+
+- `ReaperJob` sets `JOB_OBJECT_LIMIT_BREAKAWAY_OK` alongside kill-on-close: containment is
+  unchanged (escape is opt-in per spawn), but children may now request breakaway.
+- Every spawn that must outlive sessions goes through `subprocess_flags.popen_outside_job`
+  (`CREATE_BREAKAWAY_FROM_JOB`, plain-spawn fallback when denied): supervisor spawn
+  (`connect_or_spawn`), daemon successor (`_spawn_daemon_successor`), tray→daemon
+  (`ensure_daemon`), the redeploy endpoint's script spawn, and the redeploy script's app
+  relaunch. **Note:** breakaway against a Job created *before* this change is denied (it
+  lacks BREAKAWAY_OK), so the fix fully lands only after the supervisor bundle is rebuilt and
+  restarted (`muxd --shutdown` + reap, per §8).
+- The daemon, tray, and supervisor each check `win_jobobj.process_in_job()` at startup and
+  log/ledger a loud warning when inside a Job — the poisoned-launch breadcrumb.
+- Death forensics, since an external TerminateProcess is invisible in-process:
+  `lifecycle.py` maintains `<data_dir>/daemon-heartbeat.json` (refreshed ~10 s, clean exits
+  marked with intent); the next daemon logs "previous daemon pid X died without a clean
+  shutdown; last heartbeat Ns before this start". `<data_dir>/lifecycle.log` is a small
+  append-only ledger (daemon starts/clean exits, tray-observed daemon exit codes, Job
+  warnings). The tray watches its daemon child and ledgers the exit code.
+- Rolling logs so diagnosis never depends on a 160 MB console dump: rotating
+  `<data_dir>/daemon.log` (10 MB × 5) for the app log, `access.log` for aiohttp request spam
+  (`propagate=False`), rotating `supervisor.log` (stdlib-inline in `supervisor.py` to keep its
+  closure frozen), and `crash.log` via `faulthandler` (daemon, tray, supervisor) for hard
+  native crashes. Console redirects remain crash catchers: `desktop-daemon.log` (rotated to
+  `.1` by the tray at each daemon spawn), `supervisor-console.log` (renamed from the old
+  `supervisor.log` redirect), `daemon-relaunch.log`. Runtime verbosity:
+  `POST /api/debug/log-level {"level": "DEBUG"}` (GET returns the current level), or set
+  `log_level` in config — both apply live, config is the startup default.
 
 ## 8. Residual limitation (accept it)
 

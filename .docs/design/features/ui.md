@@ -13,9 +13,12 @@ responsive controls.
   strip beside that rail.
 - The sidebar is pointer/keyboard resizable from 190–480 px and collapsible. Width and collapse
   state are device-local browser preferences, not Project layout state.
-- The sidebar shows only Projects marked for active navigation. Each Project row exposes its
-  fixed Project note and Files view, then layout/session rows. An initialized or open session
-  note appears beneath its terminal.
+- The sidebar shows only Projects marked for active navigation. Each Project row exposes a fixed
+  `Note` / `Files` chip pair, then layout/session rows. An initialized or open session note
+  appears beneath its terminal. The two chips open different kinds of surface — the note is a
+  pane tab, Files is the drawer's navigator tab — so each reads its active state from where its
+  surface actually lives, and the Files chip selects that Project before opening the drawer,
+  since the drawer's Files view follows the active Project.
 - Only a tabbed pane indents its sessions in the sidebar, and it does so because it draws the
   bracket that explains the indent. Split branches are siblings at the same depth: the sidebar is
   a session list, not a pane-geometry diagram, and indenting per split produced unexplained
@@ -62,12 +65,33 @@ responsive controls.
 
 ## Menus and overlays
 
-- Scope follows the menu that opened a surface, never a hidden mode. The app menu's
-  `BROWSE ALL PROJECTS` section opens History, session notes, Process fleet, prompt library,
+- Scope follows the menu that opened a surface, never a hidden mode. The app menu's unlabeled
+  lead block opens History, session notes, Process fleet, prompt library, clipboard history,
   usage, and notifications across every Project; right-clicking a Project row opens the same
   surfaces under `BROWSE THIS PROJECT`, prefiltered to it. Right-clicking empty sidebar space is
-  the no-Project case and matches the app menu. Only actions that must target somewhere (new
-  terminal, Project settings) stay in the app menu's current-Project section.
+  the no-Project case and matches the app menu.
+- The app menu holds **nothing that acts on a single Project**. Per-Project actions — the
+  observation inbox, Project settings, files, notes — live on the Project itself: right-click a
+  sidebar row, or tap the Project title in the mobile top bar (both open the same menu). The
+  lead block is therefore deliberately unlabeled; a `BROWSE ALL PROJECTS` heading described
+  neither the clipboard nor notifications, and the old `CURRENT PROJECT` section duplicated the
+  Project menu one level away from the Project it acted on.
+- Starting work is the Run menu's job alone (active-Project header, every Project row, mobile
+  rail). Neither the app menu nor the Project context menu carries "New terminal": Run already
+  offers the same backends plus the Project's imported tasks, and a second door only split the
+  affordance.
+- Broadcast input stays in the app menu because it is an app-wide input mode, not a Project
+  action; membership in the broadcast set is per session, toggled from a session's own menu.
+- A menu section with more than a couple of rarely-used entries collapses behind a `MenuGroup`
+  (`MenuGroup.tsx`), which any `.context-menu` can host. On a hover-capable wide pointer it
+  opens a side flyout after a short intent delay and closes on a delay so the diagonal traverse
+  survives; on touch or a narrow viewport it is an inline accordion, because the menu is already
+  the width of the screen and there is no hover to open a flyout with. An accordion on desktop
+  was rejected outright: expanding in place reflows the rows under the cursor, so hovering the
+  next row to collapse the group moves the target out from under the pointer. Items render as
+  buttons inside a `.context-menu` subtree positioned directly after their header in document
+  order, so the menu-wide arrow-key walk steps through them where a reader expects. Only one
+  group is expanded at a time, and closing the menu collapses it.
 - A prefiltered surface always exposes its scope as a visible, clearable control, so a Project
   entry point narrows the same browser rather than opening a different one. The prompt library is
   the deliberate exception: its Project argument adds that Project's templates to the global set
@@ -79,6 +103,14 @@ responsive controls.
 - Split/new-terminal/move commands use non-clickable labels with directional arrow buttons.
   Only directions valid for the current desktop split tree are enabled. Mobile omits pane
   geometry actions entirely.
+- Pointer-anchored menus are re-fitted to the viewport after they mount, not merely clamped at
+  open time: the inline coordinates are seeded from rough height guesses, and content that lands
+  later (a Project's imported task list) can make the box much taller than the guess. The Run
+  menu also caps its own rendered height before lifting it, because a CSS `max-height` is measured
+  against the viewport rather than the menu's own top — a Project with a long VS Code task list,
+  opened from a sidebar row halfway down a phone screen, would otherwise be viewport-tall and
+  still hang off the bottom, clipping its last entries with no way to scroll to them. Capped, the
+  menu scrolls internally beneath its sticky header, and it re-fits on resize/rotation.
 - Account, resource-usage, context, and command popovers are viewport-anchored. Settings,
   Projects, transcript review, and confirmation dialogs use the modal layer. Opening a child
   dialog from Projects must place it above the manager, never beneath it.
@@ -90,8 +122,8 @@ responsive controls.
 - Backdrop clicks close Settings. Dirty settings first open an in-app Save/Discard decision;
   interaction with that confirmation is inside the modal boundary and cannot also trigger the
   Settings backdrop.
-- The app menu's `MAINTENANCE` section (mirrored in the sidebar context menu and command
-  palette as `daemon.reload`/`app.redeploy`/`ui.reload`) exposes the session-preserving
+- The app menu's `Maintenance` group (a `MenuGroup`; mirrored in the sidebar context menu and
+  command palette as `daemon.reload`/`app.redeploy`/`ui.reload`) exposes the session-preserving
   reloads on every device, including mobile. "Reload daemon (keep sessions)" posts
   `/api/daemon/restart`, shows a blocking wait overlay while the daemon is down, and reloads
   the page when the successor answers health; the server refuses (409, surfaced as a toast)
@@ -108,8 +140,43 @@ responsive controls.
 
 - Form changes remain local drafts until explicit Save. Save state is visible as
   dirty/saving/saved, and a background refresh cannot reset the selected settings section.
+- Opening loads one `GET /api/settings/bundle` (config, rules, keybindings, profiles,
+  projects, automation, provider, usage, project config) instead of nine per-section GETs,
+  so a high-RTT client (phone over Tailscale) pays a single round trip. The panel chrome —
+  header, tab rail, footer — renders immediately with a placeholder content area; tabs are
+  selectable before data lands. `config` is required; other parts degrade to null with the
+  reason under `errors`, except `automation_rules`/`keybindings`, whose absence blocks the
+  form because Save writes them back unconditionally. Remote and voice status stay separate
+  non-blocking fetches.
+- The panel header carries a search box that reaches every setting in every tab, including
+  tabs that are not mounted. Picking a result switches to its tab, scrolls the control into
+  view, and flashes it; `Ctrl`/`Cmd`+`F` focuses the box while the panel is open, arrows and
+  Enter drive the result list, and Escape unwinds the list before it closes the panel.
+- That index is derived from the same JSX that renders the form, so a setting added or renamed
+  in `Settings.tsx` is searchable with nothing else to declare. Each tab's markup comes from one
+  function taking the tab id, and the index walks the *vnode* tree it returns rather than the
+  DOM: building vnodes allocates plain objects, so an unmounted tab can be indexed without
+  running effects or child-component bodies. A component vnode is a function reference rather
+  than markup, so what `<AccountSettings/>` renders is invisible to that walk; a tab that has
+  been on screen is therefore also indexed from its live DOM, by the same rules, and kept for
+  the page session. Every tab additionally carries an entry for its own name, so one never
+  goes missing entirely. Labels, headings, buttons, option labels, placeholders, and the help
+  paragraph following a control are all matched on; the index is rebuilt when a search begins
+  or when the config it came from changes, never per keystroke.
+- The footer carries only draft state: status, Cancel, Save. Whole-config actions — reveal the
+  config directory, export a sanitized copy, restore defaults — live in a General-tab block,
+  because a footer repeats under every tab and so implied a per-tab scope none of them have
+  (restoring defaults rewrites the entire saved config immediately, outside the draft/Save
+  cycle). It also kept Cancel/Save in a horizontally scrolling footer on phones. Per-section
+  resets that genuinely are scoped — gesture defaults, shortcut defaults, the command rail —
+  stay with their own section.
+- Notes configures the shared Markdown editor behind every note and Markdown file: spellcheck,
+  Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
+  policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
+  the editor package rather than hand-listed, so it cannot drift from what the editor binds.
 - Terminals exposes `auto | webgl | dom` renderer selection. `auto` preserves accelerated WebGL
-  on desktop with automatic DOM fallback; mobile always uses DOM regardless of the preference.
+  on desktop with automatic DOM fallback; mobile and Codex terminals always use DOM regardless
+  of the preference so their scrollback remains stable.
 - Close, Escape, backdrop click, and navigation away all share the Save/Discard guard when a
   draft is dirty. Shell executable/profile paths deliberately use this explicit flow rather
   than per-keystroke persistence.
@@ -216,6 +283,15 @@ responsive controls.
 - A recognized gesture gives a short haptic tick, and tab navigation shows a transient label
   pill naming the tab it landed on. Both exist because a swipe that lands on an unbound slot,
   or a tab change the eye misses, is otherwise indistinguishable from "nothing happened".
+- While a slide-in panel (sidebar or utility drawer) is open, the horizontal swipe pointing
+  back toward the edge it slid in from closes the panel instead of running that slot's binding
+  — dismissing the right-edge drawer can never open the left sidebar on top of it. The
+  override applies to one- and two-finger horizontal swipes alike, even to unbound slots
+  (an open panel with a scrim makes the swipe-away motion unambiguous); the drawer wins when
+  both panels are open because it overlays the sidebar. Resolution is a pure layer between
+  recognition and dispatch (`resolveGestureCommand`), toggled by the hot-reloadable
+  `mobile_gesture_swipe_away_close` config bool (default on, checkbox in Settings → Input →
+  touch gestures).
 - A terminal scrolled off its newest line shows a jump-to-latest chip in the terminal's own
   grid cell, above the action rail. It is checked per render, not only on scroll, because
   output arriving while scrolled up moves the buffer base without moving the viewport.
@@ -284,6 +360,14 @@ responsive controls.
   deliberately keeps its label**: a copy glyph cannot distinguish it from Copy reply, and the
   two sit side by side. Icon buttons size like keys (30/44 px) and carry an explicit
   `aria-label`, since the title attribute is not a name on touch.
+- The Markdown editor carries a *second, separate* rail: Continuity's own, which the vendored
+  editor renders only on touch-primary devices and persists per device in `localStorage`. swe-mux
+  registers one host action on it (`mux:send-to-agent`) instead of projecting its `RailItem`
+  catalog there: the two models share nothing (no backend/platform filters, no placement, no
+  prompt pointers, a different store), and Continuity's rail hides while an editor is read-only.
+  Desktop therefore gets the same action as a `→ agent` button in the resource pane header
+  rather than by forcing Continuity's rail on, which would drop its whole 48 px formatting strip
+  onto every note. See `project-resources.md` for what the action sends and where.
 - Rail buttons must not carry a resting selected appearance. Hover styling is gated to
   hover-capable pointers, because touch browsers retain `:hover` on the last tapped element
   until another element is tapped, which reads as a stuck selection. Activation feedback is a
@@ -312,11 +396,36 @@ responsive controls.
 
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they
   are one gesture (mobile) or one visible click (desktop) away instead of two menu levels deep.
-  Tabs, in order: **Clipboard**, **Commands** (the rail's long tail), **Prompts**, **Alerts**
-  (notifications). The first three are all the same verb — text into the focused session — which is
-  what makes them one surface rather than three menu entries; notifications is the outlier and sits
-  last. Session history, the process fleet, usage, and automation stay modal: they are wide,
-  table-shaped surfaces that a ~380 px column serves badly.
+  Tabs, in order: **Clipboard**, **Commands** (the rail's long tail), **Prompts**, **Files**,
+  **Notes**, **Alerts** (notifications). Order groups by what a tab acts on, and the groups must
+  stay contiguous so the rail reads as blocks rather than a list. The first three are the same
+  verb — text into the focused session. Files and Notes are the **navigators**: project-scoped
+  indexes that open a document into a pane instead of typing into one. Notifications is neither,
+  and sits last. Session history, the process fleet, usage, and automation stay modal: they are
+  wide, table-shaped surfaces that a ~380 px column serves badly.
+- **Files** is a navigator, not a peer of the terminals it opens files next to, so it costs a
+  drawer tab rather than a permanent workspace tab. As a pane it forced the layout to route
+  every placement rule around it (an unanchored open, a Files-focused open, and session-note
+  placement each had to skip Files panes) and it seeded every new Project with a narrow column
+  most people ignored. Nothing is lost by the move: expanded-folder state was already persisted per Project
+  outside the layout, and on desktop the drawer is an in-flow column, so a file row can still be
+  dragged onto any pane. The one real cost is that Files and Clipboard can no longer be visible
+  at once — the drawer shows one tab at a time — which is the trade the tab model makes.
+- **Notes** is an index, not an editor. Notes stay ordinary pane tabs because the drawer unmounts
+  a tab body on every switch: hosting the editor there would destroy cursor and undo history on
+  each tab change, and would break insert routing outright (switching to Clipboard detaches the
+  very editor the insert was meant for, so the text would silently land in a terminal). The tab
+  pins the Project note first and unconditionally, pins the focused terminal's note second when
+  that note holds text, then lists every other session note with content, searchable and scoped
+  to this Project or to all of them. Selecting a row opens the note into a pane through the
+  ordinary placement rule. This replaced the session-notes modal and its three
+  scattered entry points (project context menu, app menu, `notes.browse`), all of which now open
+  this tab.
+- A note tab that appears and disappears with focus was considered and rejected: the desktop icon
+  rail earns its keep by having fixed positions, a vanishing tab has no affordance for *creating*
+  a note (the pane `note` chip already owns empty/written/open), and a Notes tab that followed
+  focus would swap the document out from under someone mid-sentence. "Only when it exists"
+  belongs to a row in a list, which is where it already lived.
 - One component, two renderings (`UtilityDrawer.tsx`). **Mobile** is an overlay with a scrim,
   mutually exclusive with the navigation sidebar (opening either closes the other). **Desktop** is
   an in-flow column of the workspace grid: the pane tree shrinks rather than being covered, because
@@ -328,13 +437,53 @@ responsive controls.
 - Desktop additionally has an always-visible 40 px **icon rail** on the far right, one icon per tab,
   with a badge for unread notifications. The rail is the part that actually fixes discoverability:
   the surfaces are visible without a menu, a chord, or any configuration. Mobile reaches the same
-  tabs through the drawer's own tab strip. Last-used tab is remembered per device, so
+  tabs through the drawer's own tab strip.
+- Both surfaces are **icon-only**, drawing from one map (`DRAWER_TAB_ICONS` in `railIcons.tsx`)
+  so the strip and the rail agree by construction instead of by two lists kept in sync. The tabs
+  used to carry glyph *and* label: six of them measured ~444 px, which overflowed a phone
+  drawer (`min(430px, 92vw)`) into a scrollbar-less scroller and silently parked the last two
+  tabs off-screen. Six icons are ~234 px. Adding Files and Notes is what pushed it over.
+- The marks are stroke SVG on a 24 viewBox, sized in CSS (17 px in the strip, 19 px on touch,
+  16 px on the rail), never in `em`: these surfaces run a 9–12 px font. They replaced text
+  glyphs for the same reason the command rail's did — a monospace font gives every glyph one
+  advance width but wildly different ink, so `!` came out a hairline beside a heavy `⧉` with no
+  way to normalize it. Two of the old glyphs were also simply wrong: `⌘` is the macOS Command
+  key on a Windows-first app, and `❯` read as a shell prompt right next to the tab named
+  Commands. The set is now clipboard-with-clock, terminal, speech bubble, folder, page, bell —
+  the two injection tabs and the two navigators each form a legible pair.
+- Nothing is drawn with a word any more, so the `title` is the only place a tab is named and
+  every title leads with its label; the label itself becomes the button's `aria-label`, since
+  an icon button has no text to take an accessible name from and `title` is not a name on touch.
+- Tabs are **user-arrangeable** by dragging one, from the strip or the rail. Both surfaces
+  render one order and share one drag handler (`beginDrawerTabDrag`), because they are two
+  renderings of one control: a per-surface order would let them disagree about what "third" is.
+  It uses the app's pointer-drag contract like every other reorderable surface — no native DnD,
+  refs and a single DOM drop-indicator attribute during the move, commit on pointer-up
+  (`workspace-layout.md`) — so the pointer-up that ends a drag has its click suppressed on both
+  surfaces, or moving a tab would also switch to it.
+- The order is **server-persisted** in the `drawerTabs` settings domain, in one canonical bucket
+  like the command rail and the file tree, rather than in localStorage beside drawer width and
+  last-used tab. Those two are genuinely per-device; an arrangement says which surfaces *you*
+  reach for, so a phone should inherit what a desktop set. Another device editing it arrives as
+  the same `settings_changed` event as the cache first loading, so one listener handles both.
+- Normalization is not optional (`drawerTabOrder.ts`): unknown and duplicate ids are dropped,
+  and a tab the stored order predates is merged in beside its default predecessor rather than
+  appended. A saved order must never hide a tab added later, and appending would put every new
+  surface in the position that reads as an afterthought. The merge is relative to where that
+  predecessor sits in the *user's* arrangement, so a new tab joins its neighbour wherever the
+  neighbour was moved to. This mirrors the rule the mobile tab rail uses for the same problem.
+- Keyboard cycling inside the strip walks the arranged order, not the registry order, or the
+  keys would jump around a rearranged strip. `drawer.resetTabs` restores the default, because
+  an arrangement is persistent state a drag can scramble and "drag five tabs back from memory"
+  is not a way out.
+- Last-used tab is remembered per device, so
   `drawer.toggle` (default two-finger swipe **left**, the swipe that drags a right-edge panel in;
   the rightward swipe keeps the left-edge sidebar) reopens where you left off, while `drawer.<tab>`
   commands open one tab directly and close it if it is already showing.
-- Inserting closes the drawer on mobile, where it covers the terminal it just typed into, and
-  leaves it open on desktop, where the column sits beside that terminal and a second insert is the
-  common next action.
+- Acting closes the drawer on mobile, where it covers the surface just acted on, and leaves it
+  open on desktop, where the column sits beside that surface and a second insert (or a second
+  file) is the common next action. One rule, applied to inserting text and to opening a file or
+  a note.
 - **Clipboard history** is a shared, bounded ring of every text copied *inside* swe-mux, and the
   drawer's first tab. Capture is installed once at boot in `clipboardHistory.ts` rather than at each copy
   site: `Clipboard.prototype.writeText` is wrapped (which covers all ~30 in-app calls *and* the
@@ -379,6 +528,13 @@ responsive controls.
 - Modal focus trapping, keyboard navigation, reduced-motion styling, clipboard recovery,
   resilient WebSocket reconnect, and IME/composition-aware terminal input apply on both desktop
   and mobile.
+- Reopening a dormant client must never require the user to work around the UI. The tab that was
+  focused when the client went to sleep is the one whose socket or load was in flight, so it is
+  also the one that used to be stuck on "reconnecting…" or a fetch error until the user switched
+  tabs and back (which forced a remount). Recovery is therefore watchdog-driven, not
+  signal-driven: attempts have deadlines, a visible-only poll re-checks, and the terminal badge
+  and resource error both carry a "retry" that skips the remaining backoff. The shared policy is
+  `liveness.ts` — see `../../technical/frontend/packages.md`.
 
 ## Feature-owned UI
 

@@ -115,12 +115,40 @@ def test_codex_spawn_resume_and_notify_are_structured(tmp_path: Path) -> None:
     assert spawned.executable == "codex.exe"
     assert spawned.argv[0] == "-c"
     assert spawned.argv[1].startswith("notify=")
+    assert spawned.argv[2:6] == (
+        "-c",
+        'tui.alternate_screen="never"',
+        "-c",
+        "tui.raw_output_mode=true",
+    )
     assert spawned.argv[-2:] == ("--model", "o3 pro")
     assert resumed.argv[-2:] == ("resume", "native-id")
 
 
-def test_codex_without_arguments_has_empty_argv(tmp_path: Path) -> None:
-    assert CodexAdapter().spawn_spec("ignored", SpawnOptions(tmp_path)).argv == ()
+def test_codex_defaults_to_scrollback_safe_tui(tmp_path: Path) -> None:
+    assert CodexAdapter().spawn_spec("ignored", SpawnOptions(tmp_path)).argv == (
+        "-c",
+        'tui.alternate_screen="never"',
+        "-c",
+        "tui.raw_output_mode=true",
+    )
+
+
+def test_codex_explicit_tui_config_overrides_scrollback_defaults(tmp_path: Path) -> None:
+    adapter = CodexAdapter(
+        default_args=["--config", 'tui.alternate_screen="always"'],
+    )
+
+    spec = adapter.spawn_spec(
+        "ignored",
+        SpawnOptions(tmp_path, args=["--config=tui.raw_output_mode=false"]),
+    )
+
+    assert spec.argv == (
+        "--config",
+        'tui.alternate_screen="always"',
+        "--config=tui.raw_output_mode=false",
+    )
 
 
 def test_codex_command_resolver_prepends_a_conpty_safe_launcher(tmp_path: Path) -> None:

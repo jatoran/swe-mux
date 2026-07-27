@@ -1,13 +1,18 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
+import type { ContinuityEditorElement, RailAction } from '@continuity-editor/editor'
 import { api } from './api'
 import { insertEditorTab } from './editorText'
 import { copyPreparedText } from './terminalClipboard'
 import { absoluteProjectPath, copySummary, FILE_COPY_MAX_LINES, truncateForClipboard } from './fileClipboard'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
+import { composeAgentMessage, selectionText } from './noteSelection'
+import type { EditorSnapshot } from './noteSelection'
+import type { SendToAgentRequest } from './SendToAgentPicker'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
 import { fileSaveTarget, noteQueueKey, noteSaveQueue, noteSaveTarget, type NoteSaveState, type ResourceSaveTarget } from './noteSaveQueue'
 import { loadExpandedFolders, saveExpandedFolders } from './deviceSettings'
+import { REQUEST_TIMEOUT_MS, retryDelay, watchResume } from './liveness'
 import type { Project } from './types'
 
 export type ProjectResourceIdentity={kind:'note'|'session-note'|'files'|'file';id:string}
@@ -36,6 +41,9 @@ type Props={
   resource:ProjectResourceIdentity
   onOpenFile:(path:string)=>void
   onFileDragStart?:(path:string,event:JSX.TargetedPointerEvent<HTMLElement>)=>void
+  /** Opens the send-to-agent dialog. Only the Continuity-backed views (notes and markdown
+   *  files) offer it: they are the surfaces that own a real selection. */
+  onSendToAgent?:(request:SendToAgentRequest)=>void
 }
 
 const parentPath=(path:string)=>path.includes('/')?path.slice(0,path.lastIndexOf('/')):''
@@ -55,7 +63,7 @@ function scheduleTreeSave(projectId:string,paths:string[]){
   },400))
 }
 
-export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Props){
+export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onSendToAgent}:Props){
   const isNote=resource.kind==='note'||resource.kind==='session-note'
   // Markdown files opened from the browser render in Continuity and autosave through the same
   // resource-scoped queue as notes; only their save target (endpoint/body) differs.
@@ -109,40 +117,64 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
   const textRef=useRef(text)
   const baselineRef=useRef(baseline)
   textRef.current=text;baselineRef.current=baseline
+  // Recovery bookkeeping (see the retry machinery below): whether a first load has ever
+  // succeeded, the pending backoff retry, and refs the timers/listeners read at call time
+  // so they never run against a stale render's closure.
+  const loadedOnce=useRef(false)
+  const retryTimer=useRef<number|undefined>(undefined)
+  const retryAttempt=useRef(0)
+  const recoveryEpoch=useRef(0)
+  const inFlightEpoch=useRef<number|null>(null)
+  const pendingRetryRef=useRef(false)
+  const recoverRef=useRef<()=>Promise<boolean>>(async()=>true)
+  const retryNowRef=useRef<()=>void>(()=>{})
+  const [pendingRetry,setPendingRetry]=useState(false)
+  const expandedRef=useRef(expanded)
+  expandedRef.current=expanded
 
-  const loadDirectory=async(folder:string)=>{
+  const loadDirectory=async(folder:string):Promise<boolean>=>{
     try{
-      const payload=await api<DirectoryPayload>('GET',`/api/projects/${project.id}/files?path=${encodeURIComponent(folder)}`)
+      const payload=await api<DirectoryPayload>('GET',`/api/projects/${project.id}/files?path=${encodeURIComponent(folder)}`,undefined,{timeoutMs:REQUEST_TIMEOUT_MS})
       setDirectories(current=>({...current,[folder]:payload}));setError('')
-    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+      return true
+    }catch(cause){
+      setError(cause instanceof Error?cause.message:String(cause))
+      // One folder failing gets the same treatment as a failed initial load: the retry
+      // reloads the whole saved tree, which includes this folder.
+      settleRecovery(false)
+      return false
+    }
   }
 
   // Restore a saved tree in one round trip: the root plus every expanded folder.
   // Folders that come back missing (deleted/renamed) are pruned so a stale saved
   // set self-heals; folders expanded while the request was in flight are kept.
-  const loadTree=async(want:string[])=>{
+  const loadTree=async(want:string[]):Promise<boolean>=>{
     try{
       const params=new URLSearchParams()
       for(const folder of ['',...want])params.append('path',folder)
-      const payload=await api<{directories:Record<string,DirectoryPayload>}>('GET',`/api/projects/${project.id}/files/tree?${params.toString()}`)
+      const payload=await api<{directories:Record<string,DirectoryPayload>}>('GET',`/api/projects/${project.id}/files/tree?${params.toString()}`,undefined,{timeoutMs:REQUEST_TIMEOUT_MS})
       const loaded=payload.directories||{}
       setDirectories(current=>({...current,...loaded}))
       const requested=new Set(['',...want])
       setExpanded(current=>new Set([...current].filter(folder=>!requested.has(folder)||folder in loaded)))
       setError('')
-    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+      loadedOnce.current=true
+      return true
+    }catch(cause){setError(cause instanceof Error?cause.message:String(cause));return false}
   }
 
-  const loadText=async()=>{
-    if(resource.kind==='files')return
+  const loadText=async():Promise<boolean>=>{
+    if(resource.kind==='files')return true
     const requestGeneration=isNote?++noteLoadGeneration.current:0
     setStatus('loading');setError('')
     const path=isNote
       ?noteEndpoint
       :`/api/projects/${project.id}/file?path=${encodeURIComponent(resource.id)}`
     try{
-      const payload=await api<NotePayload|FilePayload>('GET',path)
-      if(isNote&&requestGeneration!==noteLoadGeneration.current)return
+      const payload=await api<NotePayload|FilePayload>('GET',path,undefined,{timeoutMs:REQUEST_TIMEOUT_MS})
+      // A newer request owns the outcome; this one is neither a success nor a failure.
+      if(isNote&&requestGeneration!==noteLoadGeneration.current)return true
       const next='markdown' in payload?payload.markdown:payload.text||''
       setRevision(payload.revision);setText(next);setBaseline(next);setStatus(payload.status);setSaveState('idle')
       if(autosaved){
@@ -151,16 +183,111 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
         noteSaveQueue.reset(noteKey,saveTarget(),payload.revision)
         setLoadGeneration(generation=>generation+1)
       }
-    }catch(cause){setError(cause instanceof Error?cause.message:String(cause));setStatus('error')}
+      loadedOnce.current=true
+      return true
+    }catch(cause){
+      if(isNote&&requestGeneration!==noteLoadGeneration.current)return true
+      setError(cause instanceof Error?cause.message:String(cause));setStatus('error')
+      return false
+    }
   }
+
+  // Adopt a note edited elsewhere (another device, the agent, the file on disk). Yields to
+  // an in-progress local edit, which keeps the revision-conflict path in charge instead.
+  const followNote=async(remoteRevision=''):Promise<boolean>=>{
+    if(!isNote)return true
+    if(!noteSaveQueue.canFollowRemote(noteKey,remoteRevision))return true
+    const requestGeneration=++noteLoadGeneration.current
+    try{
+      const payload=await api<NotePayload>('GET',noteEndpoint,undefined,{timeoutMs:REQUEST_TIMEOUT_MS})
+      if(requestGeneration!==noteLoadGeneration.current)return true
+      // Typing may have started while the GET was in flight. In that case the
+      // local editor wins and the existing revision-conflict path stays armed.
+      if(!noteSaveQueue.canFollowRemote(noteKey,payload.revision))return true
+      setRevision(payload.revision);setText(payload.markdown);setBaseline(payload.markdown)
+      setStatus(payload.status);setSaveState('idle');setError('')
+      noteSaveQueue.reset(noteKey,saveTarget(),payload.revision)
+      setLoadGeneration(generation=>generation+1)
+      loadedOnce.current=true
+      return true
+    }catch(cause){
+      if(requestGeneration!==noteLoadGeneration.current)return true
+      setError(cause instanceof Error?cause.message:String(cause))
+      return false
+    }
+  }
+
+  // Whatever this tab needs in order to be current again. A note that already has content
+  // refreshes through `followNote` so a retry can never discard unsaved typing.
+  const recover=async():Promise<boolean>=>{
+    if(resource.kind==='files')return loadTree([...expandedRef.current])
+    if(isNote&&loadedOnce.current)return followNote()
+    return loadText()
+  }
+  recoverRef.current=recover
+
+  // Load failures are never terminal. A dormant PWA resumes with a network stack that can
+  // hang a request outright (the api timeout turns that into a failure), and before this the
+  // only way out was closing the tab and reopening it. Failures retry on a backoff, and any
+  // resume signal retries at once.
+  const clearRetry=()=>{
+    if(retryTimer.current===undefined)return
+    window.clearTimeout(retryTimer.current)
+    retryTimer.current=undefined
+  }
+  const scheduleRetry=()=>{
+    if(retryTimer.current!==undefined)return
+    setPendingRetry(true);pendingRetryRef.current=true
+    retryTimer.current=window.setTimeout(()=>{
+      retryTimer.current=undefined
+      // No point re-fetching for a tab nobody is looking at (and mobile throttles the timer
+      // anyway); the resume watcher drives the retry the moment it is visible again.
+      if(document.hidden){scheduleRetry();return}
+      void runRecovery()
+    },retryDelay(retryAttempt.current))
+  }
+  const settleRecovery=(ok:boolean)=>{
+    if(ok){retryAttempt.current=0;pendingRetryRef.current=false;setPendingRetry(false);return}
+    retryAttempt.current+=1
+    scheduleRetry()
+  }
+  // One attempt at a time per resource, and an attempt started for a resource this tab has
+  // since moved off can neither block the new one nor settle its retry state.
+  const runRecovery=async()=>{
+    const epoch=recoveryEpoch.current
+    if(inFlightEpoch.current===epoch)return
+    clearRetry()
+    inFlightEpoch.current=epoch
+    let ok=true
+    try{ok=await recoverRef.current()}
+    finally{if(inFlightEpoch.current===epoch)inFlightEpoch.current=null}
+    if(epoch!==recoveryEpoch.current)return
+    settleRecovery(ok)
+  }
+  const retryNow=()=>{retryAttempt.current=0;clearRetry();void runRecovery()}
+  retryNowRef.current=retryNow
 
   useEffect(()=>{
     setTreeMenu(null)
-    if(resource.kind==='files')void loadTree([...expanded])
-    else if(resource.kind==='file'&&cachedFile&&cachedFile.text!==cachedFile.baseline){
+    recoveryEpoch.current+=1
+    clearRetry();retryAttempt.current=0;pendingRetryRef.current=false;setPendingRetry(false)
+    loadedOnce.current=false
+    if(resource.kind==='file'&&cachedFile&&cachedFile.text!==cachedFile.baseline){
       setError(cachedFile.error)
-    }else void loadText()
+      loadedOnce.current=true
+      return
+    }
+    void runRecovery()
   },[project.id,resource.kind,resource.id])
+
+  // Retry on resume, and drop the retry timer when the tab goes away.
+  useEffect(()=>{
+    const stop=watchResume(()=>{
+      if(!pendingRetryRef.current&&retryTimer.current===undefined)return
+      retryNowRef.current()
+    })
+    return()=>{stop();clearRetry()}
+  },[])
 
   useEffect(()=>{
     if(resource.kind==='file')fileDrafts.set(resourceKey,{revision,text,baseline,status,saveState,error})
@@ -283,23 +410,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
 
   useEffect(()=>{
     if(!isNote)return
-    const follow=async(remoteRevision='')=>{
-      if(!noteSaveQueue.canFollowRemote(noteKey,remoteRevision))return
-      const requestGeneration=++noteLoadGeneration.current
-      try{
-        const payload=await api<NotePayload>('GET',noteEndpoint)
-        if(requestGeneration!==noteLoadGeneration.current)return
-        // Typing may have started while the GET was in flight. In that case the
-        // local editor wins and the existing revision-conflict path stays armed.
-        if(!noteSaveQueue.canFollowRemote(noteKey,payload.revision))return
-        setRevision(payload.revision);setText(payload.markdown);setBaseline(payload.markdown)
-        setStatus(payload.status);setSaveState('idle');setError('')
-        noteSaveQueue.reset(noteKey,saveTarget(),payload.revision)
-        setLoadGeneration(generation=>generation+1)
-      }catch(cause){
-        if(requestGeneration===noteLoadGeneration.current)setError(cause instanceof Error?cause.message:String(cause))
-      }
-    }
+    // A failed refresh feeds the same retry machinery as a failed load: the events socket
+    // reconnecting is exactly when the network is least likely to be ready.
+    const follow=async(remoteRevision='')=>settleRecovery(await followNote(remoteRevision))
     const changed=(event:Event)=>{
       const detail=(event as CustomEvent<NoteResourceEvent>).detail
       if(detail.projectId!==project.id||detail.kind!==resource.kind)return
@@ -325,6 +438,43 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause));setSaveState('error')}
   }
 
+  // Send-to-agent. The Continuity engine (not DOM focus) owns the selection, so a header button
+  // can still read what is highlighted after the click has taken focus away from the editor. On
+  // touch the same action is registered on Continuity's own rail, where a tap keeps the soft
+  // keyboard and the selection where they are.
+  const editorElement=useRef<ContinuityEditorElement|null>(null)
+  const sourceLabel=resource.kind==='note'?`project note (${project.name})`
+    :resource.kind==='session-note'?`session note (${project.name})`
+    :resource.id
+  const requestSendToAgent=()=>{
+    if(!onSendToAgent)return
+    let snapshot:EditorSnapshot|null=null
+    try{snapshot=editorElement.current?.snapshot()??null}catch{snapshot=null}
+    const selected=selectionText(snapshot)
+    // An empty selection is not an error: the whole document is the useful fallback, and the
+    // dialog says which of the two it is about to send.
+    const body=selected||snapshot?.text||textRef.current
+    if(!body.trim()){setError('There is nothing to send yet.');return}
+    const scope=selected?'selection':'document'
+    const slice=truncateForClipboard(body,sourceLabel)
+    onSendToAgent({
+      projectId:project.id,
+      label:sourceLabel,
+      scope,
+      message:composeAgentMessage(slice.text,{label:sourceLabel,scope}),
+    })
+  }
+  // Assigning `railActions` replaces Continuity's whole host set, so the array is built once
+  // (stable identity) and the button reads the current handler through a ref.
+  const sendRef=useRef(requestSendToAgent)
+  sendRef.current=requestSendToAgent
+  const railActions=useMemo<RailAction[]>(()=>onSendToAgent?[{
+    id:'mux:send-to-agent',
+    label:'Send to an agent session',
+    glyph:'→',
+    run:()=>sendRef.current(),
+  }]:[],[!!onSendToAgent])
+
   const editable=status==='ready'||status==='missing'
   // Notes and markdown files persist through the resource-scoped save queue (outside this
   // component so a pane close cannot cancel a save); we only mirror its state for display.
@@ -339,7 +489,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
   const resolveKeepMine=async()=>{
     try{
       const endpoint=isNote?noteEndpoint:`/api/projects/${project.id}/file?path=${encodeURIComponent(resource.id)}`
-      const payload=await api<{revision:string}>('GET',endpoint)
+      const payload=await api<{revision:string}>('GET',endpoint,undefined,{timeoutMs:REQUEST_TIMEOUT_MS})
       noteSaveQueue.overwrite(noteKey,payload.revision)
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
@@ -427,6 +577,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
 
   const searchModes:SearchMode[]=['names','contents','both']
   const searchModeLabel:Record<SearchMode,string>={names:'Names',contents:'Contents',both:'Both'}
+  // Any error with a retry queued behind it says so, and offers to skip the wait.
+  const errorLine=error?<p class="resource-error">{error}{pendingRetry&&<> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>}</p>:null
   if(resource.kind==='files')return <section class="project-resource file-browser">
     <header><div><strong>{project.root}</strong></div></header>
     <div class="file-browser-body">
@@ -444,7 +596,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
           {searchModes.map(mode=><button key={mode} class={searchMode===mode?'active':''} aria-pressed={searchMode===mode} title={`Match file ${searchModeLabel[mode].toLowerCase()}`} onClick={()=>setSearchMode(mode)}>{searchModeLabel[mode]}</button>)}
         </div>}
       </div>
-      {error&&<p class="resource-error">{error}</p>}
+      {errorLine}
       {notice&&<p class="resource-notice" role="status" aria-live="polite">{notice}</p>}
       {results!==null
         ?<div class="file-results" role="list" aria-busy={searching}>
@@ -488,9 +640,19 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart}:Pr
   }
   const stateLabel=autosaved?(noteSave.status==='idle'?status:noteSave.status):(saveState==='idle'?status:saveState)
   return <section class="project-resource file-editor">
-    <header><div>{!isNote&&<strong>{resource.id}</strong>}<span>{project.name} · {stateLabel}</span></div>{resource.kind==='file'&&!isMarkdownFile&&<div class="resource-actions"><button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button></div>}</header>
-    {error&&<p class="resource-error">{error}</p>}
+    <header><div>{!isNote&&<strong>{resource.id}</strong>}<span>{project.name} · {stateLabel}</span></div>{(autosaved&&onSendToAgent)||(resource.kind==='file'&&!isMarkdownFile)?<div class="resource-actions">
+      {autosaved&&onSendToAgent&&<button class="resource-send" disabled={!editable} title="Send the selection (or the whole document) to an agent session" onClick={requestSendToAgent}>→ agent</button>}
+      {resource.kind==='file'&&!isMarkdownFile&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}
+    </div>:null}</header>
+    {errorLine}
     {autosaved&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
-    {editable?(autosaved?<ProjectNoteEditor key={`${project.id}:${resource.kind}:${resource.id}:${loadGeneration}`} projectId={project.id} resourceId={`${resource.kind}:${resource.id}`} initialText={text} label={isNote?noteLabel:resource.id}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>):<div class="resource-unavailable">{status==='binary'?'Binary files cannot be edited here.':status==='too-large'?'This file exceeds the 2 MiB editor limit.':'This resource is read-only.'}</div>}
+    {editable?(autosaved?<ProjectNoteEditor key={`${project.id}:${resource.kind}:${resource.id}:${loadGeneration}`} projectId={project.id} resourceId={`${resource.kind}:${resource.id}`} initialText={text} label={isNote?noteLabel:resource.id} railActions={railActions} elementRef={editorElement}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>)
+      :<div class="resource-unavailable">{status==='binary'?'Binary files cannot be edited here.'
+        :status==='too-large'?'This file exceeds the 2 MiB editor limit.'
+        :status==='loading'?'Loading…'
+        // Reachable while a retry is still pending, so it says what is happening rather
+        // than claiming the resource is read-only.
+        :status==='error'?<><span>{isNote?'This note could not be loaded.':'This file could not be loaded.'}</span> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>
+        :'This resource is read-only.'}</div>}
   </section>
 }

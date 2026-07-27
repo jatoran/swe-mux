@@ -87,11 +87,13 @@ async def test_relaunch_replays_task_shell_and_retires_the_old_session(
         id="old-task",
         project_id="default",
         name="frontend",
-        exe="python",
-        args=["-m", "swe_mux.action_runner", "PAYLOAD"],
+        exe="pwsh.exe",
+        args=["-NoLogo", "-Command", "npm 'run' 'dev'"],
         completion_mode="one_shot",
         state="running",
         relaunchable=True,
+        spawn_cwd=r"D:\project\frontend",
+        spawn_env={"PORT": "45603"},
     )
     old = SimpleNamespace(record=old_record)
     new_record = SimpleNamespace(
@@ -128,10 +130,14 @@ async def test_relaunch_replays_task_shell_and_retires_the_old_session(
     response = await relaunch_session(cast(Any, request))
 
     assert response.status == 201
-    # Exact-argv replay from the record — no task file re-read, no trust re-approval.
-    assert captured["body"]["executable"] == "python"
-    assert captured["body"]["argv"] == ["-m", "swe_mux.action_runner", "PAYLOAD"]
+    # Exact replay from the record: no task file re-read, no trust re-approval. cwd
+    # and env are replayed too, or a relaunched task would silently run in the
+    # project root without the environment its step declared.
+    assert captured["body"]["executable"] == "pwsh.exe"
+    assert captured["body"]["argv"] == ["-NoLogo", "-Command", "npm 'run' 'dev'"]
     assert captured["body"]["completion_mode"] == "one_shot"
+    assert captured["body"]["cwd"] == r"D:\project\frontend"
+    assert captured["body"]["env"] == {"PORT": "45603"}
     # The running original is stopped and removed; the replacement carries the flag onward.
     assert stopped == [old_record.id]
     assert old_record.id not in manager.sessions

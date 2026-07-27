@@ -107,6 +107,147 @@ async def test_process_evidence_survives_restart_without_persisting_command(
     reopened.close()
 
 
+async def test_identity_repair_resets_rebuildable_provider_telemetry(
+    phase2_path: Path,
+) -> None:
+    store = OperationalTelemetryStore(phase2_path)
+    session = FakeLiveSession("claude")
+    session.record.agent_run_id = "false-run"
+    store.sessions = SimpleNamespace(sessions={session.record.id: session})
+    event_bus = EventBus()
+    await store.record_tool_event(
+        await event_bus.emit(
+            "tool_use",
+            session_id=session.record.id,
+            source="transcript",
+            backend="claude",
+            tool="Read",
+            call_id="false-call",
+        )
+    )
+    await store.record_compaction(
+        await event_bus.emit(
+            "context_compacted",
+            session_id=session.record.id,
+            source="transcript",
+            backend="claude",
+        )
+    )
+    await store.record_process_observations(
+        [
+            {
+                "pid": 44,
+                "session_id": session.record.id,
+                "agent_run_id": "false-run",
+                "started_at": 1234.5,
+            }
+        ]
+    )
+    store._db.execute(
+        "INSERT INTO transcript_telemetry_coverage"
+        "(session_id,backend,parser_version,status,recognized_records,unknown_records,"
+        "tool_events,skill_events,compaction_events,reconciled_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (session.record.id, "claude", "claude-v1", "ready", 1, 0, 1, 0, 1, time.time()),
+    )
+    store._db.commit()
+
+    await store.reset_session_provider_observations(session.record.id, session.record.id)
+
+    assert (
+        store._db.execute(
+            "SELECT COUNT(*) FROM tool_events WHERE session_id=?", (session.record.id,)
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        store._db.execute(
+            "SELECT COUNT(*) FROM context_compactions WHERE session_id=?",
+            (session.record.id,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        store._db.execute(
+            "SELECT COUNT(*) FROM transcript_telemetry_coverage WHERE session_id=?",
+            (session.record.id,),
+        ).fetchone()[0]
+        == 0
+    )
+    process = (await store.process_candidates())[0]
+    assert process["agent_run_id"] == session.record.id
+    store.close()
+
+
+async def test_historical_identity_repair_removes_only_false_run_telemetry(
+    phase2_path: Path,
+) -> None:
+    store = OperationalTelemetryStore(phase2_path)
+    session = FakeLiveSession("claude")
+    store.sessions = SimpleNamespace(sessions={session.record.id: session})
+    event_bus = EventBus()
+    session.record.agent_run_id = "false-run"
+    await store.record_tool_event(
+        await event_bus.emit(
+            "tool_use",
+            session_id=session.record.id,
+            source="transcript",
+            backend="claude",
+            tool="Read",
+        )
+    )
+    session.record.agent_run_id = session.record.id
+    await store.record_tool_event(
+        await event_bus.emit(
+            "tool_use",
+            session_id=session.record.id,
+            source="transcript",
+            backend="codex",
+            tool="Shell",
+            call_id="root-call",
+        )
+    )
+    await store.record_process_observations(
+        [
+            {
+                "pid": 44,
+                "session_id": session.record.id,
+                "agent_run_id": "false-run",
+                "started_at": 1234.5,
+            }
+        ]
+    )
+    store._db.execute(
+        "INSERT INTO transcript_telemetry_coverage"
+        "(session_id,backend,parser_version,status,recognized_records,unknown_records,"
+        "tool_events,skill_events,compaction_events,reconciled_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (session.record.id, "claude", "claude-v1", "ready", 1, 0, 1, 0, 0, time.time()),
+    )
+    store._db.commit()
+
+    await store.quarantine_agent_run_provider_observations(
+        session.record.id, "false-run", session.record.id
+    )
+
+    rows = store._db.execute(
+        "SELECT agent_run_id,backend FROM tool_events WHERE session_id=?",
+        (session.record.id,),
+    ).fetchall()
+    assert [(row["agent_run_id"], row["backend"]) for row in rows] == [
+        (session.record.id, "codex")
+    ]
+    assert (
+        store._db.execute(
+            "SELECT COUNT(*) FROM transcript_telemetry_coverage WHERE session_id=?",
+            (session.record.id,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (await store.process_candidates())[0]["agent_run_id"] == session.record.id
+    store.close()
+
+
 async def test_unexpected_reset_requires_two_fresh_samples_and_auth_transitions_suppress(
     phase2_path: Path,
 ) -> None:

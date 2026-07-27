@@ -27,6 +27,14 @@ ENDED_RETENTION_SECONDS = 24 * 60 * 60.0
 PREVIEW_LISTENER_GRACE_SECONDS = 20.0
 HIGH_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 NO_OUTPUT_SECONDS = 300.0
+# Constructing a psutil.Process is the single most expensive operation in a sampling
+# pass (~10-16ms each on Windows, because identity validation queries the process a
+# second time). Reconstructing one per descendant per tick cost ~900ms every 5s, which
+# is mostly GIL-held C work: it starved the event loop and showed up as terminal input
+# that lags and then catches up. Handles are therefore cached across passes and only
+# the two genuinely per-tick attributes are re-read. Identity safety is preserved by
+# other means -- see _sample_handle and _owned_live.
+MAX_HANDLE_CACHE = 4096
 PREVIEW_LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
 # A wildcard bind means "every local interface", which necessarily includes loopback:
 # a server on 0.0.0.0:5173 really is reachable at 127.0.0.1:5173. Most dev servers
@@ -78,6 +86,10 @@ class OwnedProcess:
     exit_evidence: str | None = None
     inaccessible_count: int = 0
     startup_revalidated: bool = False
+    # When the owning session was first observed to have ended. Stamped once so the
+    # orphan grace measures from that moment; deriving it from last_seen could never
+    # elapse, because last_seen is refreshed on every pass.
+    root_ended_at: float | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)
@@ -105,6 +117,16 @@ class ProcessInspector:
         self._sample_lock = asyncio.Lock()
         self._last_collect = 0.0
         self._last_persist = 0.0
+        # Live psutil.Process handles reused across passes, keyed by pid.
+        self._handles: dict[int, tuple[Any, int]] = {}
+        # (name, command, command_hash) per pid. A live process never renames itself and
+        # its command line is fixed at exec, so this is read once per handle rather than
+        # per pass; cmdline() is a remote-PEB read and was ~40% of the per-process cost.
+        self._static: dict[int, tuple[str, str, str]] = {}
+        # pid -> child pids, rebuilt once per pass from a single system-wide parent map.
+        self._children_by_pid: dict[int, list[int]] = {}
+        # pid -> parent pid from that same map, used to detect pid reuse for free.
+        self._parents: dict[int, int] = {}
         self._daemon_resources: dict[str, Any] = {
             "pid": os.getpid(),
             "processes": 0,
@@ -236,6 +258,139 @@ class ProcessInspector:
             if force or time.monotonic() - self._last_collect >= self.cadence:
                 await asyncio.to_thread(self._collect_all)
 
+    def _refresh_tree(self) -> None:
+        """Rebuild the parent/child index from one system-wide snapshot.
+
+        ``Process.children(recursive=True)`` takes its own snapshot of every process on
+        the machine, so calling it once per session root re-walked the whole table N
+        times per tick (~16ms each). One shared map serves every root and the daemon
+        tree. ``_ppid_map`` is psutil-private; if it is ever withdrawn the walk falls
+        back to ``children(recursive=True)`` via ``_descendants`` returning ``None``.
+        """
+        self._children_by_pid = {}
+        self._parents = {}
+        ppid_map = getattr(psutil, "_ppid_map", None)
+        if ppid_map is None:
+            return
+        try:
+            table = dict(ppid_map())
+        except Exception:  # pragma: no cover - defensive around a private API
+            return
+        children: dict[int, list[int]] = {}
+        for child, parent in table.items():
+            children.setdefault(parent, []).append(child)
+        self._children_by_pid = children
+        self._parents = table
+
+    def _tree_handles(self, root_pid: int, limit: int) -> list[Any]:
+        """Cached psutil handles for ``root_pid`` and its real descendants, root first.
+
+        **A raw parent map is not a process tree.** Windows never clears a dead
+        parent's pid from a child's ppid field and recycles pids aggressively, so the
+        map contains parent links that were never real: a long-lived process keeps
+        pointing at a pid that now belongs to something else entirely. Walking it
+        naively does not merely add a stray row — it can splice two unrelated trees
+        together. One such link made the PTY supervisor look like a descendant of one
+        session, and because the supervisor parents *every* session, that session
+        absorbed the whole fleet while the others reported zero processes.
+
+        `Process.children(recursive=True)` guards this by rejecting any descendant that
+        predates the root, and this walk must reproduce that rule exactly rather than
+        trust the map. An excluded pid is not traversed either: everything under a link
+        that was never real is equally not ours.
+        """
+        if psutil is None:
+            return []
+        root = self._handle(root_pid)
+        if root is None:
+            return []
+        if not self._children_by_pid:
+            try:
+                return [root, *root.children(recursive=True)][:limit]
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                return [root]
+        try:
+            root_started = float(root.create_time())
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            return [root]
+        handles: list[Any] = [root]
+        seen: set[int] = {root_pid}
+        stack: list[int] = list(self._children_by_pid.get(root_pid, ()))
+        while stack and len(handles) < limit:
+            pid = stack.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            handle = self._handle(pid)
+            if handle is None:
+                continue
+            try:
+                started = float(handle.create_time())
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                continue
+            if started < root_started:
+                continue
+            handles.append(handle)
+            stack.extend(self._children_by_pid.get(pid, ()))
+        return handles
+
+    def _handle(self, pid: int) -> Any | None:
+        """Return a cached handle for ``pid``, constructing one only when unseen.
+
+        A cached handle memoizes its creation time, so a pid recycled onto a different
+        process would keep the old identity. The parent map read this pass closes that
+        window at no cost: Windows never changes a live process's parent pid, so a
+        changed parent means the pid was recycled and the handle is rebuilt.
+        """
+        if psutil is None:
+            return None
+        cached = self._handles.get(pid)
+        parent = self._parents.get(pid)
+        if cached is not None:
+            handle, captured_parent = cached
+            if parent is None or parent == captured_parent:
+                return handle
+            self._forget(pid)
+        try:
+            handle = psutil.Process(pid)
+            captured_parent = parent if parent is not None else int(handle.ppid())
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            return None
+        if len(self._handles) < MAX_HANDLE_CACHE:
+            self._handles[pid] = (handle, captured_parent)
+        return handle
+
+    def _forget(self, pid: int) -> None:
+        self._handles.pop(pid, None)
+        self._static.pop(pid, None)
+
+    def _identity(self, handle: Any, pid: int) -> tuple[str, str, str]:
+        """`(name, command, command_hash)` for a handle, read once and then reused."""
+        cached = self._static.get(pid)
+        if cached is not None:
+            return cached
+        if psutil is None:
+            return (f"PID {pid}", "", "")
+        failed = False
+        try:
+            name = str(handle.name())
+        except (AttributeError, psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            name = f"PID {pid}"
+            failed = True
+        try:
+            command = " ".join(str(part) for part in handle.cmdline())[:1000]
+        except (AttributeError, psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            command = ""
+            failed = True
+        entry = (name, command, command_hash(command))
+        # Only a complete read is worth keeping. Caching a placeholder produced by a
+        # transient AccessDenied would pin it for the life of the handle, where the
+        # previous per-pass read would have recovered on the very next tick. A process
+        # that genuinely reports an empty command line does not raise and still caches.
+        if not failed and len(self._static) < MAX_HANDLE_CACHE:
+            self._static[pid] = entry
+        return entry
+
     def _collect_all(self, startup: bool = False) -> list[OwnedProcess]:
         result: list[OwnedProcess] = []
         seen: set[tuple[int, float]] = set()
@@ -243,6 +398,7 @@ class ProcessInspector:
         # net_connections() per process would rescan the entire table for every one of
         # potentially hundreds of descendants each tick.
         conn_map = self._connections_by_pid()
+        self._refresh_tree()
         for session in self.sessions.sessions.values():
             for item in self._collect_session(session, conn_map):
                 key = (item.pid, item.started_at or 0.0)
@@ -259,6 +415,12 @@ class ProcessInspector:
         self._cpu_samples = {
             key: sample for key, sample in self._cpu_samples.items() if key in seen
         }
+        # A handle for a pid that left the tree is dead weight and, worse, would still
+        # answer with its memoized identity if that pid were later recycled. Dropping it
+        # here means every pid re-enters through _handle's fresh construction.
+        live_pids = {pid for pid, _ in seen}
+        self._handles = {pid: entry for pid, entry in self._handles.items() if pid in live_pids}
+        self._static = {pid: entry for pid, entry in self._static.items() if pid in live_pids}
         self._last_collect = time.monotonic()
         return result
 
@@ -286,10 +448,8 @@ class ProcessInspector:
         }
         if psutil is None or not hasattr(psutil, "Process"):
             return empty
-        try:
-            root = psutil.Process(os.getpid())
-            candidates = [root, *root.children(recursive=True)]
-        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+        candidates = self._tree_handles(os.getpid(), MAX_PROCESSES_PER_SESSION)
+        if not candidates:
             return empty
         sampled_at = time.monotonic()
         process_count = 0
@@ -321,18 +481,13 @@ class ProcessInspector:
                 seen.add(sample_key)
             except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                 continue
-            try:
-                parent_pid = int(process.ppid())
-            except (AttributeError, psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-                parent_pid = None
-            try:
-                executable = str(process.name())
-            except (AttributeError, psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-                executable = f"PID {pid}"
-            try:
-                command = " ".join(str(part) for part in process.cmdline())[:1000]
-            except (AttributeError, psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-                command = ""
+            parent_pid = self._parents.get(pid)
+            if parent_pid is None:
+                try:
+                    parent_pid = int(process.ppid())
+                except (AttributeError, psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                    parent_pid = None
+            executable, command, _ = self._identity(process, pid)
             listeners, connections = self._network_from(pid, conn_map or {})
             conditions: list[str] = []
             if cpu >= 90:
@@ -436,11 +591,22 @@ class ProcessInspector:
                 item.inaccessible_count += 1
             session = self.sessions.sessions.get(item.session_id)
             root_ended = session is None or session.record.state in {"exited", "crashed"}
-            ended_at = (
-                session.record.last_activity_ts
-                if session is not None
-                else float(item.last_seen or item.first_seen or now)
-            )
+            if not root_ended:
+                item.root_ended_at = None
+            elif item.root_ended_at is None:
+                # Stamp once, on the first pass that observes the root ended. The
+                # last_seen fallback is only meaningful at that instant: it still holds
+                # the previous pass's value (or the previous daemon run's, after a
+                # restore), because this loop refreshes it further down. Re-deriving it
+                # every pass -- the original behaviour -- made ended_at track now, so the
+                # grace could never elapse and a real orphan stayed "grace pending"
+                # forever instead of escalating to suspected_orphan.
+                item.root_ended_at = (
+                    float(session.record.last_activity_ts)
+                    if session is not None
+                    else float(item.last_seen or item.first_seen or now)
+                )
+            ended_at = item.root_ended_at if item.root_ended_at is not None else now
             if root_ended and now - ended_at >= self.orphan_grace_seconds:
                 item.evidence_state = "suspected_orphan"
                 item.evidence_reason = "survived_root_session_grace_with_matching_fingerprint"
@@ -458,6 +624,34 @@ class ProcessInspector:
             item.last_seen = now
             item.last_verified_at = now
             item.startup_revalidated = startup
+
+    def _collect_unique_memory(self, pids: list[int]) -> dict[int, int]:
+        """Unique set size per pid: memory that ending the process would really return.
+
+        ``memory_bytes`` is RSS, which on Windows is the working set and therefore counts
+        every shared page once per process mapping it -- the loader image, shared
+        libraries, copy-on-write pages. Summing it across a session tree overstates the
+        fleet's real footprint substantially (measured ~3.3 GiB summed RSS against ~2.0
+        GiB summed USS for the same processes). USS is the honest number but costs about
+        200x an RSS read because it walks each working set, so it is never sampled on the
+        reconcile cadence -- only when a client opens a view that shows it.
+        """
+        if psutil is None:
+            return {}
+        result: dict[int, int] = {}
+        for pid in pids:
+            cached = self._handles.get(pid)
+            process = cached[0] if cached is not None else None
+            if process is None:
+                try:
+                    process = psutil.Process(pid)
+                except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                    continue
+            try:
+                result[pid] = int(process.memory_full_info().uss)
+            except (AttributeError, psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                continue
+        return result
 
     def _connections_by_pid(self) -> dict[int, list[Any]]:
         if psutil is None:
@@ -478,22 +672,24 @@ class ProcessInspector:
     ) -> list[OwnedProcess]:
         if psutil is None or session.record.pid <= 0:
             return []
-        try:
-            root = psutil.Process(session.record.pid)
-            processes = [root, *root.children(recursive=True)][:MAX_PROCESSES_PER_SESSION]
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        processes = self._tree_handles(session.record.pid, MAX_PROCESSES_PER_SESSION)
+        if not processes:
             return []
         result: list[OwnedProcess] = []
         for process in processes:
+            pid = int(process.pid)
+            # Only cpu_times and memory_info actually move between passes. Name and
+            # command line are fixed for the life of a process, so they come from the
+            # identity cache instead of a per-tick remote-PEB read.
+            executable, command, identity_hash = self._identity(process, pid)
             try:
                 with process.oneshot():
-                    pid = process.pid
-                    parent_pid = process.ppid()
-                    executable = process.name()
-                    command = " ".join(process.cmdline())[:1000]
-                    started_at = process.create_time()
+                    started_at = float(process.create_time())
                     cpu_times = process.cpu_times()
-                    memory = process.memory_info().rss
+                    memory = int(process.memory_info().rss)
+                parent_pid = self._parents.get(pid)
+                if parent_pid is None:
+                    parent_pid = int(process.ppid())
                 sample_key = (pid, started_at)
                 sampled_at = time.monotonic()
                 total_cpu = float(cpu_times.user + cpu_times.system)
@@ -506,6 +702,7 @@ class ProcessInspector:
                 self._cpu_samples[sample_key] = (sampled_at, total_cpu)
                 listeners, connections = self._network_from(pid, conn_map)
             except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                self._forget(pid)
                 continue
             conditions: list[str] = []
             if cpu >= 90:
@@ -531,7 +728,7 @@ class ProcessInspector:
                 project_id=session.record.project_id,
                 agent_run_id=session.record.agent_run_id,
                 identity_id=process_identity(session.record.id, pid, started_at),
-                command_hash=command_hash(command),
+                command_hash=identity_hash,
                 job_assignment=session.record.process_job_assignment,
                 first_seen=existing.first_seen if existing else time.time(),
                 last_seen=time.time(),
@@ -662,13 +859,18 @@ class ProcessInspector:
             "processes": processes[:MAX_PROCESSES_PER_SESSION],
         }
 
-    async def snapshot_all(self, *, include_ended: bool = False) -> dict[str, Any]:
+    async def snapshot_all(
+        self, *, include_ended: bool = False, unique_memory: bool = False
+    ) -> dict[str, Any]:
         """Return one coherently sampled process tree for every live mux session.
 
         Ended records are excluded by default. They carry no available action,
         are already absent from every total, and their durable history lives in
         `process_evidence`; including them would only grow a polled payload with
         rows the operator cannot act on.
+
+        ``unique_memory`` adds per-process and total USS. It is opt-in because it is
+        ~200x the cost of the RSS already sampled, so only user-opened views ask.
         """
         if not self.available:
             return {
@@ -734,17 +936,37 @@ class ProcessInspector:
                 }
             )
         live = [item for item in all_processes if item["exited_at"] is None]
+        daemon = self._daemon_resources
+        totals: dict[str, Any] = {
+            "processes": len(live),
+            "cpu_pct": round(sum(float(item["cpu_pct"]) for item in live), 1),
+            "memory_bytes": sum(int(item["memory_bytes"]) for item in live),
+            "listeners": sum(len(item["listeners"]) for item in live),
+            "connections": sum(len(item["connections"]) for item in live),
+        }
+        if unique_memory:
+            daemon_members = list(daemon.get("members") or [])
+            pids = [int(item["pid"]) for item in live]
+            pids.extend(int(item["pid"]) for item in daemon_members)
+            unique_by_pid = await asyncio.to_thread(self._collect_unique_memory, pids)
+            for item in all_processes:
+                item["memory_unique_bytes"] = unique_by_pid.get(int(item["pid"]))
+            daemon = dict(daemon)
+            daemon["members"] = [
+                {**item, "memory_unique_bytes": unique_by_pid.get(int(item["pid"]))}
+                for item in daemon_members
+            ]
+            daemon["memory_unique_bytes"] = sum(
+                unique_by_pid.get(int(item["pid"]), 0) for item in daemon_members
+            )
+            totals["memory_unique_bytes"] = sum(
+                unique_by_pid.get(int(item["pid"]), 0) for item in live
+            )
         return {
             "available": True,
             "sessions": groups,
-            "daemon": self._daemon_resources,
-            "totals": {
-                "processes": len(live),
-                "cpu_pct": round(sum(float(item["cpu_pct"]) for item in live), 1),
-                "memory_bytes": sum(int(item["memory_bytes"]) for item in live),
-                "listeners": sum(len(item["listeners"]) for item in live),
-                "connections": sum(len(item["connections"]) for item in live),
-            },
+            "daemon": daemon,
+            "totals": totals,
         }
 
     def _owned_live(

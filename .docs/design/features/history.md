@@ -26,6 +26,14 @@
 - Resume requires a valid target Project, native ID, transcript, cwd record, and adapter. It
   creates a new Project-owned session at the target root and atomically updates its layout.
 - Index deletion never deletes or edits the native transcript.
+- When session adoption proves that a lifecycle bug indexed another live session's transcript,
+  the false run is quarantined (`agent_visible=0`), its rebuildable message/index cursor is
+  removed, and the native transcript remains untouched. The direct root run is reopened under
+  its stable mux history ID.
+- The same repair runs at daemon startup after the original PTY has ended, but only when the
+  database proves all three sides of the collision: the retained executable names a different
+  provider, its note owner is that provider's canonical root row, and another canonical row
+  owns the borrowed native ID or transcript. Legitimate shell-promoted runs do not qualify.
 - Startup reconciliation reads the newest 2,000 Claude/Codex transcript files in a worker,
   incrementally indexes changed message bodies, and never moves vendor files.
 - Managed transcripts are indexed once more after session exit so the list's last-message

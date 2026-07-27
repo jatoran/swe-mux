@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+# A spawn may direct a session at a subdirectory of its project (a task that runs
+# in ./frontend), never outside it, and may carry a bounded environment.
+MAX_SPAWN_ENV = 64
 
 # Environment markers a live Claude Code process stamps on its children to
 # identify them as nested/child sessions. When swe-mux itself is (re)launched
@@ -26,6 +31,25 @@ CLAUDE_SESSION_MARKERS = frozenset(
 )
 
 
+def infer_agent_executable_backend(
+    executable: str | None, arguments: Sequence[str] | None
+) -> str | None:
+    """Identify a direct agent root from its retained executable contract."""
+    executable_name = Path(executable or "").name.casefold()
+    entrypoint = (
+        str(arguments[0]).replace("\\", "/").casefold() if arguments else ""
+    )
+    if executable_name in {"codex", "codex.exe", "codex.cmd", "codex.ps1"} or (
+        "@openai/codex/" in entrypoint and entrypoint.endswith("/codex.js")
+    ):
+        return "codex"
+    if executable_name in {"claude", "claude.exe", "claude.cmd", "claude.ps1"} or (
+        "@anthropic-ai/claude-code/" in entrypoint and entrypoint.endswith("/cli.js")
+    ):
+        return "claude"
+    return None
+
+
 def scrub_claude_session_markers(environment: Mapping[str, str]) -> dict[str, str]:
     """Drop parent-Claude session markers so terminals get a clean lineage."""
     return {
@@ -33,6 +57,44 @@ def scrub_claude_session_markers(environment: Mapping[str, str]) -> dict[str, st
         for key, value in environment.items()
         if key.upper() not in CLAUDE_SESSION_MARKERS
     }
+
+
+def resolve_contained_cwd(value: str, root: Path) -> str:
+    """Resolve a spawn/action cwd, refusing anything outside the project root.
+
+    The single containment check for both entry points: a Project Action step's
+    declared cwd and a spawn request's ``cwd`` field. Relative values resolve
+    against the root, and symlinks are collapsed before the comparison so a link
+    inside the project cannot point a session at an arbitrary directory.
+    """
+    target = Path(value) if value else root
+    if not target.is_absolute():
+        target = root / target
+    target = target.resolve(strict=False)
+    try:
+        target.relative_to(root.resolve(strict=False))
+    except ValueError as exc:
+        raise ValueError("cwd must stay inside the Project root") from exc
+    return str(target)
+
+
+def parse_spawn_env(value: Any) -> dict[str, str]:
+    """Validate an environment mapping supplied with a spawn or action step."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > MAX_SPAWN_ENV:
+        raise ValueError(f"env must be an object with at most {MAX_SPAWN_ENV} entries")
+    result: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not key or "=" in key or "\0" in key:
+            raise ValueError("env names must be non-empty strings without '=' or NUL")
+        if not isinstance(item, (str, int, float, bool)):
+            raise ValueError("env values must be strings or scalar values")
+        text = str(item)
+        if "\0" in text:
+            raise ValueError("env values cannot contain NUL")
+        result[key] = text
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +106,11 @@ class SpawnRequest:
     argv: tuple[str, ...] = field(default_factory=tuple)
     name: str | None = None
     completion_mode: str = "interactive"
+    # Both are project-relative capabilities: ``cwd`` is containment-checked
+    # against the owning project's root by the spawn handler, which is the only
+    # place that knows it.
+    cwd: str | None = None
+    env: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def parse(cls, body: dict[str, Any]) -> SpawnRequest:
@@ -58,6 +125,8 @@ class SpawnRequest:
             "project",
             "name",
             "completion_mode",
+            "cwd",
+            "env",
         }
         unknown = set(body) - known
         if unknown:
@@ -82,6 +151,13 @@ class SpawnRequest:
         completion_mode = str(body.get("completion_mode") or "interactive")
         if completion_mode not in {"interactive", "one_shot"}:
             raise ValueError({"completion_mode": "must be interactive or one_shot"})
+        raw_cwd = body.get("cwd")
+        if raw_cwd is not None and (not isinstance(raw_cwd, str) or not raw_cwd.strip()):
+            raise ValueError({"cwd": "must be a non-empty string"})
+        try:
+            environment = parse_spawn_env(body.get("env"))
+        except ValueError as exc:
+            raise ValueError({"env": str(exc)}) from exc
         return cls(
             project_id=project_id,
             backend=backend,
@@ -90,4 +166,6 @@ class SpawnRequest:
             argv=tuple(raw_argv),
             name=str(body["name"]) if body.get("name") else None,
             completion_mode=completion_mode,
+            cwd=raw_cwd.strip() if isinstance(raw_cwd, str) else None,
+            env=environment,
         )

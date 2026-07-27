@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { notifyPromptLibraryChanged } from './promptLibraryEvents'
 import { renderPromptTemplate } from './promptTemplates'
 import type { Project, ProjectBackend } from './types'
 
@@ -46,6 +47,7 @@ export function PromptLibrary({project,backend,onInsert,onClose}:{project?:Proje
     try{
       if(editing)await api('PUT',`/api/prompts/${editing.scope}/${editing.id}`,body)
       else await api('POST','/api/prompts',body)
+      notifyPromptLibraryChanged()
       setDraft(null);setSavedDraft(null);setEditing(null);setMessage('Saved.');await load()
       return true
     }catch(error){setMessage(error instanceof Error?error.message:String(error));return false}
@@ -53,16 +55,17 @@ export function PromptLibrary({project,backend,onInsert,onClose}:{project?:Proje
   const insert=async()=>{
     if(!selected||missing.length)return
     onInsert(preview)
-    await api('POST',`/api/prompts/${selected.scope}/${selected.id}/use`,{project_id:project?.id}).catch(()=>{})
+    await api('POST',`/api/prompts/${selected.scope}/${selected.id}/use`,{project_id:project?.id}).then(()=>notifyPromptLibraryChanged()).catch(()=>{})
     onClose()
   }
   const favorite=async(item:PromptTemplate)=>{
     await api('PATCH',`/api/prompts/${item.scope}/${item.id}/favorite`,{project_id:project?.id,favorite:!item.favorite})
+    notifyPromptLibraryChanged()
     await load()
   }
   const remove=async()=>{
     if(!editing)return
-    try{await api('DELETE',`/api/prompts/${editing.scope}/${editing.id}`,{project_id:project?.id,revision:editing.revision});setDraft(null);setEditing(null);await load()}
+    try{await api('DELETE',`/api/prompts/${editing.scope}/${editing.id}`,{project_id:project?.id,revision:editing.revision});notifyPromptLibraryChanged();setDraft(null);setEditing(null);await load()}
     catch(error){setMessage(error instanceof Error?error.message:String(error))}
   }
   return <div class="modal-layer prompt-library-layer" onMouseDown={event=>event.target===event.currentTarget&&close()}>

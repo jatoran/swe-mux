@@ -22,7 +22,7 @@ from .models import GitState, SessionRecord, SessionState
 from .pty_host import PtyHost, merge_environment
 from .runtime_cwd import Osc7Parser, local_directory_from_osc7
 from .scrollback import ScrollbackBuffer
-from .spawn_contract import scrub_claude_session_markers
+from .spawn_contract import infer_agent_executable_backend, scrub_claude_session_markers
 from .supervisor_client import RemotePtyHost, SupervisorClient, host_for_adoption
 from .win_jobobj import ReaperJob
 
@@ -115,6 +115,7 @@ STATE_EVIDENCE_SOURCES: dict[str, frozenset[str]] = {
 # notification/process). The startup-quiet PTY fallback passes inferred=True
 # explicitly because "pty" is also the proven source for process exits.
 INFERRED_TRANSITION_SOURCES = frozenset({"watchdog", "watchdog-pty"})
+AGENT_BACKENDS = frozenset({"claude", "codex"})
 
 # Bound on the inferred share of turn terminals before status health alarms.
 # A healthy fleet reaches terminal status by proven evidence; inferred
@@ -859,6 +860,9 @@ class SessionManager:
         # fallback whenever the supervisor is unreachable.
         self.supervisor = supervisor
         self.sessions: dict[str, Session] = {}
+        # Repairs discovered while adopting supervisor metadata are consumed by
+        # the composition root to invalidate rebuildable provider telemetry.
+        self.identity_repairs: list[tuple[str, str | None]] = []
 
     async def spawn(
         self,
@@ -872,6 +876,7 @@ class SessionManager:
         resume_native_id: str | None = None,
         shell_profile_id: str | None = None,
         profile_env: dict[str, str] | None = None,
+        extra_env: dict[str, str] | None = None,
         project_label: str | None = None,
         project: ProjectIdentity | None = None,
         startup_started_at: float | None = None,
@@ -913,6 +918,9 @@ class SessionManager:
             startup_timing_ms=startup_timing_ms,
             completion_mode=completion_mode,
         )
+        record.spawn_backend = backend
+        record.spawn_native_session_id = native_id
+        record.spawn_env = dict(extra_env or {})
         if project is None:
             project_started_at = time.perf_counter()
             project = await resolve_project(resolved_cwd)
@@ -946,6 +954,10 @@ class SessionManager:
             },
             **spawn_spec.env,
             **(profile_env or {}),
+            # A task step's own env is the most specific instruction available, so
+            # it wins over the shell profile's; mux identity below still wins over
+            # both so a task shell can never spoof another session's hooks.
+            **(extra_env or {}),
             "MUX_SESSION_ID": sid,
             "MUX_HOOK_URL": f"{self.ingress_url}/api/hooks/{sid}",
             "MUX_PROMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/promote",
@@ -1136,6 +1148,306 @@ class SessionManager:
             "agent_lifecycle_id": session.agent_lifecycle_id,
         }
 
+    @staticmethod
+    def _infer_spawn_backend(record: SessionRecord) -> str:
+        """Recover the immutable root provider from legacy supervisor metadata."""
+        if record.spawn_backend == "shell" or record.spawn_backend in AGENT_BACKENDS:
+            return record.spawn_backend
+        inferred = infer_agent_executable_backend(record.exe, record.args)
+        if inferred is not None:
+            return inferred
+        # Older direct-agent records already used the mux id as their durable
+        # history owner. A promoted shell receives a separate run id.
+        if record.backend in AGENT_BACKENDS and record.agent_run_id == record.id:
+            return record.backend
+        return "shell"
+
+    @classmethod
+    def _ensure_spawn_identity(cls, record: SessionRecord) -> None:
+        record.spawn_backend = cls._infer_spawn_backend(record)
+        if record.spawn_native_session_id:
+            return
+        native_id: str | None = None
+        args = record.args
+        if record.spawn_backend == "claude":
+            for flag in ("--session-id", "--resume"):
+                if flag in args:
+                    index = args.index(flag) + 1
+                    if index < len(args):
+                        native_id = str(args[index])
+                        break
+        elif record.spawn_backend == "codex" and "resume" in args:
+            index = args.index("resume") + 1
+            if index < len(args):
+                native_id = str(args[index])
+        record.spawn_native_session_id = native_id or record.id
+
+    @staticmethod
+    def _path_key(path: Path | str) -> str:
+        try:
+            return str(Path(path).resolve()).casefold()
+        except OSError:
+            return str(path).casefold()
+
+    def _live_transcript_claims(
+        self, exclude: Session | None = None
+    ) -> tuple[set[tuple[str, str]], set[str]]:
+        native_ids: set[tuple[str, str]] = set()
+        paths: set[str] = set()
+        for other in getattr(self, "sessions", {}).values():
+            if other is exclude or other.record.state in {"exited", "crashed"}:
+                continue
+            if other.record.backend in AGENT_BACKENDS:
+                native_ids.add((other.record.backend, other.record.native_session_id))
+                transcript_path = getattr(other, "transcript_path", None)
+                if transcript_path:
+                    paths.add(self._path_key(transcript_path))
+        return native_ids, paths
+
+    def _unclaimed_transcripts(
+        self,
+        session: Session,
+        candidates: list[tuple[float, Path, str]],
+    ) -> list[tuple[float, Path, str]]:
+        claimed_ids, claimed_paths = self._live_transcript_claims(session)
+        backend = session.adapter.name
+        distinct: dict[tuple[str, str], tuple[float, Path, str]] = {}
+        for item in candidates:
+            modified, path, native_id = item
+            if (backend, native_id) in claimed_ids:
+                continue
+            if self._path_key(path) in claimed_paths:
+                continue
+            if (backend, native_id) in session.ignored_detection_runs:
+                continue
+            key = (native_id, self._path_key(path))
+            if key not in distinct or modified > distinct[key][0]:
+                distinct[key] = item
+        return list(distinct.values())
+
+    async def _await_owned_transcript(
+        self, session: Session, stop_event: asyncio.Event
+    ) -> Path | None:
+        """Wait for transcript evidence uniquely owned by this live PTY."""
+        while not stop_event.is_set():
+            cwd = Path(session.record.run_cwd or session.record.cwd)
+            started = session.record.agent_run_started_at or session.record.created_at
+            try:
+                candidates = self._unclaimed_transcripts(
+                    session, session.adapter.recent_transcripts(cwd, started)
+                )
+            except OSError:
+                candidates = []
+            exact = [
+                item for item in candidates if item[2] == session.record.native_session_id
+            ]
+            if exact:
+                return max(exact)[1]
+            if len(candidates) == 1:
+                return candidates[0][1]
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=0.5)
+            except TimeoutError:
+                pass
+        return None
+
+    def _adoption_transcript_claims(
+        self,
+        records: dict[str, SessionRecord],
+        metas: dict[str, dict[str, Any]],
+        exclude_sid: str,
+    ) -> tuple[set[tuple[str, str]], set[str]]:
+        """Return claims backed by each other session's root-process identity."""
+        native_ids: set[tuple[str, str]] = set()
+        paths: set[str] = set()
+        for other_sid, other in records.items():
+            if other_sid == exclude_sid or other.state in {"exited", "crashed"}:
+                continue
+            root_backend = other.spawn_backend or "shell"
+            backend = root_backend if root_backend in AGENT_BACKENDS else other.backend
+            if backend not in AGENT_BACKENDS:
+                continue
+            # A direct root agent has priority over mutable metadata. For a
+            # promoted shell, the active backend/native pair remains authoritative.
+            if root_backend in AGENT_BACKENDS:
+                if backend == "claude":
+                    native_id = other.spawn_native_session_id or other.id
+                elif other.backend == backend:
+                    native_id = other.native_session_id
+                else:
+                    native_id = ""
+            else:
+                native_id = other.native_session_id
+            if native_id:
+                native_ids.add((backend, native_id))
+            raw_path = metas.get(other_sid, {}).get("transcript_path")
+            if other.backend == backend and isinstance(raw_path, str) and raw_path:
+                paths.add(self._path_key(raw_path))
+        return native_ids, paths
+
+    def _adoption_transcript(
+        self,
+        record: SessionRecord,
+        meta: dict[str, Any],
+        records: dict[str, SessionRecord],
+        metas: dict[str, dict[str, Any]],
+    ) -> Path | None:
+        backend = record.spawn_backend or "shell"
+        if backend not in AGENT_BACKENDS:
+            return None
+        adapter = self.adapters[backend]
+        claimed_ids, claimed_paths = self._adoption_transcript_claims(
+            records, metas, record.id
+        )
+        current_raw = meta.get("transcript_path")
+        current = Path(current_raw) if isinstance(current_raw, str) and current_raw else None
+        if current is not None and record.backend == backend:
+            current_native = adapter.transcript_native_id(current)
+            if (
+                current_native
+                and (backend, current_native) not in claimed_ids
+                and self._path_key(current) not in claimed_paths
+            ):
+                return current
+        cwd = Path(record.run_cwd or record.spawn_cwd or record.cwd)
+        try:
+            candidates = adapter.recent_transcripts(cwd, record.created_at)
+        except OSError:
+            return None
+        unclaimed = [
+            (modified, path, native_id)
+            for modified, path, native_id in candidates
+            if (backend, native_id) not in claimed_ids
+            and self._path_key(path) not in claimed_paths
+        ]
+        expected = record.spawn_native_session_id
+        exact = [item for item in unclaimed if item[2] == expected]
+        if exact:
+            return max(exact)[1]
+        # Ambiguity is not identity evidence. Waiting for a lifecycle hook or a
+        # unique transcript is safer than attaching a sibling's conversation.
+        distinct = {self._path_key(item[1]): item for item in unclaimed}
+        return next(iter(distinct.values()))[1] if len(distinct) == 1 else None
+
+    @staticmethod
+    def _reset_provider_observation(record: SessionRecord) -> None:
+        record.state = "starting"
+        record.state_detail = None
+        record.awaiting_reason = None
+        record.tokens_in = 0
+        record.tokens_out = 0
+        record.context_window = 0
+        record.context_pct = 0
+        record.context_peak_pct = 0
+        record.compaction_count = 0
+        record.last_compaction_at = None
+        record.compaction_capability = None
+        record.compaction_confidence = None
+        record.model = None
+        record.measurement_source = None
+        record.parser_status = "waiting"
+        record.parser_diagnostic = None
+        record.parser_events_seen = 0
+        record.parser_unknown_events = 0
+        record.parser_unknown_signatures = {}
+        record.parser_schema_version = None
+
+    def _reconcile_adopted_root_identity(
+        self,
+        record: SessionRecord,
+        meta: dict[str, Any],
+        records: dict[str, SessionRecord],
+        metas: dict[str, dict[str, Any]],
+    ) -> tuple[Path | None, str | None, dict[str, str] | None]:
+        """Reassert a direct agent's provider ownership after daemon reload."""
+        backend = record.spawn_backend or "shell"
+        raw_path = meta.get("transcript_path")
+        current_path = Path(raw_path) if isinstance(raw_path, str) and raw_path else None
+        if backend == "shell":
+            if record.backend not in AGENT_BACKENDS:
+                return current_path, None, None
+            claimed_ids, claimed_paths = self._adoption_transcript_claims(
+                records, metas, record.id
+            )
+            current_claimed = (record.backend, record.native_session_id) in claimed_ids or (
+                current_path is not None and self._path_key(current_path) in claimed_paths
+            )
+            if not current_claimed:
+                return current_path, None, None
+            previous = {
+                "backend": record.backend,
+                "native_session_id": record.native_session_id,
+                "transcript_path": str(current_path) if current_path else "",
+            }
+            bad_run_id = record.agent_run_id
+            record.backend = "shell"
+            record.native_session_id = record.spawn_native_session_id or record.id
+            record.agent_run_id = None
+            record.agent_run_started_at = None
+            record.run_cwd = None
+            record.run_project_scope_id = None
+            record.run_repo_group_id = None
+            record.repository_id = record.spawn_project_scope_id
+            record.project_scope_id = record.spawn_project_scope_id
+            record.repo_group_id = record.spawn_repo_group_id
+            record.project_label = record.spawn_project_label
+            record.project_root = record.spawn_project_root
+            if record.auto_named:
+                record.name = f"shell-{record.id[:6]}"
+            self._reset_provider_observation(record)
+            record.state = "running"
+            record.parser_status = "not_applicable"
+            return None, bad_run_id, previous
+        if backend not in AGENT_BACKENDS:
+            return current_path, None, None
+        transcript = self._adoption_transcript(record, meta, records, metas)
+        adapter = self.adapters[backend]
+        transcript_native = adapter.transcript_native_id(transcript) if transcript else None
+        claimed_ids, claimed_paths = self._adoption_transcript_claims(
+            records, metas, record.id
+        )
+        current_claimed = (record.backend, record.native_session_id) in claimed_ids or (
+            current_path is not None and self._path_key(current_path) in claimed_paths
+        )
+        changed = (
+            record.backend != backend
+            or current_claimed
+            or record.agent_run_id != record.id
+            or (
+                current_path is not None
+                and (
+                    transcript is None
+                    or self._path_key(current_path) != self._path_key(transcript)
+                )
+            )
+        )
+        if not changed:
+            return transcript or current_path, None, None
+        previous = {
+            "backend": record.backend,
+            "native_session_id": record.native_session_id,
+            "transcript_path": str(current_path) if current_path else "",
+        }
+        bad_run_id = record.agent_run_id if record.agent_run_id != record.id else None
+        record.backend = backend
+        record.native_session_id = (
+            transcript_native or record.spawn_native_session_id or record.id
+        )
+        record.agent_run_id = record.id
+        record.agent_run_started_at = record.created_at
+        record.run_cwd = record.spawn_cwd or record.cwd
+        record.run_project_scope_id = record.spawn_project_scope_id or record.project_scope_id
+        record.run_repo_group_id = record.spawn_repo_group_id or record.repo_group_id
+        record.repository_id = record.spawn_project_scope_id or record.repository_id
+        record.project_scope_id = record.spawn_project_scope_id or record.project_scope_id
+        record.repo_group_id = record.spawn_repo_group_id or record.repo_group_id
+        record.project_label = record.spawn_project_label or record.project_label
+        record.project_root = record.spawn_project_root or record.project_root
+        if record.auto_named:
+            record.name = f"{backend}-{record.id[:6]}"
+        self._reset_provider_observation(record)
+        return transcript, bad_run_id, previous
+
     async def adopt_supervisor_sessions(self) -> int:
         """Rebuild live sessions announced by the supervisor at daemon boot.
 
@@ -1148,6 +1460,22 @@ class SessionManager:
         client = self.supervisor
         if client is None:
             return 0
+        records: dict[str, SessionRecord] = {}
+        metas: dict[str, dict[str, Any]] = {}
+        for info in client.initial_sessions:
+            sid = str(info.get("sid") or "")
+            raw_meta = info.get("meta")
+            pre_meta = raw_meta if isinstance(raw_meta, dict) else {}
+            snapshot = pre_meta.get("record")
+            if not sid or not isinstance(snapshot, dict):
+                continue
+            try:
+                parsed_record = SessionRecord.from_snapshot(snapshot)
+            except (TypeError, ValueError):
+                continue
+            self._ensure_spawn_identity(parsed_record)
+            records[sid] = parsed_record
+            metas[sid] = pre_meta
         adopted = 0
         for info in client.initial_sessions:
             sid = str(info.get("sid") or "")
@@ -1162,10 +1490,9 @@ class SessionManager:
                 # know it may still come back.
                 log.warning("supervised session %s has no metadata; not adopting", sid)
                 continue
-            try:
-                record = SessionRecord.from_snapshot(record_snapshot)
-            except (TypeError, ValueError):
-                log.exception("could not rebuild session record for %s", sid)
+            record = records.get(sid)
+            if record is None:
+                log.warning("could not rebuild session record for %s", sid)
                 continue
             if record.state in {"exited", "crashed"}:
                 # Fully ended and already persisted by a previous daemon; the
@@ -1180,24 +1507,57 @@ class SessionManager:
                 log.exception("could not subscribe to supervised session %s", sid)
                 client.unregister_host(host)
                 continue
+            transcript_path, bad_run_id, previous_identity = (
+                self._reconcile_adopted_root_identity(record, meta, records, metas)
+            )
+            # The preflight maps are also consulted by sessions adopted later in
+            # this pass. Replace stale ownership evidence immediately so a
+            # repaired record cannot make its former sibling path look claimed.
+            meta["transcript_path"] = str(transcript_path) if transcript_path else None
             adapter = self.adapters.get(record.backend) or self.adapters["shell"]
             hook_secret = str(meta.get("hook_secret") or "") or secrets.token_urlsafe(24)
             session = Session(record, host, adapter, self.max_scrollback, hook_secret)
             session.scrollback.seed(replay, int(response.get("position", len(replay))))
-            transcript = meta.get("transcript_path")
-            session.transcript_path = (
-                Path(transcript) if isinstance(transcript, str) and transcript else None
-            )
+            session.transcript_path = transcript_path
             lifecycle = meta.get("agent_lifecycle_id")
-            session.agent_lifecycle_id = lifecycle if isinstance(lifecycle, str) else None
-            if record.backend in {"claude", "codex"}:
+            session.agent_lifecycle_id = (
+                lifecycle
+                if record.spawn_backend == "shell" and isinstance(lifecycle, str)
+                else None
+            )
+            if record.spawn_backend == "shell" and record.backend in AGENT_BACKENDS:
                 session.agent_promoted_at = time.time()
             self.sessions[sid] = session
             self._attach_meta_sink(session)
             session.tasks.add(asyncio.create_task(self._fanout(session), name=f"fanout-{sid}"))
             session.tasks.add(asyncio.create_task(self._ticker(session), name=f"ticker-{sid}"))
             if host.isalive():
-                if record.backend in {"claude", "codex"}:
+                if previous_identity is not None:
+                    if not hasattr(self, "identity_repairs"):
+                        self.identity_repairs = []
+                    self.identity_repairs.append((sid, record.agent_run_id))
+                    if bad_run_id:
+                        await self.history.quarantine_misattributed_agent_run(
+                            bad_run_id, "root_identity_reconciled"
+                        )
+                    if record.backend in AGENT_BACKENDS:
+                        await self.history.session_promoted(
+                            record,
+                            str(session.transcript_path) if session.transcript_path else "",
+                        )
+                        await self.history.reopen_agent_run(record.id)
+                    await self.events.emit(
+                        "session_identity_reconciled",
+                        session_id=sid,
+                        source="daemon",
+                        previous=previous_identity,
+                        backend=record.backend,
+                        native_session_id=record.native_session_id,
+                        transcript_path=(
+                            str(session.transcript_path) if session.transcript_path else None
+                        ),
+                    )
+                if record.backend in AGENT_BACKENDS:
                     self._start_observer(session, session.transcript_path)
                 elif record.backend == "shell":
                     self._start_detection(session)
@@ -1280,8 +1640,20 @@ class SessionManager:
                 )
                 if (adapter.name, native_id) not in session.ignored_detection_runs
             ]
-            if candidates:
-                _, backend, path, native_id = max(candidates)
+            claimed_ids, claimed_paths = self._live_transcript_claims(session)
+            distinct = {
+                (backend, native_id, self._path_key(path)): (
+                    modified,
+                    backend,
+                    path,
+                    native_id,
+                )
+                for modified, backend, path, native_id in candidates
+                if (backend, native_id) not in claimed_ids
+                and self._path_key(path) not in claimed_paths
+            }
+            if len(distinct) == 1:
+                _, backend, path, native_id = next(iter(distinct.values()))
                 await self._begin_agent_run(session)
                 session.adapter = self.adapters[backend]
                 session.pty.graceful_exit = session.adapter.graceful_exit_keys()
@@ -1323,10 +1695,33 @@ class SessionManager:
         if backend not in {"claude", "codex"}:
             raise ValueError(f"cannot promote session to {backend}")
         session = self.resolve(sid)
+        self._ensure_spawn_identity(session.record)
+        if session.record.spawn_backend in AGENT_BACKENDS:
+            await self.events.emit(
+                "backend_promotion_ignored",
+                session_id=session.record.id,
+                source="daemon",
+                reason="root_agent_owns_pty",
+                root_backend=session.record.spawn_backend,
+                requested_backend=backend,
+                requested_native_session_id=native_id,
+            )
+            return session
         if session.record.backend == backend and session.agent_lifecycle_id == native_id:
             return session
         if session.record.backend == backend and session.record.native_session_id == native_id:
             session.agent_lifecycle_id = native_id
+            return session
+        if session.record.backend in AGENT_BACKENDS:
+            await self.events.emit(
+                "backend_promotion_ignored",
+                session_id=session.record.id,
+                source="daemon",
+                reason="agent_run_already_active",
+                root_backend=session.record.spawn_backend,
+                requested_backend=backend,
+                requested_native_session_id=native_id,
+            )
             return session
         session.ignored_detection_runs.discard((backend, native_id))
         session.agent_lifecycle_id = native_id
@@ -1371,6 +1766,18 @@ class SessionManager:
     async def demote(self, sid: str, backend: str, native_id: str) -> Session:
         session = self.resolve(sid)
         await self._await_registration(session)
+        self._ensure_spawn_identity(session.record)
+        if session.record.spawn_backend in AGENT_BACKENDS:
+            await self.events.emit(
+                "backend_demotion_ignored",
+                session_id=session.record.id,
+                source="daemon",
+                reason="root_agent_owns_pty",
+                root_backend=session.record.spawn_backend,
+                requested_backend=backend,
+                requested_native_session_id=native_id,
+            )
+            return session
         if session.record.backend != backend:
             return session
         lifecycle_id = session.agent_lifecycle_id or session.record.native_session_id
@@ -1440,12 +1847,7 @@ class SessionManager:
         adapter = session.adapter
         path = transcript
         if path is None or not path.exists():
-            path = await adapter.await_transcript(
-                session.record.native_session_id,
-                Path(session.record.run_cwd or session.record.cwd),
-                session.record.created_at,
-                stop_event,
-            )
+            path = await self._await_owned_transcript(session, stop_event)
         backoff = OBSERVER_RESTART_BACKOFF_MIN_SECONDS
         while path and not stop_event.is_set():
             session.transcript_path = path

@@ -133,7 +133,7 @@ async def test_redeploy_status_reports_lock_and_log(tmp_path: Path) -> None:
     assert _payload(response)["running"] is True
 
 
-def test_replace_dir_moves_and_reports_failure(tmp_path: Path) -> None:
+def _redeploy_module() -> Any:
     import importlib.util
     import sys
 
@@ -148,6 +148,11 @@ def test_replace_dir_moves_and_reports_failure(tmp_path: Path) -> None:
         spec.loader.exec_module(module)
     finally:
         sys.path.pop(0)
+    return module
+
+
+def test_replace_dir_moves_and_reports_failure(tmp_path: Path) -> None:
+    module = _redeploy_module()
 
     source = tmp_path / "bundle"
     source.mkdir()
@@ -157,6 +162,96 @@ def test_replace_dir_moves_and_reports_failure(tmp_path: Path) -> None:
     assert (target / "app.exe").is_file() and not source.exists()
     # A missing source fails within the retry budget instead of hanging.
     assert module.replace_dir(tmp_path / "missing", target, retry_seconds=0.3) is False
+
+
+def test_redeploy_health_wait_allows_cold_start_but_stops_on_process_exit(
+    monkeypatch: Any,
+) -> None:
+    module = _redeploy_module()
+    health_calls: list[object] = []
+    monkeypatch.setattr(
+        module,
+        "health",
+        lambda *_args, **_kwargs: health_calls.append(object()) or None,
+    )
+    process = SimpleNamespace(poll=lambda: 7, returncode=7)
+
+    assert module.APP_HEALTH_TIMEOUT_SECONDS >= 300
+    assert module.wait_healthy(SimpleNamespace(), process=process) is None
+    assert len(health_calls) == 1
+
+
+def test_in_session_helpers_are_not_confused_with_the_shell_or_daemon() -> None:
+    """`swe-mux.exe -m swe_mux.hook_client` lives inside a live session's tree.
+
+    A redeploy once ran a bare `taskkill /F /IM swe-mux.exe`, which reached those
+    helpers and took down the one session that was mid-tool-call. Only the shell and
+    the daemon may be stopped by the ordinary path.
+    """
+    module = _redeploy_module()
+    exe = r"D:\PROJECTS\swe-mux\dist\swe-mux\swe-mux.exe"
+
+    def fake(*argv: str) -> Any:
+        return SimpleNamespace(cmdline=lambda: list(argv))
+
+    # The shell and the daemon child are the redeploy's actual targets.
+    assert module.is_session_helper(fake(exe)) is False
+    assert (
+        module.is_session_helper(fake(exe, "--daemon-child", "--config", r"C:\x\config.toml"))
+        is False
+    )
+    assert module.is_session_helper(fake(exe, "--hidden")) is False
+
+    # Every agent tool call spawns these; they share the image name only.
+    assert module.is_session_helper(fake(exe, "-m", "swe_mux.hook_client", "PreToolUse")) is True
+    assert module.is_session_helper(fake(exe, "-m", "swe_mux.hook_client", "PostToolUse")) is True
+    # The rule is the module form, so a future helper is covered without a new entry.
+    assert module.is_session_helper(fake(exe, "-m", "swe_mux.supervisor")) is True
+
+
+def test_unreadable_argv_is_spared_rather_than_killed() -> None:
+    """An unprovable process must not be killed: a lock straggler is the cheaper risk."""
+    module = _redeploy_module()
+    import psutil
+
+    def denied() -> list[str]:
+        raise psutil.AccessDenied(1)
+
+    assert module.is_session_helper(SimpleNamespace(cmdline=denied)) is True
+
+
+def test_ordinary_stop_terminates_only_shell_pids(monkeypatch: Any) -> None:
+    """The stop path signals enumerated pids and never a whole image name."""
+    module = _redeploy_module()
+    argv = {
+        11: [r"dist\swe-mux\swe-mux.exe"],
+        12: [r"dist\swe-mux\swe-mux.exe", "--daemon-child"],
+        13: [r"dist\swe-mux\swe-mux.exe", "-m", "swe_mux.hook_client", "PreToolUse"],
+    }
+    import psutil
+
+    monkeypatch.setattr(
+        module, "processes_by_image", lambda _names: [(pid, "swe-mux.exe") for pid in argv]
+    )
+    # redeploy_desktop imports psutil inside each function, so patch it at the source.
+    monkeypatch.setattr(psutil, "Process", lambda pid: SimpleNamespace(cmdline=lambda: argv[pid]))
+    killed: list[int] = []
+    monkeypatch.setattr(module, "terminate_pids", lambda pids, **_: killed.extend(pids))
+    monkeypatch.setattr(module, "health", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    blunt: list[Any] = []
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: blunt.append(a) or None)
+
+    shell, helpers = module.partition_app_processes()
+    assert shell == [11, 12]
+    assert helpers == [13]
+
+    module.stop_app_processes(SimpleNamespace(port=1, data_dir=Path(".")))
+
+    assert killed == [11, 12]
+    # The hook client survives, and taskkill is never reached on the ordinary path.
+    assert 13 not in killed
+    assert blunt == []
 
 
 @pytest.mark.parametrize("marker", ["CLAUDE_CODE_SESSION_ID", "CLAUDECODE"])

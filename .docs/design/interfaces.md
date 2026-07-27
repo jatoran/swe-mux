@@ -19,6 +19,20 @@ in constant time, and returns `202 {status: "shutting_down", mode}`. An optional
 next daemon to reattach. The token lives under the daemon data directory and never enters
 browser state or the tailnet API. Standalone `muxd` returns 404.
 
+## Runtime log level
+
+```text
+GET  /api/debug/log-level
+POST /api/debug/log-level  {level: "DEBUG"|"INFO"|"WARNING"|"ERROR"}
+```
+
+Runtime verbosity toggle for the daemon's root logger (console + rotating
+`<data_dir>/daemon.log`), applied live without a restart; returns
+`{level}` (POST normalizes case, `400` on an unknown level). The `log_level`
+config field is the startup default and is also applied live when the config
+file changes; this endpoint deliberately does not persist. The aiohttp request
+log is isolated in `<data_dir>/access.log` and unaffected by the level.
+
 ## Daemon self-restart
 
 ```text
@@ -123,13 +137,15 @@ type PaneLeaf = {type: 'leaf'; kind: 'terminal'|'note'|'preview'|'history'; id: 
 type PaneStack = {type: 'stack'; id: string; children: PaneLeaf[]; active_child_id: string}
 type PaneSplit = {type: 'split'; id: string; direction: 'horizontal'|'vertical'; ratio: number; first: PaneNode; second: PaneNode}
 type PaneNode = PaneStack | PaneSplit
-type PaneLayout = {version: 6; root: PaneNode | null}
+type PaneLayout = {version: 7; root: PaneNode | null}
 ```
 
 Every split branch terminates in a stack, including a one-tab pane. `note` leaf IDs encode
-Project note, session note, Files, and individual file resources; `history` is the searchable
-session archive. Versions 1–5 are migrated when read. Visible legacy resource docks become
-ordinary adjacent panes, while hidden docks remain closed.
+Project note, session note, and individual file resources; `history` is the searchable
+session archive. Versions 1–6 are migrated when read. Visible legacy resource docks become
+ordinary adjacent panes, while hidden docks remain closed. A v6 `files:` leaf is pruned rather
+than migrated — the Files browser is a utility-drawer tab, not a pane — collapsing a pane it
+emptied and the split above it.
 
 ## Project resources
 
@@ -253,17 +269,41 @@ interface SpawnRequest {
   executable?: string
   argv?: string[]
   resume_native_id?: string
+  cwd?: string                      // must resolve inside the owning Project root
+  env?: Record<string, string>      // ≤ 64 entries; scalar values stringified
+  completion_mode?: 'interactive' | 'one_shot'
 }
 ```
 
-`project_id` is required. `cwd`, `worktree`, and unknown fields are rejected. The daemon
-always passes the owning Project root to the session manager. Session PATCH rejects Project
-ownership changes.
+`project_id` is required. `worktree` and unknown fields are rejected. Session PATCH rejects
+Project ownership changes.
+
+`cwd` defaults to the owning Project root and may name a subdirectory of it (a task that runs
+in `./frontend`). Containment is enforced in the spawn handler, which is the only layer that
+knows which Project owns the request: the value is resolved (relative against the root,
+symlinks collapsed) and rejected if it lands outside. `env` merges over the shell profile's
+environment and under mux's own identity variables, so a spawned shell can never present
+another session's hook credentials. Both exist because a Project Action step declares its own
+directory and environment; encoding them into `argv` instead is what previously forced a
+swe-mux executable into every task's process tree.
+
+`argv` is appended after the adapter's own flags, so for an agent backend it becomes the CLI's
+trailing positional prompt: that is how a session is seeded with a first message (the
+cross-vendor review spawn and note "send to agent" both use it) without writing into a TUI that
+is not ready for input. It is a command line, so the caller owns its length — the browser caps a
+seeded prompt at 20,000 characters and routes anything longer to a live session instead.
+
+`POST /sessions/{id}/input` is the only delivery path that reaches a session whose pane is not
+mounted in the caller's browser. A multi-line body must arrive wrapped in bracketed paste
+(`ESC[200~` … `ESC[201~`, newlines as CR) or the agent composer submits at every line, and a
+submitting Enter is a separate later write, not the same one.
 
 `GET /sessions` adds a compact, read-only `delivery_readiness` object with
 `state: safe|blocked|unknown`, a reason, and `authorized: false`. It is not accepted on writes.
 Each row also exposes its stable terminal `note_id` and whether its lazily created note file
-currently exists.
+currently exists. `spawn_backend` and `spawn_native_session_id` identify the immutable root
+process; `backend` and `native_session_id` may instead describe the active promoted run only
+when that root is a shell.
 PTY WebSocket owners may send `{type:"terminal_state", mode:"normal|alternate"}`. Input
 frames label xterm device replies with `kind:"terminal_response"`; every other input frame,
 including bracketed paste, advances the human-input boundary. OSC 10/11 default-color replies
@@ -383,6 +423,11 @@ suspected_orphan | stale | inaccessible`. Actions revalidate PID, creation-time 
 and ownership immediately before signaling; no state triggers automatic termination.
 `GET /processes` returns running processes only; `include_ended=1` adds records that ended
 during the current daemon run. Ended records never contribute to resource totals.
+`memory_bytes` is RSS (the working set), which counts shared pages once per mapping process
+and therefore overstates a summed tree. `unique_memory=1` additionally samples unique set size
+into `memory_unique_bytes` per process, per daemon member, and in totals; it is opt-in because
+it walks every working set at roughly 200x the cost of the RSS read, so only user-opened views
+request it. Totals report it only when every contributor supplied one.
 
 Preview URLs are HTTP(S), literal loopback, and credential/query/fragment-free. Registration
 deduplicates by canonical Project endpoint and records the session that owns the live listener,
@@ -444,6 +489,12 @@ alert summary without deleting evidence; `manual_usage` is valid only for Codex 
 Configuration/keybindings, automation/annotations/lineage, events/notifications, voice,
 remote status, filesystem discovery, and preview proxy routes retain their feature-specific
 contracts described in the corresponding `features/` documents.
+
+`GET /api/settings/bundle?cwd=<path>` aggregates the Settings panel's open payload
+(config, automation rules, keybindings, profiles, projects, automation status, provider
+status, usage, and — when `cwd` is supplied — project config) into one response. `config`
+failing fails the request; any other part degrades to `null` with its reason keyed under
+`errors`. The individual endpoints remain authoritative and unchanged.
 
 ## CLI
 

@@ -20,7 +20,7 @@ from aiohttp import ClientSession, ClientTimeout
 from .event_bus import EventBus
 from .models import MuxEvent
 from .session import SessionManager
-from .subprocess_flags import background_creation_flags
+from .subprocess_flags import background_creation_flags, reap_process_tree
 
 log = logging.getLogger(__name__)
 
@@ -374,8 +374,7 @@ class MetaHookEngine:
                 process.wait(), timeout=float(action.get("timeout_seconds", 10))
             )
         except TimeoutError:
-            process.kill()
-            await process.wait()
+            await reap_process_tree(process)
             raise TimeoutError("hook subprocess timed out") from None
         if code:
             raise RuntimeError(f"hook subprocess exited with status {code}")

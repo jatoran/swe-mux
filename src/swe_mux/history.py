@@ -13,6 +13,7 @@ from typing import Any, TypeVar
 
 from .git_projects import ProjectIdentity
 from .models import MuxEvent, ProjectGroupRecord, ProjectRecord, SessionRecord
+from .spawn_contract import infer_agent_executable_backend
 from .sqlite_store import database_operation_lock, run_sqlite_operation
 from .transcript_view import (
     TRANSCRIPT_PARSER_VERSION,
@@ -615,6 +616,129 @@ class HistoryIndex:
             self._db.commit()
 
         await self._run(op)
+
+    async def reopen_agent_run(self, run_id: str) -> None:
+        """Clear a false terminal marker after live root identity is repaired."""
+
+        def op() -> None:
+            self._db.execute(
+                "UPDATE history SET exited_at=NULL,exit_reason=NULL,final_state=NULL "
+                "WHERE id=? AND agent_visible=1",
+                (run_id,),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def quarantine_misattributed_agent_run(self, run_id: str, reason: str) -> None:
+        """Hide observer data proven to belong to another live root session.
+
+        The row remains as an internal audit record, but its copied transcript
+        messages and indexing cursor are removed so sibling content can no
+        longer surface through history search or be incrementally re-indexed.
+        """
+
+        def op() -> None:
+            with self._db:
+                self._db.execute("DELETE FROM history_messages WHERE history_id=?", (run_id,))
+                self._db.execute(
+                    "DELETE FROM history_transcript_index WHERE history_id=?", (run_id,)
+                )
+                self._db.execute(
+                    "UPDATE history SET agent_visible=0,exited_at=?,exit_reason=?,"
+                    "final_state='crashed',transcript_path=NULL WHERE id=?",
+                    (time.time(), reason, run_id),
+                )
+
+        await self._run(op)
+
+    async def reconcile_historical_provider_collisions(
+        self,
+    ) -> list[tuple[str, str, str]]:
+        """Hide legacy false runs after their owning live session is gone.
+
+        Repair requires three independent proofs: the retained executable names
+        a different provider, its note owner is the canonical row for that root
+        provider, and another canonical row owns the claimed native id or
+        transcript. Legitimate nested agents start from a shell executable and
+        therefore cannot satisfy the first proof.
+        """
+
+        def arguments(row: sqlite3.Row) -> list[str]:
+            try:
+                value = json.loads(row["argv_json"] or "[]")
+            except (TypeError, ValueError):
+                return []
+            return [str(item) for item in value] if isinstance(value, list) else []
+
+        def op() -> list[tuple[str, str, str]]:
+            rows = self._db.execute(
+                "SELECT id,native_id,backend,note_id,transcript_path,executable,argv_json "
+                "FROM history WHERE agent_visible=1 AND backend IN ('claude','codex')"
+            ).fetchall()
+            by_id = {str(row["id"]): row for row in rows}
+            repairs: list[tuple[str, str, str]] = []
+            now = time.time()
+            with self._db:
+                for row in rows:
+                    run_id = str(row["id"])
+                    note_id = str(row["note_id"] or "")
+                    claimed_backend = str(row["backend"])
+                    root_backend = infer_agent_executable_backend(
+                        row["executable"], arguments(row)
+                    )
+                    if (
+                        root_backend is None
+                        or root_backend == claimed_backend
+                        or not note_id
+                        or run_id == note_id
+                    ):
+                        continue
+                    root = by_id.get(note_id)
+                    if root is None or str(root["backend"]) != root_backend:
+                        continue
+                    claimed_native = str(row["native_id"] or "")
+                    claimed_transcript = str(row["transcript_path"] or "")
+                    owner = next(
+                        (
+                            candidate
+                            for candidate in rows
+                            if str(candidate["id"]) != run_id
+                            and str(candidate["id"]) == str(candidate["note_id"] or "")
+                            and str(candidate["backend"]) == claimed_backend
+                            and (
+                                (
+                                    bool(claimed_native)
+                                    and str(candidate["native_id"] or "") == claimed_native
+                                )
+                                or (
+                                    bool(claimed_transcript)
+                                    and str(candidate["transcript_path"] or "")
+                                    == claimed_transcript
+                                )
+                            )
+                        ),
+                        None,
+                    )
+                    if owner is None:
+                        continue
+                    self._db.execute(
+                        "DELETE FROM history_messages WHERE history_id=?", (run_id,)
+                    )
+                    self._db.execute(
+                        "DELETE FROM history_transcript_index WHERE history_id=?",
+                        (run_id,),
+                    )
+                    self._db.execute(
+                        "UPDATE history SET agent_visible=0,exited_at=?,"
+                        "exit_reason='historical_provider_collision_reconciled',"
+                        "final_state='crashed',transcript_path=NULL WHERE id=?",
+                        (now, run_id),
+                    )
+                    repairs.append((note_id, run_id, str(root["id"])))
+            return repairs
+
+        return await self._run(op)
 
     async def agent_run_ended(self, session: SessionRecord, reason: str) -> None:
         run_id = session.agent_run_id

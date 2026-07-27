@@ -69,6 +69,13 @@ class SessionRecord:
     spawn_repo_group_id: str | None = None
     spawn_project_label: str | None = None
     spawn_project_root: str | None = None
+    # Immutable root-process identity. ``backend`` and ``native_session_id`` may
+    # temporarily describe an agent launched inside a shell, but lifecycle
+    # hooks from nested child CLIs must never replace the provider that owns the
+    # PTY itself. Optional defaults keep supervisor snapshots from older daemons
+    # adoptable; SessionManager reconstructs them from the retained spawn argv.
+    spawn_backend: str | None = None
+    spawn_native_session_id: str | None = None
     runtime_cwd: str | None = None
     runtime_cwd_live: bool = False
     runtime_cwd_source: str = "spawn"
@@ -97,6 +104,12 @@ class SessionRecord:
     # is retained on this record and can be replayed in place. Agent and plain
     # shell sessions leave this False so their rails never show Relaunch.
     relaunchable: bool = False
+    # Daemon-supplied environment for a task shell, retained so Relaunch can
+    # replay it. Carried through snapshot()/from_snapshot() so a relaunch still
+    # works after a daemon restart adopts the record. Task env is authored in the
+    # project's own task files and was equally visible in the retained argv
+    # before, so this changes legibility, not exposure.
+    spawn_env: dict[str, str] = field(default_factory=dict)
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)

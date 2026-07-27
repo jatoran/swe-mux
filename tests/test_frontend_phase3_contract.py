@@ -254,7 +254,9 @@ def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None
         for name, value in re.findall(r"\.([a-z-]+)\s*\{[^}]*?z-index:(\d+)", style)
     }
     assert depths["project-registry-dialog-layer"] > depths["projects-manager-layer"]
-    assert 'class="project-trigger" onClick={openProjectsManager}' in app
+    # openProjectsManager takes an optional focus (which Project, which tab), so
+    # every plain trigger must call it rather than hand it the click event.
+    assert 'class="project-trigger" onClick={()=>openProjectsManager()}' in app
     assert "directionRow('Move tab:'" in app
     assert "directionRow('Open in split:'" in app
     assert "directionRow('New terminal in split:'" in app

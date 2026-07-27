@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import ctypes
+import sys
 from ctypes import wintypes
 
 PROCESS_TERMINATE = 0x0001
 PROCESS_SET_QUOTA = 0x0100
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x0800
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 
@@ -74,7 +76,16 @@ class ReaperJob:
         if not self._handle:
             self._raise("CreateJobObjectW")
         info = EXTENDED_LIMITS()
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        # BREAKAWAY_OK does not weaken containment: children still land in the
+        # job by default and only escape when a spawner explicitly requests
+        # CREATE_BREAKAWAY_FROM_JOB. That escape hatch exists for exactly one
+        # reason: a daemon/tray relaunch initiated from a shell *inside* a
+        # session (redeploy_desktop.py, ensure_daemon) must not inherit that
+        # session's kill-on-close job, or removing the session later silently
+        # terminates the whole app.
+        info.BasicLimitInformation.LimitFlags = (
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
+        )
         if not kernel32.SetInformationJobObject(
             self._handle,
             JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
@@ -112,3 +123,32 @@ class ReaperJob:
     def _raise(operation: str) -> None:
         code = ctypes.get_last_error()
         raise OSError(code, f"{operation} failed: {ctypes.FormatError(code)}")
+
+
+def process_in_job() -> bool | None:
+    """Whether this process is inside any Windows Job object (None if unknowable).
+
+    A daemon, tray, or supervisor that was (re)launched from a shell inside a
+    session inherits that session's kill-on-close job and is silently
+    terminated when the session is removed. Startup paths call this to leave a
+    loud warning while the process is still healthy.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.IsProcessInJob.argtypes = [
+            wintypes.HANDLE,
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.BOOL),
+        ]
+        kernel32.IsProcessInJob.restype = wintypes.BOOL
+        result = wintypes.BOOL(0)
+        if not kernel32.IsProcessInJob(
+            kernel32.GetCurrentProcess(), None, ctypes.byref(result)
+        ):
+            return None
+        return bool(result.value)
+    except OSError:
+        return None

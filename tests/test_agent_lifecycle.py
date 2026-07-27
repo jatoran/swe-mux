@@ -6,17 +6,21 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
 from swe_mux.models import SessionRecord
-from swe_mux.session import SessionManager
+from swe_mux.session import Session, SessionManager
 
 
 def agent_record(backend: str = "claude", cwd: str = ".") -> SessionRecord:
-    return SessionRecord(
+    record = SessionRecord(
         "mux-id", "agent", "default", backend, "native-id", cwd, f"{backend}.exe", []
     )
+    record.spawn_backend = "shell"
+    record.spawn_native_session_id = record.id
+    return record
 
 
 def fake_manager() -> Any:
@@ -200,3 +204,379 @@ def test_transcript_switch_ignores_ended_sibling_in_same_cwd(tmp_path: Path) -> 
     dead.state = "exited"
     manager.sessions["dead"] = SimpleNamespace(record=dead, transcript_path=None)
     assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+
+
+def _lifecycle_manager(record: SessionRecord) -> tuple[Any, Session]:
+    pty = SimpleNamespace(graceful_exit="", isalive=lambda: True)
+    shell = SimpleNamespace(name="shell", graceful_exit_keys=lambda: "exit\r")
+    codex = SimpleNamespace(name="codex", graceful_exit_keys=lambda: "/exit\r")
+    session = Session(record, cast(Any, pty), cast(Any, codex), 32, "secret")
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    manager.sessions = {record.id: session}
+    manager.adapters = {"shell": shell, "codex": codex}
+    manager.events = SimpleNamespace(emit=AsyncMock())
+    return manager, session
+
+
+async def test_direct_agent_ignores_nested_cli_promotion_and_demotion(tmp_path: Path) -> None:
+    record = SessionRecord(
+        "root",
+        "codex-root",
+        "default",
+        "codex",
+        "root-native",
+        str(tmp_path),
+        "node.exe",
+        [r"C:\npm\node_modules\@openai\codex\bin\codex.js"],
+    )
+    record.spawn_backend = "codex"
+    record.spawn_native_session_id = "root"
+    record.agent_run_id = record.id
+    manager, session = _lifecycle_manager(record)
+
+    promoted = await manager.promote(record.id, "codex", "child-probe")
+    demoted = await manager.demote(record.id, "codex", "child-probe")
+
+    assert promoted is demoted is session
+    assert record.backend == "codex"
+    assert record.native_session_id == "root-native"
+    assert record.agent_run_id == record.id
+    assert session.agent_lifecycle_id is None
+    reasons = [
+        call.kwargs["reason"] for call in manager.events.emit.await_args_list
+    ]
+    assert reasons == ["root_agent_owns_pty", "root_agent_owns_pty"]
+
+
+async def test_promoted_shell_ignores_a_second_nested_agent_lifecycle(tmp_path: Path) -> None:
+    record = SessionRecord(
+        "shell",
+        "active",
+        "default",
+        "codex",
+        "root-agent",
+        str(tmp_path),
+        "pwsh.exe",
+        [],
+    )
+    record.spawn_backend = "shell"
+    record.spawn_native_session_id = record.id
+    record.agent_run_id = "run-id"
+    manager, session = _lifecycle_manager(record)
+    session.agent_lifecycle_id = "root-launcher"
+
+    unchanged = await manager.promote(record.id, "codex", "child-launcher")
+
+    assert unchanged is session
+    assert record.backend == "codex"
+    assert record.native_session_id == "root-agent"
+    assert session.agent_lifecycle_id == "root-launcher"
+    manager.events.emit.assert_awaited_once()
+    assert manager.events.emit.await_args.kwargs["reason"] == "agent_run_already_active"
+
+
+def test_adoption_repairs_provider_and_sibling_transcript_contamination(
+    tmp_path: Path,
+) -> None:
+    sibling_path = tmp_path / "claude-sibling.jsonl"
+    sibling_path.write_text("{}\n", encoding="utf-8")
+    codex_path = tmp_path / "codex-root.jsonl"
+    codex_path.write_text("{}\n", encoding="utf-8")
+    root = SessionRecord(
+        "root",
+        "shell-root",
+        "default",
+        "claude",
+        "claude-sibling",
+        str(tmp_path),
+        "node.exe",
+        [r"C:\npm\node_modules\@openai\codex\bin\codex.js"],
+    )
+    root.agent_run_id = "false-run"
+    root.model = "claude-opus"
+    root.tokens_in = 100
+    sibling = SessionRecord(
+        "sibling",
+        "claude-sibling",
+        "default",
+        "claude",
+        "claude-sibling",
+        str(tmp_path),
+        "claude.exe",
+        ["--session-id", "claude-sibling"],
+    )
+    sibling.agent_run_id = sibling.id
+    manager = fake_manager()
+    manager.adapters = {
+        "codex": SimpleNamespace(
+            name="codex",
+            recent_transcripts=lambda *_: [(time.time(), codex_path, "codex-native")],
+            transcript_native_id=lambda path: (
+                "codex-native" if Path(path) == codex_path else None
+            ),
+        )
+    }
+    records = {"root": root, "sibling": sibling}
+    metas = {
+        "root": {"transcript_path": str(sibling_path)},
+        "sibling": {"transcript_path": str(sibling_path)},
+    }
+    for record in records.values():
+        manager._ensure_spawn_identity(record)
+
+    transcript, bad_run_id, previous = manager._reconcile_adopted_root_identity(
+        root, metas["root"], records, metas
+    )
+
+    assert root.spawn_backend == "codex"
+    assert root.backend == "codex"
+    assert root.native_session_id == "codex-native"
+    assert root.agent_run_id == root.id
+    assert root.name == "codex-root"
+    assert root.state == "starting"
+    assert root.model is None
+    assert root.tokens_in == 0
+    assert transcript == codex_path
+    assert bad_run_id == "false-run"
+    assert previous == {
+        "backend": "claude",
+        "native_session_id": "claude-sibling",
+        "transcript_path": str(sibling_path),
+    }
+
+
+def test_adoption_refuses_ambiguous_unowned_transcripts(tmp_path: Path) -> None:
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    record = SessionRecord(
+        "root",
+        "codex-root",
+        "default",
+        "codex",
+        "unknown",
+        str(tmp_path),
+        "codex.exe",
+        [],
+    )
+    record.spawn_backend = "codex"
+    record.spawn_native_session_id = record.id
+    manager = fake_manager()
+    manager.adapters = {
+        "codex": SimpleNamespace(
+            recent_transcripts=lambda *_: [
+                (2.0, second, "second"),
+                (1.0, first, "first"),
+            ],
+            transcript_native_id=lambda _path: None,
+        )
+    }
+
+    assert manager._adoption_transcript(
+        record, {}, {record.id: record}, {record.id: {}}
+    ) is None
+
+
+def test_adoption_demotes_a_shell_run_claiming_a_live_sibling(
+    tmp_path: Path,
+) -> None:
+    sibling_path = tmp_path / "sibling.jsonl"
+    shell = SessionRecord(
+        "shell",
+        "wrong-agent",
+        "default",
+        "claude",
+        "sibling-native",
+        str(tmp_path),
+        "pwsh.exe",
+        [],
+    )
+    shell.spawn_backend = "shell"
+    shell.spawn_native_session_id = shell.id
+    shell.agent_run_id = "false-run"
+    sibling = SessionRecord(
+        "sibling",
+        "claude-sibling",
+        "default",
+        "claude",
+        "sibling-native",
+        str(tmp_path),
+        "claude.exe",
+        ["--session-id", "sibling-native"],
+    )
+    sibling.agent_run_id = sibling.id
+    manager = fake_manager()
+    records = {shell.id: shell, sibling.id: sibling}
+    metas = {
+        shell.id: {"transcript_path": str(sibling_path)},
+        sibling.id: {"transcript_path": str(sibling_path)},
+    }
+    for record in records.values():
+        manager._ensure_spawn_identity(record)
+
+    transcript, bad_run_id, previous = manager._reconcile_adopted_root_identity(
+        shell, metas[shell.id], records, metas
+    )
+
+    assert transcript is None
+    assert bad_run_id == "false-run"
+    assert previous is not None
+    assert shell.backend == "shell"
+    assert shell.native_session_id == shell.id
+    assert shell.agent_run_id is None
+    assert shell.state == "running"
+    assert shell.parser_status == "not_applicable"
+
+
+def test_owned_transcript_filter_excludes_live_sibling(tmp_path: Path) -> None:
+    own_path = tmp_path / "own.jsonl"
+    sibling_path = tmp_path / "sibling.jsonl"
+    record = agent_record("codex", str(tmp_path))
+    record.native_session_id = "own"
+    manager, session = _lifecycle_manager(record)
+    sibling_record = agent_record("codex", str(tmp_path))
+    sibling_record.id = "sibling"
+    sibling_record.native_session_id = "sibling"
+    manager.sessions["sibling"] = SimpleNamespace(
+        record=sibling_record, transcript_path=sibling_path
+    )
+
+    candidates = manager._unclaimed_transcripts(
+        session,
+        [
+            (2.0, sibling_path, "sibling"),
+            (1.0, own_path, "own"),
+        ],
+    )
+
+    assert candidates == [(1.0, own_path, "own")]
+
+
+async def test_supervisor_adoption_repairs_legacy_identity_and_persists_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    codex_path = tmp_path / "codex.jsonl"
+    codex_path.write_text("{}\n", encoding="utf-8")
+    sibling_path = tmp_path / "sibling.jsonl"
+    sibling_path.write_text("{}\n", encoding="utf-8")
+    root = SessionRecord(
+        "root",
+        "shell-root",
+        "default",
+        "claude",
+        "sibling-native",
+        str(tmp_path),
+        "node.exe",
+        [r"C:\npm\node_modules\@openai\codex\bin\codex.js"],
+        state="idle",
+    )
+    root.agent_run_id = "false-run"
+    sibling = SessionRecord(
+        "sibling",
+        "claude-sibling",
+        "default",
+        "claude",
+        "sibling-native",
+        str(tmp_path),
+        "claude.exe",
+        ["--session-id", "sibling-native"],
+        state="idle",
+    )
+    sibling.agent_run_id = sibling.id
+    infos = [
+        {
+            "sid": root.id,
+            "meta": {
+                "record": root.snapshot(),
+                "transcript_path": str(sibling_path),
+                "agent_lifecycle_id": "child-probe",
+            },
+        },
+        {
+            "sid": sibling.id,
+            "meta": {
+                "record": sibling.snapshot(),
+                "transcript_path": str(sibling_path),
+            },
+        },
+    ]
+
+    class Host:
+        graceful_exit = ""
+
+        def prepare(self) -> None:
+            pass
+
+        def isalive(self) -> bool:
+            return True
+
+    class Client:
+        initial_sessions = infos
+
+        def __init__(self) -> None:
+            self.metadata: dict[str, dict[str, Any]] = {}
+
+        async def subscribe(self, _host: Host) -> tuple[dict[str, Any], bytes]:
+            return {"position": 0}, b""
+
+        def queue_meta(self, sid: str, meta: dict[str, Any]) -> None:
+            self.metadata[sid] = meta
+
+        def unregister_host(self, _host: Host) -> None:
+            pass
+
+        def notify(self, _payload: dict[str, Any]) -> None:
+            pass
+
+    client = Client()
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    manager.supervisor = client
+    manager.sessions = {}
+    manager.max_scrollback = 128
+    manager.adapters = {
+        "shell": SimpleNamespace(name="shell"),
+        "codex": SimpleNamespace(
+            name="codex",
+            recent_transcripts=lambda *_: [(time.time(), codex_path, "codex-native")],
+            transcript_native_id=lambda path: (
+                "codex-native" if Path(path) == codex_path else None
+            ),
+        ),
+        "claude": SimpleNamespace(
+            name="claude",
+            recent_transcripts=lambda *_: [],
+            transcript_native_id=lambda path: Path(path).stem,
+        ),
+    }
+    manager.history = SimpleNamespace(
+        quarantine_misattributed_agent_run=AsyncMock(),
+        session_promoted=AsyncMock(),
+        reopen_agent_run=AsyncMock(),
+    )
+    manager.events = SimpleNamespace(emit=AsyncMock())
+    observed: list[tuple[str, Path | None]] = []
+    manager._start_observer = lambda session, path: observed.append((session.record.id, path))
+
+    async def no_background_work(_session: Any) -> None:
+        return None
+
+    manager._fanout = no_background_work
+    manager._ticker = no_background_work
+    monkeypatch.setattr("swe_mux.session.host_for_adoption", lambda *_: Host())
+
+    adopted = await manager.adopt_supervisor_sessions()
+
+    assert adopted == 2
+    revived = manager.sessions[root.id]
+    assert revived.record.backend == "codex"
+    assert revived.record.native_session_id == "codex-native"
+    assert revived.record.spawn_backend == "codex"
+    assert revived.record.agent_run_id == root.id
+    assert revived.transcript_path == codex_path
+    assert revived.agent_lifecycle_id is None
+    assert revived.agent_promoted_at is None
+    assert client.metadata[root.id]["record"]["backend"] == "codex"
+    manager.history.quarantine_misattributed_agent_run.assert_awaited_once_with(
+        "false-run", "root_identity_reconciled"
+    )
+    manager.history.reopen_agent_run.assert_awaited_once_with(root.id)
+    assert (root.id, codex_path) in observed

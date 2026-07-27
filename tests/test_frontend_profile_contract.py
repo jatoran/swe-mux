@@ -61,13 +61,16 @@ def test_settings_drafts_keep_the_active_tab_and_guard_every_close_path() -> Non
 
 
 def test_project_ignore_editors_preserve_newlines_until_save() -> None:
-    source = (Path(__file__).parents[1] / "frontend" / "src" / "Settings.tsx").read_text(
-        encoding="utf-8"
-    )
+    src = Path(__file__).parents[1] / "frontend" / "src"
+    source = (src / "Settings.tsx").read_text(encoding="utf-8")
+    manager = (src / "ProjectsManager.tsx").read_text(encoding="utf-8")
 
-    assert source.count("parseIgnorePatternDraft(e.currentTarget.value)") == 2
+    # Settings keeps only the global list; the per-Project one moved to the Projects
+    # registry, which is the single per-Project editor.
+    assert source.count("parseIgnorePatternDraft(e.currentTarget.value)") == 1
     assert (
         "project_ignore_patterns:normalizeIgnorePatterns(draft.project_ignore_patterns)" in source
     )
-    assert "ignore_patterns:normalizeIgnorePatterns(projectValues.ignore_patterns)" in source
+    assert "parseIgnorePatternDraft(event.currentTarget.value)" in manager
+    assert "ignore_patterns:normalizeIgnorePatterns(values.ignore_patterns)" in manager
     assert "e.currentTarget.value.split('\\n').map(item=>item.trim()).filter(Boolean)" not in source

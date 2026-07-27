@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from ..codex_tui import with_scrollback_safe_tui
 from .base import SpawnOptions, SpawnSpec
 
 
@@ -33,9 +34,10 @@ class CodexAdapter:
         )
 
     def _args(self, args: list[str]) -> list[str]:
+        configured = with_scrollback_safe_tui([*self.default_args, *args])
         if not self.notify_program:
-            return [*self.default_args, *args]
-        return ["-c", f"notify={json.dumps(self.notify_program)}", *self.default_args, *args]
+            return configured
+        return ["-c", f"notify={json.dumps(self.notify_program)}", *configured]
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:
         del sid
