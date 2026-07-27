@@ -9,16 +9,11 @@ Agentic Controle Plane (ACP)
 
 
 
-- control plane updates:
-	- claude --resume 4ab71d1b-8e49-4604-b543-67357adc66c4
-	
-	
-
 - command rail quick-model changes
 
 
 
-
+- should be able to resume sessions even when they weren't run in swe-mux
 	
 	
 - can i tie certain claude/codex accounts to specific browsers and/or specific chrome profiles? so when it asks to auth, it only opens those browsers/profiles?
