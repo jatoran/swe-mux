@@ -74,6 +74,21 @@ def test_claude_includes_generated_hook_settings_as_one_argument(tmp_path: Path)
     )
 
 
+def test_claude_mcp_config_never_directly_precedes_positional_args(tmp_path: Path) -> None:
+    # `--mcp-config` is variadic in the Claude CLI: it keeps consuming tokens
+    # until the next flag, so a trailing seed prompt placed right after it is
+    # read as a second config path and the CLI exits ("MCP config file not
+    # found: <prompt>"). Discovered live during Phase 4 seed verification.
+    adapter = ClaudeAdapter(data_dir=tmp_path, mcp_url="http://127.0.0.1:1/mcp")
+    spec = adapter.spawn_spec(
+        "new-id", SpawnOptions(tmp_path, args=["Reply with the single word OK."])
+    )
+    argv = list(spec.argv)
+    assert "--mcp-config" in argv and argv[-1] == "Reply with the single word OK."
+    following = argv[argv.index("--mcp-config") + 2]
+    assert following.startswith("--"), argv
+
+
 def test_claude_session_hook_settings_are_isolated_and_cleaned(tmp_path: Path) -> None:
     adapter = ClaudeAdapter(data_dir=tmp_path)
     environment = adapter.session_env("mux-session")

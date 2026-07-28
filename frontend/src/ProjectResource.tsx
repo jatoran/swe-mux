@@ -563,6 +563,25 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
 
+  // Phase 4 sender coverage: the tree menu can hand any text file to the send-to-agent
+  // dialog. Same fetch and gating as the copy action — the file on disk, not an open draft.
+  const sendFileToAgent=async(item:DirectoryItem)=>{
+    setTreeMenu(null)
+    if(!onSendToAgent)return
+    try{
+      const payload=await api<FilePayload>('GET',`/api/projects/${project.id}/file?path=${encodeURIComponent(item.path)}`)
+      if(payload.status==='too-large'){setError(`${item.name} is above the 2 MiB read limit and cannot be sent.`);return}
+      if(payload.status==='binary'||payload.text===undefined){setError(`${item.name} is not text, so there is nothing to send.`);return}
+      const slice=truncateForClipboard(payload.text,item.path)
+      onSendToAgent({
+        projectId:project.id,
+        label:item.path,
+        scope:'document',
+        message:composeAgentMessage(slice.text,{label:item.path,scope:'document'}),
+      })
+    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+  }
+
   const ignoreResource=async(item:DirectoryItem,scope:'global'|'project')=>{
     setTreeMenu(null)
     try{
@@ -624,6 +643,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       <button role="menuitem" title={absoluteProjectPath(project.root,treeMenu.item.path)} onClick={()=>void copyPath(treeMenu.item,'absolute')}>Copy full path</button>
       <button role="menuitem" title={treeMenu.item.path} onClick={()=>void copyPath(treeMenu.item,'relative')}>Copy path from project root</button>
       {treeMenu.item.kind==='file'&&<button role="menuitem" title={`Copy the file's text, capped at ${FILE_COPY_MAX_LINES.toLocaleString()} lines`} onClick={()=>void copyContents(treeMenu.item)}>Copy file contents</button>}
+      {treeMenu.item.kind==='file'&&onSendToAgent&&<button role="menuitem" title="Open the send-to-agent dialog with this file's contents" onClick={()=>void sendFileToAgent(treeMenu.item)}>Send to an agent session</button>}
       <div class="context-rule"/>
       <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'global')}>Add pattern to global ignores</button>
       <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'project')}>Add pattern to project ignores</button>
@@ -647,8 +667,10 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   }
   const stateLabel=autosaved?(noteSave.status==='idle'?status:noteSave.status):(saveState==='idle'?status:saveState)
   return <section class="project-resource file-editor">
-    <header><div>{!isNote&&<strong>{resource.id}</strong>}<span>{project.name} · {stateLabel}</span></div>{(autosaved&&onSendToAgent)||(resource.kind==='file'&&!isMarkdownFile)?<div class="resource-actions">
-      {autosaved&&onSendToAgent&&<button class="resource-send" disabled={!editable} title="Send the selection (or the whole document) to an agent session" onClick={requestSendToAgent}>→ agent</button>}
+    <header><div>{!isNote&&<strong>{resource.id}</strong>}<span>{project.name} · {stateLabel}</span></div>{onSendToAgent||(resource.kind==='file'&&!isMarkdownFile)?<div class="resource-actions">
+      {/* Continuity-backed views send the live selection (or the document); a plain-text
+          editor owns no selection engine, so its send is always the whole document. */}
+      {onSendToAgent&&<button class="resource-send" disabled={!editable} title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}
       {resource.kind==='file'&&!isMarkdownFile&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}
     </div>:null}</header>
     {errorLine}

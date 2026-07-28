@@ -150,7 +150,7 @@ interface Project {
 
 interface ProjectGroup { id: string; name: string; position: number }
 
-type PaneLeaf = {type: 'leaf'; kind: 'terminal'|'note'|'preview'|'history'; id: string}
+type PaneLeaf = {type: 'leaf'; kind: 'terminal'|'note'|'preview'|'history'|'queue'; id: string}
 type PaneStack = {type: 'stack'; id: string; children: PaneLeaf[]; active_child_id: string}
 type PaneSplit = {type: 'split'; id: string; direction: 'horizontal'|'vertical'; ratio: number; first: PaneNode; second: PaneNode}
 type PaneNode = PaneStack | PaneSplit
@@ -159,7 +159,9 @@ type PaneLayout = {version: 7; root: PaneNode | null}
 
 Every split branch terminates in a stack, including a one-tab pane. `note` leaf IDs encode
 Project note, session note, and individual file resources; `history` is the searchable
-session archive. Versions 1–6 are migrated when read. Visible legacy resource docks become
+session archive; `queue` is the per-target prompt-queue tab, its id `queue:<session_id>`
+(prefixed so it can never collide with the target's own terminal leaf). Versions 1–6 are
+migrated when read. Visible legacy resource docks become
 ordinary adjacent panes, while hidden docks remain closed. A v6 `files:` leaf is pruned rather
 than migrated — the Files browser is a utility-drawer tab, not a pane — collapsing a pane it
 emptied and the split above it.
@@ -253,6 +255,34 @@ are returned explicitly. Template bodies are bounded inert UTF-8 text and termin
 characters are rejected. The browser's Insert action uses terminal paste semantics and never
 adds Enter or submits.
 
+## Prompt queue (Phase 4)
+
+```text
+GET    /queue                                       per-target aggregates
+GET    /queue/messages?target_session_id=           one target's ordered queue
+POST   /queue/messages                              {target_session_id, body, armed?, insert_after?}
+PATCH  /queue/messages/{message_id}                 {body, revision} | {armed} | {after} | {retarget_session_id}
+POST   /queue/messages/{message_id}/cancel          {kind: cancelled|skipped}
+GET    /queue/messages/{message_id}/deliveries      audit rows (no prompt text)
+POST   /queue/send-next                             {message_id, revision, idempotency_key?, confirm?}
+GET    /queue/export?target_session_id=[&redact_secrets=0]
+```
+
+The typed daemon operations of the persistent manual prompt queue — the daemon owns
+ordering, revision checks, readiness, target identity, and audit; the browser is one caller
+(`features/prompt-queue.md`). Targets are live Claude/Codex sessions only. Messages carry
+states `draft | armed | blocked | delivering | sent | failed | cancelled | stranded`; edits
+increment `revision` and are refused for sent/delivering items. `send-next` atomically
+re-checks pending state, the exact revision the caller last saw, and strict head-of-line
+order, then target liveness/agent-run identity and delivery readiness immediately before the
+PTY write. Typed refusals carry a machine `code`: `head_of_line_blocked`,
+`revision_conflict`, `delivery_not_safe` (retryable with `confirm: true`),
+`delivery_protected` (approval/Q&A/identity — never overridable), `target_ended` /
+`target_run_replaced` (the message is stranded, not retargeted). A repeated
+`idempotency_key` replays the recorded outcome instead of delivering twice. Delivery audit
+rows and `queue_updated`/`queue_delivery` events never carry the prompt body; export redacts
+credential-shaped bodies unless the caller opts out.
+
 ## Clipboard history
 
 ```text
@@ -305,6 +335,7 @@ interface SpawnRequest {
   cwd?: string                      // must resolve inside the owning Project root
   env?: Record<string, string>      // ≤ 64 entries; scalar values stringified
   completion_mode?: 'interactive' | 'one_shot'
+  seed_text?: string                // agent backends only; ≤ 500k chars
 }
 ```
 
@@ -321,15 +352,20 @@ directory and environment; encoding them into `argv` instead is what previously 
 swe-mux executable into every task's process tree.
 
 `argv` is appended after the adapter's own flags, so for an agent backend it becomes the CLI's
-trailing positional prompt: that is how a session is seeded with a first message (the
-cross-vendor review spawn and note "send to agent" both use it) without writing into a TUI that
-is not ready for input. It is a command line, so the caller owns its length — the browser caps a
-seeded prompt at 20,000 characters and routes anything longer to a live session instead.
+trailing positional prompt: that is how a session is seeded with a first message without
+writing into a TUI that is not ready for input. `seed_text` is the preferred seeding field
+and removes the former client-side 20,000-character ceiling: the daemon inlines a body at or
+under that bound into argv itself (with the leading-dash guard) and stages a longer one into
+the workspace at `.swe-mux/seeds/` (gitignored, aged out after 14 days), seeding a short
+prompt that reads the staged file — which also removes the quoting-inflation risk a long
+Windows command line carries.
 
-`POST /sessions/{id}/input` is the only delivery path that reaches a session whose pane is not
-mounted in the caller's browser. A multi-line body must arrive wrapped in bracketed paste
-(`ESC[200~` … `ESC[201~`, newlines as CR) or the agent composer submits at every line, and a
-submitting Enter is a separate later write, not the same one.
+`POST /sessions/{id}/input` is the only raw-input path that reaches a session whose pane is
+not mounted in the caller's browser; the browser uses it for composer fill (insert without
+submit). A multi-line body must arrive wrapped in bracketed paste (`ESC[200~` … `ESC[201~`,
+newlines as CR) or the agent composer submits at every line. Actual message *delivery*
+(paste + submit) to a live agent goes through the prompt queue's `POST /queue/send-next`,
+which performs both writes daemon-side with the same evidence accounting.
 
 `GET /sessions` adds a compact, read-only `delivery_readiness` object with
 `state: safe|blocked|unknown`, a reason, and `authorized: false`. It is not accepted on writes.
@@ -538,6 +574,17 @@ probabilistic attributions, tool/skill aggregates, parser coverage, and explicit
 Its interpretation is always `observational_correlation_only`.
 Reset review is durable and audit-preserving: both resolutions remove the row from the active
 alert summary without deleting evidence; `manual_usage` is valid only for Codex rows.
+
+## Agent MCP surface
+
+`POST /mcp` — streamable-HTTP MCP endpoint for spawned agent sessions (JSON-RPC 2.0,
+protocol 2025-06-18; loopback-only; 256 KiB body cap; 120 calls/min per session). Auth is
+`Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-session, minted at spawn,
+injected into the session environment beside `MUX_MCP_URL`, and survives daemon restarts
+via supervisor meta. Tools are read-only and Project-scoped: `list_sessions`,
+`get_session`, `read_transcript`, `search_history`. Full contract:
+`features/mux-mcp.md`. Unknown token → 401 (session ended or predates the surface);
+non-loopback → 403; rate overflow → 429 with `Retry-After`.
 
 ## Other API groups
 

@@ -63,6 +63,7 @@ from .launchers import create_agent_shims, resolve_codex_pty_command, resolve_co
 from .layouts import attach_leaf, attach_terminal, stack_leaf
 from .lifecycle import HEARTBEAT_INTERVAL_SECONDS, daemon_clean_exit, daemon_started, heartbeat
 from .logsetup import current_log_level, set_log_level
+from .mcp import McpAuthError, McpService
 from .meta_hooks import MetaHookEngine, parse_hook_rules
 from .models import MuxEvent
 from .observation import apply_hook_observation, hook_event_scope
@@ -108,6 +109,12 @@ from .project_init import init_script_step, select_init_scripts
 from .project_watcher import ProjectFileWatcher
 from .projects import ProjectManager
 from .prompt_library import PromptLibrary, PromptScope
+from .prompt_queue import (
+    PromptQueueService,
+    PromptQueueStore,
+    QueueError,
+    stage_seed_argv,
+)
 from .provider_accounts import (
     ProviderAccountConflict,
     ProviderAccountError,
@@ -151,6 +158,11 @@ HOOK_RATE_LIMIT = 500
 # Sweep rate-limit windows for sessions that no longer exist once the map grows
 # past a size no live fleet reaches.
 HOOK_WINDOW_SWEEP_AT = 256
+# MCP tool-call budget per session. Generous for a deliberate agent, tight
+# enough that a retry loop cannot pull the whole archive through the endpoint.
+MCP_RATE_WINDOW_SECONDS = 60.0
+MCP_RATE_LIMIT = 120
+MCP_BODY_BYTES = 256 * 1024
 CONFIG_WATCH_LOOP = "config-watch"
 LIFECYCLE_HEARTBEAT_LOOP = "lifecycle-heartbeat"
 MEDIA_CLEANUP_LOOP = "media-cleanup"
@@ -206,6 +218,10 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         # Distinct from a bad request: the caller must resolve an ownership
         # clash or explicitly force the action.
         return json_response({"error": str(exc), "conflict": True}, 409)
+    except QueueError as exc:
+        # Typed queue-operation failures carry their own status and a machine
+        # code the queue UI branches on (head-of-line, revision, readiness).
+        return json_response({"error": str(exc), "code": exc.code, **exc.payload}, exc.status)
     except (ValueError, TypeError, ProviderAccountError) as exc:
         return json_response({"error": str(exc)}, 400)
     except Exception:
@@ -330,6 +346,7 @@ def create_app(
     app["preview_http_semaphore"] = asyncio.Semaphore(PREVIEW_HTTP_CONCURRENCY)
     app["preview_ws_semaphore"] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
     app["hook_ingress_windows"] = {}
+    app["mcp_rate_windows"] = {}
     # Mutable holder because aiohttp freezes app keys once started; carries the
     # externally-signaled shutdown intent (quit vs restart/detach) to cleanup.
     app["shutdown_state"] = {"intent": None}
@@ -401,6 +418,14 @@ def create_app(
             web.delete("/api/prompts/{scope}/{template_id}", delete_prompt),
             web.post("/api/prompts/{scope}/{template_id}/use", use_prompt),
             web.patch("/api/prompts/{scope}/{template_id}/favorite", favorite_prompt),
+            web.get("/api/queue", queue_summary),
+            web.get("/api/queue/messages", queue_messages),
+            web.post("/api/queue/messages", queue_create_message),
+            web.patch("/api/queue/messages/{message_id}", queue_patch_message),
+            web.post("/api/queue/messages/{message_id}/cancel", queue_cancel_message),
+            web.get("/api/queue/messages/{message_id}/deliveries", queue_message_deliveries),
+            web.post("/api/queue/send-next", queue_send_next),
+            web.get("/api/queue/export", queue_export),
             web.get("/api/projects", list_projects),
             web.post("/api/projects", create_project),
             web.put("/api/projects/order", reorder_projects),
@@ -526,6 +551,7 @@ def create_app(
             web.post("/api/previews/{preview_id}/capture", capture_preview),
             web.route("*", "/preview/{preview_id}/{tail:.*}", preview_proxy),
             web.post("/api/hooks/{sid}", hook_ingress),
+            web.post("/mcp", mcp_endpoint),
             web.get("/api/git/worktrees", list_worktrees),
             web.post("/api/git/worktrees", create_worktree),
             web.delete("/api/git/worktrees", remove_worktree),
@@ -624,17 +650,25 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                 "PTY supervisor unavailable; sessions will run in-process and "
                 "will not survive a daemon restart"
             )
+    mcp_url = f"http://127.0.0.1:{config.port}/mcp"
     adapters: dict[str, BackendAdapter] = {
         "shell": ShellAdapter(config.shell_exe),
-        "claude": ClaudeAdapter(config.claude_exe, config.data_dir, config.claude_args),
+        "claude": ClaudeAdapter(
+            config.claude_exe, config.data_dir, config.claude_args, mcp_url=mcp_url
+        ),
         "codex": CodexAdapter(
             config.codex_exe,
             notify=True,
             default_args=config.codex_args,
             command_resolver=resolve_codex_pty_command,
+            mcp_url=mcp_url,
         ),
     }
-    child_env = create_agent_shims(config, adapters["claude"].settings_path)  # type: ignore[attr-defined]
+    child_env = create_agent_shims(
+        config,
+        adapters["claude"].settings_path,  # type: ignore[attr-defined]
+        adapters["claude"].mcp_config_path,  # type: ignore[attr-defined]
+    )
     sessions = SessionManager(
         adapters,
         reaper,
@@ -705,6 +739,19 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     fleet.automation = automation
     voice_store = VoiceStore(config.database_path)
     voice = VoiceService(config, events, sessions, voice_store, automation_store, openrouter)
+    prompt_queue_store = PromptQueueStore(config.database_path)
+    prompt_queue = PromptQueueService(
+        prompt_queue_store,
+        sessions,
+        events,
+        fleet.readiness,
+        # Queue delivery is operator input and must share the single accounting
+        # helper (input_owner=False: the sender holds no ownership claim on the
+        # target's PTY, same as broadcast).
+        lambda session, data: _record_operator_input(
+            events, session, data, source="queue", input_owner=False
+        ),
+    )
     prompt_library = PromptLibrary(config.data_dir)
     settings_store = SettingsStore(config.data_dir)
     clipboard = ClipboardStore(
@@ -803,13 +850,19 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     process_inspector.start()
     fleet.start()
     voice.start()
+    # After supervisor adoption: the startup reconcile strands queue items
+    # whose target session or agent run did not survive the restart.
+    await prompt_queue.start()
     project_watcher.start()
     # Every long-lived loop runs under the background-task supervisor: restarted
     # with capped backoff, faults counted, health surfaced at
     # /api/diagnostics/background. An unsupervised loop that dies is invisible.
     background.start(CONFIG_WATCH_LOOP, lambda: _watch_config(app))
     background.start(MEDIA_CLEANUP_LOOP, lambda: _media_cleanup_loop(config.data_dir, projects))
-    background.start(RETENTION_LOOP, lambda: _retention_loop(automation_store, tier0, config))
+    background.start(
+        RETENTION_LOOP,
+        lambda: _retention_loop(automation_store, tier0, prompt_queue_store, config),
+    )
     background.start(STATE_WATCHDOG_LOOP, sessions.state_watchdog_loop)
     push_sender = PushSender(push_store, settings_store, events)
     background.start(PUSH_SENDER_LOOP, push_sender.run)
@@ -827,6 +880,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         projects=projects,
         history_backfills=history_backfills,
         sessions=sessions,
+        mcp=McpService(sessions, history),
         reaper=reaper,
         supervisor=supervisor_client,
         git_monitor=git_monitor,
@@ -846,6 +900,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         voice=voice,
         voice_store=voice_store,
         prompt_library=prompt_library,
+        prompt_queue=prompt_queue,
         settings_store=settings_store,
         clipboard=clipboard,
         push_store=push_store,
@@ -873,6 +928,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await hooks.stop()
     await automation.stop()
     await consumers.stop()
+    await prompt_queue.stop()
     await voice.stop()
     await project_watcher.stop()
     await usage.stop()
@@ -902,6 +958,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await clipboard.stop()
     history.close()
     automation_store.close()
+    prompt_queue_store.close()
     voice_store.close()
     telemetry.close()
     tier0.close()
@@ -3150,6 +3207,12 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
         executable = profile.executable
         argv = [*profile.argv, *argv]
         profile_env = profile.env
+    if spec.seed_text:
+        if backend not in {"claude", "codex"}:
+            raise ValueError({"seed_text": "seed prompts require an agent backend"})
+        # Short bodies ride argv; over-bound ones are staged into the workspace
+        # with a reader prompt (file I/O off-loop).
+        argv = [*argv, await asyncio.to_thread(stage_seed_argv, cwd, spec.seed_text)]
     spawn_values: dict[str, Any] = dict(
         backend=backend,
         name=spec.name,
@@ -3252,6 +3315,7 @@ async def get_background_health(request: web.Request) -> web.Response:
             # A detector that stopped producing findings is indistinguishable from
             # a quiet fleet unless the loop's own liveness is reported.
             "deterministic_consumers": consumers.status(),
+            "mcp": request.app["mcp"].status(),
         }
     )
 
@@ -3453,10 +3517,41 @@ async def branch_session(request: web.Request) -> web.Response:
     return json_response({"session": session.record.snapshot(), "source": record.id}, 201)
 
 
+def _record_operator_input(
+    events: EventBus, session: Any, data: str, *, source: str, input_owner: bool = True
+) -> None:
+    """Write operator-originated text to a PTY with full evidence accounting.
+
+    Every human-input path must advance `input_revision`/`last_input_event_ts`
+    and emit `terminal_input`, or delivery-readiness reports
+    `partial_input_absent`/`operator_quiet` as satisfied for text the operator
+    just sent — corrupting the shadow-metric baseline Phase 5 promotion is
+    validated against. The WS path does its own (throttled) accounting; this is
+    the shared path for everything else.
+    """
+    session.pty.write(data)
+    now = time.monotonic()
+    session.input_revision += 1
+    session.last_input_event_ts = now
+    session.last_input_report_ts = now
+    events.emit_background(
+        "terminal_input",
+        session_id=session.record.id,
+        source=source,
+        input_owner=input_owner,
+        bytes=len(data.encode("utf-8")),
+    )
+
+
 async def session_input(request: web.Request) -> web.Response:
     body = await request.json()
     session = request.app["sessions"].resolve(request.match_info["sid"])
-    session.pty.write(str(body.get("data", "")))
+    if session.record.state in {"exited", "crashed"}:
+        return json_response({"error": "the session has ended"}, 409)
+    data = str(body.get("data", ""))
+    if not data:
+        return json_response({"ok": True})
+    _record_operator_input(request.app["events"], session, data, source="http")
     return json_response({"ok": True})
 
 
@@ -3514,10 +3609,13 @@ async def deliver_broadcast(
     for candidate in manager.sessions.values():
         if candidate.record.id == source_id or not candidate.record.broadcast:
             continue
-        if not candidate.pty.isalive():
+        if candidate.record.state in {"exited", "crashed"} or not candidate.pty.isalive():
             skipped.append(candidate.record.id)
             continue
-        candidate.pty.write(data)
+        # Each target gets the same evidence accounting as any other operator
+        # input; `input_owner=False` because the writer holds no ownership claim
+        # on the target's PTY.
+        _record_operator_input(events, candidate, data, source="broadcast", input_owner=False)
         delivered.append(candidate.record.id)
     events.emit_background(
         "broadcast_delivered",
@@ -3533,6 +3631,110 @@ async def broadcast_input_route(request: web.Request) -> web.Response:
     data = str((await request.json()).get("data", ""))
     return json_response(
         await deliver_broadcast(request.app["sessions"], data, request.app["events"])
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: persistent manual prompt queue. Thin handlers only — ordering,
+# revision checks, readiness, identity, and audit live in PromptQueueService.
+
+
+async def queue_summary(request: web.Request) -> web.Response:
+    return json_response({"targets": await request.app["prompt_queue"].summary()})
+
+
+async def queue_messages(request: web.Request) -> web.Response:
+    target = request.query.get("target_session_id", "").strip()
+    if not target:
+        raise ValueError("target_session_id is required")
+    return json_response(await request.app["prompt_queue"].target_view(target))
+
+
+async def queue_create_message(request: web.Request) -> web.Response:
+    body = await request.json()
+    message = await request.app["prompt_queue"].enqueue(
+        target_session_id=str(body.get("target_session_id") or ""),
+        body=str(body.get("body") or ""),
+        armed=bool(body.get("armed", False)),
+        insert_after=str(body["insert_after"]) if body.get("insert_after") else None,
+        # The HTTP surface is a human surface: sender_kind is pinned to "user".
+        # queue_draft senders are in-process control-plane callers only.
+        sender_kind="user",
+        sender_id=str(body["sender_id"]) if body.get("sender_id") else None,
+    )
+    return json_response(message, 201)
+
+
+async def queue_patch_message(request: web.Request) -> web.Response:
+    queue: PromptQueueService = request.app["prompt_queue"]
+    message_id = request.match_info["message_id"]
+    body = await request.json()
+    if body.get("retarget_session_id"):
+        return json_response(
+            await queue.retarget(
+                message_id, target_session_id=str(body["retarget_session_id"])
+            )
+        )
+    if "body" in body:
+        revision = body.get("revision")
+        if not isinstance(revision, int):
+            raise ValueError("revision is required to edit a message body")
+        return json_response(
+            await queue.edit(message_id, revision=revision, body=str(body["body"]))
+        )
+    if "armed" in body:
+        return json_response(await queue.set_armed(message_id, bool(body["armed"])))
+    if "after" in body:
+        after = body.get("after")
+        return json_response(
+            await queue.move(message_id, after=str(after) if after else None)
+        )
+    raise ValueError("nothing to change")
+
+
+async def queue_cancel_message(request: web.Request) -> web.Response:
+    body = await request.json()
+    return json_response(
+        await request.app["prompt_queue"].cancel(
+            request.match_info["message_id"],
+            kind=str(body.get("kind") or "cancelled"),
+        )
+    )
+
+
+async def queue_message_deliveries(request: web.Request) -> web.Response:
+    return json_response(
+        {
+            "deliveries": await request.app["prompt_queue"].store.deliveries(
+                request.match_info["message_id"]
+            )
+        }
+    )
+
+
+async def queue_send_next(request: web.Request) -> web.Response:
+    body = await request.json()
+    message_id = str(body.get("message_id") or "")
+    revision = body.get("revision")
+    if not message_id or not isinstance(revision, int):
+        raise ValueError("message_id and revision are required")
+    return json_response(
+        await request.app["prompt_queue"].send_next(
+            message_id,
+            revision=revision,
+            idempotency_key=str(body["idempotency_key"]) if body.get("idempotency_key") else None,
+            confirm=bool(body.get("confirm", False)),
+        )
+    )
+
+
+async def queue_export(request: web.Request) -> web.Response:
+    target = request.query.get("target_session_id", "").strip()
+    if not target:
+        raise ValueError("target_session_id is required")
+    redact = request.query.get("redact_secrets", "1") not in {"0", "false"}
+    return json_response(
+        await request.app["prompt_queue"].export_target(target, redact_secrets=redact)
     )
 
 
@@ -3674,7 +3876,10 @@ async def _media_cleanup_loop(data_dir: Path, projects: ProjectManager) -> None:
 
 
 async def _retention_loop(
-    automation_store: AutomationStore, tier0: Tier0Store, config: Config
+    automation_store: AutomationStore,
+    tier0: Tier0Store,
+    prompt_queue_store: PromptQueueStore,
+    config: Config,
 ) -> None:
     """Periodic retention for the stores that only pruned at startup.
 
@@ -3686,6 +3891,7 @@ async def _retention_loop(
         with background.iteration(RETENTION_LOOP):
             await automation_store.prune(config.automation_retention_days)
             await tier0.prune()
+            await prompt_queue_store.prune(config.prompt_queue_retention_days)
         await asyncio.sleep(60 * 60)
 
 
@@ -4557,21 +4763,6 @@ async def voice_transcribe(request: web.Request) -> web.Response:
     return json_response({"text": text})
 
 
-def _record_voice_input(request: web.Request, session: Any, data: str) -> None:
-    session.pty.write(data)
-    now = time.monotonic()
-    session.input_revision += 1
-    session.last_input_event_ts = now
-    session.last_input_report_ts = now
-    request.app["events"].emit_background(
-        "terminal_input",
-        session_id=session.record.id,
-        source="voice",
-        input_owner=True,
-        bytes=len(data.encode("utf-8")),
-    )
-
-
 async def voice_submit(request: web.Request) -> web.Response:
     voice: VoiceService = request.app["voice"]
     session = request.app["sessions"].resolve(request.match_info["sid"])
@@ -4590,7 +4781,7 @@ async def voice_submit(request: web.Request) -> web.Response:
         raise ValueError("voice prompt contains terminal control characters")
     if not voice.claim_submission(utterance_id):
         return json_response({"ok": True, "duplicate": True})
-    _record_voice_input(request, session, f"{text}\r")
+    _record_operator_input(request.app["events"], session, f"{text}\r", source="voice")
     await request.app["events"].emit(
         "voice_prompt_submitted",
         session_id=session.record.id,
@@ -4606,7 +4797,7 @@ async def voice_interrupt(request: web.Request) -> web.Response:
         return json_response({"error": "conversation mode requires an agent session"}, 409)
     if session.record.state in {"exited", "crashed"}:
         return json_response({"ok": True, "already_ended": True})
-    _record_voice_input(request, session, "\x03")
+    _record_operator_input(request.app["events"], session, "\x03", source="voice")
     await request.app["events"].emit(
         "voice_agent_interrupted", session_id=session.record.id, source="voice"
     )
@@ -4794,12 +4985,10 @@ async def patch_provider_account(request: web.Request) -> web.Response:
 
 async def select_provider_account(request: web.Request) -> web.Response:
     accounts: ProviderAccountManager = request.app["provider_accounts"]
-    body = await request.json() if request.can_read_body else {}
     return json_response(
         await accounts.select(
             request.match_info["provider"],
             request.match_info["account_id"],
-            force=bool(body.get("force")),
         )
     )
 
@@ -5414,6 +5603,65 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
         raise web.HTTPBadGateway(text=f"preview unavailable: {exc}") from exc
     finally:
         semaphore.release()
+
+
+async def mcp_endpoint(request: web.Request) -> web.Response:
+    """The mux MCP v0 endpoint: JSON-RPC over streamable HTTP (`mcp.py`).
+
+    Same-host trust boundary per the 2026-07-28 decision (`ROADMAP.md` Phase
+    4.5): loopback-only like hook ingress, bearer token as caller *identity*
+    and Project read scope. Read-only end to end — the service exposes no tool
+    that can enqueue, deliver, spawn, or write to a PTY.
+    """
+    if request.content_length is not None and request.content_length > MCP_BODY_BYTES:
+        raise web.HTTPRequestEntityTooLarge(
+            max_size=MCP_BODY_BYTES, actual_size=request.content_length
+        )
+    peer = request.transport.get_extra_info("peername") if request.transport else None
+    host = peer[0] if peer else ""
+    if host not in {"127.0.0.1", "::1"}:
+        raise web.HTTPForbidden(text="the mux MCP endpoint is loopback-only")
+    service: McpService = request.app["mcp"]
+    try:
+        caller = service.resolve_caller(request.headers.get("Authorization"))
+    except McpAuthError as exc:
+        return json_response({"error": str(exc)}, 401)
+    now = time.monotonic()
+    windows: dict[str, deque[float]] = request.app["mcp_rate_windows"]
+    if len(windows) > HOOK_WINDOW_SWEEP_AT:
+        live = request.app["sessions"].sessions
+        for stale in [sid for sid in windows if sid not in live]:
+            windows.pop(stale, None)
+    window = windows.setdefault(caller.record.id, deque())
+    while window and now - window[0] >= MCP_RATE_WINDOW_SECONDS:
+        window.popleft()
+    if len(window) >= MCP_RATE_LIMIT:
+        raise web.HTTPTooManyRequests(
+            text="MCP call rate limit exceeded", headers={"Retry-After": "5"}
+        )
+    window.append(now)
+    try:
+        message = json.loads(await request.read())
+    except ValueError:
+        return json_response(
+            {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}},
+            400,
+        )
+    if not isinstance(message, dict):
+        # JSON-RPC batching was removed in protocol 2025-06-18; no client we
+        # target sends it.
+        return json_response(
+            {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32600, "message": "expected a single JSON-RPC object"},
+            },
+            400,
+        )
+    response = await service.handle_rpc(caller, message)
+    if response is None:
+        return web.Response(status=202)
+    return json_response(response)
 
 
 async def hook_ingress(request: web.Request) -> web.Response:

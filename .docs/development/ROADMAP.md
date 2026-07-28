@@ -560,47 +560,58 @@ framework.
 
 ### Queue and message model
 
-- [ ] Add persistent messages keyed to stable target agent-run/history identity with
+- [x] Add persistent messages keyed to stable target agent-run/history identity with
   Project/session provenance, sender kind/id, ordered position, body, revision, timestamps,
-  delivery constraints, and audit metadata.
-- [ ] Make the sender/provenance model rich enough to carry a control-plane `queue_draft`
+  delivery constraints, and audit metadata. (`prompt_queue.py` `queue_messages`; run
+  identity binds at enqueue or to the target's first run, and is never re-bound.)
+- [x] Make the sender/provenance model rich enough to carry a control-plane `queue_draft`
   on day one, not just a local user. Persist originating rule/observer id, the source
   Tier 0 fact(s)/fingerprint, and the annotation or fact snapshot that produced the draft,
   so drafts remain auditable back to their cause without a later schema migration. The
   queue-draft channel (`CONTROL_PLANE_ROADMAP.md` §13) is the first non-human sender and
-  writes only inert drafts a human must arm and send.
-- [ ] Use explicit states: `draft`, `armed`, `delivering`, `sent`, `blocked`, `failed`,
+  writes only inert drafts a human must arm and send. (`sender_kind`/`sender_id`/
+  `origin_json`/`payload_json`/`constraints_json`; the HTTP surface pins
+  `sender_kind="user"`, non-human senders can only create inert drafts.)
+- [x] Use explicit states: `draft`, `armed`, `delivering`, `sent`, `blocked`, `failed`,
   `cancelled`, and `stranded`. State transitions are transactional and idempotent.
-- [ ] Enforce strict head-of-line delivery: later messages may be armed, but an earlier
+- [x] Enforce strict head-of-line delivery: later messages may be armed, but an earlier
   unsent draft/armed/blocked item prevents downstream delivery until sent, cancelled, or
   explicitly skipped.
-- [ ] Let users edit drafts and armed messages until delivery begins; each edit increments
+- [x] Let users edit drafts and armed messages until delivery begins; each edit increments
   revision and records time. Sent/delivering items are immutable.
-- [ ] Persist no hidden rendered prompt variant. The exact user-visible body being delivered
-  is the audited body.
+- [x] Persist no hidden rendered prompt variant. The exact user-visible body being delivered
+  is the audited body. (Delivery wraps the body in bracketed paste at write time; nothing
+  rendered is persisted.)
 
 ### Session-attached UI
 
-- [ ] Add a Queue workspace tab attached to the target session/agent run, plus a compact
+- [x] Add a Queue workspace tab attached to the target session/agent run, plus a compact
   queue count/status affordance in the session pane. It uses the same mixed-view pane system.
-- [ ] Support add, insert after, reorder, arm/unarm, edit, cancel/skip, copy, and manual
-  “send next now.” Sent messages remain visible, crossed out, and uneditable.
-- [ ] Make lock/arm semantics explicit: any downstream item may be armed in advance, while
+  (`queue` pane leaf + the pane header's `queue[:N]` chip.)
+- [x] Support add, insert after, reorder, arm/unarm, edit, cancel/skip, copy, and manual
+  “send next now.” Sent messages remain visible, crossed out, and uneditable. (Insert-after
+  is an API capability; the tab exposes it as add + reorder.)
+- [x] Make lock/arm semantics explicit: any downstream item may be armed in advance, while
   strict ordering still blocks it behind earlier unsent items.
-- [ ] Preserve queues when views close. If the target session/run ends, mark pending items
+- [x] Preserve queues when views close. If the target session/run ends, mark pending items
   stranded and offer explicit copy/retarget/cancel; never silently target a replacement or
   resumed run.
-- [ ] Add history access for completed/stranded queues and bounded retention/export that
-  excludes secrets by user choice.
+- [x] Add history access for completed/stranded queues and bounded retention/export that
+  excludes secrets by user choice. (`prompt_queue_retention_days`; `GET /api/queue/export`
+  with opt-out secret redaction.)
 
 ### Manual delivery
 
-- [ ] Route “send next now” through one typed daemon operation with target/revision/input-
-  owner checks, clear blocked reasons, and idempotency key.
-- [ ] Require explicit confirmation when readiness is blocked or unknown; do not offer a
-  generic force-send that bypasses approval/Q&A/target identity protection.
-- [ ] Record delivery attempt/result without duplicating prompt text into general event or
-  automation logs.
+- [x] Route “send next now” through one typed daemon operation with target/revision/input-
+  owner checks, clear blocked reasons, and idempotency key. (`POST /api/queue/send-next`;
+  delivery writes go through `_record_operator_input(source="queue")`.)
+- [x] Require explicit confirmation when readiness is blocked or unknown; do not offer a
+  generic force-send that bypasses approval/Q&A/target identity protection. (Per-send
+  `confirm`; `approval_required`/`awaiting_user_input`/awaiting sub-reasons and target
+  identity/liveness are never overridable.)
+- [x] Record delivery attempt/result without duplicating prompt text into general event or
+  automation logs. (`queue_deliveries` audit rows; `queue_updated`/`queue_delivery` events
+  carry ids and counts only.)
 
 ### Send-to-agent senders and coverage
 
@@ -610,24 +621,30 @@ agent CLI's argv or is written to a live session over `POST /sessions/{id}/input
 first non-trivial producer of agent-bound text outside a terminal, so it is the natural first
 caller of the queue rather than a second delivery path to maintain.
 
-- [ ] Make the dialog a queue sender: "add to queue" (draft/armed) alongside today's "send now",
+- [x] Make the dialog a queue sender: "add to queue" (draft/armed) alongside today's "send now",
   so a message aimed at a busy session waits in one audited place instead of racing the
-  composer. Today's direct write becomes the queue's own "send next now" path.
-- [ ] Move the readiness decision into the queue. The dialog currently *reports* blocked/unknown
+  composer. Today's direct write becomes the queue's own "send next now" path. (The
+  no-submit "fill the composer" variant deliberately stays a plain input write — it never
+  submits, so it is not a delivery.)
+- [x] Move the readiness decision into the queue. The dialog currently *reports* blocked/unknown
   readiness and lets the user proceed; once the queue owns delivery, that becomes the queue's
   confirmation rule so there is exactly one place where a not-safe target is overridden.
-- [ ] Extend the surface to the views that own no Continuity selection: plain-text file editors
+  (The dialog banner is advisory; refusal and the confirm override live in `send_next`.)
+- [x] Extend the surface to the views that own no Continuity selection: plain-text file editors
   (whole-document send) and the Files tree context menu, which already fetches file contents for
   its copy action. Keep the shell exclusion — an agent composer holds a paste inert, a shell runs
-  it.
-- [ ] Replace the 20,000-character ceiling on a *new* session's seed prompt. argv is a Windows
+  it. (The daemon also enforces it: `not_agent_target`.)
+- [x] Replace the 20,000-character ceiling on a *new* session's seed prompt. argv is a Windows
   command line, so a long body is currently refused with a pointer at the live-session route;
   the durable fix is to stage the body (temp file or session note) and seed a prompt that reads
-  it, which also removes the quoting-inflation risk.
-- [ ] Finish or delete the reverse direction. `TerminalPane` handles a `captureSelection` action
+  it, which also removes the quoting-inflation risk. (`seed_text` on the spawn request:
+  short bodies inline into argv, longer ones stage into `.swe-mux/seeds/` with a reader
+  prompt.)
+- [x] Finish or delete the reverse direction. `TerminalPane` handles a `captureSelection` action
   and emits `mux:terminal-selection` with a `targetKey`, but nothing dispatches it and nothing
   listens: terminal-selection-into-notes is a half-wired stub, and shipping the note→terminal
-  direction without resolving it leaves two incomplete halves of one idea.
+  direction without resolving it leaves two incomplete halves of one idea. (Deleted — dead in
+  both directions.)
 - [ ] Only if demand appears: make the note surface's actions configurable. They are two fixed
   buttons today. The terminal's `RailItem` model (server-persisted, per-project overrides,
   platform/backend filters) and Continuity's own rail (localStorage, enable/reorder only) do not
@@ -635,9 +652,20 @@ caller of the queue rather than a second delivery path to maintain.
 
 ### Phase 4 exit criteria
 
-- [ ] Queue order/state survives daemon and browser restart without duplicate delivery.
-- [ ] Closing a session strands pending work instead of losing or retargeting it.
-- [ ] Every actual delivery is initiated by an explicit user action and is auditable.
+- [x] Queue order/state survives daemon and browser restart without duplicate delivery.
+  (Live-verified 2026-07-28 against the frozen app: order and states intact across
+  `POST /api/daemon/restart`, and a replayed idempotency key returned the recorded
+  outcome without a second PTY write. Browser state is nothing but a caller of the
+  daemon's queue reads.)
+- [x] Closing a session strands pending work instead of losing or retargeting it.
+  (Live-verified: killing the target stranded the armed item with its reason retained;
+  retarget exists only as an explicit act on stranded items.)
+- [x] Every actual delivery is initiated by an explicit user action and is auditable.
+  (One typed operation; refusals and sends alike leave `queue_deliveries` rows carrying
+  readiness evidence and confirmation flags, never prompt text. Live verification also
+  surfaced and fixed two defects: a refused attempt no longer consumes its idempotency
+  key, and the Claude adapter no longer lets variadic `--mcp-config` swallow a trailing
+  argv seed prompt — the Phase 4.5 regression that killed every argv-seeded spawn.)
 
 ## Phase 4.5 — mux MCP v0: read and discovery surface
 
@@ -654,79 +682,98 @@ one the UI reads) and on shipped history/transcript search. It does not depend o
 
 ### Server placement and transport
 
-- [ ] Host the MCP endpoint **in the daemon, never in the PTY supervisor**. The supervisor
-  cannot be updated without killing live sessions (`SESSION_PRESERVING_RELOAD.md` §8), and a
-  tool surface is high-churn code by nature.
-- [ ] Prefer a streamable-HTTP endpoint on the existing daemon port over a stdio server: one
-  implementation, per-session auth as a header, nothing new to ship inside the frozen bundle,
-  and no server process inside the supervisor's reaper Job. Verify the targeted Codex version
-  accepts an HTTP `mcp_servers` entry first; if it is stdio-only, ship a thin stdio shim that
-  proxies to the daemon rather than a second implementation.
-- [ ] Auto-register the server into each spawned session's CLI configuration, per backend, so
-  the surface is available without user setup and cannot be pointed at a foreign daemon.
-- [ ] Tolerate daemon restarts: `POST /api/daemon/restart` and redeploy replace the daemon
-  while agents keep running, so an in-flight call must fail with a typed transient error the
-  agent may retry. Never return a partial or fabricated result. The listen port is stable, so
-  registered configuration is never rewritten by a reload.
+- [x] Host the MCP endpoint **in the daemon, never in the PTY supervisor** (`POST /mcp`,
+  protocol + tools in `mcp.py`, thin handler in `server.py`; supervisor untouched).
+- [x] Streamable-HTTP on the existing daemon port. Codex support verified 2026-07-28:
+  installed codex-cli 0.145.0 takes `mcp_servers.<name>.url` +
+  `bearer_token_env_var` natively, so no stdio shim exists — one implementation.
+- [x] Auto-register per backend: Claude via a static `--mcp-config` file
+  (`Authorization: Bearer ${MUX_MCP_TOKEN}` env expansion), Codex via `-c` argv overrides;
+  both also injected by the agent shims for user-typed `claude`/`codex`, gated on the
+  session actually holding a token.
+- [x] Restart tolerance: in-flight calls die with the TCP connection (retryable transport
+  error to every MCP client); no partial or fabricated result (a parse that misses its
+  budget reports itself transient); token survives restart via supervisor-meta recovery;
+  unknown token gets a typed 401 that forbids retry-forever. Port stable, config never
+  rewritten.
 
 ### Caller identity
 
-- [ ] Mint a per-session token at spawn and inject it into the session environment. The
-  daemon derives the caller from the token; no tool accepts a sender argument, because a
-  claimed sender makes budgets, allowlists, and cycle detection decorative.
-- [ ] Persist tokens. The daemon restarts under live sessions by design; an in-memory table
-  would invalidate every live session's credential on each reload.
-- [ ] Scope a token to its session's Project by default. Cross-project reads are a separate
-  explicit grant, consistent with per-project opt-in.
-- [ ] **Decide and record the same-host caller boundary before the endpoint ships.** Verified
-  2026-07-27: every mutating HTTP route — spawn, kill, `POST /sessions/{id}/input`, settings —
-  is callable from localhost behind the Host/Origin middleware alone, with no credential, and
-  every spawned session is handed the daemon's ingress URL in its environment. A prompt-injected
-  agent does not need an MCP tool to type into a sibling's PTY; it can curl the un-tokened
-  superset API on the same port. So the per-session token is an *identity* mechanism, not an
-  authorization boundary, unless the same check is extended to the mutating HTTP routes.
-  Pick one and write it down:
-  - extend the token check to mutating `/api` routes (the browser gets a daemon-local bearer
-    at page load; sessions never receive it), **or**
-  - state explicitly that same-host agents are fully trusted, in which case Phase 5's
-    budget/allowlist/cycle machinery bounds well-behaved callers only and must say so.
-  The existing trust model (Tailscale device admission) addresses the network-peer boundary
-  and says nothing about same-host children.
-- [ ] Close the human-input evidence hole before Phase 5 arming trusts it:
-  `POST /sessions/{id}/input` and broadcast fan-out write to the PTY without advancing
-  `input_revision` / `last_input_event_ts` or emitting `terminal_input`, and without an
-  ended-session guard — while the WS and voice paths do all three. Delivery-readiness therefore
-  reports `partial_input_absent`/`operator_quiet` as satisfied for text that is sitting
-  undelivered in a composer, corrupting the shadow-metric baseline the Phase 4 gate is being
-  validated against.
+- [x] Per-session token minted at spawn (`MUX_MCP_TOKEN` + `MUX_MCP_URL` in the session
+  env). Caller derived from the token; no tool has a sender parameter.
+- [x] Persisted the same way the hook secret already is: mirrored into supervisor session
+  meta and recovered at adoption — no separate token table to invalidate, and a token is
+  never regenerated (a fresh one would authenticate nobody). Empty token (pre-feature
+  session) never authenticates.
+- [x] Token scope defaults to the session's Project (`project_id`, falling back to the git
+  `project_scope_id` for ungrouped sessions). Cross-project reads do not exist in v0; when
+  wanted they are a separate explicit grant.
+- [x] **Same-host caller boundary — DECIDED 2026-07-28: option (b), same-host agents are
+  fully trusted in v0.** The per-session MCP token is an *identity and read-scoping*
+  mechanism (attribution, Project scope), not an authorization boundary. Basis for the
+  decision: v0 is read-only end to end, so the token's real job is scoping reads and
+  attributing calls; the un-tokened mutating surface predates MCP and is unchanged by it.
+  Consequences, recorded so they are not rediscovered: (1) Phase 5's budget/allowlist/cycle
+  machinery bounds *well-behaved* callers only — a prompt-injected same-host agent can
+  bypass it via the open localhost API, and Phase 5's design must say so; (2) **this
+  decision MUST be revisited before Phase 5 arms any auto-delivery or agent-to-agent
+  write path** — the enforcement option remains extending the token check to mutating
+  `/api` routes with a daemon-local browser bearer minted at page load (sessions never
+  receive it). The evidence behind the concern (verified 2026-07-27): every mutating HTTP
+  route — spawn, kill, `POST /sessions/{id}/input`, settings — is callable from localhost
+  behind the Host/Origin middleware alone, and every spawned session holds the daemon's
+  ingress URL in its environment. The existing trust model (Tailscale device admission)
+  addresses the network-peer boundary and says nothing about same-host children.
+- [x] Human-input evidence hole closed 2026-07-28: `POST /sessions/{id}/input` and
+  broadcast fan-out now share one accounting helper with voice
+  (`_record_operator_input`) — revision/timestamp advance, `terminal_input` emission
+  (`source="http"`/`"broadcast"`), ended-session guard (409 on the route, skip per
+  broadcast target). Automation `write_pty`, branch writes, and interrupts deliberately
+  stay uncounted — they are not operator input. Details:
+  `design/features/delivery-readiness.md`.
 
 ### v0 tool surface (read-only)
 
-- [ ] List active, prior, and concurrent sessions with stable ids, Project, backend, and
-  current status; read session metadata and transcript; `searchHistory` over the existing
-  cross-vendor archive.
-- [ ] Return nothing rather than a weak match, per the return-path precision gate
-  (`CONTROL_PLANE_ROADMAP.md` §7). Empty is acceptable; plausible-but-wrong is corrosive and
-  teaches an agent to stop calling.
-- [ ] Redact the same material the diagnostics surface redacts: no secrets, credentials, or
-  provider tokens through tool output.
-- [ ] Rate-limit and bound every tool result; a tool call cannot pull an unbounded transcript
-  into an agent's context.
+- [x] Four read tools: `list_sessions` (live + optionally ended, caller marked),
+  `get_session` (live or archived, same status the UI reads), `read_transcript` (bounded
+  tail), `search_history` (FTS over the archive, `agent_visible` quarantine kept).
+- [x] Return nothing rather than a weak match: scope misses and true misses answer
+  identically ("no such session in your Project"); search returns only FTS hits.
+- [x] Redaction: session records leave through an explicit allowlist (`session_summary` —
+  `spawn_env` can never leak); transcript messages and search excerpts that trip the
+  clipboard credential gate (`looks_like_secret`) are replaced with a redaction marker.
+- [x] Bounds and rate limit: 512 KiB / 200-message transcript cap, 50-entry search cap,
+  256 KiB request bodies, 120 calls/min per session with swept sliding windows.
 
 ### Phase 4.5 exit criteria
 
-- [ ] A live agent session can enumerate sibling sessions and search history through MCP with
+- [x] A live agent session can enumerate sibling sessions and search history through MCP with
   no user setup, and every result is attributable to the calling session's token.
-- [ ] A daemon reload mid-call surfaces a retryable error and leaves no partial state; after
-  the reload the same token still works.
-- [ ] The surface is read-only end to end: no tool in v0 can enqueue, deliver, spawn, or write
-  to a PTY.
+  Live-verified 2026-07-28: a freshly spawned session called `initialize`,
+  `list_sessions` (siblings + ended, caller marked `you`), and `search_history` (real FTS
+  excerpts) using only its injected env; a wrong token got the typed 401.
+- [x] A daemon reload mid-call surfaces a retryable error and leaves no partial state; after
+  the reload the same token still works. Live-verified 2026-07-28: after
+  `POST /api/daemon/restart`, the adopted session's original token authenticated again
+  (supervisor-meta recovery) and all tools answered identically.
+- [x] The surface is read-only end to end: no tool in v0 can enqueue, deliver, spawn, or write
+  to a PTY. Pinned by `tests/test_mcp.py` (the tool set is a closed allowlist of four read
+  tools).
 
 ## Phase 5 — Gated auto-delivery, mailbox, and bounded agent communication
 
 Phase 5 authorizes narrowly scoped actuation after Phase 1 shadow evidence and Phase 4
 manual-delivery reliability pass. It does not authorize model-selected actions,
 auto-approval, arbitrary PTY writes, or uncontrolled relay chains.
+
+**Standing precondition (from the Phase 4.5 boundary decision, 2026-07-28): before this
+phase arms any auto-delivery or agent-to-agent write path, revisit the same-host caller
+boundary.** v0 shipped under "same-host agents are fully trusted"; that makes every
+budget/allowlist/cycle bound in this phase advisory against a prompt-injected same-host
+caller, which can reach the un-tokened mutating `/api` routes directly. Either extend the
+per-session token check to the mutating routes (browser gets a daemon-local bearer at page
+load; sessions never receive it) or re-affirm the trust statement explicitly with that
+limitation written into this phase's design.
 
 ### User-authored same-session auto-delivery
 

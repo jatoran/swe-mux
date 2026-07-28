@@ -31,7 +31,9 @@ def test_provider_account_ui_surfaces_identity_verification_and_duplicates() -> 
     assert "relink only if this really is that account" in source
     assert "/adopt" in source
     assert "'/api/provider-accounts/verify'" in source
-    assert "switch anyway" in source
+    # Switching is unconditional: no force flag, no "switch anyway" confirmation.
+    assert "force" not in source
+    assert "Sessions already running follow the switch" in source
     assert ".account-conflict{" in css
     assert ".account-identity.verified{" in css
 

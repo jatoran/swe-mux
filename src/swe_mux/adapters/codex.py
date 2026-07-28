@@ -31,6 +31,7 @@ class CodexAdapter:
         notify: bool = False,
         default_args: list[str] | None = None,
         command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
+        mcp_url: str | None = None,
     ) -> None:
         self.default_exe = default_exe
         self.default_args = default_args or []
@@ -38,12 +39,29 @@ class CodexAdapter:
         self.notify_program = (
             [sys.executable, "-m", "swe_mux.hook_client", "codex_notify"] if notify else None
         )
+        self.mcp_url = mcp_url
+
+    def _mcp_args(self) -> list[str]:
+        """Register the mux MCP server as streamable HTTP (Codex >= 0.145).
+
+        Values are explicit TOML strings; the bearer comes from the session env
+        (`bearer_token_env_var`), so the argv itself carries no secret.
+        """
+        if not self.mcp_url:
+            return []
+        return [
+            "-c",
+            f'mcp_servers.mux.url="{self.mcp_url}"',
+            "-c",
+            'mcp_servers.mux.bearer_token_env_var="MUX_MCP_TOKEN"',
+        ]
 
     def _args(self, args: list[str]) -> list[str]:
         configured = with_scrollback_safe_tui([*self.default_args, *args])
-        if not self.notify_program:
-            return configured
-        return ["-c", f"notify={json.dumps(self.notify_program)}", *configured]
+        prefix = self._mcp_args()
+        if self.notify_program:
+            prefix = ["-c", f"notify={json.dumps(self.notify_program)}", *prefix]
+        return [*prefix, *configured]
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:
         del sid

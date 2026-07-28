@@ -90,6 +90,11 @@ def _claude(args: list[str]) -> tuple[str, list[str], str]:
     settings = os.environ.get("MUX_CLAUDE_SETTINGS")
     if settings and "--settings" not in args:
         args = ["--settings", settings, *args]
+    # Register the mux MCP server only when this session actually holds an MCP
+    # identity; a registration without a token would just 401 inside the CLI.
+    mcp_config = os.environ.get("MUX_CLAUDE_MCP_CONFIG")
+    if mcp_config and os.environ.get("MUX_MCP_TOKEN") and "--mcp-config" not in args:
+        args = ["--mcp-config", mcp_config, *args]
     args = [*json.loads(os.environ.get("MUX_CLAUDE_ARGS", "[]")), *args]
     return exe, args, native_id
 
@@ -103,6 +108,19 @@ def _codex(args: list[str]) -> tuple[str, list[str], str]:
     if not any("notify=" in arg for arg in args):
         notify = [sys.executable, "-m", "swe_mux.hook_client", "codex_notify"]
         args = ["-c", f"notify={json.dumps(notify)}", *args]
+    mcp_url = os.environ.get("MUX_MCP_URL")
+    if (
+        mcp_url
+        and os.environ.get("MUX_MCP_TOKEN")
+        and not any("mcp_servers.mux" in arg for arg in args)
+    ):
+        args = [
+            "-c",
+            f'mcp_servers.mux.url="{mcp_url}"',
+            "-c",
+            'mcp_servers.mux.bearer_token_env_var="MUX_MCP_TOKEN"',
+            *args,
+        ]
     return exe, args, native_id
 
 

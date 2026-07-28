@@ -1,4 +1,9 @@
-export type ApiError = Error & { fields?: Record<string,string>; status?: number; timeout?: boolean }
+export type ApiError = Error & {
+  fields?: Record<string,string>; status?: number; timeout?: boolean
+  /** The complete error body — typed daemon operations (the prompt queue) carry a
+   *  machine `code` plus operation-specific fields the UI branches on. */
+  detail?: Record<string, unknown>
+}
 export type ApiOptions = {
   /** Abort the request (and its body read) after this long. Requests a view cannot
    *  render without should always set one: a fetch issued while a dormant PWA is
@@ -28,6 +33,7 @@ export async function api<T>(method: string, path: string, body?: unknown, optio
       const error = new Error(detail.error || `${method} ${path} failed`) as ApiError
       error.fields = detail.fields
       error.status = response.status
+      error.detail = detail
       throw error
     }
     return await response.json() as T

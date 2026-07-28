@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from pathlib import Path
 from types import MethodType, SimpleNamespace
@@ -8,9 +9,14 @@ from typing import Any
 
 import pytest
 
+from swe_mux.background_tasks import background
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
-from swe_mux.provider_accounts import ProviderAccountError, ProviderAccountManager
+from swe_mux.provider_accounts import (
+    SELECTION_GUARD_LOOP,
+    ProviderAccountError,
+    ProviderAccountManager,
+)
 from swe_mux.server import create_app
 
 
@@ -51,6 +57,17 @@ def token_identity(email: str, account_uuid: str) -> dict[str, Any]:
         "provider_account_id": account_uuid,
         "organization": "Test Org",
         "source": "token",
+    }
+
+
+def oauth_account_block(uuid_value: str, email: str) -> dict[str, Any]:
+    """A ~/.claude.json `oauthAccount` block as the CLI writes it."""
+    return {
+        "accountUuid": uuid_value,
+        "emailAddress": email,
+        "organizationUuid": f"org-{uuid_value}",
+        "billingType": "stripe_subscription",
+        "profileFetchedAt": 1_700_000_000_000,
     }
 
 
@@ -391,7 +408,7 @@ async def test_refresh_rotation_does_not_overwrite_changed_system_login(
     system_auth.write_bytes(concurrently_rotated)
 
     async def rotated_refresh(
-        self: ProviderAccountManager, auth: dict[str, Any]
+        self: ProviderAccountManager, auth: dict[str, Any], *, allow_refresh: bool = True
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         return {"session": None, "weekly": None}, claude_auth(
             "rotated", "saved@example.com"
@@ -417,7 +434,7 @@ async def test_quota_failure_retains_last_success_as_stale(tmp_path: Path) -> No
     account = manager._account(snapshot["selected"]["claude"])
 
     async def success(
-        self: ProviderAccountManager, auth: dict[str, Any]
+        self: ProviderAccountManager, auth: dict[str, Any], *, allow_refresh: bool = True
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         return {"session": {"used_percent": 25}, "weekly": {"used_percent": 50}}, None
 
@@ -425,7 +442,7 @@ async def test_quota_failure_retains_last_success_as_stale(tmp_path: Path) -> No
     await manager._refresh_one(account)
 
     async def failure(
-        self: ProviderAccountManager, auth: dict[str, Any]
+        self: ProviderAccountManager, auth: dict[str, Any], *, allow_refresh: bool = True
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         raise ProviderAccountError("temporary provider failure")
 
@@ -652,7 +669,7 @@ async def test_two_slots_holding_one_account_are_flagged_and_not_double_polled(
 
 
 @pytest.mark.asyncio
-async def test_switching_is_blocked_while_live_sessions_hold_the_current_login(
+async def test_switching_proceeds_while_live_sessions_hold_the_current_login(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
@@ -670,16 +687,226 @@ async def test_switching_is_blocked_while_live_sessions_hold_the_current_login(
         sessions={"s1": SimpleNamespace(record=SimpleNamespace(backend="claude", state="working"))}
     )
 
-    with pytest.raises(ProviderAccountError, match="live claude session"):
-        await manager.select("claude", first)
-    assert json.loads(system_auth.read_text(encoding="utf-8"))["claudeAiOauth"]["accessToken"] == (
-        "two"
-    )
-
-    await manager.select("claude", first, force=True)
+    # Live sessions re-read the shared credential file, so they follow the
+    # switch; refusing it only ever cost the user a confirmation.
+    snapshot = await manager.select("claude", first)
     assert json.loads(system_auth.read_text(encoding="utf-8"))["claudeAiOauth"]["accessToken"] == (
         "one"
     )
+    assert snapshot["selected"]["claude"] == first
+    assert manager._selection_guard["claude"][0] == first
+    await background.stop(f"{SELECTION_GUARD_LOOP}-claude")
+
+
+@pytest.mark.asyncio
+async def test_selection_guard_restores_a_switch_a_live_session_rotated_back(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    system_auth = home / ".claude" / ".credentials.json"
+    system_auth.parent.mkdir(parents=True)
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home))
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+    system_auth.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
+    first = (await manager.capture_current("claude", label="first"))["selected"]["claude"]
+    system_auth.write_text(json.dumps(claude_auth("two", "two@example.com")), encoding="utf-8")
+    second = (await manager.capture_current("claude", label="second"))["selected"]["claude"]
+
+    manager.sessions = SimpleNamespace(
+        sessions={"s1": SimpleNamespace(record=SimpleNamespace(backend="claude", state="working"))}
+    )
+    await manager.select("claude", first)
+    await background.stop(f"{SELECTION_GUARD_LOOP}-claude")
+
+    # A refresh that was already in flight under the outgoing login lands after
+    # the switch and writes that account's credentials straight back.
+    system_auth.write_text(json.dumps(claude_auth("two", "two@example.com")), encoding="utf-8")
+    await manager.reconcile_current()
+    assert manager.snapshot()["selected"]["claude"] == second
+
+    await manager._reassert_selection("claude")
+    assert json.loads(system_auth.read_text(encoding="utf-8"))["claudeAiOauth"]["accessToken"] == (
+        "one"
+    )
+    assert manager.snapshot()["selected"]["claude"] == first
+    assert "selection_reasserted" in [entry["action"] for entry in manager.audit_entries()]
+
+
+@pytest.mark.asyncio
+async def test_selection_guard_leaves_an_unidentified_live_login_alone(
+    tmp_path: Path,
+) -> None:
+    """An external rotation may hold a newer token than any saved snapshot."""
+    home = tmp_path / "home"
+    system_auth = home / ".claude" / ".credentials.json"
+    system_auth.parent.mkdir(parents=True)
+    manager = offline(ProviderAccountManager(tmp_path / "mux", EventBus(), home=home))
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+    system_auth.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
+    first = (await manager.capture_current("claude", label="first"))["selected"]["claude"]
+
+    manager.sessions = SimpleNamespace(
+        sessions={"s1": SimpleNamespace(record=SimpleNamespace(backend="claude", state="working"))}
+    )
+    manager._selection_guard["claude"] = (first, time.monotonic() + 60)
+
+    system_auth.write_text(json.dumps(identityless_claude_auth("rotated")), encoding="utf-8")
+    await manager._reassert_selection("claude")
+    assert json.loads(system_auth.read_text(encoding="utf-8"))["claudeAiOauth"]["accessToken"] == (
+        "rotated"
+    )
+
+
+def cli_profile_manager(tmp_path: Path) -> ProviderAccountManager:
+    """A manager whose verified identity is derived from the fake access token."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    identities = {
+        "one": token_identity("one@example.com", "uuid-one"),
+        "two": token_identity("two@example.com", "uuid-two"),
+    }
+    manager = offline(
+        ProviderAccountManager(tmp_path / "mux", EventBus(), home=home),
+        lambda auth: identities.get(str(auth["claudeAiOauth"]["accessToken"])),
+    )
+    manager._status_identity = MethodType(no_status, manager)  # type: ignore[method-assign]
+    manager.refresh = MethodType(fake_refresh, manager)  # type: ignore[method-assign]
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_switch_restores_the_cli_cached_profile_block(tmp_path: Path) -> None:
+    manager = cli_profile_manager(tmp_path)
+    system_auth = tmp_path / "home" / ".claude" / ".credentials.json"
+    config = tmp_path / "home" / ".claude.json"
+
+    system_auth.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
+    config.write_text(
+        json.dumps(
+            {
+                "projects": {"a": 1},
+                "oauthAccount": oauth_account_block("uuid-one", "one@example.com"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    first = (await manager.capture_current("claude", label="first"))["selected"]["claude"]
+    snapshot_path = (
+        tmp_path / "mux" / "provider-accounts" / "claude" / first / "oauth-account.json"
+    )
+    assert json.loads(snapshot_path.read_text(encoding="utf-8"))["accountUuid"] == "uuid-one"
+
+    system_auth.write_text(json.dumps(claude_auth("two", "two@example.com")), encoding="utf-8")
+    config.write_text(
+        json.dumps(
+            {
+                "projects": {"a": 1},
+                "oauthAccount": oauth_account_block("uuid-two", "two@example.com"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    await manager.capture_current("claude", label="second")
+
+    await manager.select("claude", first)
+    updated = json.loads(config.read_text(encoding="utf-8"))
+    # /status reads this block, not the credential file: without the restore it
+    # keeps naming the outgoing account for up to a day after a switch.
+    assert updated["oauthAccount"] == oauth_account_block("uuid-one", "one@example.com")
+    assert updated["projects"] == {"a": 1}
+    assert "oauth_profile_restored" in [entry["action"] for entry in manager.audit_entries()]
+
+
+@pytest.mark.asyncio
+async def test_switch_without_profile_snapshot_writes_identity_and_forces_refetch(
+    tmp_path: Path,
+) -> None:
+    manager = cli_profile_manager(tmp_path)
+    system_auth = tmp_path / "home" / ".claude" / ".credentials.json"
+    config = tmp_path / "home" / ".claude.json"
+
+    # First login is captured while ~/.claude.json does not exist yet, so no
+    # profile snapshot is taken for it.
+    system_auth.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
+    first = (await manager.capture_current("claude", label="first"))["selected"]["claude"]
+
+    system_auth.write_text(json.dumps(claude_auth("two", "two@example.com")), encoding="utf-8")
+    config.write_text(
+        json.dumps({"oauthAccount": oauth_account_block("uuid-two", "two@example.com")}),
+        encoding="utf-8",
+    )
+    await manager.capture_current("claude", label="second")
+
+    await manager.select("claude", first)
+    block = json.loads(config.read_text(encoding="utf-8"))["oauthAccount"]
+    assert block == {
+        "accountUuid": "uuid-one",
+        "emailAddress": "one@example.com",
+        "organizationName": "Test Org",
+    }
+    # No profileFetchedAt: the CLI's 24h freshness gate fails and it refetches
+    # the real profile on the next session start.
+    assert "profileFetchedAt" not in block
+
+
+@pytest.mark.asyncio
+async def test_profile_restore_never_touches_an_unparseable_cli_config(tmp_path: Path) -> None:
+    manager = cli_profile_manager(tmp_path)
+    system_auth = tmp_path / "home" / ".claude" / ".credentials.json"
+    config = tmp_path / "home" / ".claude.json"
+
+    system_auth.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
+    first = (await manager.capture_current("claude", label="first"))["selected"]["claude"]
+    system_auth.write_text(json.dumps(claude_auth("two", "two@example.com")), encoding="utf-8")
+    await manager.capture_current("claude", label="second")
+
+    config.write_text("{definitely not json", encoding="utf-8")
+    await manager.select("claude", first)
+    assert config.read_text(encoding="utf-8") == "{definitely not json"
+
+
+@pytest.mark.asyncio
+async def test_claude_token_rotation_defers_to_live_sessions(tmp_path: Path) -> None:
+    manager = cli_profile_manager(tmp_path)
+    system_auth = tmp_path / "home" / ".claude" / ".credentials.json"
+    system_auth.write_text(json.dumps(claude_auth("one", "one@example.com")), encoding="utf-8")
+    first = (await manager.capture_current("claude", label="first"))["selected"]["claude"]
+
+    rotations: list[str] = []
+
+    async def unauthorized(
+        self: ProviderAccountManager,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        data: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        return 401, {}
+
+    async def rotate(self: ProviderAccountManager, auth: dict[str, Any]) -> None:
+        rotations.append(str(auth["claudeAiOauth"]["accessToken"]))
+        return None
+
+    manager._json_request = MethodType(unauthorized, manager)  # type: ignore[method-assign]
+    manager._refresh_claude_auth = MethodType(rotate, manager)  # type: ignore[method-assign]
+
+    # A live session runs under the selected account: its CLI owns the refresh
+    # token's rotation, so the managed refresh must not race it.
+    manager.sessions = SimpleNamespace(
+        sessions={"s1": SimpleNamespace(record=SimpleNamespace(backend="claude", state="working"))}
+    )
+    await manager._refresh_one(manager._account(first))
+    assert rotations == []
+    quota = manager._manifest["quota"][first]
+    assert "live session owns" in str(quota.get("error"))
+
+    # No live sessions: the managed refresh may rotate freely.
+    manager.sessions = None
+    await manager._refresh_one(manager._account(first))
+    assert rotations == ["one"]
 
 
 @pytest.mark.asyncio

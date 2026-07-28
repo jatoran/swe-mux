@@ -71,6 +71,18 @@ test('inserted text goes to the last focused surface, not the focused DOM node',
   assert.deepEqual(chooseInsertTarget(null, null), { kind: 'none' })
 })
 
+test('a terminals-only insert refuses an editor rather than ranking it lower', () => {
+  // Prompt templates route this way: a template dropped into whichever note or file
+  // was last focused edits that document instead of filling an agent's composer.
+  const editor: EditorHandle = { insertText: () => assert.fail('editor received a terminals-only insert'), isConnected: true }
+  const focusedEditor = { kind: 'editor', editor, at: 5 } as const
+  assert.deepEqual(chooseInsertTarget(focusedEditor, 'sess-1', { terminalsOnly: true }), { kind: 'terminal', sessionId: 'sess-1' })
+  // No terminal to fall back on is "nowhere to put this", not "use the editor".
+  assert.deepEqual(chooseInsertTarget(focusedEditor, null, { terminalsOnly: true }), { kind: 'none' })
+  // The default routing is untouched.
+  assert.deepEqual(chooseInsertTarget(focusedEditor, 'sess-1'), { kind: 'editor', editor })
+})
+
 test('entry rows label age and provenance compactly', () => {
   assert.equal(relativeAge(1_000, 1_010), 'now')
   assert.equal(relativeAge(1_000, 1_180), '3m')

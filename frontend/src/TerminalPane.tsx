@@ -42,6 +42,7 @@ import {
   terminalAttachReadyFrame,
   type ActiveTerminalRenderer,
   type TerminalRendererPreference,
+  type WindowsPtyCompatibility,
 } from './terminalRenderer'
 import {
   isWebglRenderError,
@@ -67,6 +68,8 @@ interface Props {
   keybindings: Record<string, string>
   scrollback: number
   rendererPreference: TerminalRendererPreference
+  /** ConPTY compatibility descriptor from the daemon; undefined off Windows. */
+  windowsPty?: WindowsPtyCompatibility
   mobileInput: MobileInputSettings
   /** Open the command-rail settings editor (the rail's trailing gear). */
   onConfigureRail?: () => void
@@ -123,7 +126,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session) {
   term.focus()
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, mobileInput, onConfigureRail, onBranch }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, onConfigureRail, onBranch }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
@@ -270,6 +273,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       cursorBlink: true, cursorStyle: 'bar', fontFamily: '"Cascadia Mono", Consolas, monospace',
       fontSize: 11, fontWeight: '600', fontWeightBold: '600', lineHeight: 1.2, scrollback, allowProposedApi: true,
       screenReaderMode: false,
+      // Passed at construction, not assigned later: below ConPTY build 21376 this
+      // both disables reflow and installs the wrapped-line heuristic in the parser,
+      // so bytes written before it is set would keep wrong wrap flags for the rest
+      // of the buffer's life. `undefined` leaves xterm's cross-platform defaults.
+      ...(windowsPty ? { windowsPty } : {}),
       theme: terminalThemes[resolvedTheme((document.documentElement.dataset.themeSelection || 'dark') as ThemeName)],
     })
     const fit = new FitAddon()
@@ -995,7 +1003,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     connect(false)
     return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{} }
-  }, [session.id, keybindings, scrollback, rendererPreference, mobileInput])
+  }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput])
 
   const copy = async () => {
     const term = termRef.current
@@ -1068,7 +1076,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
 
   useEffect(() => {
     const onAction = (event: Event) => {
-      const detail = (event as CustomEvent<{sessionId:string|null;action:string;text?:string;submit?:boolean;targetKey?:string}>).detail
+      const detail = (event as CustomEvent<{sessionId:string|null;action:string;text?:string;submit?:boolean}>).detail
       if (detail.sessionId !== session.id) return
       if (detail.action === 'copy') void copy()
       else if (detail.action === 'paste') void paste()
@@ -1090,11 +1098,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // rail click focuses its own pane on pointerdown, so `session.kill` always
       // resolves to the session the button belongs to.
       else if (detail.action === 'endSession') runCommand('session.kill')
-      else if (detail.action === 'captureSelection') {
-        const term = termRef.current
-        if (!term?.hasSelection()) reportError('Select terminal text before capturing it into notes.')
-        else window.dispatchEvent(new CustomEvent('mux:terminal-selection', { detail: { sessionId: session.id, text: term.getSelection(), targetKey: detail.targetKey } }))
-      }
+      // `captureSelection`/`mux:terminal-selection` (terminal selection into notes) was a
+      // half-wired stub — nothing ever dispatched or listened. Deleted with roadmap Phase 4
+      // rather than shipped as two incomplete halves of one idea.
     }
     window.addEventListener('mux:terminal-action', onAction)
     return () => window.removeEventListener('mux:terminal-action', onAction)
@@ -1263,5 +1269,8 @@ export const TerminalPane = memo(TerminalPaneImpl, (a, b) =>
   // Omitting this blocked a renderer change from ever reaching an existing pane;
   // it only appeared to work because unrelated prop churn re-rendered anyway.
   a.rendererPreference === b.rendererPreference &&
+  // Identity-stable per machine (App value-compares it), so this only differs on
+  // the single boot transition from "config not loaded yet" to the real value.
+  a.windowsPty === b.windowsPty &&
   a.mobileInput === b.mobileInput,
 )

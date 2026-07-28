@@ -771,6 +771,12 @@ Two consequences to design for up front:
   separate explicit grant. The default answer to "what may this agent see" is its own
   Project, consistent with per-project opt-in (§8).
 
+**Same-host boundary decision (2026-07-28, `ROADMAP.md` Phase 4.5):** same-host agents
+are fully trusted in v0 — the token is identity and read scope, not authorization; the
+un-tokened mutating HTTP surface is unchanged. Must be revisited before Phase 5 arms any
+write path (the enforcement option is a token check on mutating routes with a
+daemon-local browser bearer).
+
 ### 7.5 Shipping order: a v0 read surface long before v1 memory
 
 The §9 build order originally placed the whole return path last, which conflates two
@@ -889,16 +895,20 @@ another agent can pick up mid-plan. Section links point to the design detail.
     optional Playwright backend; saves into the Project's `.swe-mux/preview-shots/`,
     swept at 7 days. Endpoint coverage for the unavailable-backend shape and the
     shot-directory resolution is in `tests/test_processes_phase4.py` (no Chromium needed).
-- [ ] **2.5 · mux MCP v0: read + discovery surface** (§7.5). Pulled forward out of step 8:
-  it depends only on shipped machinery + the Phase 3.5 status contract, and it proves the
-  transport/identity/restart decisions (§7.3–7.4) before any memory tool depends on them.
-  Delivered as `ROADMAP.md` Phase 4.5.
-  - [ ] Streamable-HTTP MCP endpoint on the **daemon** (never the supervisor, §7.3), with
-    per-session tokens minted at spawn, persisted across daemon restarts, Project-scoped
-  - [ ] Read tools only: list active/prior/concurrent sessions, session status + metadata,
-    transcript read, `searchHistory`
-  - [ ] Auto-registration of the server into each spawned session's CLI config
-  - [ ] Restart-tolerance: typed transient error on daemon reload, never a partial result
+- [x] **2.5 · mux MCP v0: read + discovery surface** (§7.5). Shipped 2026-07-28 as
+  `ROADMAP.md` Phase 4.5. Design: `design/features/mux-mcp.md`.
+  - [x] Streamable-HTTP MCP endpoint on the **daemon** (`POST /mcp`, never the supervisor,
+    §7.3), per-session tokens minted at spawn, persisted via supervisor-meta recovery
+    (the hook-secret pattern — no token table), Project-scoped
+  - [x] Read tools only: `list_sessions`, `get_session`, `read_transcript` (bounded),
+    `search_history` — thin callers over `SessionManager`/`HistoryIndex`, allowlisted
+    output, credential-shape redaction, not-found identical for scope and true misses
+  - [x] Auto-registration per backend: Claude `--mcp-config` (env-expanded bearer), Codex
+    0.145 native streamable HTTP `-c` overrides (verified; no stdio shim), plus both shims
+  - [x] Restart-tolerance: retryable transport error mid-reload, no partial results, token
+    survives adoption, typed 401 for a token the daemon no longer knows. Also closed the
+    human-input evidence hole (Phase 4.5 checklist) so readiness shadow metrics are honest
+    before Phase 5 reads them.
 - [x] **3 · Deterministic consumers** (§6.1, 6.3, 6.4, 6.5). No model; write to `annotations`.
   Design: `design/features/deterministic-consumers.md`.
   - [x] Annotation anchor + evidence schema: `automation_annotations.agent_run_id` is now
@@ -907,14 +917,23 @@ another agent can pick up mid-plan. Section links point to the design detail.
     makes a re-running detector idempotent. `AutomationStore` gained the additive migration
     path it never had; the rebuild is gated on the new column being absent.
   - [x] Loop/stall deterministic half (§6.4) — fingerprint repeat ≥3 with the no-progress
-    gate (failing-test set did not shrink, no new write hash, no second git head)
+    gate (failing-test set did not shrink, no new write hash, no second git head).
+    Calibrated live 2026-07-28: only change-attempting kinds (`command`/`file_write`/
+    `test`/`test_result`) seed a loop — the gate is vacuously true for read-only actions,
+    which flagged repeated Greps as a loop.
   - [x] Declared-vs-verified (§6.3) — Tier 0 test facts + a narrow completion-claim pattern,
     reported as three separate facts and never one ✓
   - [x] Doc-debt ledger (§6.5) — the routing table is keyed by change *type*, which no
     machine can match to a path, so ownership is inverted from each doc's literal
     **"Key files"** section instead. Accumulates a count; does not nag per turn.
+    Calibrated live 2026-07-28: a file claimed by >4 docs (`server.py`: 15, `App.tsx`: 8)
+    is infrastructure and carries no ownership signal — one `App.tsx` edit had marked
+    eight unrelated docs dirty.
   - [x] Provenance graph (§6.1) — `target` + time order per the step 1 decision, cross-session
     only, with `ambiguous` marking an intervening write. Never a causal blame label.
+    Calibrated live 2026-07-28: one annotation per edge with a per-edge dedupe key
+    (writer_fact > reader_fact) — the original set-hash key restated the whole growing
+    graph every evaluation (quadratic storage, edges double-counted by ranking).
 - [ ] **4 · Project card** (§5.4). Distilled architecture, cached; feeds scan timeline + Tier 2.
 - [ ] **5 · Scan timeline (Tier 1)** (§5.5). First model-cost layer. Capture-first: readable
   timeline + dead-end memory (§6.2) + continuous title (§6.11). Instrument the rehydration

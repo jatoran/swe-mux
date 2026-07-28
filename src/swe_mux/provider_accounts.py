@@ -23,6 +23,7 @@ from .subprocess_flags import background_creation_flags, reap_process_tree
 
 QUOTA_POLL_LOOP = "provider-quota-poll"
 QUOTA_TURN_REFRESH_LOOP = "provider-quota-turn-refresh"
+SELECTION_GUARD_LOOP = "provider-selection-guard"
 _REPLACE_RETRIES = 4
 _REPLACE_RETRY_DELAY_SECONDS = 0.05
 
@@ -53,7 +54,20 @@ IDENTITY_STRENGTH: dict[str, int] = {"file": 1, "cli": 2, "token": 3}
 IDENTITY_CACHE_LIMIT = 64
 AUDIT_FILE_NAME = "credential-events.jsonl"
 AUDIT_MAX_BYTES = 2_000_000
+# Per-account snapshot of the Claude CLI's cached profile block (`oauthAccount`
+# in ~/.claude.json). The CLI shows identity (/status) from this block, not from
+# the credential file, and refetches it at most daily — so a credential switch
+# alone leaves every surface naming the previous account for up to a day.
+OAUTH_SNAPSHOT_FILE = "oauth-account.json"
 LIVE_SESSION_STATES = ("starting", "running", "working", "idle", "awaiting")
+# How long a switch made under live sessions defends itself against a token
+# refresh that was already in flight when the swap landed. Such a refresh
+# completes with the outgoing account's refresh token and writes the result back
+# over the shared credential file, which silently undoes the switch. Everything
+# else follows the switch on its own, so the window only has to outlast one
+# in-flight refresh round trip.
+SELECTION_GUARD_SECONDS = 60.0
+SELECTION_GUARD_POLL_SECONDS = 2.0
 
 
 class ProviderAccountError(RuntimeError):
@@ -272,6 +286,9 @@ class ProviderAccountManager:
         self._identity_cache: dict[Provider, tuple[str, dict[str, Any]]] = {}
         self._identity_probe_attempts: dict[Provider, tuple[str, float]] = {}
         self._current: dict[Provider, dict[str, Any]] = {}
+        # provider -> (pinned account id, monotonic deadline) for a switch that
+        # is still defending itself against the outgoing login.
+        self._selection_guard: dict[Provider, tuple[str, float]] = {}
         self._reconcile_current()
         self._mutation_lock = asyncio.Lock()
         self._refresh_lock = asyncio.Lock()
@@ -948,6 +965,121 @@ class ProviderAccountManager:
             return False
         return hashlib.sha256(content).hexdigest() == account.get("auth_digest")
 
+    # ---- Claude cached-profile snapshot (oauthAccount in ~/.claude.json) ---------
+
+    def _claude_config_path(self) -> Path:
+        return self.home / ".claude.json"
+
+    def _oauth_snapshot_path(self, account_id: str) -> Path:
+        return self.root / "claude" / account_id / OAUTH_SNAPSHOT_FILE
+
+    def _read_claude_config(self) -> dict[str, Any] | None:
+        """The CLI's main config as a dict, or None when absent or unparseable.
+
+        Unparseable is deliberately indistinguishable from a decision not to
+        touch the file: this config is owned and constantly rewritten by the
+        CLI, and writing anything over content we could not read would clobber
+        state we never saw.
+        """
+        try:
+            value = json.loads(self._claude_config_path().read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def _snapshot_oauth_account(self, account: dict[str, Any]) -> None:
+        """Keep the account's cached CLI profile block beside its credentials.
+
+        Only a block whose ``accountUuid`` equals this slot's token-verified
+        owner is saved: the block describes machine-global CLI state, and after
+        a fast login sequence it can still name a different account than the
+        credential being captured. A stale snapshot would later be restored as
+        truth, which is the exact confusion this feature removes.
+        """
+        if account.get("provider") != "claude":
+            return
+        verified = self._account_verified_key(account)
+        if verified is None:
+            return
+        config = self._read_claude_config()
+        block = _record(config.get("oauthAccount")) if config else {}
+        uuid_value = _string(block.get("accountUuid"))
+        if uuid_value is None or uuid_value.casefold() != verified:
+            return
+        content = (json.dumps(block, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        path = self._oauth_snapshot_path(str(account["id"]))
+        try:
+            if path.is_file() and path.read_bytes() == content:
+                return
+            _atomic_write(path, content)
+        except OSError:
+            pass
+
+    def _restore_oauth_account(self, account: dict[str, Any]) -> None:
+        """Make the CLI's cached profile agree with the account just selected.
+
+        Without this, every CLI surface that shows identity (``/status``, the
+        browser bridge) keeps naming the outgoing account for up to a day after
+        a switch, because the CLI trusts its cached ``oauthAccount`` while its
+        24h freshness gate holds. Restoring the saved block corrects it
+        immediately; when no snapshot exists, a minimal verified-identity block
+        without ``profileFetchedAt`` fails that gate and forces the CLI to
+        refetch and correct itself on the next session start.
+
+        Only the ``oauthAccount`` key is touched, a block already naming the
+        right account is left alone (the CLI's own copy is at least as fresh),
+        and an unreadable config is never overwritten.
+        """
+        if account.get("provider") != "claude":
+            return
+        verified = self._account_verified_key(account)
+        if verified is None:
+            return
+        config = self._read_claude_config()
+        if config is None:
+            return
+        current = _string(_record(config.get("oauthAccount")).get("accountUuid"))
+        if current is not None and current.casefold() == verified:
+            return
+        block: dict[str, Any] | None = None
+        matched_by = "snapshot"
+        try:
+            saved = json.loads(
+                self._oauth_snapshot_path(str(account["id"])).read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            saved = None
+        if isinstance(saved, dict):
+            saved_uuid = _string(saved.get("accountUuid"))
+            if saved_uuid is not None and saved_uuid.casefold() == verified:
+                block = saved
+        if block is None:
+            matched_by = "verified_identity"
+            block = {
+                key: value
+                for key, value in {
+                    "accountUuid": _string(account.get("provider_account_id")),
+                    "emailAddress": _string(account.get("email")),
+                    "organizationName": _string(account.get("organization")),
+                }.items()
+                if value is not None
+            }
+        config["oauthAccount"] = block
+        try:
+            _atomic_write(
+                self._claude_config_path(),
+                json.dumps(config, ensure_ascii=False).encode("utf-8"),
+            )
+        except OSError:
+            return
+        self._audit(
+            "oauth_profile_restored",
+            provider="claude",
+            account_id=str(account["id"]),
+            matched_by=matched_by,
+            detail=_string(account.get("email")),
+        )
+
     def snapshot(self) -> dict[str, Any]:
         self._reconcile_current()
         selected = _record(self._manifest.get("selected"))
@@ -1062,6 +1194,10 @@ class ProviderAccountManager:
             self._backup_managed_auth(managed_path)
             _atomic_write(managed_path, content)
             _record(self._manifest["selected"])[provider] = account["id"]
+            # A newer deliberate selection retires any guard still defending an
+            # older switch, so the two never fight over the credential file.
+            self._selection_guard.pop(provider, None)
+            self._snapshot_oauth_account(account)
             self._reconcile_current(write=False)
             self._write()
             self._audit(
@@ -1096,9 +1232,15 @@ class ProviderAccountManager:
                 live.append(str(session_id))
         return live
 
-    async def select(
-        self, provider_value: str, account_id: str, *, force: bool = False
-    ) -> dict[str, Any]:
+    async def select(self, provider_value: str, account_id: str) -> dict[str, Any]:
+        """Switch the live login, including for sessions already running.
+
+        Provider processes re-read the shared credential file when its mtime
+        changes, so a switch reaches every live session of that provider without
+        restarting anything. It is therefore never refused: the one case that
+        used to justify refusing it — the outgoing login rotating its token back
+        over the swap — is handled afterwards by the selection guard instead.
+        """
         provider = _provider(provider_value)
         async with self._mutation_lock:
             account = self._account(account_id)
@@ -1106,32 +1248,28 @@ class ProviderAccountManager:
                 raise ProviderAccountError("account provider does not match")
             active = _record(self._manifest.get("selected")).get(provider)
             live = self.live_sessions(provider)
-            if live and active != account_id and not force:
-                # Those processes hold the outgoing account's refresh token and
-                # write rotations straight back into the shared credential file,
-                # which is how one account's token ends up in another's slot.
-                raise ProviderAccountConflict(
-                    f"{len(live)} live {provider} session(s) still run under the current "
-                    f"login and can rotate its token back over this switch; end them or "
-                    f"switch with force"
-                )
             content, _ = self._read_json_auth(self._managed_auth_path(provider, account_id))
             previous_digest = _string(account.get("auth_digest"))
             _atomic_write(self._system_auth_path(provider), content)
             account["auth_digest"] = hashlib.sha256(content).hexdigest()
             account["updated_at"] = time.time()
             _record(self._manifest["selected"])[provider] = account_id
+            self._restore_oauth_account(account)
             self._reconcile_current(write=False)
             self._write()
             self._audit(
                 "selected",
                 provider=provider,
                 account_id=account_id,
-                matched_by="forced" if force and live else "user",
+                matched_by="user",
                 old_digest=previous_digest,
                 new_digest=_string(account.get("auth_digest")),
                 detail=f"{len(live)} live session(s)" if live else None,
             )
+            if live and active != account_id:
+                self._arm_selection_guard(provider, account_id)
+            else:
+                self._selection_guard.pop(provider, None)
         await self.events.emit(
             "provider_account_selected",
             source="provider_accounts",
@@ -1140,6 +1278,82 @@ class ProviderAccountManager:
         )
         await self.refresh(account_id)
         return self.snapshot()
+
+    def _arm_selection_guard(self, provider: Provider, account_id: str) -> None:
+        """Hold a fresh switch against a straggling rotation from the old login.
+
+        A refresh already in flight when the swap lands completes with the
+        outgoing account's refresh token and writes that result into the shared
+        credential file, reverting the switch with nothing to show for it. The
+        guard re-applies the selection for a bounded window, and only when the
+        live login resolves to a *different saved account* — an unidentified
+        login is left alone rather than overwritten from a stale snapshot.
+        """
+        self._selection_guard[provider] = (
+            account_id,
+            time.monotonic() + SELECTION_GUARD_SECONDS,
+        )
+        background.start(
+            f"{SELECTION_GUARD_LOOP}-{provider}",
+            lambda: self._selection_guard_loop(provider),
+        )
+
+    async def _selection_guard_loop(self, provider: Provider) -> None:
+        name = f"{SELECTION_GUARD_LOOP}-{provider}"
+        while True:
+            pin = self._selection_guard.get(provider)
+            if pin is None or time.monotonic() >= pin[1]:
+                if pin is not None:
+                    self._selection_guard.pop(provider, None)
+                return
+            await asyncio.sleep(SELECTION_GUARD_POLL_SECONDS)
+            with background.iteration(name):
+                await self._reassert_selection(provider)
+
+    async def _reassert_selection(self, provider: Provider) -> None:
+        pin = self._selection_guard.get(provider)
+        if pin is None or time.monotonic() >= pin[1]:
+            return
+        account_id = pin[0]
+        await self.reconcile_current()
+        current = _record(self._current.get(provider))
+        # Only a live login that reconciliation positively resolved to another
+        # saved account is a reverted switch. "external" covers both an
+        # unidentifiable rotation and one this host is offline to verify;
+        # re-applying a snapshot over either can destroy a valid newer token.
+        if current.get("state") != "saved" or current.get("account_id") == account_id:
+            return
+        async with self._mutation_lock:
+            if self._selection_guard.get(provider) != pin:
+                return
+            try:
+                account = self._account(account_id)
+                content, _ = self._read_json_auth(self._managed_auth_path(provider, account_id))
+            except ProviderAccountError:
+                self._selection_guard.pop(provider, None)
+                return
+            reverted_to = _string(current.get("account_id"))
+            _atomic_write(self._system_auth_path(provider), content)
+            account["auth_digest"] = hashlib.sha256(content).hexdigest()
+            account["updated_at"] = time.time()
+            _record(self._manifest["selected"])[provider] = account_id
+            self._restore_oauth_account(account)
+            self._reconcile_current(write=False)
+            self._write()
+            self._audit(
+                "selection_reasserted",
+                provider=provider,
+                account_id=account_id,
+                matched_by="selection_guard",
+                new_digest=_string(account.get("auth_digest")),
+                detail=f"a live session rotated {reverted_to} back over the switch",
+            )
+        await self.events.emit(
+            "provider_account_selected",
+            source="provider_accounts",
+            provider=provider,
+            account_id=account_id,
+        )
 
     async def adopt(self, provider_value: str, account_id: str) -> dict[str, Any]:
         """Bind the live system login to a saved account on explicit user request.
@@ -1189,6 +1403,8 @@ class ProviderAccountManager:
             ):
                 raise ProviderAccountError("the account snapshot could not be written")
             _record(self._manifest["selected"])[provider] = account_id
+            self._selection_guard.pop(provider, None)
+            self._snapshot_oauth_account(account)
             self._reconcile_current(write=False)
             self._write()
             self._audit(
@@ -1343,6 +1559,9 @@ class ProviderAccountManager:
         self._task = None
         await background.stop(QUOTA_TURN_REFRESH_LOOP)
         self._event_task = None
+        self._selection_guard.clear()
+        for provider in PROVIDERS:
+            await background.stop(f"{SELECTION_GUARD_LOOP}-{provider}")
         if self._event_queue:
             self.events.unsubscribe(self._event_queue)
             self._event_queue = None
@@ -1511,8 +1730,20 @@ class ProviderAccountManager:
             # rotation that swapped in another account's token is caught here
             # rather than showing up as two accounts with identical quota.
             await self._verify_account_identity(account)
+            is_selected = _record(self._manifest.get("selected")).get(provider) == account_id
             if provider == "claude":
-                quota, updated = await self._fetch_claude(auth)
+                if is_selected:
+                    # The CLI refreshes this block itself while it runs; folding
+                    # each refetch back into the snapshot keeps the copy restored
+                    # on the next switch as fresh as the CLI's own.
+                    self._snapshot_oauth_account(account)
+                # Rotating the selected account's token while live sessions run
+                # under it races the CLI's own rotation of the same refresh
+                # token; the loser of that race writes a dead credential. The
+                # live process owns the refresh — a 401 here just leaves quota
+                # stale until the CLI rotates and reconciliation syncs the slot.
+                allow_refresh = not (is_selected and self.live_sessions(provider))
+                quota, updated = await self._fetch_claude(auth, allow_refresh=allow_refresh)
             else:
                 quota, updated = await self._fetch_codex(auth, account_id)
             if updated is not None:
@@ -1597,7 +1828,7 @@ class ProviderAccountManager:
         )
 
     async def _fetch_claude(
-        self, auth: dict[str, Any]
+        self, auth: dict[str, Any], *, allow_refresh: bool = True
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         oauth = _record(auth.get("claudeAiOauth"))
         token = _string(oauth.get("accessToken"))
@@ -1610,6 +1841,11 @@ class ProviderAccountManager:
         }
         status, payload = await self._json_request("GET", CLAUDE_USAGE_URL, headers=headers)
         updated: dict[str, Any] | None = None
+        if status in {400, 401, 403} and not allow_refresh:
+            raise ProviderAccountError(
+                f"Claude quota request failed (HTTP {status}); a live session owns this "
+                f"token's rotation, retrying after it refreshes"
+            )
         if status in {400, 401, 403} and _string(oauth.get("refreshToken")):
             updated = await self._refresh_claude_auth(auth)
             if updated:

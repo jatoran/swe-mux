@@ -8,6 +8,17 @@ id = "29a044bb-a06b-4216-95e4-39c5e91d48fb"
 Agentic Controle Plane (ACP)
 
 
+
+Test automations/control plane before proceeding through remaining roadmap
+	Ensure everything is firing and working properly across the control plane/automation/observation hierarchy
+
+codex has a "latest" button that scrolls you to bottom, and it works. claude has a "jump to bottom" button which works on desktop, but doesnt work on mobile. the ctrl+end command in the command rail still works on claude, but id like tapping that jump to bottom button to also work if we can do that?
+	if there is a serious limitation here, then i'm fine deferring this, but if we can make that work, I'd like to
+
+disable gesture shortcuts when rearranging right sidebar drawer tabs on mobile
+
+gestures for switching between projects
+
 task list - that an agent can check off and add comments too - maybe replace or supercede the observability inbox
 
 - custom tasks - not just vscode tasks. probably good to just not rely on vscode conventions while still allowing importing of them though, but you can just define ur own swemux scripts for a project. agents can do that easily once the swemux mcp is up and can be queried for swe-mux development type info
@@ -37,14 +48,6 @@ task list - that an agent can check off and add comments too - maybe replace or 
 	- markdown horizontal breaks arent rendering, `---`
 
 
-- [x] command rail option: end session (2 click/tap inline confirm)
-
-
-- [x] session titler should prefer 2 or 3 word session titles. and short if possible. but must be accurate/descriptive 
-
-prompt library ui in the right sidebar UI:
-	dont paste into notes or files panes. only paste into agent sessions
-	allow long press or right click prompts to bring up context menu to trigger send to specific in-current-project sessions or to send into a new session (claude or codex)
 
 - ability to click file paths from agent chats and they open
 

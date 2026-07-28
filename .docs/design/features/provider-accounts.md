@@ -39,6 +39,9 @@
   detection only compares samples of the same verified account. Removing an account purges its
   rows, and a bounded purge can discard only the period after credentials changed hands.
 - `<data_dir>/provider-accounts/claude/<id>/.credentials.json`: Claude auth snapshot.
+- `<data_dir>/provider-accounts/claude/<id>/oauth-account.json`: snapshot of the CLI's cached
+  profile block (`oauthAccount` from `~/.claude.json`), saved only when token-verified as this
+  slot's owner; restored into the CLI config on selection.
 - `<data_dir>/provider-accounts/codex/<id>/auth.json`: Codex auth snapshot.
 - `<snapshot>.prev`: the credential a slot held before its most recent replacement.
 - `<data_dir>/provider-accounts/credential-events.jsonl`: append-only, rotated audit of every
@@ -53,10 +56,31 @@
 - Sign in + save runs the provider's ordinary host login command, then captures the
   resulting system auth file. Save current login captures without launching login.
 - Selection atomically replaces only the normal system auth file. Provider config,
-  skills, sessions, projects, and histories remain shared. Selecting a different account while
-  live sessions of that provider are running is refused unless forced: those processes hold the
-  outgoing account's refresh token and write rotations straight back into the shared credential
-  file, which is how one account's token reaches another account's slot.
+  skills, sessions, projects, and histories remain shared. It is never refused and never asks
+  for confirmation, including while live sessions of that provider are running: those processes
+  re-read the shared credential file when its mtime changes, so they follow the switch without
+  being restarted.
+- Cached-profile restore (Claude): the CLI shows identity (`/status`, browser bridge) from the
+  `oauthAccount` block in `~/.claude.json`, not from the credential file, and refetches it at
+  most daily — a credential swap alone leaves every surface naming the outgoing account for up
+  to a day. Each saved Claude account therefore keeps a snapshot of that block
+  (`oauth-account.json`, captured only when its `accountUuid` equals the slot's token-verified
+  owner; refreshed on capture, adopt, and each quota poll of the selected account). Selection
+  and the guard's re-assert restore it: only the `oauthAccount` key is rewritten, a block
+  already naming the right account is left alone, and an absent or unparseable config is never
+  written. With no usable snapshot, a minimal verified-identity block without
+  `profileFetchedAt` is written instead — it fails the CLI's 24h freshness gate, forcing a
+  refetch that self-corrects on the next session start. Restores are audited as
+  `oauth_profile_restored`. Panes already running hold their config in memory and keep the old
+  display until restarted; their requests still authenticate as the new account.
+- Selection guard: a switch made while live sessions exist is defended for
+  `SELECTION_GUARD_SECONDS` (60s). The one case that survives the mtime re-read is a token
+  refresh already in flight when the swap lands — it completes with the outgoing account's
+  refresh token and writes that back, silently reverting the switch. The guard polls
+  reconciliation and re-applies the selection, audited as `selection_reasserted`, but only when
+  the live login positively resolves to a *different saved account*; an `external` login is left
+  alone, because it may hold a newer token than any saved snapshot. A newer deliberate
+  selection, capture, or adoption retires the guard, so the two never fight over the file.
 - Capture resolves the owner from the credential first, then falls back to weaker readings. It
   deduplicates on verified account ID, then on weak identity only when no verified ID exists,
   then on exact auth digest, so one provider account occupies exactly one slot. Capturing into
@@ -87,8 +111,12 @@
   `conflict`, and are excluded from durable-sample display rather than repeating the primary's
   numbers.
 - Claude uses the OAuth usage endpoint. An authorization failure may rotate the public
-  Claude Code refresh token; rotated credentials update the saved snapshot and, when
-  still matched to live system auth, the system auth file. A login changed during the network
+  Claude Code refresh token — but never for the selected account while live Claude sessions
+  run: those CLIs rotate the same refresh token themselves, and a managed rotation racing that
+  writes a dead credential over a live one. The gated refresh fails with a typed error and
+  quota goes stale until the CLI rotates and reconciliation syncs the slot. Otherwise rotated
+  credentials update the saved snapshot and, when still matched to live system auth, the
+  system auth file. A login changed during the network
   request is never overwritten: the slot's digest is re-checked against the one read at the
   start of the refresh, and a mismatch skips the write with an audited `rotation_skipped`.
   The rotation write itself keeps the previous credential as `.prev` and appends an audit
@@ -117,6 +145,7 @@
 - The account popover can review a reset as manual Codex usage or discard it as a detection
   error. Review is server-persisted, removes the row from active notifications, retains it in
   the evidence log, and rejects manual-usage classification for Claude rows.
+- `POST .../select` takes no body; there is no force flag and no confirmation step.
 - Desktop status uses one bottom-sidebar row per provider: terminal-style icon, current
   identity, 5-hour/weekly quota percentages with compact reset countdowns, and live
   quota/auth state. The full switcher is a viewport-level overlay anchored to this status
@@ -175,11 +204,16 @@ type AccountConflict = {
   No credential is written on an unverified guess.
 - Weak identity resembling a saved account ⇒ relink hint only; adoption re-checks ownership and
   refuses credentials belonging to another saved account.
-- Switching providers under live sessions ⇒ HTTP 409 until forced, because those sessions can
-  rotate the outgoing token back over the switch.
+- Switching under live sessions ⇒ always applied; a straggling rotation from the outgoing login
+  is undone by the selection guard within its window, and an unidentifiable live login is left
+  in place rather than overwritten from a saved snapshot.
 - Two slots resolving to one provider account ⇒ both flagged; the duplicate stops polling instead
   of repeating the primary's usage.
 - Provider/network/auth failure ⇒ stale-retention policy; no account switch.
+- Selected Claude account's token expired while sessions are live ⇒ quota reads fail typed
+  ("a live session owns this token's rotation") instead of racing the CLI's own refresh.
+- `~/.claude.json` absent or unparseable during a switch ⇒ profile restore skipped; the CLI
+  rebuilds its own config and `/status` self-corrects on its next profile refetch.
 - Private snapshot sync failure ⇒ live login remains external; no claim that stale saved auth
   is active.
 - Missing Codex app-server ⇒ direct quota failure remains visible; terminal use unaffected.

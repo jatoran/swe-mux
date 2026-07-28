@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -342,6 +343,9 @@ class Config:
     project_init_scripts: list[dict[str, Any]] = field(default_factory=list)
     automation_enabled: bool = False
     automation_retention_days: int = 90
+    # Prompt-queue history (sent/cancelled/failed/stranded items and their
+    # delivery audit) ages out on this window; pending items never do.
+    prompt_queue_retention_days: int = 90
     automation_concurrency: int = 2
     automation_queue_size: int = 256
     automation_max_input_tokens: int = 4096
@@ -400,7 +404,24 @@ class Config:
         # The daemon retains exact bytes. Browsers retain an approximate line
         # window using a documented 160-byte average, bounded for xterm.
         result["xterm_scrollback_lines"] = max(1_000, min(100_000, self.scrollback_bytes // 160))
+        result["pty_windows"] = windows_pty_compatibility()
         return result
+
+
+def windows_pty_compatibility() -> dict[str, object] | None:
+    """Describe the host PTY to xterm.js, or None when it is not a ConPTY.
+
+    xterm's ``windowsPty`` option gates workarounds it cannot infer on its own:
+    below ConPTY build 21376 it must disable reflow (ConPTY hard-wraps and never
+    reports the wrap flag, so rewrapping a resized pane corrupts scrollback) and
+    treat a line whose last cell is non-blank as wrapped. On every ConPTY build
+    it also has to grow the viewport with blank rows instead of pulling
+    scrollback back down, because ConPTY reprints its own view of the screen.
+    Sent to the browser because only the daemon knows what the PTY really is.
+    """
+    if sys.platform != "win32":
+        return None
+    return {"backend": "conpty", "build_number": sys.getwindowsversion().build}
 
 
 def _validate_project_init_scripts(config: Config, errors: dict[str, str]) -> None:
@@ -577,6 +598,8 @@ def _validate(config: Config) -> None:
         )
     if not 1 <= config.automation_retention_days <= 3650:
         errors["automation_retention_days"] = "must be between 1 and 3650"
+    if not 1 <= config.prompt_queue_retention_days <= 3650:
+        errors["prompt_queue_retention_days"] = "must be between 1 and 3650"
     if not 1 <= config.automation_concurrency <= 16:
         errors["automation_concurrency"] = "must be between 1 and 16"
     if not 16 <= config.automation_queue_size <= 4096:

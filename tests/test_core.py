@@ -147,6 +147,17 @@ def test_agent_launchers_inject_mux_wiring(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setenv("MUX_CLAUDE_EXE", "real-claude.exe")
     monkeypatch.setenv("MUX_CODEX_EXE", "real-codex.exe")
     monkeypatch.setenv("MUX_CLAUDE_SETTINGS", str(tmp_path / "hooks.json"))
+    # The shims read the spawning session's environment; running this suite
+    # inside a mux session would otherwise leak its MCP identity/args in and
+    # prepend --mcp-config / mcp_servers overrides to the assertions below.
+    for leaked in (
+        "MUX_MCP_TOKEN",
+        "MUX_MCP_URL",
+        "MUX_CLAUDE_MCP_CONFIG",
+        "MUX_CLAUDE_ARGS",
+        "MUX_CODEX_ARGS",
+    ):
+        monkeypatch.delenv(leaked, raising=False)
     exe, args, native_id = _claude([])
     assert exe == "real-claude.exe"
     assert args[:2] == ["--settings", str(tmp_path / "hooks.json")]

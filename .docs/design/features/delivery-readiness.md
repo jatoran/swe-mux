@@ -37,15 +37,21 @@ count as human input; keystrokes and bracketed paste advance an in-memory input 
 The daemon evaluates these facts synchronously without an await boundary. It stores bounded
 reasons/transitions only—never terminal bytes or prompt bodies.
 
-**Known hole (scheduled with Phase 4.5, `development/ROADMAP.md`).** `POST
-/sessions/{id}/input` and broadcast fan-out write to the PTY without advancing
-`input_revision` / `last_input_event_ts` and without emitting `terminal_input`, so text
-delivered through the REST path — `mux send`, note send-to-agent, the UI's paste-then-focus
-flow — is invisible to these counters. Every readiness report therefore emits
-`partial_input_absent` and `operator_quiet` as satisfied even when the text is sitting
-undelivered in a composer. The surface is research-only today (`authorized` is hardcoded
-false), so the damage is a corrupted shadow-metric baseline rather than user-visible
-misbehavior — but it must be closed before any arming logic reads these counters.
+**Closed 2026-07-28 (with Phase 4.5).** `POST /sessions/{id}/input` and broadcast fan-out
+previously wrote to the PTY without advancing `input_revision` / `last_input_event_ts`,
+without emitting `terminal_input`, and without an ended-session guard, so REST-delivered
+text — `mux send`, note send-to-agent, the prompt library's delivery path — was invisible
+to these counters and every readiness report emitted `partial_input_absent` /
+`operator_quiet` as satisfied for text sitting undelivered in a composer. All operator
+input paths now share one accounting helper (`_record_operator_input` in `server.py`): the
+HTTP route (`source="http"`, 409 for ended sessions), broadcast per-target
+(`source="broadcast"`, `input_owner=False`, ended targets skipped), voice
+(`source="voice"`), and — since Phase 4 — prompt-queue delivery (`source="queue"`,
+`input_owner=False`; both the paste and the submit write, see
+`features/prompt-queue.md`). Deliberately NOT counted: automation `write_pty`, the branch command
+write, and process interrupts — those are not *operator* input, and advancing the
+operator-quiet clock for them would mask a different hole. The WS path keeps its own
+throttled accounting.
 
 Transcript classification records schema version, recognized and unknown counts, bounded
 unknown signatures, and a degraded status after sustained drift. Claude discovery follows

@@ -50,6 +50,21 @@
   `clipboard_history_persist` is on. Turning that setting off — or turning history off entirely —
   deletes the rows. Secret-shaped and oversized copies never become rows at all; see
   `features/ui.md`.
+- `queue_messages`: the persistent manual prompt queue (`features/prompt-queue.md`).
+  Keyed to `target_session_id` + the bound `target_agent_run_id` (nullable until the
+  target's first run binds, then never re-bound), with a target label/backend/project
+  snapshot for stranded queues, gap-free `position` per target, state
+  (`draft|armed|blocked|delivering|sent|failed|cancelled|stranded`), body, `revision`,
+  and the provenance-rich sender model — `sender_kind` (`user|queue_draft`), `sender_id`,
+  `origin_json` (rule id / Tier 0 fact fingerprints / annotation snapshot), `payload_json`
+  (typed action payload for control-plane drafts), `constraints_json` (Phase 5 delivery
+  constraints, carried now) — plus blocked reasons, stranded reason, `cancel_kind`,
+  `retargeted_from_json`, and lifecycle timestamps.
+- `queue_deliveries`: the delivery audit — per attempt: revision, target identity,
+  readiness state + reasons, explicit-confirmation flag, outcome
+  (`pending|sent|refused|failed`), error, byte count, and a partial-unique
+  `idempotency_key` (a repeated key replays the recorded outcome instead of delivering
+  twice). Deliberately carries no prompt text; bodies live in `queue_messages` only.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
 - `automation_annotations`: observer/rule/detector output. Anchored to `agent_run_id` **or**
@@ -65,7 +80,8 @@
 - `schema_versions(store, version)`: per-store schema version on the shared file.
   `PRAGMA user_version` is a property of the *database*, so several stores stamping it made
   the last connect overwrite the rest and each store read a neighbour's number.
-- History, operational telemetry, automation, and voice use separate serialized connections to
+- History, operational telemetry, automation, prompt-queue, and voice use separate serialized
+  connections to
   one WAL database plus a process-wide per-database operation coordinator. Complete operations
   cannot compete for SQLite's single writer slot; every failed worker operation rolls back, and
   an operation may not return with an implicit transaction still open. Expected uniqueness
@@ -84,6 +100,10 @@
 - `<project>/.swe-mux/preview-shots/<id>.png`: headless preview screenshots saved into the
   owning Project (data-dir fallback) so a local agent can read them. See
   `features/processes-and-previews.md`.
+- `<project>/.swe-mux/seeds/seed-*.md`: staged new-session seed prompts whose bodies exceed
+  the argv bound, gitignored via a generated `.gitignore` and pruned after 14 days — staged
+  *inside* the workspace so both agent CLIs can read them without leaving it. See
+  `features/prompt-queue.md`.
 - `<project>/.swe-mux/notes/project.md`: the Project's one canonical note, seeded at creation
   with a Project-named heading only when the file is absent.
 - `<project>/.swe-mux/notes/sessions/<safe-session-id>.md`: lazily initialized notes owned by
@@ -118,7 +138,10 @@ unbounded growth is covered — firings, action results, observer calls, notific
 spend ledger, observer batches and rule checkpoints on the configured
 `automation_retention_days`, and the three derived-knowledge tables (run-note annotations,
 learned resolutions, session lineage) on a deliberately longer window, because a user reads
-those long after the operational trail that produced them.
+those long after the operational trail that produced them. Prompt-queue history
+(terminal-state messages and their delivery audit) ages out on
+`prompt_queue_retention_days`; pending queue items never age out. Staged new-session seed
+files (`.swe-mux/seeds/`) are pruned opportunistically after 14 days.
 
 Clipboard history is the one store that holds arbitrary user text verbatim, so it is the one
 store that defaults to keeping nothing durable: memory-only unless persistence is opted into,

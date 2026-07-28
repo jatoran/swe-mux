@@ -1,2 +1,3 @@
 version = 1
 ignore_patterns = [".pytest-codex-demote", ".pytest-tmp-project-refactor", "test-tmp-codex", ".tmp-orca"]
+automations = { declared_vs_verified = true, doc_debt = true, loop_detection = true, provenance_graph = true, raw_store = true, tier0 = true }

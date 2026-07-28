@@ -126,8 +126,10 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
 
 - Every Continuity-backed view (project note, session note, Markdown file) offers **send to
   agent**: the highlighted text, or the whole document when nothing is highlighted, becomes the
-  first message of a new Claude/Codex session or is inserted into a live one. Plain-text files
-  and the file browser do not offer it; they own no selection.
+  first message of a new Claude/Codex session or is delivered to a live one through the prompt
+  queue. Plain-text file editors offer it too (always the whole document — they own no
+  selection engine), and the Files tree context menu offers "Send to an agent session" with
+  the same fetch/size/binary gating as its copy action.
 - The action has two hosts. A `→ agent` button in the pane header serves desktop (Continuity's
   own rail is touch-only), and the same action is registered on that rail as `mux:send-to-agent`
   for touch, where a tap keeps the keyboard and the selection in place. Both read the selection
@@ -141,21 +143,19 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
   offered: an agent composer holds a paste inert until submitted, while a shell would run it.
   Ended, crashed, and still-spawning sessions are excluded, and switching Project drops a target
   that does not exist there rather than silently retargeting.
-- A new session is seeded through the agent CLI's own argv, the same mechanism as the
-  cross-vendor review spawn, and opens beside the pane the text came from. That avoids writing
-  into a TUI that is not ready for input yet. Because argv is a command line, the seeded prompt
-  is bounded (20,000 characters); a longer body is refused for a new session, with the live-session
-  route offered instead. A body starting with `-` is offset by one space so the CLI cannot read
-  it as a flag.
-- A live session is written to over `POST /api/sessions/{id}/input`, wrapped in bracketed paste
-  (newlines as CR) so a multi-line body does not submit at every line, and the Enter is a second
-  write a moment later so the composer has absorbed the paste first. Submitting is a checkbox,
-  on by default. That endpoint, not the in-page terminal action bus, is the delivery path
-  because it reaches a target whose pane is not mounted.
-- When the target's delivery readiness is `blocked` or `unknown`, the dialog names the reason and
-  the button becomes "Send anyway"; nothing is auto-forced. Delivery here is manual and
-  per-message — the durable queue, ordering, and retargeting semantics remain Phase 4 work
-  (`development/ROADMAP.md`), and this dialog is one of its future senders, not a substitute.
+- A new session is seeded through `seed_text` on the spawn request and opens beside the pane
+  the text came from — that avoids writing into a TUI that is not ready for input yet. The
+  daemon inlines a short body into the agent CLI's argv (a leading `-` offset by one space so
+  the CLI cannot read it as a flag) and stages a body over the argv bound into
+  `.swe-mux/seeds/` with a short reader prompt, so there is no client-side length ceiling.
+- Sending to a live session is a **prompt queue** operation (`features/prompt-queue.md`): the
+  dialog stages the message armed and asks the queue to deliver it now, and also offers "Add
+  to queue" to stage without delivering. An occupied queue holds the message in strict order
+  instead of racing the composer; a not-safe target is refused by the daemon with typed
+  reasons and the button becomes the explicit "Send anyway" confirmation (never available for
+  approval/Q&A or a replaced target). With "Press Enter after inserting" off, the text only
+  fills the composer over `POST /api/sessions/{id}/input` (bracketed paste, no submit) — a
+  fill, not a delivery, so it does not enter the queue.
 
 ### Known nested-Project gap
 

@@ -56,6 +56,29 @@ _WRITE_KINDS = frozenset({"file_write", "file_write_result"})
 _READ_KINDS = frozenset({"file_read", "file_read_result"})
 _TEST_KINDS = frozenset({"test_result"})
 
+# Only actions that *attempt change* can loop. A read-only action (kinds "tool"
+# and "file_read" — Grep, Glob, file reads — and their results) produces no test
+# outcome, no content hash and no commit, so the no-progress gate is vacuously
+# true for it by construction: any agent that searches the same directory three
+# times would be flagged. Repeated looking is not repeated failing — the Wink
+# precedent behind LOOP_REPEAT_THRESHOLD measures repeated ineffective
+# *attempts*. Non-test result kinds are also excluded: a result fingerprint
+# collapses onto one value when the payload carries no content hash, so four
+# distinct successful edits can share a single `file_write_result` fingerprint
+# (observed live). `test_result` stays: its fingerprint carries the failing-set
+# state, so identical repeats mean the same failures kept happening.
+_LOOP_CANDIDATE_KINDS = frozenset({"command", "file_write", "test", "test_result"})
+
+# A source file claimed by more than this many docs is infrastructure — a
+# composition root like `server.py` (15 claimants) or `App.tsx` (8) — not a
+# subject any single doc owns, and it carries no ownership signal: touching it
+# would mark every claimant dirty regardless of what changed. Calibrated against
+# this repo's `.docs` tree (2026-07-28): 83/20/8/4 files carry 1–4 owners and
+# every one of those has a genuine subject doc among its claimants
+# (`tier0_store.py`, `ProviderAccounts.tsx`), then a clean break to the ≥5 tail
+# which is exactly the composition roots and cross-cutting infra modules.
+DOC_HUB_OWNER_LIMIT = 4
+
 
 def normalize_target(target: str | None, project_root: str | None = None) -> str | None:
     """Canonical form of a tool's target path for cross-fact comparison.
@@ -158,10 +181,15 @@ def detect_loop(facts: Sequence[dict[str, Any]]) -> LoopFinding | None:
     the same test command four times while fixing things is *work*, not a loop.
     Only a repeat window in which nothing measurable moved is a finding, and even
     then it is evidence for the ranking layer rather than an interrupt.
+
+    Only `_LOOP_CANDIDATE_KINDS` facts can seed a loop; every fact still feeds
+    the progress gate.
     """
     ordered = sorted(facts, key=lambda fact: (fact.get("created_at") or 0.0))
     groups: dict[str, list[dict[str, Any]]] = {}
     for fact in ordered:
+        if str(fact.get("kind") or "") not in _LOOP_CANDIDATE_KINDS:
+            continue
         fingerprint = fact.get("fingerprint")
         if isinstance(fingerprint, str) and fingerprint:
             groups.setdefault(fingerprint, []).append(fact)
@@ -287,7 +315,9 @@ _BACKTICKED = re.compile(r"`([^`]+)`")
 _SOURCE_SUFFIXES = (".py", ".ts", ".tsx", ".css", ".toml", ".json")
 
 
-def build_doc_ownership(docs_root: Path) -> dict[str, tuple[str, ...]]:
+def build_doc_ownership(
+    docs_root: Path, *, hub_owner_limit: int = DOC_HUB_OWNER_LIMIT
+) -> dict[str, tuple[str, ...]]:
     """Invert every doc's "Key files" section into `source path -> owning docs`.
 
     The routing table in `.docs/CLAUDE.md` is keyed by *change type*, which a
@@ -295,6 +325,10 @@ def build_doc_ownership(docs_root: Path) -> dict[str, tuple[str, ...]]:
     the same routing information already written as literal paths, so they give a
     deterministic lookup with no heuristics and no second list to maintain: a doc
     that adopts a module by listing it is immediately covered.
+
+    A file claimed by more than `hub_owner_limit` docs is dropped from the map
+    entirely: it is infrastructure everyone touches, and keeping it would turn
+    every edit to a composition root into debt against a page of unrelated docs.
     """
     ownership: dict[str, set[str]] = {}
     if not docs_root.is_dir():
@@ -321,7 +355,11 @@ def build_doc_ownership(docs_root: Path) -> dict[str, tuple[str, ...]]:
                 if normalized:
                     relative = doc.relative_to(docs_root).as_posix()
                     ownership.setdefault(normalized, set()).add(relative)
-    return {path: tuple(sorted(docs)) for path, docs in ownership.items()}
+    return {
+        path: tuple(sorted(docs))
+        for path, docs in ownership.items()
+        if len(docs) <= hub_owner_limit
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,17 +505,14 @@ def build_provenance_edges(
     return edges
 
 
-def provenance_content(edges: Sequence[ProvenanceEdge]) -> str:
-    lines = []
-    for edge in edges[:20]:
-        digest = (edge.writer_content_hash or "")[:12]
-        hashed = f" (content {digest})" if digest else ""
-        qualifier = " — another write to the same file falls in between" if edge.ambiguous else ""
-        lines.append(
-            f"session {edge.writer_session_id[:8]} wrote {edge.target}{hashed}; "
-            f"session {edge.reader_session_id[:8]} read it afterwards{qualifier}"
-        )
-    return "\n".join(lines)
+def provenance_content(edge: ProvenanceEdge) -> str:
+    digest = (edge.writer_content_hash or "")[:12]
+    hashed = f" (content {digest})" if digest else ""
+    qualifier = " — another write to the same file falls in between" if edge.ambiguous else ""
+    return (
+        f"session {edge.writer_session_id[:8]} wrote {edge.target}{hashed}; "
+        f"session {edge.reader_session_id[:8]} read it afterwards{qualifier}"
+    )
 
 
 # ------------------------------------------------------------- annotation keys
@@ -497,11 +532,14 @@ def doc_debt_dedupe_key(project_id: str, finding: DocDebtFinding) -> str:
     return _dedupe_key("doc-debt", project_id, "\x1f".join(sorted(finding.dirty)))
 
 
-def provenance_dedupe_key(project_id: str, edges: Sequence[ProvenanceEdge]) -> str:
+def provenance_dedupe_key(project_id: str, edge: ProvenanceEdge) -> str:
+    # Per edge, not per edge *set*: a set-hash key changes whenever the graph
+    # grows, so every evaluation of a growing window minted a new annotation
+    # restating every prior edge — quadratic storage, and each edge counted
+    # once per restatement by anything ranking annotations. Keyed on the two
+    # fact ids, one real-world write→read event is exactly one row forever.
     return _dedupe_key(
-        "provenance",
-        project_id,
-        "\x1f".join(sorted(f"{edge.writer_fact_id}>{edge.reader_fact_id}" for edge in edges)),
+        "provenance", project_id, f"{edge.writer_fact_id}>{edge.reader_fact_id}"
     )
 
 
@@ -530,6 +568,10 @@ PROJECT_FACT_WINDOW_SECONDS = 24 * 3600
 # matters, and an unbounded read on the event path is the one heavy operation the
 # design flags.
 CLAIM_TRANSCRIPT_BYTES = 256 * 1024
+# New provenance rows one evaluation may write. Bounds the first pass over a
+# busy window; later passes pick up the remainder because per-edge dedupe skips
+# everything already recorded.
+PROVENANCE_MAX_NEW_PER_PASS = 50
 
 
 class DeterministicConsumerService:
@@ -727,15 +769,27 @@ class DeterministicConsumerService:
         edges = build_provenance_edges(facts, project_root=context.project_root)
         if not edges:
             return []
-        written = await self._annotate(
-            context,
-            tag="provenance",
-            content=provenance_content(edges),
-            evidence=[edge.snapshot() for edge in edges],
-            dedupe_key=provenance_dedupe_key(context.project_id, edges),
-            run_scoped=False,
-        )
-        return [written] if written else []
+        # One annotation per edge: the per-edge dedupe key makes an edge that
+        # was already recorded a no-op, so re-deriving the whole window on every
+        # turn writes only what is new. The cap bounds one pass's writes (and
+        # `annotation_created` fan-out) on a first evaluation of a busy window;
+        # it is not truncation — the loop walks every edge, skipping duplicates,
+        # and anything past the cap lands on the next turn boundary.
+        written: list[dict[str, Any]] = []
+        for edge in edges:
+            if len(written) >= PROVENANCE_MAX_NEW_PER_PASS:
+                break
+            annotation = await self._annotate(
+                context,
+                tag="provenance",
+                content=provenance_content(edge),
+                evidence=[edge.snapshot()],
+                dedupe_key=provenance_dedupe_key(context.project_id, edge),
+                run_scoped=False,
+            )
+            if annotation:
+                written.append(annotation)
+        return written
 
     async def _last_assistant_text(self, session_id: str) -> str:
         session = self.sessions.sessions.get(session_id)

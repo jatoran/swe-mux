@@ -41,6 +41,8 @@ It should call domain packages rather than acquire their storage or process resp
 | `automation_registry.py` | control-plane enablement DAG: substrate/consumer deps, cycle-checked resolution | storage, execution |
 | `tier0_store.py` | deterministic no-model fact capture (Tier 0 substrate), gated per-project, source pointers, run/project fact queries | model calls, actuation |
 | `deterministic_consumers.py` | model-free detectors over Tier 0 (loop/stall, declared-vs-verified, doc debt, provenance edges) and the turn-boundary runner | model calls, spend, anything that writes toward a session |
+| `mcp.py` | agent-facing MCP v0 protocol + read tools (session list/status, bounded transcript read, history search), token-derived caller identity, Project scoping, output redaction | write tools, PTY writes, spawn, queue access, aiohttp handlers (those live in `server.py`) |
+| `prompt_queue.py` | persistent manual prompt queue: durable message store (states, strict head-of-line, revisions), typed operations (enqueue/edit/arm/move/cancel/retarget/send-next), event-driven stranding + startup reconcile, delivery audit, seed-prompt staging (`stage_seed_argv`) | timers/auto-delivery, PTY ownership (delivery writes go through the injected operator-input helper), aiohttp handlers |
 | `preview_capture.py` | optional headless preview screenshot (Playwright), typed-unavailable | proxy transport, PTY writes |
 | `clipboard_store.py` | in-memory clipboard-history ring (dedupe by content hash, pins, count/time bounds, secret-shape refusal) plus its opt-in SQLite mirror | reading or polling the OS clipboard, deciding where inserted text goes |
 

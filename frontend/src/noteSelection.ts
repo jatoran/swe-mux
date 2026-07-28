@@ -137,28 +137,18 @@ export function composeAgentMessage(body: string, source: MessageSource): string
   return `${origin}\n\n${body.replace(/\s+$/, '')}`
 }
 
-// A new agent is seeded through its CLI's own argv, which on Windows is one command line capped
-// near 32,767 characters — a budget the executable path, `--session-id` and `--settings` also
-// draw from, and which quoting can inflate for text dense in quotes or backslashes. This bound
-// keeps a comfortable margin under that while still carrying a whole ordinary note. Anything
-// larger goes to a live session instead, whose composer is fed over the PTY with no ceiling.
-export const ARGV_PROMPT_MAX_CHARS = 20_000
+// New-session seeding travels as `seed_text` on the spawn request: the daemon inlines short
+// bodies into the agent CLI's argv (with the leading-dash guard) and stages over-bound ones
+// into the workspace with a reader prompt, so the browser carries no length ceiling.
 
-/** The prompt as an argv element. A body starting with `-` would be read as a flag by the
- *  agent CLI, so it is pushed off the option boundary with a leading space — invisible in a
- *  prompt, and the only transformation that keeps the text itself intact. */
-export function argvPrompt(message: string): string {
-  return message.startsWith('-') ? ` ${message}` : message
-}
-
-// Delivering to a *live* session goes over `POST /api/sessions/{id}/input`, which writes raw
-// bytes: a multi-line body sent unwrapped would submit at every newline. xterm's own paste path
-// (what the terminal rail uses) wraps in bracketed paste, so the same wrapping is rebuilt here
-// for the writes that never pass through a mounted pane. Agent TUIs have bracketed paste on,
-// which is why only Claude/Codex sessions are offered as targets.
+// Filling a *live* session's composer goes over `POST /api/sessions/{id}/input`, which writes
+// raw bytes: a multi-line body sent unwrapped would submit at every newline. xterm's own paste
+// path (what the terminal rail uses) wraps in bracketed paste, so the same wrapping is rebuilt
+// here for the writes that never pass through a mounted pane. Agent TUIs have bracketed paste
+// on, which is why only Claude/Codex sessions are offered as targets. Actual *delivery*
+// (paste + submit) is the queue's send operation, performed daemon-side.
 export const BRACKETED_PASTE_START = '\x1b[200~'
 export const BRACKETED_PASTE_END = '\x1b[201~'
-export const SUBMIT_SEQUENCE = '\r'
 
 /** Newlines become CR inside the block, matching what xterm writes for a real paste. */
 export function pastePayload(message: string): string {

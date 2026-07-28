@@ -56,11 +56,39 @@ class ClaudeAdapter:
         default_exe: str = "claude.exe",
         data_dir: Path | None = None,
         default_args: list[str] | None = None,
+        mcp_url: str | None = None,
     ) -> None:
         self.default_exe = default_exe
         self.default_args = default_args or []
         self.data_dir = data_dir
         self.settings_path = self._write_hook_settings(data_dir) if data_dir else None
+        self.mcp_config_path = (
+            self._write_mcp_config(data_dir, mcp_url) if data_dir and mcp_url else None
+        )
+
+    @staticmethod
+    def _write_mcp_config(data_dir: Path, mcp_url: str) -> Path:
+        """One static registration file for the mux MCP server (`--mcp-config`).
+
+        The URL is literal (stable daemon port); only the bearer token is
+        per-session, carried by `${MUX_MCP_TOKEN}` env expansion so no
+        per-session file is needed. `--mcp-config` *adds* servers, so a user's
+        own MCP configuration is untouched.
+        """
+        path = data_dir / "claude-mcp.json"
+        payload = {
+            "mcpServers": {
+                "mux": {
+                    "type": "http",
+                    "url": mcp_url,
+                    "headers": {"Authorization": "Bearer ${MUX_MCP_TOKEN}"},
+                }
+            }
+        }
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temporary.replace(path)
+        return path
 
     def _write_hook_settings(self, data_dir: Path) -> Path:
         path = data_dir / "claude-hooks.json"
@@ -95,7 +123,15 @@ class ClaudeAdapter:
         return path
 
     def _args(self, action: str, native_id: str, opts: SpawnOptions) -> list[str]:
+        # `--mcp-config` is a VARIADIC option in the Claude CLI: it keeps
+        # consuming following tokens until the next flag. It must therefore
+        # never sit immediately before the trailing positional args — with a
+        # seed prompt appended there, the CLI read the prompt as a second MCP
+        # config path and exited ("MCP config file not found: <prompt>"). The
+        # single-value `--settings` is what may safely precede positionals.
         args = [action, native_id]
+        if self.mcp_config_path:
+            args.extend(["--mcp-config", str(self.mcp_config_path)])
         settings = self._session_settings(opts.session_id)
         if settings:
             args.extend(["--settings", str(settings)])

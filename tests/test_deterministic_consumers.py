@@ -104,6 +104,46 @@ def test_a_shrinking_failing_test_set_is_progress_not_a_loop() -> None:
     assert detect_loop(facts) is None
 
 
+def test_repeated_read_only_actions_are_never_a_loop() -> None:
+    # Live calibration case (run 603e5833, 2026-07-28): four identical Greps on
+    # `frontend/src` were flagged. A read-only action produces no test outcome,
+    # no content hash and no commit, so the no-progress gate is vacuously true
+    # for it *by construction* — repeated looking is not repeated failing, and
+    # the Wink precedent behind the threshold measures ineffective *attempts*.
+    for kind in ("tool", "tool_result", "file_read", "file_read_result"):
+        facts = [
+            fact(kind, at=index, fingerprint="same", target="frontend/src")
+            for index in range(1, 7)
+        ]
+        assert detect_loop(facts) is None, kind
+
+
+def test_a_collapsed_write_result_fingerprint_is_not_a_loop_seed() -> None:
+    # Observed live: four *distinct* successful edits shared one
+    # `file_write_result` fingerprint because the result payload carries no
+    # content hash. Result kinds (other than test_result) must not seed a loop.
+    facts = [
+        fact("file_write_result", at=index, fingerprint="same", target="a.tsx")
+        for index in range(1, 5)
+    ]
+    assert detect_loop(facts) is None
+
+
+def test_read_only_facts_still_feed_the_progress_gate() -> None:
+    # Excluding read-only kinds from *seeding* must not exclude the window's
+    # other facts from the gate: a repeated command interleaved with reads is
+    # still judged on whether anything measurable moved.
+    facts = [
+        fact("command", at=1, fingerprint="same"),
+        fact("file_read", at=2, fingerprint="r", target="a.py"),
+        fact("command", at=3, fingerprint="same"),
+        fact("command", at=4, fingerprint="same"),
+    ]
+    finding = detect_loop(facts)
+    assert finding is not None
+    assert finding.repeats == 3
+
+
 def test_new_file_content_in_the_window_is_progress() -> None:
     facts = [
         fact("command", at=1, fingerprint="same"),
@@ -184,6 +224,36 @@ def test_doc_ownership_is_built_from_each_doc_s_key_files_section(tmp_path: Path
     # Paths outside the Key files section are not ownership claims.
     assert normalize_target("src/swe_mux/decoy.py") not in ownership
     assert normalize_target("src/swe_mux/other.py") not in ownership
+
+
+def test_a_hub_file_claimed_by_many_docs_carries_no_ownership(tmp_path: Path) -> None:
+    # Live calibration case (2026-07-28): one edit to `App.tsx` — claimed by 8
+    # feature docs because it is the browser composition root — marked 8
+    # unrelated docs dirty. A file claimed by more than DOC_HUB_OWNER_LIMIT docs
+    # is infrastructure, not a subject any single doc owns, and must carry no
+    # ownership signal. Files at or under the limit keep theirs.
+    docs = tmp_path / ".docs" / "design" / "features"
+    docs.mkdir(parents=True)
+    for name in ("git", "sessions", "projects", "ui", "workspace-layout"):
+        lines = ["## Key files", "", "- `frontend/src/App.tsx`"]
+        if name != "git":
+            lines.append("- `frontend/src/shared.tsx`")
+        lines.append(f"- `src/swe_mux/{name}.py`")
+        (docs / f"{name}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    ownership = build_doc_ownership(tmp_path / ".docs")
+    # 5 claimants > limit: dropped entirely.
+    assert normalize_target("frontend/src/App.tsx") not in ownership
+    # Exactly at the limit (4 claimants): still a real owner.
+    assert len(ownership[normalize_target("frontend/src/shared.tsx")]) == 4
+    # Single-owner files are untouched.
+    assert ownership[normalize_target("src/swe_mux/git.py")] == (
+        "design/features/git.md",
+    )
+    # And debt from touching only the hub is no finding at all.
+    assert (
+        detect_doc_debt([fact("file_write", at=1, target="frontend/src/App.tsx")], ownership)
+        is None
+    )
 
 
 def test_doc_debt_accumulates_and_clears_when_the_doc_is_edited() -> None:
@@ -279,6 +349,94 @@ def test_a_session_reading_back_its_own_write_is_not_an_edge() -> None:
         fact("file_read", at=2, target="a.py", session_id="s1"),
     ]
     assert build_provenance_edges(facts) == []
+
+
+def test_provenance_dedupe_is_per_edge_so_a_growing_graph_never_restates() -> None:
+    # The old key hashed the whole edge *set*, so every evaluation of a growing
+    # window minted a new annotation restating every prior edge — quadratic
+    # storage, and one write→read event counted once per restatement by anything
+    # ranking annotations (observed live 2026-07-28: a 2-edge row then a 6-edge
+    # row repeating the same edges). Per-edge keys make an edge one row forever.
+    from swe_mux.deterministic_consumers import provenance_dedupe_key
+
+    facts = [
+        fact("file_write", at=1, target="a.py", content_hash="h1", session_id="writer"),
+        fact("file_read", at=2, target="a.py", session_id="reader"),
+    ]
+    grown = [*facts, fact("file_read", at=3, target="a.py", session_id="reader")]
+    first = build_provenance_edges(facts)
+    second = build_provenance_edges(grown)
+    assert len(first) == 1 and len(second) == 2
+    # The pre-existing edge keeps its key when the graph grows around it.
+    assert provenance_dedupe_key("p1", first[0]) == provenance_dedupe_key("p1", second[0])
+    # Distinct edges get distinct keys.
+    assert provenance_dedupe_key("p1", second[0]) != provenance_dedupe_key("p1", second[1])
+
+
+@pytest.mark.asyncio
+async def test_reevaluating_the_same_window_writes_zero_new_provenance_rows(
+    tmp_path: Path,
+) -> None:
+    from swe_mux.deterministic_consumers import ConsumerContext, DeterministicConsumerService
+
+    database = tmp_path / "mux.db"
+    tier0 = Tier0Store(database)
+    store = AutomationStore(database)
+
+    class Events:
+        async def emit(self, kind: str, **payload: Any) -> None:
+            pass
+
+    async def context(_session_id: str) -> ConsumerContext:
+        return ConsumerContext(
+            project_id="p1",
+            project_root=str(tmp_path),
+            agent_run_id=None,
+            enabled=frozenset({"provenance_graph"}),
+        )
+
+    try:
+        now = time.time()
+        await tier0.record_fact(
+            session_id="writer",
+            project_id="p1",
+            kind="file_write",
+            target="src/a.py",
+            content_hash="h1",
+            created_at=now - 30,
+        )
+        await tier0.record_fact(
+            session_id="reader",
+            project_id="p1",
+            kind="file_read",
+            target="src/a.py",
+            created_at=now - 20,
+        )
+        service = DeterministicConsumerService(
+            tier0,
+            store,
+            type("Sessions", (), {"sessions": {}})(),
+            Events(),
+            resolve_context=context,
+        )
+        first = await service.evaluate("reader")
+        assert [item["tag"] for item in first] == ["provenance"]
+        # Same window, next turn boundary: the edge is already recorded.
+        assert await service.evaluate("reader") == []
+        # A new edge writes exactly one new row, never a restatement.
+        await tier0.record_fact(
+            session_id="reader",
+            project_id="p1",
+            kind="file_read",
+            target="src/a.py",
+            created_at=now - 10,
+        )
+        third = await service.evaluate("reader")
+        assert len(third) == 1
+        assert json.loads(third[0]["evidence_json"])[0]["target"] == "src/a.py"
+    finally:
+        store.close()
+        tier0.close()
 
 
 # ------------------------------------------------------------- enablement DAG

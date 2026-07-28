@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import tomllib
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from swe_mux.config import (
     default_ccusage_command,
     load_config,
     update_config,
+    windows_pty_compatibility,
 )
 
 
@@ -32,6 +34,20 @@ def test_legacy_config_migrates_with_backup_and_removes_obsolete_secret(tmp_path
     assert "token" not in config.public_dict()
     assert "notes_default_open" not in config.public_dict()
     assert config.public_dict()["access_mode"] == "local+tailnet"
+
+
+def test_public_config_describes_the_host_pty_for_xterm(tmp_path: Path) -> None:
+    """Browsers cannot detect ConPTY, and xterm needs it to size and reflow correctly."""
+    descriptor = load_config(tmp_path / "config.toml").public_dict()["pty_windows"]
+
+    assert descriptor == windows_pty_compatibility()
+    if sys.platform == "win32":
+        assert isinstance(descriptor, dict)
+        assert descriptor["backend"] == "conpty"
+        assert isinstance(descriptor["build_number"], int)
+        assert descriptor["build_number"] > 0
+    else:
+        assert descriptor is None
 
 
 def test_conversation_stt_defaults_and_untouched_sapi_pair_migrate_to_whisper(

@@ -55,7 +55,11 @@ def resolve_codex_pty_command(
     return resolved, ()
 
 
-def create_agent_shims(config: Config, claude_settings: Path | None) -> dict[str, str]:
+def create_agent_shims(
+    config: Config,
+    claude_settings: Path | None,
+    claude_mcp_config: Path | None = None,
+) -> dict[str, str]:
     bin_dir = config.data_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     for backend in ("claude", "codex"):
@@ -78,4 +82,6 @@ def create_agent_shims(config: Config, claude_settings: Path | None) -> dict[str
     }
     if claude_settings:
         result["MUX_CLAUDE_SETTINGS"] = str(claude_settings)
+    if claude_mcp_config:
+        result["MUX_CLAUDE_MCP_CONFIG"] = str(claude_mcp_config)
     return result

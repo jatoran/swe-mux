@@ -698,6 +698,8 @@ class Session:
         hook_secret: str,
         ownership_job: ReaperJob | None = None,
         startup_started_at: float | None = None,
+        *,
+        mcp_token: str | None = None,
     ) -> None:
         self.record, self.pty, self.adapter = record, pty, adapter
         self.scrollback = ScrollbackBuffer(max_scrollback)
@@ -706,6 +708,10 @@ class Session:
         self.stopping = False
         self.stop_event = asyncio.Event()
         self.hook_secret = hook_secret
+        # MCP caller identity (CP §7.4): minted at spawn, injected into the
+        # session env, recovered from supervisor meta at adoption. Empty means
+        # "no MCP identity" (pre-feature session) and must never authenticate.
+        self.mcp_token = mcp_token or ""
         self.ownership_job = ownership_job
         self.startup_started_at = startup_started_at or time.perf_counter()
         self.startup_measurement_task: asyncio.Task[Any] | None = None
@@ -1098,6 +1104,7 @@ class SessionManager:
             record.run_project_scope_id = project.id
             record.run_repo_group_id = project.repo_group_id
         hook_secret = secrets.token_urlsafe(24)
+        mcp_token = secrets.token_urlsafe(32)
         env_extra = {
             **self.child_env,
             **{
@@ -1116,6 +1123,8 @@ class SessionManager:
             "MUX_PROMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/promote",
             "MUX_DEMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/demote",
             "MUX_HOOK_SECRET": hook_secret,
+            "MUX_MCP_URL": f"{self.ingress_url}/mcp",
+            "MUX_MCP_TOKEN": mcp_token,
             **(
                 {"MUX_HOOK_SPOOL": str(self.hook_spool_dir / f"{sid}.jsonl")}
                 if self.hook_spool_dir is not None
@@ -1144,7 +1153,11 @@ class SessionManager:
                 # supervisor holding a live session with meta {} — permanently
                 # unadoptable, invisible in the UI, and stoppable only by reaping
                 # every session.
-                meta={"record": record.snapshot(), "hook_secret": hook_secret},
+                meta={
+                    "record": record.snapshot(),
+                    "hook_secret": hook_secret,
+                    "mcp_token": mcp_token,
+                },
             )
             remote.prepare()
             try:
@@ -1203,6 +1216,7 @@ class SessionManager:
             hook_secret,
             ownership_job,
             startup_started_at,
+            mcp_token=mcp_token,
         )
         self.sessions[sid] = session
         if isinstance(pty, RemotePtyHost):
@@ -1302,6 +1316,7 @@ class SessionManager:
         return {
             "record": session.record.snapshot(),
             "hook_secret": session.hook_secret,
+            "mcp_token": session.mcp_token,
             "transcript_path": (
                 str(session.transcript_path) if session.transcript_path else None
             ),
@@ -1709,7 +1724,16 @@ class SessionManager:
             meta["transcript_path"] = str(transcript_path) if transcript_path else None
             adapter = self.adapters.get(record.backend) or self.adapters["shell"]
             hook_secret = str(meta.get("hook_secret") or "") or secrets.token_urlsafe(24)
-            session = Session(record, host, adapter, self.max_scrollback, hook_secret)
+            # Never regenerate the MCP token: the agent holds the original in its
+            # env, so a fresh one would authenticate nobody. Empty stays empty.
+            session = Session(
+                record,
+                host,
+                adapter,
+                self.max_scrollback,
+                hook_secret,
+                mcp_token=str(meta.get("mcp_token") or ""),
+            )
             session.scrollback.seed(replay, int(response.get("position", len(replay))))
             session.transcript_path = transcript_path
             lifecycle = meta.get("agent_lifecycle_id")

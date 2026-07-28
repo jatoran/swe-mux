@@ -22,8 +22,14 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   enough). Symptom of this trap: a verified-correct CSS/JS fix that "still doesn't work" for
   the user, especially on mobile.
 - **Backend/daemon change**: `curl -X POST http://127.0.0.1:8765/api/daemon/restart`
-  (or UI menu → "Reload daemon (keep sessions)", or `mux reload-daemon`). The daemon
-  restarts in place with your code; every session survives.
+  (or UI menu → "Reload daemon (keep sessions)", or `mux reload-daemon`). Every session
+  survives — but the daemon restarts with your code **only when it runs from source**
+  (`uv run` / dev). The restart spawns a successor of the *same executable*: a **frozen
+  desktop app** daemon respawns its bundled (old) backend code, and your source change
+  silently does nothing. This is the backend half of the frontend trap above — same check
+  applies (compare the served asset hash; a frozen daemon also serves the bundled
+  frontend). On the frozen app, ship backend changes with the **Frozen desktop app
+  update** flow below.
 - **Frozen desktop app update** (rebuild `dist/` + relaunch, sessions preserved —
   safe to run from a session inside swe-mux): `uv run python packaging/redeploy_desktop.py`,
   or from the UI: menu → "Rebuild + redeploy app (keep sessions)" (`app.redeploy`, also on

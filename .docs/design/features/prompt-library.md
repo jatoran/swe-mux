@@ -39,10 +39,30 @@ Insert dispatches `insertText` to the focused xterm, which uses paste semantics.
 newline, Enter, submit, or execute action. Editor changes use explicit Save/Discard and an
 in-app close confirmation.
 
+Insert routing is **terminals-only** for prompts. Everything else that injects text (clipboard
+history, note sends) lands in the last-focused surface, which may be a note or file editor; a
+prompt template refuses that target and falls back to the focused terminal, or reports that there
+is none. A template is written to be read by an agent, so landing one in whichever document was
+touched last is a silent edit to that document rather than a misplaced paste.
+
+Choosing a *recipient* is the one path that may submit. A prompt row in the drawer's Prompts tab
+answers right-click and touch long-press with a target menu: any live Claude/Codex session in the
+current Project (same filter as send-to-agent — a shell would run the template as commands), or a
+new Claude/Codex session in that Project. A live session receives the body as a bracketed paste
+plus, unless the menu's toggle is turned off, the submit sequence; a new session carries it as its
+first argv prompt and is therefore bounded by `ARGV_PROMPT_MAX_CHARS`, which the tab checks before
+spawning rather than failing at launch. Both reuse the delivery path in `App.deliverToAgent`, so
+there is one implementation of "text into a session that may not be mounted". Picking a target for
+a template whose `{{variables}}` are still empty parks that target and expands the fields instead
+of sending a half-rendered body; the fields' button then reads `Send to <target>` until dismissed
+with `Insert instead`.
+
 ## Key files
 
 - `src/swe_mux/prompt_library.py`
 - `frontend/src/PromptLibrary.tsx`
 - `frontend/src/PromptsTab.tsx`
+- `frontend/src/insertTarget.ts`
+- `frontend/src/agentTargets.ts`
 - `frontend/src/promptLibraryEvents.ts`
 - `frontend/src/promptTemplates.ts`

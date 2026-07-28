@@ -23,6 +23,11 @@ export type InsertDecision =
   | { kind: 'editor'; editor: EditorHandle }
   | { kind: 'none' }
 
+/** `terminalsOnly` refuses an editor outright rather than ranking it lower: a prompt
+ *  template is written to be read by an agent, and landing one in the note or file the
+ *  user happened to touch last is silent damage to a document, not a misplaced paste. */
+export type InsertOptions = { terminalsOnly?: boolean }
+
 let current: InsertTarget | null = null
 
 /**
@@ -35,8 +40,9 @@ let current: InsertTarget | null = null
 export function chooseInsertTarget(
   target: InsertTarget | null,
   fallbackSessionId: string | null,
+  options: InsertOptions = {},
 ): InsertDecision {
-  if (target?.kind === 'editor' && target.editor.isConnected !== false) {
+  if (!options.terminalsOnly && target?.kind === 'editor' && target.editor.isConnected !== false) {
     return { kind: 'editor', editor: target.editor }
   }
   if (target?.kind === 'terminal') return { kind: 'terminal', sessionId: target.sessionId }
@@ -69,8 +75,9 @@ export function currentInsertTarget(): InsertTarget | null {
 export function insertIntoFocusedSurface(
   text: string,
   fallbackSessionId: string | null = null,
+  options: InsertOptions = {},
 ): InsertDecision['kind'] {
-  const decision = chooseInsertTarget(current, fallbackSessionId)
+  const decision = chooseInsertTarget(current, fallbackSessionId, options)
   if (decision.kind === 'editor') {
     decision.editor.insertText(text)
     return 'editor'

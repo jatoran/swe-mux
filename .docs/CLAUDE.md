@@ -25,6 +25,11 @@
   `design/features/remote-access.md`, `technical/backend/packages.md`
 - Changing reusable prompt templates: `design/features/prompt-library.md`,
   `design/interfaces.md`, `design/data-model.md`
+- Changing the prompt queue (message model, states, head-of-line, send-next, stranding,
+  Queue tab, send-to-agent senders, new-session seed staging):
+  `design/features/prompt-queue.md`, `design/features/delivery-readiness.md`,
+  `design/interfaces.md`, `design/data-model.md`, `technical/backend/packages.md`,
+  `technical/frontend/packages.md`
 - Changing root-session or quota-reset sounds: `design/features/notifications.md`,
   `design/features/voice.md`
 - Changing Claude/Codex account capture, switching, or quota polling:
@@ -48,6 +53,8 @@
 - Changing Tier 0 deterministic fact capture or its source pointers/fingerprints:
   `design/features/tier0-facts.md`, `design/data-model.md`,
   `technical/backend/packages.md`, `technical/backend/sqlite.md`
+- Changing the agent MCP surface (endpoint, tools, per-session tokens, CLI registration):
+  `design/features/mux-mcp.md`, `design/interfaces.md`, `technical/backend/packages.md`
 - Changing the observation inbox: `design/features/observations.md`, `design/interfaces.md`,
   `design/data-model.md`
 - Changing preview screenshot capture or the region selector:

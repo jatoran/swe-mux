@@ -3,10 +3,12 @@ import type { ComponentChildren, JSX } from 'preact'
 import { api, openWebSocket } from './api'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness } from './liveness'
 import { TerminalPane } from './TerminalPane'
-import type { TerminalRendererPreference } from './terminalRenderer'
+import { windowsPtyCompatibility, type TerminalRendererPreference, type WindowsPtyCompatibility } from './terminalRenderer'
 import { ProjectResource } from './ProjectResource'
-import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentTarget } from './SendToAgentPicker'
-import { argvPrompt, pastePayload, SUBMIT_SEQUENCE } from './noteSelection'
+import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentResult, type SendToAgentTarget } from './SendToAgentPicker'
+import { pastePayload } from './noteSelection'
+import { QueuePane } from './QueuePane'
+import { editQueueMessage, enqueueMessage, fetchQueueSummary, sendQueueMessage, type QueueTargetSummary } from './queueApi'
 import { ContinuityBanner } from './ContinuityBanner'
 import { DirectoryPicker } from './DirectoryPicker'
 import { folderNameFromPath } from './pathNames'
@@ -75,13 +77,9 @@ import { sessionStatus, stateDotClass } from './sessionStatus'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
-  activateContainingStack, activateStackChild, addLeafToStack, addToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, openAnchorId, openTab, paneNeighborIds, paneStacks, reorderStack, resolveLayout, spawnAnchorId, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
+  activateContainingStack, activateStackChild, addLeafToStack, addToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, openAnchorId, openTab, paneNeighborIds, paneStacks, queueLeafId, queueLeafSessionId, reorderStack, resolveLayout, spawnAnchorId, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
   type PaneDirection, type PaneLeaf, type PaneLeafKind, type PaneNode, type SplitDirection,
 } from './layout'
-
-// Gap between writing a pasted body into an agent composer and pressing Enter on it. Short
-// enough to feel immediate, long enough that a multi-line paste has been laid out first.
-const AGENT_SUBMIT_DELAY_MS=180
 
 const paneDirectionOptions:Array<{id:PaneDirection;glyph:string;direction:SplitDirection;position:'before'|'after'}>=[
   {id:'left',glyph:'←',direction:'horizontal',position:'before'},
@@ -232,6 +230,26 @@ export function App() {
   // A note/markdown selection waiting for a target. The message is captured when the dialog
   // opens, so editing the document underneath cannot change what is about to be sent.
   const [sendToAgent,setSendToAgent]=useState<SendToAgentRequest|null>(null)
+  // Per-target prompt-queue aggregates (pending counts for pane chips), keyed by
+  // target session id and refreshed off `queue_updated` events.
+  const [queueSummary,setQueueSummary]=useState<Record<string,QueueTargetSummary>>({})
+  const queueSummaryTimer=useRef<number|undefined>(undefined)
+  const loadQueueSummary=async()=>{
+    try{
+      const result=await fetchQueueSummary()
+      setQueueSummary(Object.fromEntries(result.targets.map(target=>[target.target_session_id,target])))
+    }catch{/* the daemon is briefly away; the next event retries */}
+  }
+  const refreshQueueSummary=()=>{
+    if(queueSummaryTimer.current)return
+    queueSummaryTimer.current=window.setTimeout(()=>{queueSummaryTimer.current=undefined;void loadQueueSummary()},300)
+  }
+  useEffect(()=>{
+    void loadQueueSummary()
+    const reload=()=>void loadQueueSummary()
+    window.addEventListener('mux:events-connected',reload)
+    return()=>window.removeEventListener('mux:events-connected',reload)
+  },[])
   const [contextMenu, setContextMenu] = useState<ContextState>(null)
   const [projectMenu, setProjectMenu] = useState<ProjectContext>(null)
   const [sidebarMenu,setSidebarMenu]=useState<SidebarContext>(null)
@@ -326,6 +344,7 @@ export function App() {
   const [clipboardEnabled,setClipboardEnabled]=useState(true)
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [terminalRenderer, setTerminalRenderer] = useState<TerminalRendererPreference>('auto')
+  const [windowsPty, setWindowsPty] = useState<WindowsPtyCompatibility | undefined>(undefined)
   const [mobileInput, setMobileInput] = useState<MobileInputSettings>(defaultMobileInputSettings)
   const [mobileGestures, setMobileGestures] = useState<MobileGestureSettings>(defaultMobileGestureSettings)
   const [swipeAwayClose, setSwipeAwayClose] = useState(true)
@@ -683,6 +702,12 @@ export function App() {
     applyNoteEditorConfig(config)
     setXtermScrollback(config.xterm_scrollback_lines)
     setTerminalRenderer(config.terminal_renderer)
+    // Value-compared for the same reason as mobileInput below: this feeds
+    // TerminalPane's mount effect, so a fresh object identity on an unchanged
+    // machine descriptor would dispose and rebuild every live terminal.
+    const nextWindowsPty = windowsPtyCompatibility(config.pty_windows)
+    setWindowsPty(current =>
+      JSON.stringify(current) === JSON.stringify(nextWindowsPty) ? current : nextWindowsPty)
     // Value-compared, not replaced: a fresh object identity defeats TerminalPane's
     // memo and remounts every terminal (socket torn down, xterm disposed, buffer
     // replayed) on an unchanged setting.
@@ -908,6 +933,8 @@ export function App() {
             void loadConfig(false)
           }
           if(event.type==='project_files_changed')window.dispatchEvent(new CustomEvent('mux:project-files-changed',{detail:{projectId:event.payload?.project_id,paths:event.payload?.paths||[]}}))
+          // Queue tabs and pane chips live-update off these; payloads carry ids/counts only.
+          if(event.type==='queue_updated'||event.type==='queue_delivery'){window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{sessionId:event.session_id}}));refreshQueueSummary()}
           if(event.type==='project_note_changed'||event.type==='session_note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{projectId:String(event.payload?.project_id||''),kind:event.type==='session_note_changed'?'session-note':'note',noteId:event.type==='session_note_changed'?String(event.payload?.note_id||''):null,revision:String(event.payload?.revision||'')}}))
         } catch { /* malformed events are ignored */ }
       }
@@ -1239,7 +1266,7 @@ export function App() {
   // the cross-vendor review spawn does. That is deliberately not an inject-then-Enter dance: a
   // freshly spawned TUI is not ready for input for seconds, and anything written before it is
   // would be swallowed.
-  const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after', backend:'shell'|'claude'|'codex'='shell', options?:{argv?:string[]}) => {
+  const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after', backend:'shell'|'claude'|'codex'='shell', options?:{argv?:string[];seedText?:string}) => {
     if (spawning.current) return
     const target=projectsRef.current.find(item=>item.id===targetProject)
     if(!target){setError('Project is not available yet.');return}
@@ -1271,6 +1298,9 @@ export function App() {
         backend, project_id: targetProject,
         profile_id: backend==='shell' ? profileId || undefined : undefined,
         ...(options?.argv?.length ? { argv: options.argv } : {}),
+        // A first prompt as text: the daemon inlines short bodies into argv and stages long
+        // ones into the workspace with a reader prompt, so there is no client-side ceiling.
+        ...(options?.seedText ? { seed_text: options.seedText } : {}),
       })
       startupOrigins.current[next.id]=startupOrigin
       const browserTiming={api_response:performance.now()-startupOrigin}
@@ -1729,34 +1759,76 @@ export function App() {
     await updateLayout(session.project_id,isPaned?activateContainingStack(current,session.id):openTab(current,focusedViewId,terminalLeaf(session.id)))
   }
 
+  /** Open (or focus) the Queue workspace tab attached to one target session. */
+  const openQueueForSession = async (sessionId: string) => {
+    const session = sessionsRef.current.find(item => item.id === sessionId)
+    const targetProject = session?.project_id || projectId
+    if (!targetProject) return
+    const current = resolveLayout(layoutMap[targetProject], projects.find(project => project.id === targetProject)?.layout)
+    const resourceId = queueLeafId(sessionId)
+    const focused = openAnchorId(current, sessionId)
+    setProjectId(targetProject)
+    setFocusedViewId(resourceId)
+    setContextMenu(null); setTabMenu(null); setMainMenuOpen(false)
+    await updateLayout(targetProject, openTab(current, focused, resourceLeaf('queue', resourceId)))
+  }
+
   /**
-   * Deliver a note/markdown selection. A new session is seeded through argv (see
-   * `spawnTerminal`) and opens beside the pane the text came from; a live session is written
-   * to over `POST /api/sessions/{id}/input`, which is the only path that reaches a target whose
-   * pane is not mounted — the `mux:terminal-action` bus only reaches rendered panes.
-   *
-   * The paste and the Enter are two writes with a gap between them: a large body has to be
-   * absorbed by the agent's composer before the submit lands, and one combined write has the
-   * TUI reflowing and reading a carriage return in the same tick.
+   * Deliver a note/markdown/file selection — Phase 4 shape. A new session is seeded through
+   * `seed_text` (the daemon inlines short bodies into argv and stages long ones into the
+   * workspace, so there is no client-side length ceiling). A live-session send is a queue
+   * operation: the message is staged armed, then delivered with the queue's own
+   * "send next now" — one audited path with the daemon re-checking identity, revision, and
+   * readiness at send time. With `submit` off the text only fills the target's composer,
+   * which is not a delivery and deliberately stays a plain input write.
    */
-  const deliverToAgent = async (target: SendToAgentTarget, message: string): Promise<string> => {
+  const deliverToAgent = async (target: SendToAgentTarget, message: string): Promise<SendToAgentResult> => {
     if (target.kind === 'new') {
       setSendToAgent(null)
       // spawnTerminal reports its own failures through the toast and unwinds the layout.
-      await spawnTerminal(target.projectId,'horizontal',undefined,undefined,'after',target.backend,{argv:[argvPrompt(message)]})
-      return ''
+      await spawnTerminal(target.projectId,'horizontal',undefined,undefined,'after',target.backend,{seedText:message})
+      return { status: 'done' }
     }
+    const sid = target.session.id
     try {
-      await api('POST',`/api/sessions/${target.session.id}/input`,{data:pastePayload(message)})
-      if (target.submit) {
-        await new Promise(resolve=>window.setTimeout(resolve,AGENT_SUBMIT_DELAY_MS))
-        await api('POST',`/api/sessions/${target.session.id}/input`,{data:SUBMIT_SEQUENCE})
+      if (!target.submit) {
+        await api('POST',`/api/sessions/${sid}/input`,{data:pastePayload(message)})
+        await selectSession(target.session)
+        return { status: 'done' }
+      }
+      let messageId = target.confirmQueued?.messageId || ''
+      let revision = target.confirmQueued?.revision || 0
+      if (target.confirmQueued?.bodyChanged && messageId) {
+        const edited = await editQueueMessage(messageId, revision, message)
+        revision = edited.revision
+      }
+      if (!messageId) {
+        const created = await enqueueMessage(sid, message, { armed: true })
+        messageId = created.id
+        revision = created.revision
+      }
+      const outcome = await sendQueueMessage(messageId, revision, {
+        confirm: !!target.confirmQueued,
+        idempotencyKey: browserUuid(),
+      })
+      switch (outcome.status) {
+        case 'sent':
+          await selectSession(target.session)
+          return { status: 'done' }
+        case 'queued_behind':
+          // Strict order: the message waits in the one audited place. Show it.
+          await openQueueForSession(sid)
+          return { status: 'done' }
+        case 'blocked':
+          return { status: 'blocked', messageId, revision, reasons: outcome.reasons, protected: outcome.protected }
+        case 'stranded':
+        case 'revision_conflict':
+        case 'error':
+          return { status: 'error', error: 'error' in outcome ? outcome.error : 'The message changed underneath this dialog; check the Queue tab.' }
       }
     } catch (cause) {
-      return cause instanceof Error?cause.message:String(cause)
+      return { status: 'error', error: cause instanceof Error ? cause.message : String(cause) }
     }
-    await selectSession(target.session)
-    return ''
   }
 
   const openInSplit = async (session: Session, direction: SplitDirection = 'horizontal', position:'before'|'after'='after', targetId=activeId) => {
@@ -1887,10 +1959,17 @@ export function App() {
   // Cycle the mobile unified tab strip. Recomputes the projection from live layout
   // state so it works when invoked from a gesture, outside the render-time `mobileProjection`.
   // Short label for a projected mobile tab; also what the swipe HUD announces.
+  const queueTabLabel = (resourceId: string): string => {
+    const targetSessionId = queueLeafSessionId(resourceId)
+    const owner = targetSessionId ? sessions.find(item => item.id === targetSessionId) : undefined
+    return owner ? `Queue · ${sessionName(owner)}` : 'Queue'
+  }
+
   const mobileTabLabel = (leaf: PaneLeaf): string => {
     if (leaf.kind === 'terminal') { const session = sessions.find(item => item.id === leaf.id); return session ? sessionName(session) : leaf.id }
     if (leaf.kind === 'preview') { const preview = previews[leaf.id]; return preview ? `:${preview.port}` : leaf.id }
     if (leaf.kind === 'history') return 'History'
+    if (leaf.kind === 'queue') return queueTabLabel(leaf.id)
     return noteTabLabel(leaf.id)
   }
 
@@ -2493,6 +2572,10 @@ export function App() {
             const label='History'
             return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label="History tab" title="Search session history" aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◷</span>{label}</button>{closeTab(child,label)}</div>
           }
+          if(child.kind==='queue'){
+            const label=queueTabLabel(child.id)
+            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} queue tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">⇥</span>{label}</button>{closeTab(child,label)}</div>
+          }
           const session=sessions.find(item=>item.id===child.id)
           const label=session?.name||child.id
           return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session?.state)}/>{label}</button>{closeTab(child,label,session)}</div>
@@ -2505,6 +2588,11 @@ export function App() {
       return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>{if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}openProjectFile(activeProject,path)}} onFileDragStart={(path,event)=>beginFileTabDrag(event,path)} onSendToAgent={setSendToAgent}/>
     }
     if(node.kind==='history')return <section class="workspace-leaf-placeholder"><strong>History moved</strong><span>Session history is now a full-screen overlay.</span><button onClick={()=>{setHistoryOpen(true);void updateLayout(projectId,removeLeaf(layoutValues.current[projectId]||emptyLayout(),'history',node.id))}}>Open History</button></section>
+    if(node.kind==='queue'){
+      const targetSessionId=queueLeafSessionId(node.id)
+      if(!targetSessionId)return <section class="workspace-leaf-placeholder"><strong>queue unavailable</strong><span>{node.id}</span></section>
+      return <QueuePane key={node.id} sessionId={targetSessionId} sessions={sessions} onSelectSession={sid=>{const owner=sessions.find(item=>item.id===sid);if(owner)void selectSession(owner)}}/>
+    }
     if (node.kind === 'preview') {
       const preview = previews[node.id]
       if (!preview) return <section class="workspace-leaf-placeholder"><strong>preview unavailable</strong><span>{node.id}</span></section>
@@ -2553,10 +2641,10 @@ export function App() {
         <div><span class={`pane-state ${session.state}`} title={[session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}</span></div>
         <div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>
         <div class="pane-voice">{paneVoice}</div>
-        <div class="pane-tools"><button class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button><button class="pane-tool-label" aria-label={`Inspect processes for ${sessionName(session)}`} title="Processes and previews" onClick={() => {setActiveId(session.id);openProcessViewer(session)}}>proc</button><button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
+        <div class="pane-tools"><button class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button>{isAgent(session)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}<button class="pane-tool-label" aria-label={`Inspect processes for ${sessionName(session)}`} title="Processes and previews" onClick={() => {setActiveId(session.id);openProcessViewer(session)}}>proc</button><button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
       {voiceStripNode}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} mobileInput={mobileInput} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Terminal tabs">
@@ -2773,9 +2861,9 @@ export function App() {
     const selected=leaf.id===mobileProjection.selected?.id
     const session=leaf.kind==='terminal'?sessions.find(item=>item.id===leaf.id):undefined
     const preview=leaf.kind==='preview'?previews[leaf.id]:undefined
-    const label=leaf.kind==='terminal'?session?.name||leaf.id:leaf.kind==='preview'?preview?.url||leaf.id:leaf.kind==='history'?'History':noteTabLabel(leaf.id)
+    const label=leaf.kind==='terminal'?session?.name||leaf.id:leaf.kind==='preview'?preview?.url||leaf.id:leaf.kind==='history'?'History':leaf.kind==='queue'?queueTabLabel(leaf.id):noteTabLabel(leaf.id)
     const visibleLabel=mobileTabLabel(leaf)
-    const glyph=leaf.kind==='terminal'?<span class={stateDotClass(session?.state)}/>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':'◇'}</span>
+    const glyph=leaf.kind==='terminal'?<span class={stateDotClass(session?.state)}/>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':'◇'}</span>
     // Mobile tabs carry no close button: it ate label width and was a mis-tap
     // hazard next to tab activation. Closing/killing lives in the long-press
     // menu (session menu for terminals, tab menu for resources), which is also
@@ -2935,6 +3023,7 @@ export function App() {
         // Desktop only: the drawer is an in-flow column there, so a file row can be dragged
         // onto a visible pane. On mobile it is an overlay with nothing to drop onto.
         onFileDragStart={mobileWorkspace?undefined:(path,event)=>beginFileTabDrag(event,path)}
+        onSendToAgent={request=>{if(mobileWorkspace)setClipboardOpen(false);setSendToAgent(request)}}
         notesAllProjects={notesAllProjects}
         onNotesAllProjects={setNotesAllProjects}
         focusedNote={active?.note_exists?{projectId:active.project_id,noteId:active.note_id||active.id,label:sessionName(active)}:null}
@@ -2950,6 +3039,15 @@ export function App() {
           if(target==='none')setError('Focus a terminal or note before inserting text.')
           return target
         }}
+        // A prompt template is written for an agent to read: routing one into whichever
+        // note or file pane happened to be focused last edits that document instead.
+        onInsertPrompt={text=>{
+          const target=insertIntoFocusedSurface(text,activeId,{terminalsOnly:true})
+          if(target==='none')setError('Focus an agent session before inserting a prompt.')
+          return target
+        }}
+        sessions={sessions}
+        onSendPrompt={deliverToAgent}
       />}
       {/* Desktop only: the always-visible strip that makes these surfaces
           discoverable without a menu or a chord. Mobile reaches the same tabs

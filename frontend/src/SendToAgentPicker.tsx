@@ -6,7 +6,7 @@ import {
   agentTargetName, agentTargets, backendFromTargetKey, defaultNewTarget, newTargetKey,
   retargetForProject, sessionIdFromTargetKey, sessionTargetKey,
 } from './agentTargets'
-import { ARGV_PROMPT_MAX_CHARS } from './noteSelection'
+import { enqueueMessage } from './queueApi'
 import type { Project, Session } from './types'
 import type { MessageScope } from './noteSelection'
 
@@ -25,15 +25,30 @@ export type SendToAgentRequest = {
 
 export type SendToAgentTarget =
   | { kind: 'new'; backend: 'claude' | 'codex'; projectId: string }
-  | { kind: 'session'; session: Session; submit: boolean }
+  | {
+      kind: 'session'
+      session: Session
+      submit: boolean
+      /** Set on the retry after a not-safe refusal: the queued message to deliver with the
+       *  explicit confirmation, instead of staging a second copy. `bodyChanged` means the
+       *  dialog text was edited since it was staged, so the queue item is edited first —
+       *  the body delivered is always the body on screen, revision-checked. */
+      confirmQueued?: { messageId: string; revision: number; bodyChanged: boolean }
+    }
+
+/** What a send came to. `blocked` keeps the dialog open with the daemon's refusal reasons
+ *  and (when not protected) arms the explicit "send anyway" retry. */
+export type SendToAgentResult =
+  | { status: 'done' }
+  | { status: 'error'; error: string }
+  | { status: 'blocked'; messageId: string; revision: number; reasons: string[]; protected: boolean }
 
 type Props = {
   request: SendToAgentRequest
   projects: Project[]
   sessions: Session[]
   onClose: () => void
-  /** Resolves to '' on success, or to a message the dialog shows while staying open. */
-  onSend: (target: SendToAgentTarget, message: string) => Promise<string>
+  onSend: (target: SendToAgentTarget, message: string) => Promise<SendToAgentResult>
 }
 
 export function SendToAgentPicker({ request, projects, sessions, onClose, onSend }: Props) {
@@ -46,6 +61,12 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
   const [submit, setSubmit] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // A not-safe refusal from the queue's send operation: the message is already staged
+  // (blocked) and the retry delivers *it*, with confirmation, instead of a second copy.
+  const [refusal, setRefusal] = useState<{
+    sessionId: string; messageId: string; revision: number; body: string
+    reasons: string[]; protected: boolean
+  } | null>(null)
   useModalFocus(panel, onClose, !busy)
 
   const project = projects.find(item => item.id === projectId)
@@ -59,12 +80,13 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
   const chosenId = sessionIdFromTargetKey(target)
   const chosen = chosenId ? agents.find(item => item.id === chosenId) || null : null
   const readiness = chosen?.delivery_readiness
-  // The delivery contract asks for an explicit confirmation when readiness is blocked or
-  // unknown, so the button says what it is about to do rather than implying the target is idle.
+  // Advisory only: the queue's send operation is where a not-safe target is actually refused
+  // and (when allowed) overridden — this warning just says what is likely to happen.
   const unreadied = !!chosen && !!readiness && readiness.state !== 'safe'
-  // A new session carries its first prompt on the command line, which is bounded; a live
-  // session is written to over the PTY and is not. Say so instead of failing at spawn time.
-  const overArgvBound = !chosen && message.length > ARGV_PROMPT_MAX_CHARS
+  // The refusal belongs to one exact message on one target; switching targets demotes the
+  // retry back to a fresh send (the staged message stays in the old target's queue).
+  const activeRefusal = refusal && chosen && refusal.sessionId === chosen.id ? refusal : null
+  const confirmMode = !!activeRefusal && !activeRefusal.protected
 
   const send = async () => {
     if (!message.trim()) {
@@ -74,12 +96,59 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
     setBusy(true)
     setError('')
     const payload: SendToAgentTarget = chosen
-      ? { kind: 'session', session: chosen, submit }
+      ? {
+          kind: 'session',
+          session: chosen,
+          submit,
+          ...(confirmMode && activeRefusal
+            ? {
+                confirmQueued: {
+                  messageId: activeRefusal.messageId,
+                  revision: activeRefusal.revision,
+                  bodyChanged: activeRefusal.body !== message,
+                },
+              }
+            : {}),
+        }
       : { kind: 'new', backend: backendFromTargetKey(target), projectId }
-    const failure = await onSend(payload, message)
+    const result = await onSend(payload, message)
     setBusy(false)
-    if (failure) setError(failure)
-    else onClose()
+    if (result.status === 'done') {
+      onClose()
+      return
+    }
+    if (result.status === 'blocked') {
+      setRefusal({
+        sessionId: chosen?.id || '',
+        messageId: result.messageId,
+        revision: result.revision,
+        body: message,
+        reasons: result.reasons,
+        protected: result.protected,
+      })
+      setError(
+        result.protected
+          ? `The queue refused delivery and this cannot be overridden (${result.reasons.join(', ')}). ` +
+            'The message stays queued; it can be sent from the Queue tab once the target is free.'
+          : `The target is not safe right now (${result.reasons.join(', ')}).`,
+      )
+      return
+    }
+    setRefusal(null)
+    setError(result.error)
+  }
+
+  const addToQueue = async () => {
+    if (!chosen || !message.trim()) return
+    setBusy(true)
+    setError('')
+    try {
+      await enqueueMessage(chosen.id, message, { armed: true })
+      onClose()
+    } catch (cause) {
+      setBusy(false)
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
   }
 
   const option = (value: string, dot: JSX.Element | null, title: string, detail: string) => (
@@ -168,18 +237,12 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
               <span>Press Enter after inserting (off fills the composer and leaves it to you)</span>
             </label>
           )}
-          {unreadied && chosen && readiness && (
+          {unreadied && chosen && readiness && !activeRefusal && (
             <p class="modal-warning" role="status">
               {agentTargetName(chosen)} is{' '}
               {readiness.state === 'blocked' ? 'not ready for input' : 'in an unknown state'}
-              {readiness.reason ? `: ${readiness.reason}` : '.'} Sending anyway is your call.
-            </p>
-          )}
-          {overArgvBound && (
-            <p class="modal-warning" role="status">
-              {message.length.toLocaleString()} characters is too long to start a new session with
-              (the limit is {ARGV_PROMPT_MAX_CHARS.toLocaleString()}, because a first prompt travels
-              on the command line). Send it to a live session instead, or trim it.
+              {readiness.reason ? `: ${readiness.reason}` : '.'} Sending will ask the queue to
+              deliver; it re-checks and may ask you to confirm.
             </p>
           )}
           {error && (
@@ -203,14 +266,24 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
           <button type="button" disabled={busy} onClick={onClose}>
             Cancel
           </button>
+          {chosen && (
+            <button
+              type="button"
+              disabled={busy || !message.trim()}
+              title="Stage the message in the target's queue without delivering it"
+              onClick={() => void addToQueue()}
+            >
+              Add to queue
+            </button>
+          )}
           <button
             type="button"
             class="primary"
-            disabled={busy || !message.trim() || overArgvBound}
+            disabled={busy || !message.trim() || !!(activeRefusal && activeRefusal.protected)}
             onClick={() => void send()}
           >
             {chosen
-              ? unreadied
+              ? confirmMode
                 ? 'Send anyway'
                 : 'Send'
               : `Start ${backendFromTargetKey(target) === 'codex' ? 'Codex' : 'Claude'}`}

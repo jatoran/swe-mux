@@ -292,28 +292,122 @@ async def test_pty_replay_has_a_bounded_fallback_for_clients_without_readiness(
         await ws.close()
 
 
+def _broadcast_session(
+    writes: dict[str, list[str]],
+    identity: str,
+    *,
+    included: bool,
+    alive: bool = True,
+    state: str = "running",
+) -> Any:
+    return SimpleNamespace(
+        record=SimpleNamespace(id=identity, broadcast=included, state=state),
+        pty=SimpleNamespace(isalive=lambda: alive, write=writes[identity].append),
+        input_revision=0,
+        last_input_event_ts=0.0,
+        last_input_report_ts=0.0,
+    )
+
+
 async def test_server_broadcast_targets_each_included_live_session_once() -> None:
-    writes: dict[str, list[str]] = {"source": [], "included": [], "dead": [], "other": []}
-
-    def fake_session(identity: str, *, included: bool, alive: bool = True) -> Any:
-        return SimpleNamespace(
-            record=SimpleNamespace(id=identity, broadcast=included),
-            pty=SimpleNamespace(isalive=lambda: alive, write=writes[identity].append),
-        )
-
+    writes: dict[str, list[str]] = {
+        "source": [], "included": [], "dead": [], "ended": [], "other": []
+    }
     sessions = {
-        "source": fake_session("source", included=True),
-        "included": fake_session("included", included=True),
-        "dead": fake_session("dead", included=True, alive=False),
-        "other": fake_session("other", included=False),
+        "source": _broadcast_session(writes, "source", included=True),
+        "included": _broadcast_session(writes, "included", included=True),
+        "dead": _broadcast_session(writes, "dead", included=True, alive=False),
+        "ended": _broadcast_session(writes, "ended", included=True, state="exited"),
+        "other": _broadcast_session(writes, "other", included=False),
     }
     events = EventBus()
     result = await deliver_broadcast(
         cast(Any, SimpleNamespace(sessions=sessions)), "hello", events, source_id="source"
     )
 
-    assert result == {"delivered": ["included"], "skipped": ["dead"]}
-    assert writes == {"source": [], "included": ["hello"], "dead": [], "other": []}
+    assert result == {"delivered": ["included"], "skipped": ["dead", "ended"]}
+    assert writes == {
+        "source": [], "included": ["hello"], "dead": [], "ended": [], "other": []
+    }
+
+
+async def test_broadcast_targets_carry_operator_input_evidence() -> None:
+    """Fan-out must account like any other operator input on every target.
+
+    Without the per-target `input_revision`/`last_input_event_ts` advance and
+    `terminal_input` emission, delivery-readiness reported `partial_input_absent`
+    and `operator_quiet` as satisfied for text the operator just broadcast —
+    corrupting the shadow-metric baseline Phase 5 promotion is validated against.
+    """
+    writes: dict[str, list[str]] = {"source": [], "included": []}
+    sessions = {
+        "source": _broadcast_session(writes, "source", included=True),
+        "included": _broadcast_session(writes, "included", included=True),
+    }
+    background: list[tuple[str, dict[str, Any]]] = []
+    events = cast(
+        Any,
+        SimpleNamespace(
+            emit_background=lambda kind, **payload: background.append((kind, payload))
+        ),
+    )
+    await deliver_broadcast(
+        cast(Any, SimpleNamespace(sessions=sessions)), "hi", events, source_id="source"
+    )
+
+    target = sessions["included"]
+    assert target.input_revision == 1
+    assert target.last_input_event_ts > 0
+    assert sessions["source"].input_revision == 0
+    terminal_inputs = [payload for kind, payload in background if kind == "terminal_input"]
+    assert [item["session_id"] for item in terminal_inputs] == ["included"]
+    # The writer holds no ownership claim on the target's PTY.
+    assert terminal_inputs[0]["input_owner"] is False
+
+
+async def test_http_session_input_guards_ended_sessions_and_carries_evidence() -> None:
+    """`POST /api/sessions/{sid}/input` mirrors the WS/voice evidence contract."""
+    from swe_mux.server import session_input
+
+    writes: dict[str, list[str]] = {"live": [], "ended": []}
+    live = _broadcast_session(writes, "live", included=False)
+    ended = _broadcast_session(writes, "ended", included=False, state="exited")
+    background: list[tuple[str, dict[str, Any]]] = []
+
+    def request_for(session: Any, data: str) -> Any:
+        class Request:
+            match_info = {"sid": session.record.id}
+            app = {
+                "sessions": SimpleNamespace(resolve=lambda _sid: session),
+                "events": SimpleNamespace(
+                    emit_background=lambda kind, **payload: background.append(
+                        (kind, payload)
+                    )
+                ),
+            }
+
+            async def json(self) -> dict[str, str]:
+                return {"data": data}
+
+        return cast(Any, Request())
+
+    ok = await session_input(request_for(live, "echo hi\r"))
+    assert ok.status == 200
+    assert writes["live"] == ["echo hi\r"]
+    assert live.input_revision == 1
+    assert live.last_input_event_ts > 0
+    assert [kind for kind, _ in background] == ["terminal_input"]
+    assert background[0][1]["source"] == "http"
+
+    refused = await session_input(request_for(ended, "echo hi\r"))
+    assert refused.status == 409
+    assert writes["ended"] == []
+    assert ended.input_revision == 0
+
+    # Empty payloads write nothing and leave no evidence.
+    empty = await session_input(request_for(live, ""))
+    assert empty.status == 200
+    assert live.input_revision == 1
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")

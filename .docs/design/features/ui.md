@@ -181,6 +181,12 @@ responsive controls.
 - Terminals exposes `auto | webgl | dom` renderer selection. `auto` preserves accelerated WebGL
   on desktop with automatic DOM fallback; mobile and Codex terminals always use DOM regardless
   of the preference so their scrollback remains stable.
+- The daemon reports the host PTY to the browser as `pty_windows` in `/api/config`, and every
+  terminal is constructed with it as xterm's `windowsPty`. A browser cannot detect ConPTY, and
+  xterm needs it to know that lines are hard-wrapped without a wrap flag: below ConPTY build
+  21376 it must disable reflow, or resizing a pane rewraps and rewrites the whole scrollback.
+  It is passed at construction, never assigned afterwards — the option installs a parser-level
+  wrapped-line heuristic, so bytes written before it was set would keep the wrong flags.
 - Close, Escape, backdrop click, and navigation away all share the Save/Discard guard when a
   draft is dirty. Shell executable/profile paths deliberately use this explicit flow rather
   than per-keystroke persistence.
@@ -299,6 +305,13 @@ responsive controls.
 - A terminal scrolled off its newest line shows a jump-to-latest chip in the terminal's own
   grid cell, above the action rail. It is checked per render, not only on scroll, because
   output arriving while scrolled up moves the buffer base without moving the viewport.
+- Every in-flow child of `.terminal-surface` names `grid-column:1`, and the surface declares a
+  single explicit column. Overlays that share the terminal's cell must stack, never displace:
+  auto-placement refuses to put an auto-column item into an occupied cell, so while the column
+  was implicit the jump-to-latest chip pushed the terminal host into a second ~200px column at
+  the pane's right edge the moment it appeared. The refit that followed collapsed the terminal
+  to ~29 columns, resized the PTY to match, and reflowed the scrollback to the top — and the
+  chip stays visible while off-tail, so one scroll notch left the pane stuck there.
 - Mobile Run is tap-to-open-launcher, hold-to-repeat: a long-press starts the last launched
   backend directly. The click that follows a long-press is swallowed, or the launcher would
   open on top of the session the hold just started.
@@ -312,6 +325,9 @@ responsive controls.
 - A terminal pane is three rows: the header bar, an optional read-aloud player strip, then the
   terminal surface (terminal + action rail). The rows are placed explicitly so the middle track
   collapses to nothing when no strip is rendered.
+- The pane tools row carries `note`, `queue[:N]` (agent sessions only — opens the session's
+  prompt-queue tab, the count is its pending items; `features/prompt-queue.md`), `proc`, and
+  the `⋯` session menu.
 - The pane header is `[status] [cwd] [voice] [tools]` and **must stay one row**. It is a grid
   with `grid-auto-flow:column`, which is what enforces that: without it, an item beyond the
   declared column count auto-places into a *second row*, and the voice group is a
@@ -417,6 +433,11 @@ responsive controls.
   indexes that open a document into a pane instead of typing into one. Notifications is neither,
   and sits last. Session history, the process fleet, usage, and automation stay modal: they are
   wide, table-shaped surfaces that a ~380 px column serves badly.
+- The first three tabs share the verb but not the routing. Clipboard inserts land in the
+  last-focused surface, editor or terminal. **Prompts** inserts are terminals-only and its rows
+  additionally answer right-click / long-press with a target menu (a live agent session in this
+  Project, or a new Claude/Codex one) — see `prompt-library.md`. Text meant for an agent must not
+  be able to edit whichever note or file the user happened to open last.
 - **Files** is a navigator, not a peer of the terminals it opens files next to, so it costs a
   drawer tab rather than a permanent workspace tab. As a pane it forced the layout to route
   every placement rule around it (an unanchored open, a Files-focused open, and session-note

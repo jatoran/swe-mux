@@ -1,4 +1,4 @@
-export type PaneLeafKind = 'terminal' | 'note' | 'preview' | 'history'
+export type PaneLeafKind = 'terminal' | 'note' | 'preview' | 'history' | 'queue'
 export type SplitDirection = 'horizontal' | 'vertical'
 export type PaneDirection = 'left'|'right'|'up'|'down'
 
@@ -42,6 +42,20 @@ export function noteResourceId(kind: NoteLeafIdentity['kind'], id: string): stri
   return `${kind === 'session-note' ? 'sessions' : kind}:${encodeURIComponent(id)}`
 }
 
+/** A queue leaf's id is prefixed so it can never collide with the terminal leaf
+ *  of the same session — focus tracking resolves views by bare id. */
+export const queueLeafId = (sessionId: string): string => `queue:${encodeURIComponent(sessionId)}`
+
+export function queueLeafSessionId(resourceId: string): string | null {
+  if (!resourceId.startsWith('queue:')) return null
+  try {
+    const id = decodeURIComponent(resourceId.slice('queue:'.length))
+    return id || null
+  } catch {
+    return null
+  }
+}
+
 export function parseNoteResourceId(resourceId: string): NoteLeafIdentity | null {
   const separator = resourceId.indexOf(':')
   if (separator < 1) return null
@@ -58,7 +72,7 @@ export function parseNoteResourceId(resourceId: string): NoteLeafIdentity | null
 const isLeaf=(value:unknown):value is PaneLeaf=>{
   if(!value||typeof value!=='object')return false
   const leaf=value as Record<string,unknown>
-  return leaf.type==='leaf'&&['terminal','note','preview','history'].includes(String(leaf.kind))&&typeof leaf.id==='string'&&!!leaf.id
+  return leaf.type==='leaf'&&['terminal','note','preview','history','queue'].includes(String(leaf.kind))&&typeof leaf.id==='string'&&!!leaf.id
 }
 
 /** The Files browser was a `files:` resource leaf through layout v6. It is now the utility

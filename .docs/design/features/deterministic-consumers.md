@@ -39,9 +39,19 @@ Fires when one canonical fingerprint repeats **≥3** times *and* the no-progres
 across that window. Progress is any of: a failing-test set that got smaller, a file write
 whose `content_hash` was not seen earlier in the run, or a second distinct git `head`.
 
+Only facts of a **change-attempting kind** (`command`, `file_write`, `test`, `test_result`)
+can seed a loop; every fact in the window still feeds the progress gate. Read-only actions
+(kinds `tool`, `file_read` and their results — Grep, Glob, file reads) produce no test
+outcome, hash, or commit, so the gate is vacuously true for them by construction and any
+agent searching the same directory three times would be flagged (observed live,
+2026-07-28). Non-test result kinds are excluded for a second reason: a result fingerprint
+collapses onto one value when the payload has no content hash, so distinct successful
+edits can share a single `file_write_result` fingerprint.
+
 The gate is the entire difference between a useful signal and a detector that cries wolf:
 running the same test command four times while fixing things is work, not a loop. The
-threshold and the gate follow the production precedent cited in CP §2.
+threshold and the gate follow the production precedent cited in CP §2 — which measures
+repeated ineffective *attempts*, not repeated looking.
 
 ### Declared vs verified
 
@@ -61,6 +71,13 @@ written as literal paths, so `build_doc_ownership` inverts those sections into
 `source path → owning docs`. A doc that adopts a module by listing it is immediately
 covered, and there is no second list to maintain.
 
+A file claimed by **more than 4 docs** (`DOC_HUB_OWNER_LIMIT`) is infrastructure — a
+composition root like `server.py` (15 claimants) or `App.tsx` (8) — not a subject any
+single doc owns, and carries no ownership signal: one `App.tsx` edit otherwise marks
+eight unrelated feature docs dirty (observed live, 2026-07-28). The limit is calibrated
+against this repo's `.docs` tree, where 1–4-owner files all have a genuine subject doc
+among their claimants and the ≥5 tail is exactly the composition roots.
+
 Debt accumulates with a visible count rather than nagging per turn, and a doc edited in the
 same window is not dirty — the debt was paid as it was incurred.
 
@@ -76,6 +93,16 @@ general.
 Edges are cross-session only, and `ambiguous` marks the case where another write to the same
 target falls between the write and the read — precisely when "the reader saw this write"
 stops being a fact. Never a causal blame label; the human draws the conclusion.
+
+**One annotation per edge**, dedupe-keyed on the two fact ids (`writer_fact_id >
+reader_fact_id`), so one real-world write→read event is exactly one row forever. The
+original set-hash key changed whenever the window's graph grew, minting a new annotation
+that restated every prior edge — quadratic storage, and each edge counted once per
+restatement by anything ranking annotations (observed live 2026-07-28). Re-deriving the
+whole window each turn is fine: already-recorded edges dedupe to no-ops, and a per-pass cap
+(`PROVENANCE_MAX_NEW_PER_PASS`, 50) bounds a first pass over a busy window without
+truncating — the remainder lands on subsequent turn boundaries. Aggregation ("today's
+cross-session graph") belongs to the reader, grouping rows by target.
 
 ## Operations
 

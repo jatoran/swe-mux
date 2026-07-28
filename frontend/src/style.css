@@ -1045,13 +1045,23 @@ body {
 .mobile-toolbar{display:none}
 /* Terminal on top (1fr), then the clipboard rail. The rail is in normal flow, so the
    terminal is bounded above it and never sits under an overlay. */
-.terminal-surface{position:relative;width:100%;height:100%;min-width:0;min-height:0;display:grid;grid-template-rows:minmax(0,1fr) auto;overflow:hidden}
-.terminal-surface>.terminal-host{grid-row:1;min-width:0;min-height:0}
+/* The single explicit column is load-bearing, and so is `grid-column:1` on every
+   in-flow child. `.terminal-jump-latest` is an overlay that shares the terminal's
+   cell (grid-row:1/grid-column:1), but auto-placement will not put an auto-column
+   item into an occupied cell: with the column left implicit, the host — which only
+   pins its row — was pushed into a second, ~200px implicit column at the right edge
+   the instant the button appeared. That collapsed the terminal to ~29 cols, refit
+   and resized the PTY to match, and reflowed the whole scrollback to the top, so
+   scrolling up one notch made the pane unusable and it could not recover (the
+   button stays visible while off-tail). Every in-flow child names column 1 so the
+   overlay can only ever stack, never displace. */
+.terminal-surface{position:relative;width:100%;height:100%;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;overflow:hidden}
+.terminal-surface>.terminal-host{grid-row:1;grid-column:1;min-width:0;min-height:0}
 .mobile-terminal-live-input{display:none}
 /* The rail holds voice, terminal keys, and clipboard actions; it overflows on narrow panes
    and scrolls horizontally (touch drag, scrollbar, or wheel via the onWheel handler). Items
    keep their natural width so nothing collapses while scrolling. */
-.terminal-action-rail{grid-row:2;min-height:34px;display:flex;align-items:center;gap:5px;padding:3px 7px;border-top:1px solid var(--line);background:var(--panel);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;touch-action:pan-x;-webkit-overflow-scrolling:touch}
+.terminal-action-rail{grid-row:2;grid-column:1;min-height:34px;display:flex;align-items:center;gap:5px;padding:3px 7px;border-top:1px solid var(--line);background:var(--panel);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;touch-action:pan-x;-webkit-overflow-scrolling:touch}
 .terminal-action-rail>*{flex:0 0 auto}
 .terminal-action-rail .term-key{min-width:30px;padding:0 6px}
 /* Icon-only actions size like keys, not like the 74px text buttons they replaced. The svg is
@@ -1496,6 +1506,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-fields input{min-height:30px;padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
 .drawer-fields button{min-height:32px;border:1px solid var(--accent);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}
 .drawer-fields button:disabled{opacity:.45;cursor:not-allowed}
+/* Prompt row target menu (right-click / long-press): a plain .context-menu whose
+   session rows carry a state dot, which is otherwise laid out for a flex row. */
+.prompt-target-menu button{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.prompt-target-menu button .state-dot{margin:0 6px 0 0;vertical-align:middle}
 .utility-drawer .notification-list{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 9px;display:grid;gap:6px;align-content:start}
 .utility-drawer .notification-list article{display:grid;grid-template-columns:9px minmax(0,1fr);gap:7px;padding:7px;border:1px solid var(--line);background:var(--bg)}
 .utility-drawer .notification-list article>div{min-width:0;display:grid;gap:3px}
@@ -1513,3 +1527,38 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .drawer-actions button{min-height:40px}
 }
 @media(prefers-reduced-motion:reduce){.utility-drawer.overlay{animation:none}}
+
+/* ---- Prompt queue (Phase 4): the Queue workspace tab and pane chip ---- */
+.queue-pane{display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;background:var(--bg);color:var(--text)}
+.queue-pane-header{display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 10px;border-bottom:1px solid var(--line)}
+.queue-pane-header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.queue-pane-header .queue-pane-status{margin-left:auto;color:var(--muted);white-space:nowrap}
+.queue-pane-error{margin:0;padding:6px 10px;border-bottom:1px solid var(--line);color:var(--red)}
+.queue-list{flex:1 1 auto;min-height:0;overflow:auto;margin:0;padding:8px 10px;list-style:none;display:grid;gap:8px;align-content:start}
+.queue-empty{padding:20px 8px;color:var(--muted);line-height:1.45}
+.queue-item{border:1px solid var(--line);background:var(--panel);padding:7px 9px;display:grid;gap:6px}
+.queue-item-head{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
+.queue-item-meta{display:flex;flex-wrap:wrap;align-items:center;gap:7px;color:var(--muted);font-size:9px}
+.queue-state{padding:1px 6px;border:1px solid var(--line)}
+.queue-state-armed{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+.queue-state-blocked,.queue-state-failed{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
+.queue-state-stranded{border-color:color-mix(in srgb,var(--amber) 55%,var(--line));color:var(--amber)}
+.queue-state-sent,.queue-state-cancelled{opacity:.65}
+.queue-next-marker{color:var(--accent)}
+.queue-item-reasons{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.queue-item-body{margin:0;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:inherit;line-height:1.4}
+.queue-item-sent{text-decoration:line-through;opacity:.55}
+.queue-item-cancelled .queue-item-body,.queue-item-failed .queue-item-body{opacity:.55}
+.queue-item-actions{display:flex;flex-wrap:wrap;gap:5px}
+.queue-item-actions button,.queue-item-actions select{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.queue-item-actions .queue-send{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+.queue-item-actions .queue-send-confirm{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
+.queue-item-edit{display:grid;gap:6px}
+.queue-item-edit textarea{min-height:80px;resize:vertical;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:6px}
+.queue-composer{display:grid;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
+.queue-composer textarea{min-height:56px;resize:vertical;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:6px}
+.queue-composer-actions{display:flex;justify-content:flex-end;gap:6px}
+.queue-composer-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.queue-composer-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+.pane-tools .queue-chip.has-pending{color:var(--accent)}
+@media(max-width:760px){.queue-item-actions button,.queue-item-actions select{min-height:38px}.queue-composer-actions button{min-height:40px}}

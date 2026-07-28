@@ -76,7 +76,6 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
   const [open,setOpen]=useState(false)
   const [busy,setBusy]=useState('')
   const [resetUnread,setResetUnread]=useState(false)
-  const [forceSwitch,setForceSwitch]=useState('')
   const [resetSound,setResetSound]=useState(()=>soundPreferences().enabled&&soundPreferences().events.reset)
   const root=useRef<HTMLDivElement>(null)
   const popover=useRef<HTMLDivElement>(null)
@@ -105,16 +104,13 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
   }
-  const choose=async(account:ProviderAccount,force=false)=>{
+  // Switching is never gated on live sessions: they re-read the shared
+  // credential file and follow the switch, and the daemon defends it against a
+  // straggling rotation from the outgoing login.
+  const choose=async(account:ProviderAccount)=>{
     setBusy(account.id);setError('')
-    try{const next=await api<ProviderAccountsStatus>('POST',`/api/provider-accounts/${account.provider}/${account.id}/select`,force?{force:true}:{});setStatus(next);setForceSwitch('');notifyChanged()}
-    catch(cause){
-      const message=cause instanceof Error?cause.message:String(cause)
-      setError(message)
-      // Live sessions keep rotating the outgoing account's token back into the
-      // shared credential file, so the switch needs an explicit confirmation.
-      setForceSwitch(message.includes('switch with force')?account.id:'')
-    }
+    try{const next=await api<ProviderAccountsStatus>('POST',`/api/provider-accounts/${account.provider}/${account.id}/select`,{});setStatus(next);notifyChanged()}
+    catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
   }
   const refresh=async()=>{
@@ -140,7 +136,6 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
       <header><div><strong>ACCOUNTS</strong><span>session · weekly</span></div><button aria-label="Close account switcher" onClick={()=>setOpen(false)}>×</button></header>
       {(['claude','codex'] as ProviderName[]).map(provider=>{const current=status?.current[provider];const active=selected(provider);return <section><h4>{provider}</h4>{current?.state!=='saved'&&<p class={`account-current-notice ${current?.state||'signed_out'}`}>{currentDescription(current,active)}{current?.match_hint?` ${hintDescription(current)}`:''}</p>}{status?.accounts.filter(account=>account.provider===provider).map(account=><button class={`${status.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} onClick={()=>void choose(account)} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong><small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<>{quotaSummary(account)}{account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}> · {formatRefreshAge(account.quota.refreshed_at)}</i>:''}</>}</small></button>)}{!status?.accounts.some(account=>account.provider===provider)&&<p>No saved accounts</p>}</section>})}
       {error&&<p class="account-error" role="alert">{error}</p>}
-      {forceSwitch&&<p class="account-current-notice external">Live sessions still hold the current login. <button disabled={!!busy} onClick={()=>{const account=status?.accounts.find(item=>item.id===forceSwitch);if(account)void choose(account,true)}}>switch anyway</button></p>}
       {latestReset&&resetUnread&&<section class="account-reset-alert"><h4>quota reset evidence</h4><p><strong>{latestReset.provider} {latestReset.window}</strong> moved {latestReset.before_value}% → {latestReset.after_value}% and was confirmed by a second fresh sample.</p><div>{latestReset.provider==='codex'&&<button disabled={!!busy} onClick={()=>void reviewReset('manual_usage')}>{busy==='reset-manual_usage'?'marking…':'manual Codex usage'}</button>}<button class="danger" disabled={!!busy} onClick={()=>void reviewReset('discarded')}>{busy==='reset-discarded'?'discarding…':'discard as error'}</button><button disabled={!!busy} onClick={dismissReset}>mark seen</button><button disabled={!!busy} onClick={toggleResetSound}>{resetSound?'mute reset sound':'enable reset sound'}</button></div></section>}
       <footer><button disabled={!!busy} onClick={()=>void refresh()}>{busy==='refresh'?'refreshing…':'refresh quotas'}</button><button onClick={()=>{setOpen(false);onManage()}}>manage…</button></footer>
     </div>
@@ -185,7 +180,6 @@ export function AccountSettings() {
   const [message,setMessage]=useState('')
   const [labels,setLabels]=useState<Record<ProviderName,string>>({claude:'',codex:''})
   const [confirmRemove,setConfirmRemove]=useState('')
-  const [forceSwitch,setForceSwitch]=useState('')
   const grouped=useMemo(()=>({claude:status?.accounts.filter(account=>account.provider==='claude')||[],codex:status?.accounts.filter(account=>account.provider==='codex')||[]}),[status])
   const mutate=async(key:string,method:string,path:string,body?:unknown,tutorialAction=false)=>{
     setBusy(key);setError('');setMessage('')
@@ -193,26 +187,22 @@ export function AccountSettings() {
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
   }
-  const selectAccount=async(account:ProviderAccount,force=false)=>{
+  const selectAccount=async(account:ProviderAccount)=>{
     setBusy(account.id);setError('');setMessage('')
-    try{const next=await api<ProviderAccountsStatus>('POST',`/api/provider-accounts/${account.provider}/${account.id}/select`,force?{force:true}:{});setStatus(next);setForceSwitch('');notifyChanged();setMessage('Account state updated.')}
-    catch(cause){
-      const detail=cause instanceof Error?cause.message:String(cause)
-      setError(detail)
-      setForceSwitch(detail.includes('switch with force')?account.id:'')
-    }
+    try{const next=await api<ProviderAccountsStatus>('POST',`/api/provider-accounts/${account.provider}/${account.id}/select`,{});setStatus(next);notifyChanged();setMessage('Account state updated.')}
+    catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
   }
   const add=(provider:ProviderName,login:boolean)=>void mutate(`${provider}-${login?'login':'capture'}`,'POST',`/api/provider-accounts/${provider}/${login?'login':'capture'}`,{label:labels[provider]||undefined},true)
   const reauthenticate=(account:ProviderAccount)=>void mutate(account.id,'POST',`/api/provider-accounts/${account.provider}/login`,{replace_id:account.id,label:account.label})
   const rename=(account:ProviderAccount,label:string)=>{if(label.trim()&&label.trim()!==account.label)void mutate(account.id,'PATCH',`/api/provider-accounts/${account.provider}/${account.id}`,{label})}
   const remove=(account:ProviderAccount)=>{if(confirmRemove!==account.id){setConfirmRemove(account.id);return}setConfirmRemove('');void mutate(account.id,'DELETE',`/api/provider-accounts/${account.provider}/${account.id}`)}
-  return <section data-tutorial="provider-accounts" class="account-settings"><h3>Provider accounts</h3><p>Switching replaces only the provider's system authentication file. Global config, skills, projects, and histories remain shared. Existing Claude and Codex processes observe the same system-wide login.</p>
+  return <section data-tutorial="provider-accounts" class="account-settings"><h3>Provider accounts</h3><p>Switching replaces only the provider's system authentication file. Global config, skills, projects, and histories remain shared. Sessions already running follow the switch too — they re-read that file — so switching is never blocked or confirmed. The switch also restores the account's cached CLI profile, so <code>/status</code> in new sessions names the right account immediately; panes already running keep the old display until restarted.</p>
     {(['claude','codex'] as ProviderName[]).map(provider=>{const current=status?.current[provider];const active=grouped[provider].find(account=>account.id===current?.account_id);return <div class="account-provider-settings"><header><div><strong>{provider.toUpperCase()}</strong><small>{grouped[provider].length} saved · quotas refresh every {status?.poll_minutes||15} minutes</small></div><div class="account-actions"><button disabled={!!busy} onClick={()=>void mutate('verify','POST','/api/provider-accounts/verify',{})}>{busy==='verify'?'verifying…':'verify identities'}</button><button disabled={!!busy} onClick={()=>void mutate('refresh','POST','/api/provider-accounts/refresh',{})}>refresh quotas</button></div></header>
       <div class={`account-current ${current?.state||'signed_out'}`}><span>LIVE SYSTEM AUTH</span><strong>{currentDescription(current,active)}</strong><small>swe-mux follows the daemon host credentials; startup never restores an older saved account. Credentials move into a saved account only on a provider-verified identity or an explicit relink.</small>{current?.match_hint&&<p class="account-relink"><span>{hintDescription(current)}</span><button disabled={!!busy} onClick={()=>void mutate(`adopt-${provider}`,'POST',`/api/provider-accounts/${provider}/${current.match_hint!.account_id}/adopt`)}>{busy===`adopt-${provider}`?'relinking…':`relink to ${current.match_hint.label}`}</button></p>}</div>
       <div data-tutorial="provider-account-actions" class="account-add"><input aria-label={`New ${provider} account label`} placeholder="optional label" value={labels[provider]} onInput={event=>setLabels(value=>({...value,[provider]:event.currentTarget.value}))}/><button class="primary" disabled={!!busy} onClick={()=>add(provider,true)}>{busy===`${provider}-login`?'waiting for sign-in…':'sign in + save'}</button><button disabled={!!busy} onClick={()=>add(provider,false)}>{busy===`${provider}-capture`?'saving…':'save current login'}</button></div>
       <p class="account-help">“Sign in + save” launches <code>{provider==='claude'?'claude auth login --claudeai':'codex login'}</code> on the daemon host. “Save current login” captures an account you signed into separately.</p>
-      <div class="account-list">{grouped[provider].map(account=><article class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict?'conflicted':''}`}><span class="account-state">{status?.selected[provider]===account.id?'◆ active':'◇ saved'}</span><input aria-label={`${provider} account label`} defaultValue={account.label} onBlur={event=>rename(account,event.currentTarget.value)}/><small>{account.email||account.organization||account.provider_account_id||'identity unavailable'}<i class={`account-identity ${account.identity_source==='token'?'verified':'unverified'}`} title={account.identity_source==='token'?'Identity confirmed by asking the provider with these credentials.':'Identity has not been confirmed against the provider yet.'}>{identityNote(account)}</i></small><div class="account-quota" title={quotaTitle(account)}><span>session <b>{percent(account.quota?.session)}</b></span><span>weekly <b>{percent(account.quota?.weekly)}</b></span>{account.quota?.fable&&<span>fable <b>{percent(account.quota.fable)}</b></span>}<em>{account.quota?.status||'pending'}{account.quota?.error?` · ${account.quota.error}`:''}</em></div><div class="account-actions"><button disabled={!!busy||status?.selected[provider]===account.id} onClick={()=>void selectAccount(account)}>use</button><button disabled={!!busy} onClick={()=>reauthenticate(account)}>sign in again</button><button class={confirmRemove===account.id?'danger confirming':'danger'} disabled={!!busy} onClick={()=>remove(account)}>{confirmRemove===account.id?'confirm remove':'remove'}</button></div>{account.conflict&&<p class="account-conflict" role="alert">{conflictDescription(account)}</p>}{forceSwitch===account.id&&<p class="account-conflict"><button disabled={!!busy} onClick={()=>void selectAccount(account,true)}>switch anyway</button></p>}</article>)}{!grouped[provider].length&&<div class="account-empty">No {provider} accounts saved yet.</div>}</div>
+      <div class="account-list">{grouped[provider].map(account=><article class={`${status?.selected[provider]===account.id?'active':''} ${account.conflict?'conflicted':''}`}><span class="account-state">{status?.selected[provider]===account.id?'◆ active':'◇ saved'}</span><input aria-label={`${provider} account label`} defaultValue={account.label} onBlur={event=>rename(account,event.currentTarget.value)}/><small>{account.email||account.organization||account.provider_account_id||'identity unavailable'}<i class={`account-identity ${account.identity_source==='token'?'verified':'unverified'}`} title={account.identity_source==='token'?'Identity confirmed by asking the provider with these credentials.':'Identity has not been confirmed against the provider yet.'}>{identityNote(account)}</i></small><div class="account-quota" title={quotaTitle(account)}><span>session <b>{percent(account.quota?.session)}</b></span><span>weekly <b>{percent(account.quota?.weekly)}</b></span>{account.quota?.fable&&<span>fable <b>{percent(account.quota.fable)}</b></span>}<em>{account.quota?.status||'pending'}{account.quota?.error?` · ${account.quota.error}`:''}</em></div><div class="account-actions"><button disabled={!!busy||status?.selected[provider]===account.id} onClick={()=>void selectAccount(account)}>use</button><button disabled={!!busy} onClick={()=>reauthenticate(account)}>sign in again</button><button class={confirmRemove===account.id?'danger confirming':'danger'} disabled={!!busy} onClick={()=>remove(account)}>{confirmRemove===account.id?'confirm remove':'remove'}</button></div>{account.conflict&&<p class="account-conflict" role="alert">{conflictDescription(account)}</p>}</article>)}{!grouped[provider].length&&<div class="account-empty">No {provider} accounts saved yet.</div>}</div>
     </div>})}
     {(error||message)&&<p class={error?'settings-inline-error':''} role={error?'alert':'status'}>{error||message}</p>}
   </section>

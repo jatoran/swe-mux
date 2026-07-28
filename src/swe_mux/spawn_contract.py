@@ -111,6 +111,11 @@ class SpawnRequest:
     # place that knows it.
     cwd: str | None = None
     env: Mapping[str, str] = field(default_factory=dict)
+    # A new agent session's seed prompt as text, with no argv length ceiling:
+    # the spawn handler turns it into an argv prompt directly, or stages an
+    # over-bound body into the workspace with a short reader prompt
+    # (`prompt_queue.stage_seed_argv`). Agent backends only.
+    seed_text: str | None = None
 
     @classmethod
     def parse(cls, body: dict[str, Any]) -> SpawnRequest:
@@ -127,6 +132,7 @@ class SpawnRequest:
             "completion_mode",
             "cwd",
             "env",
+            "seed_text",
         }
         unknown = set(body) - known
         if unknown:
@@ -158,6 +164,12 @@ class SpawnRequest:
             environment = parse_spawn_env(body.get("env"))
         except ValueError as exc:
             raise ValueError({"env": str(exc)}) from exc
+        raw_seed = body.get("seed_text")
+        if raw_seed is not None:
+            if not isinstance(raw_seed, str) or not raw_seed.strip():
+                raise ValueError({"seed_text": "must be a non-empty string"})
+            if len(raw_seed) > 500_000:
+                raise ValueError({"seed_text": "must contain at most 500000 characters"})
         return cls(
             project_id=project_id,
             backend=backend,
@@ -168,4 +180,5 @@ class SpawnRequest:
             completion_mode=completion_mode,
             cwd=raw_cwd.strip() if isinstance(raw_cwd, str) else None,
             env=environment,
+            seed_text=raw_seed,
         )

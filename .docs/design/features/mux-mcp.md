@@ -1,0 +1,100 @@
+# mux MCP: the agent return path (v0 — read and discovery)
+
+## What it is
+
+A streamable-HTTP MCP endpoint (`POST /mcp`) hosted in the daemon that gives every spawned
+agent session read-only visibility into its own Project: sibling sessions, their live
+status, bounded transcript reads, and full-text search over the archived conversation
+history. Roadmap Phase 4.5 / control-plane build-order step 2.5 (`CONTROL_PLANE_ROADMAP.md`
+§7.3–7.5). Registered automatically into every spawned Claude and Codex session — no user
+setup — and reachable by a user-typed `claude`/`codex` inside a mux shell session via the
+agent shims.
+
+v0 is **read-only end to end**: no tool can enqueue, deliver, spawn, or write to a PTY.
+`notify`/`requestSpawn` arrive as callers over the Phase 5 queue; the v1 memory tools
+(`provenance`, `priorResolutions`, `deadEnds`) stay in control-plane step 8.
+
+## Key concepts
+
+- **MCP is transport, not authority (CP §7.1).** Every tool is a thin caller over the same
+  services the browser routes use (`SessionManager`, `HistoryIndex`,
+  `parse_transcript_cached`). Nothing is implemented inside the MCP layer, and status read
+  through it is bit-identical to what the UI shows (the Phase 3.5 status contract:
+  `SessionRecord.state` has one writer, `apply_state_transition`).
+- **Caller identity is injected, never claimed (CP §7.4).** A per-session bearer token is
+  minted at spawn (`MUX_MCP_TOKEN`, beside `MUX_MCP_URL`), mirrored into the supervisor's
+  session meta, and recovered at adoption — so it survives daemon restarts the same way the
+  hook secret does, with no token table to invalidate. No tool has a sender parameter. An
+  empty token (a session spawned before this feature) never authenticates.
+- **Scope is the caller's Project.** Every tool filters to the caller's `project_id`
+  (falling back to the git `project_scope_id` for ungrouped sessions). A target outside the
+  scope answers exactly like a target that never existed — confirming existence is itself a
+  leak. History queries go through `history_page`, which keeps the `agent_visible=1`
+  quarantine predicate.
+- **Return nothing over a weak match (CP §7).** Empty results are fine;
+  plausible-but-wrong teaches an agent to stop calling.
+- **Bounded and redacted.** Transcript reads are byte- (512 KiB tail) and message-capped;
+  search results carry at most the FTS excerpts `history_page` already bounds. Session
+  records go out through an explicit field allowlist (`session_summary`) — never
+  `record.snapshot()`, which carries `spawn_env`. Any message or excerpt that trips the
+  clipboard credential gate (`looks_like_secret`) is replaced with a redaction marker.
+- **Same-host callers are fully trusted (decision 2026-07-28, `ROADMAP.md` Phase 4.5).**
+  The token is identity and read scope, not an authorization boundary — the un-tokened
+  mutating `/api` surface predates MCP and is unchanged. Must be revisited before Phase 5
+  arms any write path.
+
+## Tool surface (v0)
+
+| Tool | Returns |
+|---|---|
+| `list_sessions` | live sessions in the caller's Project (caller marked `you`); optionally recently ended agent sessions |
+| `get_session` | status + metadata for one session by id or exact name, live or ended |
+| `read_transcript` | bounded tail of a session's transcript (role, ts, text) |
+| `search_history` | FTS over the Project's archived Claude/Codex conversations, keyset-paginated |
+
+## Registration per backend
+
+- **Claude**: one static `<data_dir>/claude-mcp.json` (`--mcp-config`, added by
+  `ClaudeAdapter._args` and by the shim via `MUX_CLAUDE_MCP_CONFIG`): HTTP server entry with
+  a literal URL and `Authorization: Bearer ${MUX_MCP_TOKEN}` env expansion — the token never
+  lands in a shared file. `--mcp-config` adds servers; user MCP config is untouched.
+- **Codex** (>= 0.145): argv overrides `-c mcp_servers.mux.url="…"` and
+  `-c mcp_servers.mux.bearer_token_env_var="MUX_MCP_TOKEN"` — natively env-based bearer, no
+  stdio shim needed. Shim path mirrors it for user-typed `codex`.
+- Both shim paths register only when `MUX_MCP_TOKEN` is present in the environment; a
+  registration without a token would only produce 401s inside the CLI.
+
+## Restart tolerance
+
+The daemon restarts under live sessions by design. An in-flight call dies with the TCP
+connection — a transport error every MCP client treats as retryable; the server never
+returns a partial or fabricated result (a transcript parse that misses its 2 s budget
+reports itself as transient and retryable). After the restart the same token works again:
+adoption recovers it from supervisor meta. The listen port is stable, so registered CLI
+configuration is never rewritten. An unknown token gets a typed 401 explaining that the
+session ended or predates the surface — explicitly *not* a retry-forever condition.
+
+## Operations
+
+- Loopback-only, like hook ingress; the Host allowlist of `security_middleware` applies.
+- Per-session sliding-window rate limit (120 calls/min) with the same sweep pattern as
+  `hook_ingress_windows`; 256 KiB request-body cap.
+- `calls`/`denied` counters under `mcp` in `GET /api/diagnostics/background`.
+- JSON-RPC methods: `initialize` (protocol 2025-06-18, older versions negotiated),
+  `ping`, `tools/list`, `tools/call`; notifications get 202. Batching is rejected.
+
+## Key files
+
+- Protocol + tools: `src/swe_mux/mcp.py`
+- Endpoint handler, rate limit, wiring: `src/swe_mux/server.py`
+- Token mint / env / meta mirror / adoption recovery: `src/swe_mux/session.py`
+- Registration: `src/swe_mux/adapters/claude.py`, `src/swe_mux/adapters/codex.py`,
+  `src/swe_mux/agent_launcher.py`, `src/swe_mux/launchers.py`
+- Tests: `tests/test_mcp.py`
+
+## Relates to
+
+- `delivery-readiness.md` — the operator-input evidence contract this phase also closed.
+- `status-detection.md` — the status contract MCP reads through.
+- `history.md` — the archive `search_history` queries.
+- `../development/CONTROL_PLANE_ROADMAP.md` §7 — the full return-path design and v1 plan.

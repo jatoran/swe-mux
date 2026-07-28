@@ -209,6 +209,9 @@ EVENT_PAYLOAD_FIELDS: dict[str, set[str]] = {
     "terminal_detached": {"connections"},
     "terminal_input": {"input_owner", "bytes"},
     "broadcast_delivered": {"targets"},
+    # Prompt-queue events carry ids/counters only — never the prompt body.
+    "queue_updated": {"message_id", "state", "pending"},
+    "queue_delivery": {"message_id", "outcome", "delivery_state", "confirmed", "bytes"},
     "capability_degraded": {"capability", "reason", "minimum"},
     "annotation_created": {"annotation_id", "tag", "rule_id"},
     "notification_created": {"notification_id", "kind"},

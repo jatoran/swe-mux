@@ -292,7 +292,12 @@ user/agent-facing triggers:
   deliberately never picks the frozen bundle, so iterated code is the code that runs).
 - **Daemon self-restart** (`POST /api/daemon/restart`): the daemon spawns a successor with
   `--relaunch-wait` (waits for the port), sets detach intent, and exits; the successor
-  reattaches. Refused with 409 when no supervisor is attached unless `force=true`. Triggers:
+  reattaches. **The successor is the same executable**: a source daemon re-imports current
+  source (backend changes apply), but a frozen daemon relaunches its bundled code — backend
+  source changes do NOT reach a frozen app via this route; use the frozen redeploy below
+  (observed live 2026-07-28: a detector fix "shipped" by restart kept producing old-code
+  findings until a redeploy). Refused with 409 when no supervisor is attached unless
+  `force=true`. Triggers:
   UI app menu / sidebar menu / command palette ("Reload daemon (keep sessions)",
   `daemon.reload`) with a blocking overlay + auto page reload; `mux reload-daemon [--force]`;
   plain HTTP for agents (`curl -X POST http://127.0.0.1:<port>/api/daemon/restart`). "Reload

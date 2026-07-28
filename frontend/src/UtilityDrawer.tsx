@@ -7,6 +7,7 @@ import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
 import { drawerTab, nextDrawerTab, type DrawerTab, type DrawerTabId } from './drawerTabs'
 import { DRAWER_TAB_ICONS } from './railIcons'
+import type { SendToAgentRequest, SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
 import type { Project, ProjectBackend, Session } from './types'
 
 // Host for the right-edge utility drawer. Two renderings, one component:
@@ -33,11 +34,20 @@ type Props = {
   notifications: NotificationData
   unread: number
   onInsert: (text: string) => 'terminal' | 'editor' | 'none'
+  /** Prompt inserts are terminals-only: a template dropped into the note or file the
+   *  user last touched edits that document instead of filling a composer. */
+  onInsertPrompt: (text: string) => 'terminal' | 'editor' | 'none'
+  /** Prompt targets: every session (filtered to this Project's live agents there) and
+   *  the same delivery path the send-to-agent dialog uses. */
+  sessions: Session[]
+  onSendPrompt: (target: SendToAgentTarget, text: string) => Promise<SendToAgentResult>
   onOpenSession: (sessionId: string) => void
   onOpenSettings: (section: string) => void
   onManagePrompts: () => void
   /** Files: open a Project-relative path as a pane tab. */
   onOpenFile: (path: string) => void
+  /** Files: open the send-to-agent dialog with a tree file's contents. */
+  onSendToAgent?: (request: SendToAgentRequest) => void
   /** Files: desktop-only drag of a file row onto a pane. Omitted on mobile, where
    *  the drawer is an overlay and there is no visible pane to drop onto. */
   onFileDragStart?: (path: string, event: JSX.TargetedPointerEvent<HTMLElement>) => void
@@ -76,7 +86,7 @@ export function UtilityDrawer(props: Props) {
     : tab === 'commands'
       ? <CommandsTab session={session} onDone={onDone} onOpenSettings={() => props.onOpenSettings('Command rail')} />
       : tab === 'prompts'
-        ? <PromptsTab project={project} backend={props.backend} onInsert={props.onInsert} onDone={onDone} onManage={props.onManagePrompts} preselect={props.promptPreselect} />
+        ? <PromptsTab project={project} backend={props.backend} onInsert={props.onInsertPrompt} onDone={onDone} onManage={props.onManagePrompts} preselect={props.promptPreselect} sessions={props.sessions} onSend={props.onSendPrompt} />
         : tab === 'files'
           ? (project
             ? <ProjectResource
@@ -85,6 +95,7 @@ export function UtilityDrawer(props: Props) {
               resource={{ kind: 'files', id: project.id }}
               onOpenFile={path => { props.onOpenFile(path); onDone() }}
               onFileDragStart={props.onFileDragStart}
+              onSendToAgent={props.onSendToAgent}
             />
             : <p class="drawer-empty">Select a Project to browse its files.</p>)
           : tab === 'notes'

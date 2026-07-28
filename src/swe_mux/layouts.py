@@ -6,7 +6,7 @@ from uuid import uuid4
 LAYOUT_VERSION = 7
 MAX_LAYOUT_LEAVES = 64
 MAX_LAYOUT_DEPTH = 24
-LEAF_KINDS = {"terminal", "note", "preview", "history"}
+LEAF_KINDS = {"terminal", "note", "preview", "history", "queue"}
 SPLIT_DIRECTIONS = {"horizontal", "vertical"}
 # The Files browser was a `files:` resource leaf through layout v6; it is now the utility
 # drawer's Files tab. A persisted (or stale-client) layout carrying one is pruned rather than

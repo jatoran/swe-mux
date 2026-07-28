@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  ARGV_PROMPT_MAX_CHARS,
-  argvPrompt,
   BRACKETED_PASTE_END,
   BRACKETED_PASTE_START,
   comparePositions,
@@ -130,14 +128,3 @@ test('CRLF and bare CR normalize to the same single break', () => {
   assert.equal(pastePayload('a\rb'), pastePayload('a\nb'))
 })
 
-test('a prompt that would be read as a flag is pushed off the option boundary', () => {
-  assert.equal(argvPrompt('--- a/file.ts'), ' --- a/file.ts')
-  assert.equal(argvPrompt('-p'), ' -p')
-  assert.equal(argvPrompt('From `a.md`:\n\nbody'), 'From `a.md`:\n\nbody')
-  // The text itself is never altered, only offset.
-  assert.equal(argvPrompt('--x').trimStart(), '--x')
-})
-
-test('the argv bound stays well under the Windows command-line ceiling', () => {
-  assert.ok(ARGV_PROMPT_MAX_CHARS < 32_767 - 8_000)
-})

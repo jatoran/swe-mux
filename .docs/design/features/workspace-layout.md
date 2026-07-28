@@ -14,13 +14,15 @@ PaneLayout
     ├── PaneStack {id, children[], active_child_id}
     └── PaneSplit {id, direction, ratio, first, second}
 
-PaneLeaf = terminal | note | preview | history
+PaneLeaf = terminal | note | preview | history | queue
 ```
 
 - A stack is a pane even when it has one tab. A split contains exactly two child branches.
 - `terminal` identifies a live/ended session viewport; `preview` identifies a loopback preview;
   `history` identifies the searchable archive; `note` resource IDs encode Project note,
-  session note, and individual file editors.
+  session note, and individual file editors; `queue` identifies a session's prompt-queue tab
+  (`features/prompt-queue.md`), its id `queue:<session_id>` so it can never collide with the
+  target's own terminal leaf in focus tracking.
 - Leaf IDs are globally unique inside a Project layout. Server validation caps layouts at 64
   leaves, nesting depth 24, and split ratios from 0.1 through 0.9.
 - Layout versions 1–6 migrate on read. A visible legacy resource dock becomes an adjacent pane;
