@@ -4,7 +4,8 @@ import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import type { AwaitingReason, Session, SessionState } from '../src/types.ts'
-import { awaitingLabel, sessionStatus, stateDotClass } from '../src/sessionStatus.ts'
+import { awaitingLabel, idleLabel, sessionStatus, stateDotClass } from '../src/sessionStatus.ts'
+import { classifySoundEvent } from '../src/sessionSounds.ts'
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
 
@@ -54,6 +55,27 @@ test('idle_prompt-driven idle renders ready, never awaiting approval', () => {
   const label = sessionStatus(agent('idle'))
   assert.ok(label.startsWith('ready'))
   assert.ok(!label.includes('awaiting'))
+})
+
+test('idle distinguishes a finished turn from one waiting on background work', () => {
+  // Both are genuinely idle (composer accepts input, delivery is safe), so this
+  // stays a sub-reason rather than a state — but "turn complete" reads as
+  // "nothing more is coming", which is wrong while the agent will self-resume.
+  const done = sessionStatus(agent('idle'))
+  const waiting = sessionStatus(agent('idle', { idle_reason: 'waiting_on_background' }))
+  assert.equal(done, 'ready · turn complete')
+  assert.equal(waiting, 'ready · background work running')
+  assert.notEqual(done, waiting)
+  assert.equal(idleLabel(agent('idle', { idle_reason: null })), 'ready · turn complete')
+  // The state axis is untouched: the dot is the same idle dot.
+  assert.equal(stateDotClass('idle'), 'state-dot idle')
+})
+
+test('a background-wait turn end does not fire the completion sound', () => {
+  const event = (payload: Record<string, unknown>) =>
+    ({ type: 'turn_ended', session_id: 's1', payload }) as never
+  assert.ok(classifySoundEvent(event({ scope: 'root' })))
+  assert.equal(classifySoundEvent(event({ scope: 'root', idle_reason: 'waiting_on_background' })), null)
 })
 
 test('shell sessions render the raw state', () => {

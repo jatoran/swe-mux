@@ -435,3 +435,173 @@ async def test_session_manager_reattaches_after_daemon_restart(
         os.environ.pop("CLAUDE_CODE_CHILD_SESSION", None)
         history.close()
         reaper.close()
+
+
+# ---- §7.1 backpressure must never fabricate an exit ---------------------------
+
+
+class _FakePty:
+    """Minimal stand-in for the reader's thread-local PTY handle."""
+
+    def __init__(self, alive: bool = True) -> None:
+        self.alive = alive
+
+    def isalive(self) -> bool:
+        return self.alive
+
+
+async def test_backpressured_put_waits_instead_of_fabricating_end_of_output() -> None:
+    """A full output queue must throttle the child, not end the session.
+
+    Timing out the cross-thread handoff aborted the reader thread, whose finally
+    injected the b"" end-of-output sentinel — an exit fabricated purely from
+    consumer backpressure. The supervisor then closed the session's
+    kill-on-close job, killing a live agent tree.
+    """
+    from swe_mux import pty_host as pty_host_module
+
+    host = PtyHost("cmd.exe")
+    host.prepare()
+    queue = host.output_queue
+    while not queue.full():
+        queue.put_nowait(b"x")
+    pty = _FakePty(alive=True)
+
+    # Re-check liveness quickly so the test does not sit on the production cadence.
+    original_poll = pty_host_module._QUEUE_PUT_POLL_SECONDS
+    pty_host_module._QUEUE_PUT_POLL_SECONDS = 0.01
+    try:
+        result: list[bool] = []
+        worker = asyncio.get_running_loop().run_in_executor(
+            None, lambda: result.append(host._put_with_backpressure(b"payload", pty))
+        )
+        # The child is alive: the reader keeps waiting rather than giving up.
+        await asyncio.sleep(0.1)
+        assert result == []
+
+        # Draining one slot lets the handoff complete normally.
+        queue.get_nowait()
+        await asyncio.wait_for(worker, timeout=5)
+        assert result == [True]
+        assert b"payload" in list(queue._queue)  # type: ignore[attr-defined]
+    finally:
+        pty_host_module._QUEUE_PUT_POLL_SECONDS = original_poll
+
+
+async def test_backpressured_put_gives_up_once_the_child_is_really_gone() -> None:
+    from swe_mux import pty_host as pty_host_module
+
+    host = PtyHost("cmd.exe")
+    host.prepare()
+    queue = host.output_queue
+    while not queue.full():
+        queue.put_nowait(b"x")
+    pty = _FakePty(alive=True)
+
+    original_poll = pty_host_module._QUEUE_PUT_POLL_SECONDS
+    pty_host_module._QUEUE_PUT_POLL_SECONDS = 0.01
+    try:
+        result: list[bool] = []
+        worker = asyncio.get_running_loop().run_in_executor(
+            None, lambda: result.append(host._put_with_backpressure(b"payload", pty))
+        )
+        await asyncio.sleep(0.05)
+        pty.alive = False
+        await asyncio.wait_for(worker, timeout=5)
+        assert result == [False]
+    finally:
+        pty_host_module._QUEUE_PUT_POLL_SECONDS = original_poll
+
+
+# ---- §9 the sentinel alone is not proof of exit ------------------------------
+
+
+class _SentinelHost:
+    def __init__(self, alive: bool) -> None:
+        self.output_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        self._alive = alive
+
+    def isalive(self) -> bool:
+        return self._alive
+
+    def exit_status(self) -> int | None:
+        return None if self._alive else 0
+
+
+def _supervised(host: Any) -> Any:
+    from swe_mux.scrollback import ScrollbackBuffer
+    from swe_mux.supervisor import SupervisedSession
+
+    return SupervisedSession(sid="s1", host=host, scrollback=ScrollbackBuffer(1024))
+
+
+async def test_fanout_does_not_report_exit_while_the_process_is_alive(
+    tmp_path: Path,
+) -> None:
+    """`b""` means the reader stopped, not that the child died."""
+    server = SupervisorServer(tmp_path / "config.toml", tmp_path)
+    entry = _supervised(_SentinelHost(alive=True))
+    server.sessions["s1"] = entry
+    await entry.host.output_queue.put(b"")
+    await asyncio.wait_for(server._fanout(entry), timeout=5)
+    assert entry.alive is True
+    assert entry.output_ended_while_alive is True
+
+
+async def test_fanout_reports_exit_when_the_process_is_really_gone(
+    tmp_path: Path,
+) -> None:
+    server = SupervisorServer(tmp_path / "config.toml", tmp_path)
+    entry = _supervised(_SentinelHost(alive=False))
+    server.sessions["s1"] = entry
+    await entry.host.output_queue.put(b"")
+    await asyncio.wait_for(server._fanout(entry), timeout=5)
+    assert entry.alive is False
+    assert entry.output_ended_while_alive is False
+    assert entry.exit_code == 0
+
+
+async def test_remove_stops_a_session_the_daemon_wrongly_believes_is_dead(
+    tmp_path: Path,
+) -> None:
+    """The release branch suppresses "cannot release a live pseudoconsole" and
+    then closes a kill-on-close job. A stale `alive=False` must not take it."""
+
+    class Host:
+        def __init__(self) -> None:
+            self.output_queue: asyncio.Queue[bytes] = asyncio.Queue()
+            self.stopped = False
+            self.released = False
+
+        def isalive(self) -> bool:
+            return True
+
+        def stop(self, *, graceful: bool = True, timeout: float = 2.0) -> None:
+            del graceful, timeout
+            self.stopped = True
+
+        def release(self) -> None:
+            self.released = True
+
+    class Job:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class Sink:
+        def send(self, header: dict[str, Any], payload: bytes = b"") -> None:
+            del header, payload
+
+    server = SupervisorServer(tmp_path / "config.toml", tmp_path)
+    host = Host()
+    entry = _supervised(host)
+    entry.alive = False  # the daemon's (wrong) belief
+    entry.ownership_job = Job()  # type: ignore[assignment]
+    server.sessions["s1"] = entry
+
+    await server._remove_and_reply(Sink(), {"sid": "s1"}, None)  # type: ignore[arg-type]
+
+    assert host.stopped is True
+    assert host.released is False

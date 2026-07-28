@@ -857,11 +857,38 @@ another agent can pick up mid-plan. Section links point to the design detail.
   - [x] Race-free content hash + normalized target at the adapter boundary
     (`observation.tool_call_evidence`)
   - [x] Raw store: native transcripts authoritative + `source_seq` pointer (half — enough)
-  - [ ] **GAP:** git commit/tree hashes + read-side file hashes — needed by provenance (§6.1)
+  - [x] Bounded-but-lossless capture: `detail_json` is bounded per value, never by slicing
+    the serialization (which produced unparseable rows that were then dropped whole,
+    deterministically destroying exactly the long test/build facts §6.3–6.4 need); capture
+    failures are counted and surfaced at `GET /api/diagnostics/background`
+  - [x] Ownership on every fact: `agent_run_id` + `project_id` resolved at capture time.
+    Per-run queries cannot be recovered from `session_id` across resume/promotion/branch
+  - [x] `tool_result` facts classified per action (`command_result`, `file_read_result`, …)
+    with the tool's target correlated forward from its `tool_use`; the exit class no longer
+    collapses success and failure onto one fingerprint
+  - [x] Structured test facts: `{framework, passed, failed, errors, skipped, failing_tests[]}`
+    parsed at the adapter boundary (pytest, jest/vitest, go, cargo, unittest), with the
+    failing set folded into the fingerprint — this is the substrate §6.4's no-progress gate
+    ("the failing-test set didn't shrink") queries
+  - [x] Git commit/tree hashes: `git_changed` carries the commit `head` and a `dirty_hash` of
+    the working-tree change set
+  - [x] Read-side file hashes: a tool result hashes the exact bytes the agent saw, before the
+    payload's `detail` is bounded
+  - [x] **Gap resolved by decision, not by code:** write-side and read-side hashes are not
+    joinable by equality — a `Read` result hashes the CLI's *rendering* of a file, not the
+    file. The provenance edge is therefore **restated as `target` + time order**, carrying
+    the writer's content hash as the thing that was written. The rejected alternative was a
+    per-backend normalizer reconstructing file bytes from a lossy, version-drifting
+    rendering, which truncated reads make impossible in general. Where another write to the
+    same target falls between the write and the read, the edge is marked `ambiguous` rather
+    than asserted — that is exactly when "the reader saw this write" stops being a fact.
+    Recorded in `design/features/deterministic-consumers.md`.
 - [x] **2 · Helps-today siblings** (§6.9). Cheap, high daily leverage, no scan-timeline dep.
   - [x] Observation inbox (`.swe-mux/observations.json`, no AI) — full stack + tests
   - [x] Screenshot capture (full + drag region) → copies a reference to the clipboard;
-    optional Playwright backend; saves into the Project's `.swe-mux/preview-shots/`
+    optional Playwright backend; saves into the Project's `.swe-mux/preview-shots/`,
+    swept at 7 days. Endpoint coverage for the unavailable-backend shape and the
+    shot-directory resolution is in `tests/test_processes_phase4.py` (no Chromium needed).
 - [ ] **2.5 · mux MCP v0: read + discovery surface** (§7.5). Pulled forward out of step 8:
   it depends only on shipped machinery + the Phase 3.5 status contract, and it proves the
   transport/identity/restart decisions (§7.3–7.4) before any memory tool depends on them.
@@ -872,11 +899,22 @@ another agent can pick up mid-plan. Section links point to the design detail.
     transcript read, `searchHistory`
   - [ ] Auto-registration of the server into each spawned session's CLI config
   - [ ] Restart-tolerance: typed transient error on daemon reload, never a partial result
-- [ ] **3 · Deterministic consumers** (§6.1, 6.3, 6.4, 6.5). No model; write to `annotations`.
-  - [ ] Loop/stall deterministic half (§6.4) — pure Tier 0 fingerprint query; build first
-  - [ ] Declared-vs-verified (§6.3) — Tier 0 test facts + completion-claim regex
-  - [ ] Doc-debt ledger (§6.5) — Tier 0 files-changed + `.docs/CLAUDE.md` routing lookup
-  - [ ] Provenance graph (§6.1) — blocked on the Tier 0 git/read-hash gap in step 1
+- [x] **3 · Deterministic consumers** (§6.1, 6.3, 6.4, 6.5). No model; write to `annotations`.
+  Design: `design/features/deterministic-consumers.md`.
+  - [x] Annotation anchor + evidence schema: `automation_annotations.agent_run_id` is now
+    nullable beside a `project_id` anchor (a project-scoped detector has no run), findings
+    carry `evidence_json` — the *set* of Tier 0 facts the case rests on — and a `dedupe_key`
+    makes a re-running detector idempotent. `AutomationStore` gained the additive migration
+    path it never had; the rebuild is gated on the new column being absent.
+  - [x] Loop/stall deterministic half (§6.4) — fingerprint repeat ≥3 with the no-progress
+    gate (failing-test set did not shrink, no new write hash, no second git head)
+  - [x] Declared-vs-verified (§6.3) — Tier 0 test facts + a narrow completion-claim pattern,
+    reported as three separate facts and never one ✓
+  - [x] Doc-debt ledger (§6.5) — the routing table is keyed by change *type*, which no
+    machine can match to a path, so ownership is inverted from each doc's literal
+    **"Key files"** section instead. Accumulates a count; does not nag per turn.
+  - [x] Provenance graph (§6.1) — `target` + time order per the step 1 decision, cross-session
+    only, with `ambiguous` marking an intervening write. Never a causal blame label.
 - [ ] **4 · Project card** (§5.4). Distilled architecture, cached; feeds scan timeline + Tier 2.
 - [ ] **5 · Scan timeline (Tier 1)** (§5.5). First model-cost layer. Capture-first: readable
   timeline + dead-end memory (§6.2) + continuous title (§6.11). Instrument the rehydration
@@ -891,11 +929,14 @@ another agent can pick up mid-plan. Section links point to the design detail.
 
 ### UI work (design before it ships — the enablement surface is the big risk)
 
-- [ ] **Enablement-DAG toggle surface.** Toggling a consumer must show its substrate
-  dependencies as a small dependency tree, not a flat checkbox list ("enabling dead-end
-  memory requires Tier 0 + scan timeline"). Design before shipping.
-- [ ] **Per-project scope affordance.** Everything reads as global today; per-project
-  automations need a scope indicator per row + a project selector in the modal.
+- [x] **Enablement-DAG toggle surface.** Shipped in the per-Project settings editor
+  (`ProjectsManager.tsx`) over `GET|PUT /api/projects/{id}/automations`: each row names the
+  substrate it needs and how much of it is still off, enabling a consumer enables its whole
+  transitive closure, disabling substrate disables its dependents, and a reserved id with no
+  implementation renders disabled rather than as ready to switch on (the registry carries an
+  `implemented` flag and the route refuses `409 automation_not_implemented`).
+- [x] **Per-project scope affordance.** The toggle lives in the one per-Project editor, so
+  scope is structural rather than a label; global config remains an inherited default.
 - [ ] **Persistent spend/budget line.** Tokens/cost today + the coming daily interrupt
   budget belong in an always-on status line (like the message bar), not one tab.
 - [ ] **Progressive disclosure on rule rows.** Show name + state + one-line summary by
@@ -907,9 +948,10 @@ another agent can pick up mid-plan. Section links point to the design detail.
   the adaptive, scan-derived, rename-suppressed titler; `automation.py` still reserves one
   title call per run and `test_automation_phase6.py` asserts the old one-shot behavior. Both
   must change for the doc to be true (§6.11).
-- [ ] **No opt-in UI yet.** Enabling a consumer means hand-editing `.swe-mux/config.toml`
-  until the toggle surface above ships.
-- [ ] **Preview screenshots have no retention sweep.** `.swe-mux/preview-shots/` accumulates.
+- [x] **Opt-in UI.** Shipped with the deterministic consumers (see the toggle surface above);
+  hand-editing `.swe-mux/config.toml` still works and remains the source of truth.
+- [x] **Preview-shot retention.** Swept at 7 days by the media-cleanup loop across registered
+  Project roots and the data-dir fallback.
 - [ ] **Preview capture assumes a locally installed Chromium.** A clean-machine desktop build
   needs Chromium bundled or a first-run `playwright install` (Phase 11 packaging).
 

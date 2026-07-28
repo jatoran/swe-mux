@@ -48,10 +48,20 @@ function useProviderAccounts(intervalMs=60_000) {
   const load=()=>api<ProviderAccountsStatus>('GET','/api/provider-accounts').then(value=>{setStatus(value);setError('')}).catch(cause=>setError(cause instanceof Error?cause.message:String(cause)))
   useEffect(()=>{
     void load()
-    const timer=window.setInterval(()=>void load(),intervalMs)
+    // Skip while hidden and catch up on return, matching every other poll in the
+    // app. Two or three of these mount at once (sidebar plus collapsed rail), so
+    // a backgrounded tab was making several provider round-trips a minute for a
+    // view nobody could see.
+    const timer=window.setInterval(()=>{if(!document.hidden)void load()},intervalMs)
     const changed=()=>void load()
+    const onVisible=()=>{if(!document.hidden)void load()}
     window.addEventListener(providerEvent,changed)
-    return()=>{window.clearInterval(timer);window.removeEventListener(providerEvent,changed)}
+    document.addEventListener('visibilitychange',onVisible)
+    return()=>{
+      window.clearInterval(timer)
+      window.removeEventListener(providerEvent,changed)
+      document.removeEventListener('visibilitychange',onVisible)
+    }
   },[intervalMs])
   return {status,setStatus,error,setError,load}
 }

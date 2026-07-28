@@ -15,9 +15,16 @@ from typing import Any, Literal
 
 import aiohttp
 
+from .background_tasks import background
 from .event_bus import EventBus
+from .models import MuxEvent
 from .shim_paths import which_real
 from .subprocess_flags import background_creation_flags, reap_process_tree
+
+QUOTA_POLL_LOOP = "provider-quota-poll"
+QUOTA_TURN_REFRESH_LOOP = "provider-quota-turn-refresh"
+_REPLACE_RETRIES = 4
+_REPLACE_RETRY_DELAY_SECONDS = 0.05
 
 Provider = Literal["claude", "codex"]
 CurrentAccountState = Literal["saved", "external", "signed_out", "unreadable"]
@@ -125,7 +132,17 @@ def _atomic_write(path: Path, content: bytes) -> None:
         temporary.chmod(0o600)
     except OSError:
         pass
-    os.replace(temporary, path)
+    # Windows fails the replace outright while any process holds the destination
+    # open (antivirus, a backup agent, an editor). The lock is transient; a short
+    # bounded retry turns a hard write failure into a delay.
+    for attempt in range(_REPLACE_RETRIES):
+        try:
+            os.replace(temporary, path)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_RETRIES - 1:
+                raise
+            time.sleep(_REPLACE_RETRY_DELAY_SECONDS * (attempt + 1))
 
 
 def _reset_timestamp(value: object) -> float | None:
@@ -1312,23 +1329,20 @@ class ProviderAccountManager:
         return output
 
     def start(self) -> None:
+        # Supervised: a single transient failure (a Windows lock on the manifest
+        # replace, a SQLite busy timeout) used to end quota polling, reset
+        # detection and managed-token rotation for the daemon's lifetime.
         if self._task is None:
-            self._task = asyncio.create_task(self._loop(), name="provider-quota-poll")
+            self._task = background.start(QUOTA_POLL_LOOP, self._loop)
         if self._event_task is None:
-            self._event_queue = self.events.subscribe()
-            self._event_task = asyncio.create_task(
-                self._event_refresh_loop(), name="provider-quota-turn-refresh"
-            )
+            self._event_queue = self.events.subscribe(name="provider-accounts")
+            self._event_task = background.start(QUOTA_TURN_REFRESH_LOOP, self._event_refresh_loop)
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            await asyncio.gather(self._task, return_exceptions=True)
-            self._task = None
-        if self._event_task:
-            self._event_task.cancel()
-            await asyncio.gather(self._event_task, return_exceptions=True)
-            self._event_task = None
+        await background.stop(QUOTA_POLL_LOOP)
+        self._task = None
+        await background.stop(QUOTA_TURN_REFRESH_LOOP)
+        self._event_task = None
         if self._event_queue:
             self.events.unsubscribe(self._event_queue)
             self._event_queue = None
@@ -1339,7 +1353,8 @@ class ProviderAccountManager:
     async def _loop(self) -> None:
         await asyncio.sleep(2)
         while True:
-            await self.refresh()
+            with background.iteration(QUOTA_POLL_LOOP):
+                await self.refresh()
             await asyncio.sleep(self.poll_seconds)
 
     async def _event_refresh_loop(self) -> None:
@@ -1347,27 +1362,31 @@ class ProviderAccountManager:
         while True:
             event = await self._event_queue.get()
             try:
-                if (
-                    not self.turn_refresh_enabled
-                    or event.type != "turn_ended"
-                    or event.payload.get("scope", "root") != "root"
-                    or not event.session_id
-                ):
-                    continue
-                now = time.monotonic()
-                if now - self._last_event_refresh < self.turn_refresh_min_seconds:
-                    continue
-                session = self.sessions.sessions.get(event.session_id) if self.sessions else None
-                provider = str(session.record.backend) if session else ""
-                if provider not in PROVIDERS:
-                    continue
-                account_id = _record(self._manifest.get("selected")).get(provider)
-                if not account_id:
-                    continue
-                self._last_event_refresh = now
-                await self.refresh(str(account_id))
+                with background.iteration(QUOTA_TURN_REFRESH_LOOP):
+                    await self._maybe_refresh_for_turn(event)
             finally:
                 self._event_queue.task_done()
+
+    async def _maybe_refresh_for_turn(self, event: MuxEvent) -> None:
+        if (
+            not self.turn_refresh_enabled
+            or event.type != "turn_ended"
+            or event.payload.get("scope", "root") != "root"
+            or not event.session_id
+        ):
+            return
+        now = time.monotonic()
+        if now - self._last_event_refresh < self.turn_refresh_min_seconds:
+            return
+        session = self.sessions.sessions.get(event.session_id) if self.sessions else None
+        provider = str(session.record.backend) if session else ""
+        if provider not in PROVIDERS:
+            return
+        account_id = _record(self._manifest.get("selected")).get(provider)
+        if not account_id:
+            return
+        self._last_event_refresh = now
+        await self.refresh(str(account_id))
 
     async def refresh(
         self, account_id: str | None = None, *, force_identity_probe: bool = False
@@ -1499,14 +1518,43 @@ class ProviderAccountManager:
             if updated is not None:
                 system_still_matches = self._system_matches_account(provider, account)
                 content = (json.dumps(updated, separators=(",", ":")) + "\n").encode()
-                _atomic_write(self._managed_auth_path(provider, account_id), content)
-                if (
-                    _record(self._manifest.get("selected")).get(provider) == account_id
-                    and system_still_matches
-                ):
-                    _atomic_write(self._system_auth_path(provider), content)
-                account["auth_digest"] = hashlib.sha256(content).hexdigest()
-                account["updated_at"] = now
+                managed_path = self._managed_auth_path(provider, account_id)
+                previous_digest = str(account.get("auth_digest") or "")
+                current_digest = hashlib.sha256(
+                    managed_path.read_bytes() if managed_path.is_file() else b""
+                ).hexdigest()
+                if previous_digest and current_digest != previous_digest:
+                    # The slot changed hands while this refresh was in flight (a
+                    # capture landed a different login). Writing the rotated old
+                    # credential over it would silently undo that.
+                    self._audit(
+                        "rotation_skipped",
+                        provider=provider,
+                        account_id=account_id,
+                        detail="slot credential changed during refresh",
+                    )
+                else:
+                    # Same backup + audit trail as every other credential write.
+                    # A background rotation is exactly the silent rewrite the
+                    # audit log exists to explain after the fact.
+                    self._backup_managed_auth(managed_path)
+                    _atomic_write(managed_path, content)
+                    digest = hashlib.sha256(content).hexdigest()
+                    self._audit(
+                        "rotated_auth_written",
+                        provider=provider,
+                        account_id=account_id,
+                        matched_by="token_refresh",
+                        old_digest=previous_digest or current_digest,
+                        new_digest=digest,
+                    )
+                    if (
+                        _record(self._manifest.get("selected")).get(provider) == account_id
+                        and system_still_matches
+                    ):
+                        _atomic_write(self._system_auth_path(provider), content)
+                    account["auth_digest"] = digest
+                    account["updated_at"] = now
             quota.update({"status": "ready", "error": None, "refreshed_at": now})
             _record(self._manifest["quota"])[account_id] = quota
         except (ProviderAccountError, aiohttp.ClientError, TimeoutError, OSError) as exc:

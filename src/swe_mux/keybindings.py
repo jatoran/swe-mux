@@ -88,15 +88,20 @@ KEYBINDING_COMMANDS = (
     # The right-edge utility drawer (default two-finger swipe-left gesture on
     # touch; an always-visible icon rail on desktop). `drawer.toggle` reopens the
     # last tab; the per-tab ids open one directly and close it if it is showing.
-    ("drawer.toggle", "Toggle the side panel", "view"),
-    ("drawer.clipboard", "Side panel: clipboard history", "clipboard"),
-    ("drawer.commands", "Side panel: session commands", "terminal"),
-    ("drawer.prompts", "Side panel: prompt templates", "input"),
-    ("drawer.files", "Side panel: project files", "view"),
-    ("drawer.notes", "Side panel: project and session notes", "view"),
-    ("drawer.notifications", "Side panel: notifications", "view"),
+    # These labels are what the gesture/shortcut pickers show, and picking between
+    # them is the whole decision a user makes there — so each one says whether it
+    # restores the last tab or forces its own. Binding a per-tab id to the gesture
+    # you open the panel with is what makes the panel "forget" which tab you left
+    # it on; it is obeying the binding, not losing state.
+    ("drawer.toggle", "Side panel: toggle, reopening the last tab used", "view"),
+    ("drawer.clipboard", "Side panel: always clipboard history", "clipboard"),
+    ("drawer.commands", "Side panel: always session commands", "terminal"),
+    ("drawer.prompts", "Side panel: always prompt templates", "input"),
+    ("drawer.files", "Side panel: always project files", "view"),
+    ("drawer.notes", "Side panel: always project and session notes", "view"),
+    ("drawer.notifications", "Side panel: always notifications", "view"),
     ("drawer.resetTabs", "Reset side panel tab order", "view"),
-    ("clipboard.open", "Open clipboard history", "clipboard"),
+    ("clipboard.open", "Side panel: always clipboard history (rail Clip button)", "clipboard"),
     ("clipboard.clear", "Clear unpinned clipboard history", "clipboard"),
     *tuple(
         (f"project.activate({index})", f"Switch to project {index}", "project")

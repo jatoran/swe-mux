@@ -30,6 +30,13 @@
   the false run is quarantined (`agent_visible=0`), its rebuildable message/index cursor is
   removed, and the native transcript remains untouched. The direct root run is reopened under
   its stable mux history ID.
+- **A quarantine is permanent.** Its exit reason (`root_identity_reconciled`,
+  `historical_provider_collision_reconciled`) marks the row as a proven cross-attribution
+  artifact, and no migration or backfill may make it visible again — only an explicit repair
+  path may. The historical `agent_visible` backfill is one-shot (gated on the column having
+  just been added) and additionally excludes those reasons; running it unconditionally, as it
+  used to on every connect, resurrected every quarantined run under the sibling's identity
+  within one session-preserving reload.
 - The same repair runs at daemon startup after the original PTY has ended, but only when the
   database proves all three sides of the collision: the retained executable names a different
   provider, its note owner is that provider's canonical root row, and another canonical row
@@ -45,6 +52,20 @@
 - `Scan historical sessions` is an explicit, project-scoped background job. It bypasses the
   startup cap, scans the complete shared native history, fingerprints unchanged transcripts,
   batches serialized SQLite writes, exposes progress/results, and supports cancellation.
+  A scan only claims rows with no canonical owner yet: a run's Project is decided at spawn,
+  so scanning Project A must not rewrite the history of a session that ran under nested
+  Project B. For the same reason startup reconcile leaves an already-assigned row's
+  Project label/root alone rather than re-deriving them from Git.
+- Provider housekeeping is excluded, not indexed. `<id>.orphaned-<ts>-<hash>.jsonl` still
+  reports the original conversation's `sessionId`, so treating it as a transcript maps the
+  fragment onto the real conversation's row; the two then alternate ownership of one
+  watermark and both re-parse on every startup, with a stale snippet shown as the
+  conversation. Claude sidechain (`isSidechain`) records are likewise not root messages —
+  indexing them put subagent chatter in history search and let a subagent's clock become the
+  run's first/last message time.
+- One unreadable transcript never aborts a scan. Provider transcript cleanup and antivirus
+  operate in these very directories, so a file can vanish between glob and stat; per-file
+  failures are skipped and counted, and the whole-scan task logs its own death.
 - EventBus persistence precedes fanout; reconnect catch-up uses monotonic sequence IDs.
 - Current context telemetry remains on live sessions and history. Explicit provider-native
   compaction records increment durable count/last-time/capability/confidence summaries;

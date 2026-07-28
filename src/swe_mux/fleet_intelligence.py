@@ -9,6 +9,7 @@ from collections import defaultdict, deque
 from typing import Any
 
 from .automation_store import AutomationStore
+from .background_tasks import background
 from .config import Config
 from .delivery_readiness import DeliveryReadinessTracker
 from .event_bus import EventBus
@@ -22,6 +23,9 @@ UNATTENDED_SECONDS = 15
 RUNAWAY_BYTES_PER_MINUTE = 4 * 1024 * 1024
 INTERLOCK_REPEAT_SECONDS = 300
 DIGEST_SECONDS = 30 * 60
+
+FLEET_INSPECT_LOOP = "fleet-intelligence"
+FLEET_EVENT_LOOP = "fleet-events"
 
 
 class FleetIntelligence:
@@ -44,6 +48,7 @@ class FleetIntelligence:
         self.config = config
         self._task: asyncio.Task[None] | None = None
         self._event_task: asyncio.Task[None] | None = None
+        self._claim_checks: set[asyncio.Task[None]] = set()
         self._queue: asyncio.Queue[MuxEvent] | None = None
         self._seen: dict[str, float] = {}
         self._failures: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
@@ -56,121 +61,150 @@ class FleetIntelligence:
         self._last_user_activity = time.time()
         self._last_digest = time.time()
         self.readiness = DeliveryReadinessTracker()
+        # Optional back-reference: fleet already owns the one place that sees a
+        # session end, so it is where per-session accumulators are dropped.
+        self.automation: Any | None = None
 
     def start(self) -> None:
         if self._task:
             return
-        self._queue = self.events.subscribe()
-        self._task = asyncio.create_task(self._run(), name="fleet-intelligence")
-        self._event_task = asyncio.create_task(self._consume(), name="fleet-events")
+        self._queue = self.events.subscribe(name="fleet-intelligence")
+        # Supervised: an unguarded fault here silently disables stall, unattended,
+        # runaway, context-pressure, interlock and digest detection for the rest
+        # of the daemon's (potentially weeks-long) lifetime.
+        self._task = background.start(FLEET_INSPECT_LOOP, self._run)
+        self._event_task = background.start(FLEET_EVENT_LOOP, self._consume)
 
     async def stop(self) -> None:
         if self._queue:
             self.events.unsubscribe(self._queue)
-        for task in (self._task, self._event_task):
-            if task:
-                task.cancel()
-        await asyncio.gather(
-            *(task for task in (self._task, self._event_task) if task),
-            return_exceptions=True,
-        )
+        await background.stop(FLEET_INSPECT_LOOP)
+        await background.stop(FLEET_EVENT_LOOP)
+        self._task = None
+        self._event_task = None
+        for task in tuple(self._claim_checks):
+            task.cancel()
+        await asyncio.gather(*self._claim_checks, return_exceptions=True)
+        self._claim_checks.clear()
 
     async def _consume(self) -> None:
         assert self._queue is not None
         while True:
             event = await self._queue.get()
-            session = (
-                self.sessions.sessions.get(event.session_id)
-                if event.session_id is not None
-                else None
+            with background.iteration(FLEET_EVENT_LOOP):
+                await self._consume_one(event)
+
+    async def _consume_one(self, event: MuxEvent) -> None:
+        session = (
+            self.sessions.sessions.get(event.session_id)
+            if event.session_id is not None
+            else None
+        )
+        self.readiness.observe(event, session)
+        if event.type in {"terminal_attached", "terminal_input"}:
+            self._last_user_activity = event.ts
+            await self.store.set_checkpoint("fleet:last_user_activity", {"ts": event.ts})
+        if not event.session_id:
+            return
+        if event.type in {"session_exited", "session_crashed"}:
+            sid = event.session_id
+            self._failures.pop(sid, None)
+            self._last_turn.pop(sid, None)
+            self._turn_started.pop(sid, None)
+            self._last_test.pop(sid, None)
+            for key in self._emit_keys_by_session.pop(sid, ()):
+                self._seen.pop(key, None)
+            # The readiness tracker and the automation engine's source probes key
+            # on the same sessions; without this their per-session memory grows
+            # for the daemon's lifetime and skews the metrics read off them.
+            self.readiness.forget(sid)
+            if self.automation is not None:
+                self.automation.forget_session(sid)
+            return
+        if event.type == "turn_ended":
+            self._last_turn[event.session_id] = event.ts
+            # asyncio keeps only a weak reference to a task; hold a strong one
+            # so a claim check cannot be collected mid-flight, and so stop()
+            # can cancel it.
+            claim_task = asyncio.create_task(
+                self._claim_check(event.session_id, event.ts),
+                name=f"claim-check-{event.session_id}",
             )
-            self.readiness.observe(event, session)
-            if event.type in {"terminal_attached", "terminal_input"}:
-                self._last_user_activity = event.ts
-                await self.store.set_checkpoint("fleet:last_user_activity", {"ts": event.ts})
-            if not event.session_id:
-                continue
-            if event.type in {"session_exited", "session_crashed"}:
-                sid = event.session_id
-                self._failures.pop(sid, None)
-                self._last_turn.pop(sid, None)
-                self._turn_started.pop(sid, None)
-                self._last_test.pop(sid, None)
-                for key in self._emit_keys_by_session.pop(sid, ()):
-                    self._seen.pop(key, None)
-                continue
-            if event.type == "turn_ended":
-                self._last_turn[event.session_id] = event.ts
-                asyncio.create_task(
-                    self._claim_check(event.session_id, event.ts),
-                    name=f"claim-check-{event.session_id}",
+            self._claim_checks.add(claim_task)
+            claim_task.add_done_callback(self._claim_checks.discard)
+        elif event.type == "turn_started":
+            self._turn_started[event.session_id] = event.ts
+        elif event.type == "tool_result" and event.payload.get("success", True):
+            tool = str(event.payload.get("tool") or "").casefold()
+            if any(token in tool for token in ("test", "pytest", "vitest", "check")):
+                self._last_test[event.session_id] = event.ts
+        elif event.type == "tool_result" and not event.payload.get("success", True):
+            failures = self._failures[event.session_id]
+            failures.append(
+                {
+                    "ts": event.ts,
+                    "tool": str(event.payload.get("tool") or "unknown")[:120],
+                    "exit_code": event.payload.get("exit_code"),
+                }
+            )
+            while failures and event.ts - failures[0]["ts"] > 900:
+                failures.popleft()
+            same_tool = [item for item in failures if item["tool"] == failures[-1]["tool"]]
+            session = self.sessions.sessions.get(event.session_id)
+            if session and len(same_tool) >= 3:
+                spiral_key = (
+                    f"spiral:{session.record.agent_run_id}:"
+                    f"{same_tool[-1]['tool']}:{int(event.ts // 900)}"
                 )
-            elif event.type == "turn_started":
-                self._turn_started[event.session_id] = event.ts
-            elif event.type == "tool_result" and event.payload.get("success", True):
-                tool = str(event.payload.get("tool") or "").casefold()
-                if any(token in tool for token in ("test", "pytest", "vitest", "check")):
-                    self._last_test[event.session_id] = event.ts
-            elif event.type == "tool_result" and not event.payload.get("success", True):
-                failures = self._failures[event.session_id]
-                failures.append(
-                    {
-                        "ts": event.ts,
-                        "tool": str(event.payload.get("tool") or "unknown")[:120],
-                        "exit_code": event.payload.get("exit_code"),
-                    }
+                await self._emit_once(
+                    spiral_key,
+                    "stalled",
+                    session,
+                    [
+                        {"signal": "repeated_tool_failure", "value": same_tool[-5:]},
+                        {"signal": "failure_window_s", "value": 900},
+                    ],
+                    0.9,
+                    subtype="spiral",
                 )
-                while failures and event.ts - failures[0]["ts"] > 900:
-                    failures.popleft()
-                same_tool = [item for item in failures if item["tool"] == failures[-1]["tool"]]
-                session = self.sessions.sessions.get(event.session_id)
-                if session and len(same_tool) >= 3:
-                    spiral_key = (
-                        f"spiral:{session.record.agent_run_id}:"
-                        f"{same_tool[-1]['tool']}:{int(event.ts // 900)}"
+            detail = str(event.payload.get("detail") or "")
+            # Same project only, and only on an exact normalized error signature.
+            # Widening to every project when the session has no trusted scope is
+            # how a generic "command failed" ended up quoting an unrelated repo's
+            # fix into this run's notes — the trust-poisoning failure the design
+            # calls out by name.
+            if detail and session and session.record.agent_run_id and (
+                scope := session.record.trusted_scope_id
+            ):
+                matches = await self.store.experiences(
+                    error=detail,
+                    project_scope_id=scope,
+                    limit=1,
+                )
+                if matches:
+                    match = matches[0]
+                    annotation = await self.store.create_annotation(
+                        agent_run_id=session.record.agent_run_id,
+                        session_id=event.session_id,
+                        tag="prior-resolution",
+                        content=(
+                            "A prior run encountered a similar error. Suggested resolution: "
+                            f"{match['resolution_summary']}"
+                        ),
+                        source_event_seq=event.seq,
+                        rule_id=None,
+                        rule_revision=None,
+                        provenance="experience_index",
+                        confidence=match.get("confidence"),
                     )
-                    await self._emit_once(
-                        spiral_key,
-                        "stalled",
-                        session,
-                        [
-                            {"signal": "repeated_tool_failure", "value": same_tool[-5:]},
-                            {"signal": "failure_window_s", "value": 900},
-                        ],
-                        0.9,
-                        subtype="spiral",
+                    await self.events.emit(
+                        "annotation_created",
+                        session_id=event.session_id,
+                        source="automation",
+                        annotation_id=annotation["id"],
+                        tag=annotation["tag"],
+                        rule_id=None,
                     )
-                detail = str(event.payload.get("detail") or "")
-                if detail and session and session.record.agent_run_id:
-                    matches = await self.store.experiences(
-                        query=detail[:240],
-                        project_scope_id=session.record.trusted_scope_id,
-                        limit=1,
-                    )
-                    if matches:
-                        match = matches[0]
-                        annotation = await self.store.create_annotation(
-                            agent_run_id=session.record.agent_run_id,
-                            session_id=event.session_id,
-                            tag="prior-resolution",
-                            content=(
-                                "A prior run encountered a similar error. Suggested resolution: "
-                                f"{match['resolution_summary']}"
-                            ),
-                            source_event_seq=event.seq,
-                            rule_id=None,
-                            rule_revision=None,
-                            provenance="experience_index",
-                            confidence=match.get("confidence"),
-                        )
-                        await self.events.emit(
-                            "annotation_created",
-                            session_id=event.session_id,
-                            source="automation",
-                            annotation_id=annotation["id"],
-                            tag=annotation["tag"],
-                            rule_id=None,
-                        )
 
     async def _claim_check(self, session_id: str, ended_at: float) -> None:
         session = self.sessions.sessions.get(session_id)
@@ -217,7 +251,8 @@ class FleetIntelligence:
     async def _run(self) -> None:
         while True:
             await asyncio.sleep(5)
-            await self.inspect()
+            with background.iteration(FLEET_INSPECT_LOOP):
+                await self.inspect()
 
     def _index_processes(self) -> dict[str, list[OwnedProcess]]:
         """Group live owned processes by session id once per tick.
@@ -469,8 +504,11 @@ class FleetIntelligence:
             evidence=evidence,
             confidence=1.0,
         )
+        # The emit above suspends, and the server pops sessions concurrently: a
+        # bare index here is a live KeyError that used to kill the whole loop.
+        owner = self.sessions.sessions.get(session_ids[0])
         notification = await self.store.notify(
-            agent_run_id=self.sessions.sessions[session_ids[0]].record.agent_run_id,
+            agent_run_id=owner.record.agent_run_id if owner else None,
             session_id=session_ids[0],
             rule_id=None,
             kind="environment_interlock",

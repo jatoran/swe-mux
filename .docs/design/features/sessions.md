@@ -90,9 +90,47 @@ and reattachable browser viewports.
   and quarantines the misattributed history run. A direct agent returns to its root provider; a
   shell whose promoted run claimed a live sibling returns conservatively to shell/detection.
   Shutdown intent decides the sessions' fate: quit stops and reaps everything as before; detach
-  (daemon restart) leaves supervised sessions running. If the supervisor is unreachable at
-  spawn time the daemon falls back to today's in-process ConPTY, whose lifetime is daemon-bound
-  as before.
+  (daemon restart) leaves supervised sessions running — and stops those sessions' tickers
+  first, because after the client disconnects `isalive()` is false by definition and one more
+  tick would persist a spurious exit for an agent that is still running. If the supervisor is
+  unreachable at spawn time the daemon falls back to today's in-process ConPTY, whose lifetime
+  is daemon-bound as before.
+- A spawn mirrors the session's initial metadata with the spawn RPC itself, not only through
+  the debounced meta sink: a daemon crash inside that ~0.5s window otherwise left the
+  supervisor holding a live session with empty metadata, permanently unadoptable and
+  reachable only by reaping everything.
+- **A broken connection is not a dead supervisor.** Only a supervisor whose process is
+  actually gone means the kill-on-close Jobs closed and the trees died; a transient socket
+  fault leaves sessions running. Treating the second as the first fabricated an exit for
+  every live session, recorded false history, and re-adopted them on the next boot. The
+  daemon reports `supervisor_state: "lost"` instead, and recovery is a daemon restart.
+- **Transcript ownership is corroborated, never assumed.** The candidate pool for a session's
+  transcript is the backend's *shared* per-cwd directory, which every CLI on the machine writes
+  into — a VS Code Claude extension, a scripted `claude -p`, a one-off terminal run. Three
+  gates keep another writer's conversation from being adopted (which would rekey
+  `native_session_id`, rebind the history row, and stream the outsider's status and tokens
+  under this session's identity):
+  - **Bind at first observe.** When the CLI was told which conversation to write (Claude's
+    injected `--session-id`), only that exact id is ours; the single-unclaimed-candidate
+    fallback is refused. Where no id was injected (shim-less promotion) the fallback still
+    applies, but the file must have been *created* after this agent run began.
+  - **The CLI's own answer wins over any heuristic.** `claude --continue` / `-r <term>` let
+    the CLI choose the conversation, so the shim cannot inject or read a `--session-id` and
+    promotes with an empty native id (injecting one anyway is what the CLI rejects outright
+    with exit 1). The root `SessionStart` hook then arrives over this session's own loopback
+    ingress with this session's own secret, which is the strongest available proof of which
+    conversation this PTY runs; it fills an *unknown* id only and never overwrites a bound
+    one, so a hook cannot rekey a session.
+  - **Switch (in-CLI resume).** Following a freshly-written transcript additionally requires
+    that this session's own PTY produced output around the time the candidate appeared. An
+    outside CLI leaves our PTY silent, which is what distinguishes it.
+  - **Siblings block.** Another live session in the same cwd makes a fresh transcript
+    ambiguous. That includes an unpromoted *shell* that has already echoed this backend's
+    name: its shim-less launch is about to create a transcript here, and this session's 2s
+    switch watcher can beat that shell's 0.5s detection loop to the claim.
+- The root process's OS creation time is captured at spawn (`SessionRecord.root_started_at`).
+  A pid alone is not an identity on Windows, and exited sessions stay listed with their pid
+  intact, so every later consumer of `record.pid` pairs the two.
 
 ## Key files
 

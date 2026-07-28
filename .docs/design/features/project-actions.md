@@ -81,6 +81,10 @@ can authorize only the command the user selected, only after exact-content appro
 trigger itself, broaden automation authority, store credentials, or bypass the normal session
 and process ownership model.
 
+Project setup commands (`projects.md`) reuse this spawn contract but sit outside the trust
+boundary entirely: they are typed by the user into machine-local settings rather than imported
+from a checkout, so there is nothing to fingerprint and nothing repository-supplied to approve.
+
 ## Native file shape
 
 ```toml

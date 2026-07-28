@@ -38,9 +38,13 @@
 - Changing session status detection, the transition ledger, the state watchdog,
   awaiting sub-reasons, the detection golden corpus, or status-health diagnostics:
   `design/features/status-detection.md`, `design/features/delivery-readiness.md`
-- Changing per-project automation opt-in or the enablement dependency graph:
-  `design/features/automation-enablement.md`, `design/features/project-resources.md`,
-  `design/data-model.md`, `design/interfaces.md`
+- Changing per-project automation opt-in, the enablement dependency graph, or its toggle
+  surface: `design/features/automation-enablement.md`,
+  `design/features/project-resources.md`, `design/data-model.md`, `design/interfaces.md`
+- Changing the model-free control-plane detectors (loop/stall, declared-vs-verified,
+  doc debt, provenance) or the annotation anchor/evidence schema:
+  `design/features/deterministic-consumers.md`, `design/features/tier0-facts.md`,
+  `design/data-model.md`, `technical/backend/packages.md`
 - Changing Tier 0 deterministic fact capture or its source pointers/fingerprints:
   `design/features/tier0-facts.md`, `design/data-model.md`,
   `technical/backend/packages.md`, `technical/backend/sqlite.md`

@@ -11,7 +11,13 @@ POST /desktop/shutdown   Authorization: Bearer DESKTOP_CONTROL_TOKEN
 ```
 
 `GET /health` remains ordinary local/tailnet diagnostics; it also reports `supervisor: bool`
-(whether the daemon is attached to the PTY supervisor). Shutdown exists only when the daemon
+(whether the daemon is attached to the PTY supervisor), `supervisor_state`
+(`connected | lost | absent`), and `supervisor_unadopted`. `lost` is deliberately distinct
+from `absent`: the supervisor process is alive and still holds live sessions, this daemon
+just cannot reach them — reporting that as "no supervisor" hides sessions that are running
+and unkillable from here. `supervisor_unadopted` counts supervised sessions this daemon
+could not rebuild (snapshot drift, a crash inside the spawn-meta window); they keep running
+with no UI handle, so the count must be visible rather than only a log line. Shutdown exists only when the daemon
 was launched with desktop control, accepts IP-loopback peers only, compares the generated token
 in constant time, and returns `202 {status: "shutting_down", mode}`. An optional JSON body
 `{mode: "quit"|"restart"}` (default `quit`) carries shutdown intent: `quit` reaps every session
@@ -89,7 +95,7 @@ kill-server command: it reaps all supervised sessions and stops the supervisor.
 
 ```text
 GET    /projects
-POST   /projects                    {name, root, group_id?}
+POST   /projects                    {name, root, group_id?, create_missing?}
 PATCH  /projects/{project_id}       mutable Project fields/layout revision
 PUT    /projects/order              {project_ids, expected_order}
 DELETE /projects/{project_id}
@@ -100,9 +106,20 @@ PATCH  /project-groups/{group_id}   {name?, position?}
 DELETE /project-groups/{group_id}
 ```
 
-Project creation requires an existing folder, rejects duplicate canonical roots, and
-initializes `.swe-mux/`. Project deletion rejects any live or historical session reference.
-Deleting a Group ungroups its Projects.
+Project creation rejects duplicate canonical roots and an empty root, and initializes
+`.swe-mux/`. `create_missing` makes exactly one folder: the parent must already exist, an
+already-present folder is accepted, and the duplicate/group checks run first so a rejected
+request leaves no stray directory. Project deletion rejects any live or historical session
+reference. Deleting a Group ungroups its Projects.
+
+```text
+POST /projects/{project_id}/init-scripts/run   {script_ids}
+```
+
+Runs the user's own setup commands (`project_init_scripts` in the daemon config) as ordinary
+one-shot shell terminals at the Project root, started in configured order. Unknown ids are
+rejected as a whole; a launch failure is reported per script and returns `207`. These are
+machine-local and user-authored, so no trust fingerprint is involved.
 
 ```text
 GET  /projects/{project_id}/actions
@@ -167,13 +184,29 @@ GET|PUT /project/config               typed portable Project options
 GET     /projects/{project_id}/observations
 POST    /projects/{project_id}/observations   {body}                append one
 PUT     /projects/{project_id}/observations   {observations, revision}   replace
+GET     /projects/{project_id}/automations
+PUT     /projects/{project_id}/automations    {automations, revision?}
 ```
 
 The observation inbox is a project-owned capture list (`.swe-mux/observations.json`, no AI).
 Append is conflict-free; replace (toggle done, delete, reorder) is revision checked and
-returns `409 revision_conflict`. Bounded to 500 items of 2,000 characters. See
-`features/observations.md`. The typed portable Project options include an `automations`
-opt-in table gating control-plane substrate/consumers (`features/automation-enablement.md`).
+returns `409 revision_conflict`. Bounded to 500 items of 2,000 characters. An inbox file
+that exists but cannot be parsed reports `status: "malformed"` and refuses both writes with
+`409 observations_unreadable` — reading it as empty meant the next captured note rewrote the
+file with one item and destroyed the rest. See `features/observations.md`.
+
+The automations routes are the per-project control-plane opt-in surface. `GET` returns the
+registry (id, kind, label, `requires`, `implemented`), the project's `requested` table, and
+the resolution (`enabled`, plus `blocked` → the dependencies each still needs) so a toggle
+can show a dependency tree rather than a flat checkbox list. `PUT` replaces the table
+through the ordinary project-config write: `409 revision_conflict` on a stale revision,
+`409 automation_not_implemented` for a reserved id with no code behind it. The same table is
+also carried by the typed portable Project options (`features/automation-enablement.md`).
+
+`GET|PUT /project/config` accept an optional `project_id`. Supplying it makes that
+registered Project's root authoritative for paths; without it the daemon re-resolves the
+supplied `cwd` through Git, which retargets a Project registered inside a larger worktree to
+the enclosing one.
 
 `GET /session-notes` lists session notes that hold text, newest first, optionally scoped to one
 Project; an unknown `project_id` is rejected. Each row carries `note_id`, Project identity,
@@ -300,6 +333,11 @@ submitting Enter is a separate later write, not the same one.
 
 `GET /sessions` adds a compact, read-only `delivery_readiness` object with
 `state: safe|blocked|unknown`, a reason, and `authorized: false`. It is not accepted on writes.
+Rows also carry `idle_reason`, the idle-axis sibling of `awaiting_reason`:
+`waiting_on_background` means the turn genuinely ended (the composer accepts input,
+`delivery_state` is unchanged) while the agent has background work that will wake it back
+up. Completion sounds and push alerts skip that turn end; the next one is the moment worth
+the user's attention.
 Each row also exposes its stable terminal `note_id` and whether its lazily created note file
 currently exists. `spawn_backend` and `spawn_native_session_id` identify the immutable root
 process; `backend` and `native_session_id` may instead describe the active promoted run only
@@ -363,6 +401,23 @@ GET /automation/injection-safety
 Version 2 returns research-only per-session delivery checks/evidence, parser coverage, and
 aggregate shadow metrics. `authorizes_actuation` and every session's `authorized` are always
 false. Prompt bodies and terminal bytes are never included.
+
+```text
+GET /api/diagnostics/status-health
+GET /api/diagnostics/background
+```
+
+`status-health` reports the fleet's transition ledger: proven/inferred counts, bounds, alarm.
+
+`background` reports whether the daemon's long-lived loops are actually running:
+`loops[]` (name, running/stopped, restarts, faults, last fault + timestamp, iterations,
+seconds since progress), `degraded[]`, and per-subscriber `event_bus` drop counts and queue
+depths plus `tier0_capture` (captured/dropped, last error) and `deterministic_consumers`
+(findings, last error, loop liveness — a detector that stopped producing findings is
+otherwise indistinguishable from a quiet fleet). Both are in-memory per daemon
+boot and do not survive a restart. This is the surface that makes a poller which died — the
+audited failure mode where a feature silently stops for the rest of the process lifetime —
+visible instead of merely absent.
 
 ## History and reviews
 
@@ -489,6 +544,15 @@ alert summary without deleting evidence; `manual_usage` is valid only for Codex 
 Configuration/keybindings, automation/annotations/lineage, events/notifications, voice,
 remote status, filesystem discovery, and preview proxy routes retain their feature-specific
 contracts described in the corresponding `features/` documents.
+
+`GET /events[?after_seq=N][&session=<id>]` is the live event stream. `after_seq` is a resume
+cursor: the client tracks the highest `seq` it has applied and sends it on reconnect, and the
+server replays exactly the events above it (oldest first, each marked `replay: true`). With
+no cursor the server replays the **newest** retained page, not the oldest — an established
+install otherwise re-sent days-old history and delivered none of the gap. When more was
+missed than the page carries, a leading `{"type": "events_gap", "reason":
+"catchup_truncated"}` frame tells the client to full-refresh rather than assume it caught up.
+A malformed `after_seq` is rejected with 400.
 
 `GET /api/settings/bundle?cwd=<path>` aggregates the Settings panel's open payload
 (config, automation rules, keybindings, profiles, projects, automation status, provider

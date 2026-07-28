@@ -10,7 +10,11 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
 ## Key concepts
 
 - **Automation**: one registry entry with `id`, `kind` (`substrate` | `consumer`), `label`,
-  and `requires` (direct dependency ids).
+  `requires` (direct dependency ids), and `implemented`.
+- **`implemented`**: false while an id is reserved with no code behind it. The toggle
+  surface renders dependencies straight from this registry, so a placeholder edge presented
+  as a complete dependency set would let a user switch on something that then does nothing.
+  Enabling an unimplemented id is refused (`409 automation_not_implemented`).
 - **Substrate**: captures facts but never acts or spends (`raw_store`, `tier0`,
   `project_card`, `scan_timeline`). Inert.
 - **Consumer**: a feature assembled from substrate (`provenance_graph`,
@@ -33,8 +37,22 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   set, never global automations: a Project that never opted in contributes nothing.
 - Enablement gating is distinct from config-value precedence. Once enabled, a setting
   value still resolves session/request → project → global-default.
-- The Tier 0 capture gate is the first live consumer of this: capture runs for a session
-  only when its owning Project has `tier0` effectively enabled (`../features/tier0-facts.md`).
+- Tier 0 capture and the deterministic consumers share one resolver and one short TTL cache
+  per Project root, so a Project can never have one running under a stale answer the other
+  already refreshed (`tier0-facts.md`, `deterministic-consumers.md`).
+
+## Toggle surface
+
+Toggling a consumer shows the substrate it needs as a dependency line rather than a flat
+checkbox, because a consumer whose substrate is off would otherwise read as
+enabled-and-working:
+
+- Enabling a consumer enables its whole transitive closure in the same action.
+- Disabling substrate disables everything that reads from it, rather than leaving dependents
+  enabled-but-inert.
+- Unimplemented ids render disabled and labelled, never as ready to switch on.
+- The file remains the source of truth; the editor is a two-way view over it and the write
+  is revision-checked like every other project-config write.
 
 ## Configuration
 
@@ -42,17 +60,27 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
 
 ## API surface
 
-- Read/written through the existing typed Project config endpoints
-  (`GET|PUT /api/project/config`); no dedicated route.
+```text
+GET /api/projects/{project_id}/automations
+PUT /api/projects/{project_id}/automations   {automations: {id: bool}, revision?}
+```
+
+`GET` returns the registry (id, kind, label, `requires`, `implemented`), the project's
+`requested` table, and the resolution (`enabled`, `blocked` → missing dependencies). `PUT`
+replaces the opt-in table through the ordinary project-config write: `409 revision_conflict`
+on a stale revision, `409 automation_not_implemented` for a reserved id. The typed project
+config endpoints (`GET|PUT /api/project/config`) still carry the same table.
 
 ## Key files
 
 - Registry + DAG + resolver: `src/swe_mux/automation_registry.py`
 - Per-project config field (parse/serialize/validate, `project_automations`): `src/swe_mux/project_files.py`
-- Gate wiring (`tier0_enabled` resolver): `src/swe_mux/server.py`
+- Gate wiring + toggle routes: `src/swe_mux/server.py`
+- Toggle surface: `frontend/src/ProjectsManager.tsx`
 
 ## Relates to
 
 - `tier0-facts.md` — the first gated substrate consumer.
+- `deterministic-consumers.md` — the model-free detectors gated by this DAG.
 - `project-resources.md` — the `.swe-mux/config.toml` typed-options surface.
 - `automation.md` — the OpenRouter observer/rule layer (separate mechanism).

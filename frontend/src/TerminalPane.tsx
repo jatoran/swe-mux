@@ -147,6 +147,34 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // Bumped when another surface edits the shared rail config so this pane re-reads it.
   const [,bumpRailRev]=useState(0)
   useEffect(()=>{const on=()=>bumpRailRev(value=>value+1);window.addEventListener('mux:settings-changed',on);return()=>window.removeEventListener('mux:settings-changed',on)},[])
+  // Ending a session is a two-click confirm, and App owns both the armed id and the
+  // window that disarms it (`requestKill`). The rail button mirrors that broadcast
+  // rather than running a second timer of its own, so its label can never disagree
+  // with what the next click will actually do.
+  const [killArmed,setKillArmed]=useState(false)
+  // The pane is rendered unkeyed as the stack's single active child, so Preact
+  // reuses this component instance across tab switches rather than remounting it.
+  // Every piece of per-session UI state must therefore be cleared explicitly:
+  // otherwise "Copy reply" copies (and records into clipboard history) the
+  // previous session's reply, and the prepared-clipboard, selection and find
+  // state bleed across the switch too.
+  useEffect(()=>{
+    setLastReply('')
+    setPreparedClipboard('')
+    setManualClipboard(false)
+    setSelectionText('')
+    setClipboardStatus('')
+    setManualPaste(false)
+    setFindOpen(false)
+    setFindQuery('')
+    setFindResult('')
+    setKillArmed(false)
+  },[session.id])
+  useEffect(()=>{
+    const on=(event:Event)=>setKillArmed((event as CustomEvent<string|null>).detail===session.id)
+    window.addEventListener('mux:kill-armed',on)
+    return()=>window.removeEventListener('mux:kill-armed',on)
+  },[session.id])
   const manualClipboardRef=useRef<HTMLTextAreaElement>(null)
   const manualPasteRef=useRef<HTMLTextAreaElement>(null)
   const mobileLiveInputRef=useRef<HTMLTextAreaElement>(null)
@@ -379,8 +407,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const loadLatestReply=()=>{
       if(session.backend==='shell')return
       void api<{text:string}>('GET',`/api/sessions/${session.id}/last-reply`).then(result=>{
-        if(!disposed&&result.text)setLastReply(result.text)
-      }).catch(()=>{})
+        // Clear on an empty result too: keeping the previous value here is what
+        // let a session with no reply yet still answer "Copy reply".
+        if(!disposed)setLastReply(result.text||'')
+      }).catch(()=>{if(!disposed)setLastReply('')})
     }
     const scheduleLatestReply=(delay=700)=>{
       if(session.backend==='shell')return
@@ -474,6 +504,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       rows: term.rows,
       renderer: activeRenderer,
     })
+    let ownsInput = false
     const claimInput = () => {
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'claim_input' }))
       // Focus here also makes this terminal the target for inserted text (clipboard
@@ -495,6 +526,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     const sendInput = (data: string, protocolResponse: boolean, broadcast: boolean) => {
       if (socket?.readyState !== WebSocket.OPEN) return
+      // Typing is itself evidence this pane should own input. Without it a pane
+      // displaced by another device stays silently muted until the user happens
+      // to click inside it.
+      if (!ownsInput && !protocolResponse) claimInput()
       socket.send(JSON.stringify({
         type: 'input',
         data,
@@ -542,6 +577,17 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           reportStartup('replay_ready')
           replayEndReceived = true
           if (pendingReplayWrites === 0) finishReplay()
+        }
+        if (frame.type === 'input_owner') {
+          // Ownership is claimed on pointerdown, so a device that never receives
+          // another pointer event (the desktop pane still has DOM focus after the
+          // phone claimed the session) would type into a void: the daemon drops
+          // every keystroke from a non-owner and says nothing. Re-claim as soon
+          // as this pane is the focused one again.
+          ownsInput = frame.active === true
+          if (!ownsInput && document.activeElement && host.current?.contains(document.activeElement)) {
+            claimInput()
+          }
         }
         if (frame.type === 'exit') {
           setConnectionState('ended')
@@ -1039,6 +1085,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       else if (detail.action === 'copyResume') void copyResumeCommand()
       else if (detail.action === 'branch') onBranch?.()
       else if (detail.action === 'relaunch') runCommand('session.relaunch')
+      // Both hosts route to App's `session.kill`, which owns the confirm window and
+      // the layout/focus cleanup; the drawer is scoped to the focused session, and a
+      // rail click focuses its own pane on pointerdown, so `session.kill` always
+      // resolves to the session the button belongs to.
+      else if (detail.action === 'endSession') runCommand('session.kill')
       else if (detail.action === 'captureSelection') {
         const term = termRef.current
         if (!term?.hasSelection()) reportError('Select terminal text before capturing it into notes.')
@@ -1140,6 +1191,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       case 'paste':return <button key={item.id} class="rail-icon" aria-label="Paste into terminal" title="Paste the clipboard into this terminal" onClick={()=>void paste()}><PasteIcon/></button>
       case 'clipboardHistory':return <button key={item.id} title="Open clipboard history — recent copies, insertable into this terminal" onClick={()=>runCommand('clipboard.open')}>Clip</button>
+      case 'endSession':{
+        // Ended sessions keep the button: the same command removes their row from the
+        // sidebar, which is the only remaining thing left to do with them.
+        const ended=session.state==='exited'||session.state==='crashed'
+        const verb=ended?'Remove':'End session'
+        return <button key={item.id} class={`rail-danger ${killArmed?'confirming':''}`} aria-label={killArmed?`Confirm ${verb.toLowerCase()}`:verb} title={killArmed?'Click again to confirm':ended?'Remove this ended session from the sidebar (click twice to confirm)':'End this session (click twice to confirm)'} onClick={()=>runCommand('session.kill')}>{killArmed?'Confirm ✓':verb}</button>
+      }
       case 'kbdToggle':return <button key={item.id} class={`term-key kbd-toggle ${keyboardOff?'active':''}`} aria-pressed={keyboardOff} title={keyboardOff?'Read mode: tap the terminal to select/scroll without the keyboard. Click to type again.':'Hide the on-screen keyboard so you can select, scroll, and paste'} onClick={toggleKeyboard}>⌨</button>
     }
     if(item.type==='key')return <button key={item.id} class={item.className||'term-key'} title={item.title||item.label} onClick={()=>sendKey(item.bytes||'')}>{item.label}</button>
@@ -1202,5 +1260,8 @@ export const TerminalPane = memo(TerminalPaneImpl, (a, b) =>
   a.broadcast === b.broadcast &&
   a.scrollback === b.scrollback &&
   a.keybindings === b.keybindings &&
+  // Omitting this blocked a renderer change from ever reaching an existing pane;
+  // it only appeared to work because unrelated prop churn re-rendered anyway.
+  a.rendererPreference === b.rendererPreference &&
   a.mobileInput === b.mobileInput,
 )

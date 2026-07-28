@@ -5,11 +5,15 @@ export type SessionState = 'starting' | 'running' | 'working' | 'idle' | 'awaiti
 /** Typed sub-reason set whenever state === 'awaiting'; mirrors the backend contract. */
 export type AwaitingReason = 'approval' | 'question' | 'elicitation' | 'rate_limit'
 
+/** Idle-axis sibling: the turn ended but the agent will resume itself. */
+export type IdleReason = 'waiting_on_background'
+
 export interface Session {
   id: string; name: string; project_id: string; backend: 'shell' | 'claude' | 'codex'
   native_session_id: string; cwd: string; exe: string; args: string[]; pid: number
   created_at: number; state: SessionState; state_detail?: string; tokens_in: number
   awaiting_reason?: AwaitingReason | null
+  idle_reason?: IdleReason | null
   process_job_assignment:string
   tokens_out: number; context_window: number; context_pct: number; last_activity_ts: number
   git: { branch?: string; dirty: number; ahead: number; behind: number }

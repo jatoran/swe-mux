@@ -84,15 +84,34 @@ responses rather than interim tool activity, and recomputes only on a material s
 spike, work-phase or target change, new user request) with debounce and hysteresis so the title
 neither flickers nor costs a call every turn. An explicit user rename pins the title and disables
 auto-update for that session; the automation never overwrites a human-chosen name. Generated
-titles are compact task labels for tabs/sidebar, without backend or “terminal session” prefixes.
+titles are compact task labels for tabs/sidebar, without backend or “terminal session” prefixes:
+the prompt targets 2-3 words and caps at 4, because the tab strip and sidebar rows are narrow
+enough that a longer-but-equally-accurate title only buys an ellipsis.
 Provider failure, invalid output, cancellation, queue pressure, or budget failure cannot block
 or change the agent/PTY lifecycle. Canonical observers have no PTY write, approval,
 worker/spawn, script, arbitrary HTTP, project-write, or relay path.
+
+## Reliability and diagnostics
+
+Ingest, rules-file watch, timer triggers and every worker run under the shared background-task
+supervisor (`background_tasks.py`): one iteration's failure is counted and logged and the loop
+keeps its cadence, and a loop that dies anyway is restarted with capped backoff. Health is at
+`GET /api/diagnostics/background`.
+
+The rules-file watcher treats an unreadable stat as "unchanged" rather than an error: editors
+save by delete+rename, and one unlucky poll used to end hot reload for the daemon's lifetime.
+
+`status()['queue']` reports `dropped` and `loop_rejections` as before, plus `worker_failures`
+and `worker_last_error` — worker faults used to share the single `diagnostic` slot with
+rules-file errors and were cleared by the next reload — and `bus`, the per-subscriber
+event-bus drop counts. An event dropped before automation ever saw it is invisible to every
+counter downstream of it, so it is attributed at the bus.
 
 ## Key files
 
 - `src/swe_mux/automation.py`
 - `src/swe_mux/automation_store.py`
+- `src/swe_mux/background_tasks.py`
 - `src/swe_mux/openrouter.py`
 - `src/swe_mux/secret_store.py`
 - `frontend/src/AutomationDashboard.tsx`

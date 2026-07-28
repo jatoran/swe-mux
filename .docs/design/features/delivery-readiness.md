@@ -37,6 +37,16 @@ count as human input; keystrokes and bracketed paste advance an in-memory input 
 The daemon evaluates these facts synchronously without an await boundary. It stores bounded
 reasons/transitions only—never terminal bytes or prompt bodies.
 
+**Known hole (scheduled with Phase 4.5, `development/ROADMAP.md`).** `POST
+/sessions/{id}/input` and broadcast fan-out write to the PTY without advancing
+`input_revision` / `last_input_event_ts` and without emitting `terminal_input`, so text
+delivered through the REST path — `mux send`, note send-to-agent, the UI's paste-then-focus
+flow — is invisible to these counters. Every readiness report therefore emits
+`partial_input_absent` and `operator_quiet` as satisfied even when the text is sitting
+undelivered in a composer. The surface is research-only today (`authorized` is hardcoded
+false), so the damage is a corrupted shadow-metric baseline rather than user-visible
+misbehavior — but it must be closed before any arming logic reads these counters.
+
 Transcript classification records schema version, recognized and unknown counts, bounded
 unknown signatures, and a degraded status after sustained drift. Claude discovery follows
 the CLI's current project-directory encoding. Codex discovery honors `CODEX_HOME` and rejects

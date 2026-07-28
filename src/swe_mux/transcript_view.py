@@ -33,6 +33,14 @@ def _native_conversation_message(event: dict[str, Any], backend: str) -> dict[st
         role = event.get("type")
         if role not in {"user", "assistant"}:
             return None
+        # Claude writes subagent turns into the root transcript tagged
+        # ``isSidechain``. They are another agent's conversation, so they are not
+        # root messages: indexing them pollutes history search, and letting them
+        # win min/max makes a subagent's clock the run's first/last message time.
+        # The live observer already special-cases them; this is the same rule on
+        # the parse path.
+        if event.get("isSidechain") is True:
+            return None
         blocks = _blocks((event.get("message") or {}).get("content"))
     else:
         payload = event.get("payload") or {}
@@ -125,8 +133,19 @@ def parse_transcript(
     path: Path, backend: str, *, max_bytes: int | None = None
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
     if max_bytes is None:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        # Stream: a months-long conversation is hundreds of MB, and reading it
+        # into one string plus a split list held several multiples of the file
+        # in RAM at once on the indexing path.
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict):
+                    events.append(event)
     else:
         with path.open("rb") as handle:
             size = handle.seek(0, 2)
@@ -134,15 +153,13 @@ def parse_transcript(
             raw = handle.read(max_bytes)
         if size > max_bytes:
             _, _, raw = raw.partition(b"\n")
-        text = raw.decode("utf-8", "replace")
-    events: list[dict[str, Any]] = []
-    for line in text.splitlines():
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(event, dict):
-            events.append(event)
+        for line in raw.decode("utf-8", "replace").splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                events.append(event)
     codex_response_messages = backend == "codex" and any(
         event.get("type") == "response_item"
         and (event.get("payload") or {}).get("type") == "message"
@@ -180,14 +197,14 @@ def parse_transcript(
 
 
 _CACHE_MAX = 32
-_cache: OrderedDict[tuple[str, int, str, int | None], list[dict[str, Any]]] = OrderedDict()
+_cache: OrderedDict[tuple[str, int, int, str, int | None], list[dict[str, Any]]] = OrderedDict()
 _cache_lock = threading.Lock()
 
 
 def parse_transcript_cached(
     path: Path, backend: str, *, max_bytes: int | None = None
 ) -> list[dict[str, Any]]:
-    """Cached ``parse_transcript`` keyed on (path, mtime_ns, backend, max_bytes).
+    """Cached ``parse_transcript`` keyed on (path, mtime_ns, size, backend, max_bytes).
 
     The same transcript is parsed several times per turn (fleet claim-check,
     titler/summarizer observers, the history transcript view). This bounded LRU
@@ -199,21 +216,40 @@ def parse_transcript_cached(
     on a missing/locked file propagates exactly as ``parse_transcript``'s read
     would; the cache never swallows it. The returned list is SHARED across
     callers and MUST be treated as read-only.
+
+    Size is part of the key, not just mtime: Windows mtime granularity is a timer
+    tick, so a transcript appended twice inside one tick keeps the same
+    ``st_mtime_ns`` and a mtime-only key would serve the pre-append parse.
     """
-    mtime_ns = path.stat().st_mtime_ns
-    key = (str(path), mtime_ns, backend, max_bytes)
+    return parse_transcript_with_watermark(path, backend, max_bytes=max_bytes)[0]
+
+
+def parse_transcript_with_watermark(
+    path: Path, backend: str, *, max_bytes: int | None = None
+) -> tuple[list[dict[str, Any]], int, int]:
+    """``parse_transcript_cached`` plus the ``(mtime_ns, size)`` it is valid for.
+
+    The watermark is stamped from the stat taken *before* the parse, so it can
+    only describe the same bytes or fewer than the returned messages. A caller
+    that persists it (the message index) therefore errs toward re-indexing after
+    a concurrent append rather than recording "indexed up to here" for content it
+    never saw — a poisoned watermark is trusted by every later ``unchanged``
+    check, so the conservative direction is the only safe one.
+    """
+    stat = path.stat()
+    key = (str(path), stat.st_mtime_ns, stat.st_size, backend, max_bytes)
     with _cache_lock:
         hit = _cache.get(key)
         if hit is not None:
             _cache.move_to_end(key)
-            return hit
+            return hit, stat.st_mtime_ns, stat.st_size
     result = parse_transcript(path, backend, max_bytes=max_bytes)
     with _cache_lock:
         _cache[key] = result
         _cache.move_to_end(key)
         while len(_cache) > _CACHE_MAX:
             _cache.popitem(last=False)
-    return result
+    return result, stat.st_mtime_ns, stat.st_size
 
 
 def searchable_transcript_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

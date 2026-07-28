@@ -12,24 +12,56 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, TypeVar
 
-from .sqlite_store import database_operation_lock, run_sqlite_operation
+from .sqlite_store import (
+    connect_or_quarantine,
+    database_operation_lock,
+    run_sqlite_operation,
+    write_schema_version,
+)
 
 T = TypeVar("T")
+
+AUTOMATION_SCHEMA_VERSION = 2
+
+# Floor for the second retention window (see `AutomationStore.prune`). Derived
+# knowledge outlives the operational trail that produced it.
+DURABLE_RETENTION_MIN_DAYS = 365
+# Every growing table is named here. `automation_model_cache` is deliberately
+# absent: CHECK(id=1) already bounds it to a single row.
+_OPERATIONAL_PRUNE_TABLES = (
+    "automation_firings",
+    "automation_action_results",
+    "automation_observer_calls",
+    "automation_notifications",
+    "automation_budget_ledger",
+    "observer_batches",
+)
+_DURABLE_PRUNE_TABLES = (
+    "automation_annotations",
+    "experience_entries",
+    "session_lineage",
+)
 
 AUTOMATION_SCHEMA = """
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS automation_annotations (
-  id TEXT PRIMARY KEY, agent_run_id TEXT NOT NULL, session_id TEXT,
+  id TEXT PRIMARY KEY, agent_run_id TEXT, project_id TEXT, session_id TEXT,
   tag TEXT NOT NULL, content TEXT NOT NULL, source_event_seq INTEGER,
+  evidence_json TEXT, dedupe_key TEXT,
   rule_id TEXT, rule_revision TEXT, provenance TEXT NOT NULL,
   requested_model TEXT, resolved_model TEXT, generation_id TEXT,
   input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd REAL, confidence REAL, created_at REAL NOT NULL
+  cost_usd REAL, confidence REAL, created_at REAL NOT NULL,
+  CHECK(agent_run_id IS NOT NULL OR project_id IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS idx_annotations_run
   ON automation_annotations(agent_run_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_annotations_project
+  ON automation_annotations(project_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_annotations_tag
   ON automation_annotations(tag,created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_annotations_dedupe
+  ON automation_annotations(dedupe_key);
 CREATE TABLE IF NOT EXISTS automation_firings (
   id TEXT PRIMARY KEY, event_seq INTEGER NOT NULL, event_type TEXT NOT NULL,
   agent_run_id TEXT, session_id TEXT, rule_id TEXT NOT NULL,
@@ -139,11 +171,54 @@ class AutomationStore:
         # additionally tolerates benign cross-thread introspection (tests reading
         # ``_db`` directly, a fallback close) without weakening that guarantee.
         with self._operation_lock:
-            self._db = sqlite3.connect(self._path, check_same_thread=False)
-            self._db.row_factory = sqlite3.Row
-            _tune_connection(self._db)
+            self._db = connect_or_quarantine(self._path, self._open)
+            # Migrate first: the schema script creates indexes over columns a
+            # legacy table does not have yet, so running it against an
+            # un-migrated database fails before the migration can fix it.
+            self._migrate_schema()
             self._db.executescript(AUTOMATION_SCHEMA)
+            write_schema_version(self._db, "automation", AUTOMATION_SCHEMA_VERSION)
             self._db.commit()
+
+    def _open(self) -> sqlite3.Connection:
+        db = sqlite3.connect(self._path, check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        _tune_connection(db)
+        return db
+
+    def _columns(self, table: str) -> set[str]:
+        return {
+            str(row["name"]) for row in self._db.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+
+    def _migrate_schema(self) -> None:
+        """Bring a database created by an older build up to the current schema.
+
+        ``CREATE TABLE IF NOT EXISTS`` no-ops on an existing table, so without a
+        migration path a new column exists only in fresh databases and every
+        upgrade-in-place fails on the first insert that names it. This store had
+        no migration mechanism at all; it does now, and every schema change after
+        this one belongs here.
+        """
+        annotations = self._columns("automation_annotations")
+        if annotations and "project_id" not in annotations:
+            # `agent_run_id` has to become nullable so a project-scoped detector
+            # (doc debt has no run to anchor to) can write a finding, and ALTER
+            # cannot relax NOT NULL — so this one is a rebuild rather than a
+            # column add. Gated on the column being absent, therefore one-shot.
+            self._db.execute("ALTER TABLE automation_annotations RENAME TO annotations_legacy")
+            self._db.executescript(AUTOMATION_SCHEMA)
+            self._db.execute(
+                "INSERT INTO automation_annotations"
+                "(id,agent_run_id,session_id,tag,content,source_event_seq,rule_id,"
+                "rule_revision,provenance,requested_model,resolved_model,generation_id,"
+                "input_tokens,output_tokens,cost_usd,confidence,created_at) "
+                "SELECT id,agent_run_id,session_id,tag,content,source_event_seq,rule_id,"
+                "rule_revision,provenance,requested_model,resolved_model,generation_id,"
+                "input_tokens,output_tokens,cost_usd,confidence,created_at "
+                "FROM annotations_legacy"
+            )
+            self._db.execute("DROP TABLE annotations_legacy")
 
     async def _run(self, fn: Callable[[], T]) -> T:
         loop = asyncio.get_running_loop()
@@ -218,7 +293,13 @@ class AutomationStore:
     ) -> None:
         def op() -> None:
             self._db.execute(
-                "INSERT INTO automation_action_results VALUES(?,?,?,?,?,?,?,?)",
+                # Explicit column lists everywhere: a positional INSERT breaks the
+                # moment a column is added, and the redeploy flow keeps a
+                # roll-back-able previous bundle that would then hit "table has N
+                # columns but N-1 values were supplied" on every write.
+                "INSERT INTO automation_action_results"
+                "(id,firing_id,action_index,kind,status,detail_json,error,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
                 (
                     str(uuid.uuid4()),
                     firing_id,
@@ -237,13 +318,16 @@ class AutomationStore:
     async def create_annotation(
         self,
         *,
-        agent_run_id: str,
-        session_id: str | None,
+        agent_run_id: str | None = None,
+        project_id: str | None = None,
+        session_id: str | None = None,
         tag: str,
         content: str,
-        source_event_seq: int | None,
-        rule_id: str | None,
-        rule_revision: str | None,
+        source_event_seq: int | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        dedupe_key: str | None = None,
+        rule_id: str | None = None,
+        rule_revision: str | None = None,
         provenance: str,
         requested_model: str | None = None,
         resolved_model: str | None = None,
@@ -253,15 +337,33 @@ class AutomationStore:
         cost_usd: float | None = None,
         confidence: float | None = None,
     ) -> dict[str, Any]:
+        """Persist one annotation, anchored to a run *or* a project.
+
+        Two anchors because deterministic consumers need both shapes: a loop
+        finding belongs to one agent run, while doc debt is a property of the
+        project and has no run to attach to. ``evidence`` is a list, not a single
+        `source_event_seq`, because a finding whose case rests on a *set* of facts
+        (a fingerprint repeated three times) is not traceable through one pointer.
+        ``dedupe_key`` makes a re-running detector idempotent: a conflicting write
+        returns the existing row tagged ``duplicate`` instead of a second finding.
+        """
+        if not agent_run_id and not project_id:
+            raise ValueError("an annotation must be anchored to an agent run or a project")
         identity = str(uuid.uuid4())
         created = time.time()
+        evidence_json = (
+            json.dumps(evidence, separators=(",", ":")) if evidence is not None else None
+        )
         values = (
             identity,
             agent_run_id,
+            project_id,
             session_id,
             tag,
             content,
             source_event_seq,
+            evidence_json,
+            dedupe_key,
             rule_id,
             rule_revision,
             provenance,
@@ -275,21 +377,46 @@ class AutomationStore:
             created,
         )
 
-        def op() -> None:
-            self._db.execute(
-                "INSERT INTO automation_annotations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                values,
-            )
-            self._db.commit()
+        def op() -> dict[str, Any] | None:
+            try:
+                self._db.execute(
+                    "INSERT INTO automation_annotations"
+                    "(id,agent_run_id,project_id,session_id,tag,content,source_event_seq,"
+                    "evidence_json,dedupe_key,rule_id,rule_revision,provenance,requested_model,"
+                    "resolved_model,generation_id,input_tokens,output_tokens,cost_usd,"
+                    "confidence,created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    values,
+                )
+                self._db.commit()
+            except sqlite3.IntegrityError:
+                # Expected-duplicate path: roll back before returning so the
+                # connection never keeps the writer slot on an open transaction.
+                self._db.rollback()
+                row = (
+                    self._db.execute(
+                        "SELECT * FROM automation_annotations WHERE dedupe_key=?", (dedupe_key,)
+                    ).fetchone()
+                    if dedupe_key is not None
+                    else None
+                )
+                if row is None:
+                    raise
+                return {**dict(row), "duplicate": True}
+            return None
 
-        await self._run(op)
+        if (existing := await self._run(op)) is not None:
+            return existing
         return {
             "id": identity,
             "agent_run_id": agent_run_id,
+            "project_id": project_id,
             "session_id": session_id,
             "tag": tag,
             "content": content,
             "source_event_seq": source_event_seq,
+            "evidence_json": evidence_json,
+            "dedupe_key": dedupe_key,
             "rule_id": rule_id,
             "rule_revision": rule_revision,
             "provenance": provenance,
@@ -307,6 +434,7 @@ class AutomationStore:
         self,
         *,
         agent_run_id: str | None = None,
+        project_id: str | None = None,
         tag: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
@@ -315,6 +443,9 @@ class AutomationStore:
         if agent_run_id:
             sql += " AND agent_run_id=?"
             args.append(agent_run_id)
+        if project_id:
+            sql += " AND project_id=?"
+            args.append(project_id)
         if tag:
             sql += " AND tag=?"
             args.append(tag)
@@ -410,7 +541,9 @@ class AutomationStore:
     ) -> None:
         def op() -> None:
             self._db.execute(
-                "INSERT INTO automation_budget_ledger VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO automation_budget_ledger"
+                "(id,day,rule_id,requested_model,input_tokens,output_tokens,cost_usd,"
+                "observer_call_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
                 (
                     str(uuid.uuid4()),
                     time.strftime("%Y-%m-%d", time.gmtime()),
@@ -487,7 +620,9 @@ class AutomationStore:
 
         def op() -> None:
             self._db.execute(
-                "INSERT INTO automation_notifications VALUES(?,?,?,?,?,?,?,?,?,NULL,?)",
+                "INSERT INTO automation_notifications"
+                "(id,agent_run_id,session_id,rule_id,kind,title,message,severity,"
+                "evidence_json,read_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,NULL,?)",
                 (
                     identity,
                     agent_run_id,
@@ -789,13 +924,31 @@ class AutomationStore:
         }
 
     async def experiences(
-        self, *, query: str = "", project_scope_id: str | None = None, limit: int = 100
+        self,
+        *,
+        query: str = "",
+        project_scope_id: str | None = None,
+        error: str | None = None,
+        limit: int = 100,
     ) -> list[dict[str, Any]]:
-        sql = (
-            "SELECT * FROM experience_entries WHERE "
-            "(error_summary LIKE ? OR resolution_summary LIKE ?)"
-        )
-        args: list[Any] = [f"%{query}%", f"%{query}%"]
+        """Browse experiences, or retrieve by exact normalized error signature.
+
+        `error` is the retrieval path a `prior-resolution` annotation must use:
+        substring matching a raw 240-character tool detail against a short
+        model-written summary practically never hits, and when it does the match
+        is coincidental. A usually-wrong prior resolution poisons trust in the
+        whole annotation surface, so this side is equality on the fingerprint.
+        """
+        if error is not None:
+            fingerprint = hashlib.sha256(_normalize_error(error).encode()).hexdigest()[:24]
+            sql = "SELECT * FROM experience_entries WHERE error_fingerprint=?"
+            args: list[Any] = [fingerprint]
+        else:
+            sql = (
+                "SELECT * FROM experience_entries WHERE "
+                "(error_summary LIKE ? OR resolution_summary LIKE ?)"
+            )
+            args = [f"%{query}%", f"%{query}%"]
         if project_scope_id:
             sql += " AND project_scope_id=?"
             args.append(project_scope_id)
@@ -869,17 +1022,41 @@ class AutomationStore:
 
         return await self._run(op)
 
-    async def prune(self, retention_days: int) -> None:
-        cutoff = time.time() - retention_days * 86400
+    async def prune(
+        self, retention_days: int, *, durable_retention_days: int | None = None
+    ) -> None:
+        """Age out automation rows.
+
+        Every table with unbounded growth is covered. Six of them previously had
+        no DELETE anywhere in the codebase, so on a supervisor-preserved daemon
+        (weeks of uptime is the design goal) they grew without any bound at all.
+
+        Two windows, because the tables are not the same kind of data:
+        operational records (firings, action results, observer calls,
+        notifications, spend ledger, batches, rule checkpoints) age out on the
+        configured automation window, while derived knowledge a user reads long
+        after the run — run-note annotations, learned resolutions, branch lineage
+        — is kept for a deliberately longer one.
+        """
+        now = time.time()
+        durable_days = (
+            durable_retention_days
+            if durable_retention_days is not None
+            else max(retention_days, DURABLE_RETENTION_MIN_DAYS)
+        )
+        cutoff = now - max(1, retention_days) * 86400
+        durable_cutoff = now - max(1, durable_days) * 86400
 
         def op() -> None:
-            for table in (
-                "automation_firings",
-                "automation_action_results",
-                "automation_observer_calls",
-                "automation_notifications",
-            ):
+            for table in _OPERATIONAL_PRUNE_TABLES:
                 self._db.execute(f"DELETE FROM {table} WHERE created_at<?", (cutoff,))
+            for table in _DURABLE_PRUNE_TABLES:
+                self._db.execute(f"DELETE FROM {table} WHERE created_at<?", (durable_cutoff,))
+            # Checkpoint keys embed the agent run id, so every run leaves rows
+            # behind permanently; they stamp updated_at rather than created_at.
+            self._db.execute(
+                "DELETE FROM automation_checkpoints WHERE updated_at<?", (cutoff,)
+            )
             self._db.commit()
 
         await self._run(op)

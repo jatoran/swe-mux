@@ -46,3 +46,15 @@ packaging/swe-mux.ico
 _agents-orchestrator/
 .tmp-orca/
 .trash/
+
+# === Test / verification scratch ===
+# Throwaway working directories written by live-agent and identity tests and by
+# the verification runs. They hold binary mux.db copies and fake executables and
+# must never be committed (4f744d8 did, accidentally).
+.test-tmp-identity/
+test-tmp-codex/
+.verify/
+# Per-test SQLite files under tests/. The fixture removes them, but a test that
+# fails before closing its store leaves one behind (Windows will not unlink a
+# file a live connection holds), and those are exactly what got committed before.
+tests/.phase2-*.db*

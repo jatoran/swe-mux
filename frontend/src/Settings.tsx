@@ -16,6 +16,7 @@ import { clearProjectRail, loadRailItems, projectRailIsCustom, saveRailItems } f
 import { ALL_BACKENDS, ALL_PLATFORMS, DEFAULT_CUSTOM_PLACEMENT, isBuiltinRailId, railItemPlacement, railPayload, type RailBackend, type RailItem, type RailItemType, type RailPlacement, type RailPlacementSetting, type RailPlatform } from './commandRail'
 import { fetchPromptTemplates, promptItemSummary } from './promptRail'
 import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
+import type { InitScript } from './projectCreate'
 import type { PromptTemplate } from './PromptLibrary'
 import type { ShellProfile, Project } from './types'
 
@@ -49,6 +50,7 @@ type Config = {
   custom_theme:CustomTheme
   default_shell_profile:string; shell_profiles:ShellProfile[]
   project_ignore_patterns:string[]
+  project_init_scripts:InitScript[]
   automation_enabled:boolean;automation_retention_days:number;automation_concurrency:number
   automation_queue_size:number;automation_max_input_tokens:number;automation_max_output_tokens:number
   automation_daily_token_budget:number;automation_daily_budget_usd:number;automation_rule_daily_token_budget:number
@@ -563,6 +565,25 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
     change('shell_profiles',[...draft!.shell_profiles,{...base,id,args:[...base.args],env:{...base.env},capabilities:[...base.capabilities]}])
     setSelectedProfileId(id)
   }
+  // Init scripts are ordinary config rows; the id is generated once and then left
+  // alone, because the Add-project dialog selects by id and a label edit must not
+  // silently orphan a selection.
+  const initScripts = ():InitScript[] => draft!.project_init_scripts||[]
+  const updateInitScript = (index:number,changes:Partial<InitScript>) =>
+    change('project_init_scripts',initScripts().map((script,itemIndex)=>itemIndex===index?{...script,...changes}:script))
+  const addInitScript = () => {
+    let id='setup', suffix=2
+    while(initScripts().some(script=>script.id===id)) id=`setup-${suffix++}`
+    change('project_init_scripts',[...initScripts(),{id,label:'',command:'',default_enabled:false}])
+  }
+  const removeInitScript = (index:number) =>
+    change('project_init_scripts',initScripts().filter((_,itemIndex)=>itemIndex!==index))
+  const moveInitScript = (index:number,offset:number) => {
+    const items=[...initScripts()],target=index+offset
+    if(target<0||target>=items.length)return
+    ;[items[index],items[target]]=[items[target],items[index]]
+    change('project_init_scripts',items)
+  }
   const moveProfile = (index:number,offset:number) => { const items=[...draft!.shell_profiles],target=index+offset;if(target<0||target>=items.length)return;[items[index],items[target]]=[items[target],items[index]];change('shell_profiles',items) }
   const restoreDetected = () => { const existing=new Set(draft!.shell_profiles.map(profile=>profile.id));change('shell_profiles',[...draft!.shell_profiles,...detectedProfiles.filter(profile=>!existing.has(profile.id)).map(profile=>({...profile,configured:undefined}))]) }
   const refreshUsage = async () => {
@@ -634,6 +655,23 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <label>Default backend<select value={draft.default_backend} onChange={e=>change('default_backend',e.currentTarget.value)}><option value="shell">Shell</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label>
           <label>Scrollback bytes<input type="number" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} /></label>
           <label>History limit<input type="number" value={draft.history_limit} onInput={e=>change('history_limit',Number(e.currentTarget.value))} /></label>
+          {/* Setup commands offered when a Project is registered. They are yours, typed
+              here, stored on this machine — nothing is ever read out of a repository, so
+              there is no trust prompt and no fingerprint to approve. */}
+          <div class="settings-init-scripts">
+            <div class="settings-init-scripts-head"><div><strong>Project setup commands</strong><p>Offered as unchecked options in Add project. Each selected command opens its own one-shot terminal at the new Project root, started in this order.</p></div><button onClick={addInitScript}>+ Add command</button></div>
+            {initScripts().map((script,index)=><div class="settings-init-script" key={script.id}>
+              <label>Name<input value={script.label} placeholder="Initialize git" onInput={e=>updateInitScript(index,{label:e.currentTarget.value})} /></label>
+              <label>Command<textarea value={script.command} placeholder="git init && git commit --allow-empty -m init" onInput={e=>updateInitScript(index,{command:e.currentTarget.value})} /></label>
+              <div class="settings-init-script-actions">
+                <label class="check"><span>Checked by default</span><input type="checkbox" checked={!!script.default_enabled} onChange={e=>updateInitScript(index,{default_enabled:e.currentTarget.checked})} /></label>
+                <button disabled={index===0} onClick={()=>moveInitScript(index,-1)}>↑</button>
+                <button disabled={index===initScripts().length-1} onClick={()=>moveInitScript(index,1)}>↓</button>
+                <button class="danger" onClick={()=>removeInitScript(index)}>Remove</button>
+              </div>
+            </div>)}
+            {!initScripts().length&&<p>No setup commands yet. Add one to have it offered whenever you register a Project.</p>}
+          </div>
           <div class="settings-tutorial-reset"><div><strong>Getting started tutorial</strong><p>Replay the guided tour of Projects, provider accounts, tabs, pane splits, resources, and the main navigation.</p></div><button onClick={()=>requestClose('tutorial')}>Reset &amp; run tutorial</button></div>
           {/* Config-file actions live here rather than in the footer: they act on the
               whole configuration, not the visible tab, so repeating them under every

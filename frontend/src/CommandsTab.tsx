@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'preact/hooks'
+import { useEffect, useMemo, useState } from 'preact/hooks'
 import { railPayload, resolveRail, type RailBackend, type RailItem } from './commandRail'
 import { activatePromptRailItem } from './promptRail'
 import { currentProfile, loadRailItems } from './deviceSettings'
@@ -34,15 +34,24 @@ const ACTION_LABELS: Record<string, string> = {
   relaunch: 'Relaunch',
   toggleKeyboard: 'Keyboard',
   clipboardHistory: 'Clipboard',
+  endSession: 'End session',
 }
 
 export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
   const [note, setNote] = useState('')
+  // End session is the one item here that arms a confirm rather than acting, so this
+  // tab mirrors the workspace's armed id (broadcast by App) to label the second click.
+  const [killArmed, setKillArmed] = useState(false)
   const backend = (session?.backend || 'shell') as RailBackend
   const items = useMemo(
     () => resolveRail(loadRailItems(session?.project_id), { platform: currentProfile(), backend }, 'drawer'),
     [session?.project_id, backend],
   )
+  useEffect(() => {
+    const on = (event: Event) => setKillArmed((event as CustomEvent<string | null>).detail === session?.id)
+    window.addEventListener('mux:kill-armed', on)
+    return () => window.removeEventListener('mux:kill-armed', on)
+  }, [session?.id])
 
   if (!session) {
     return <>
@@ -65,6 +74,9 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
       // `clipboardHistory` is the drawer itself; running it from inside the drawer
       // would be a no-op, so it is filtered out of this grid entirely.
       dispatch(session.id, item.action === 'toggleKeyboard' ? 'toggleKeyboard' : item.action || '', {})
+      // End session only *arms* a confirm on the first click; closing the drawer here
+      // would leave nowhere to make the second one before the window lapses.
+      if (item.action === 'endSession' && !killArmed) return
     } else {
       const payload = railPayload(item, backend)
       if (!payload) { setNote(`${item.label} has no payload configured.`); return }
@@ -77,12 +89,13 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
   const keys = visible.filter(item => item.type === 'key')
   const rest = visible.filter(item => item.type !== 'key')
   const label = (item: RailItem) =>
-    item.type === 'action' ? ACTION_LABELS[item.action || ''] || item.label : item.label
+    item.action === 'endSession' && killArmed ? 'Confirm ✓'
+      : item.type === 'action' ? ACTION_LABELS[item.action || ''] || item.label : item.label
 
   return <>
     <p class="drawer-status">{session.name || session.id} · {backend}</p>
     {rest.length > 0 && <div class="drawer-grid" role="group" aria-label="Session commands">
-      {rest.map(item => <button key={item.id} title={item.title || (item.type === 'prompt' ? 'Insert this prompt template into the composer' : railPayload(item, backend)) || item.label} onClick={() => run(item)}>
+      {rest.map(item => <button key={item.id} class={item.action === 'endSession' && killArmed ? 'confirming' : undefined} title={item.title || (item.type === 'prompt' ? 'Insert this prompt template into the composer' : railPayload(item, backend)) || item.label} onClick={() => run(item)}>
         <span>{label(item)}</span>
         {item.type !== 'action' && <small>{item.type === 'skill' ? 'skill' : item.type === 'slash' ? 'command' : item.type === 'prompt' ? 'prompt' : 'text'}{item.type !== 'prompt' && item.submit ? ' · sends' : ''}</small>}
       </button>)}

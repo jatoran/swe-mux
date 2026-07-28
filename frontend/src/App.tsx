@@ -10,6 +10,11 @@ import { argvPrompt, pastePayload, SUBMIT_SEQUENCE } from './noteSelection'
 import { ContinuityBanner } from './ContinuityBanner'
 import { DirectoryPicker } from './DirectoryPicker'
 import { folderNameFromPath } from './pathNames'
+import {
+  defaultInitScriptSelection, emptyProjectCreateDraft, projectCreateFolder, projectCreateReady,
+  projectCreateRoot, suggestFolderName, toggleInitScript,
+  type InitScript, type ProjectCreateDraft,
+} from './projectCreate'
 import { ProcessPanel, type FleetSnapshot, type Preview, type ProcessItem } from './ProcessPanel'
 import { ResourceUsageSummary } from './ResourceUsage'
 import { ProjectsManager, type ProjectPatch, type ProjectsManagerTab } from './ProjectsManager'
@@ -252,8 +257,11 @@ export function App() {
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const renameInput = useRef<HTMLInputElement>(null)
   const [renameValue, setRenameValue] = useState('')
-  const [projectCreate,setProjectCreate]=useState<{name:string;root:string;group_id:string}>({name:'',root:'',group_id:''})
+  const [projectCreate,setProjectCreate]=useState<ProjectCreateDraft>(emptyProjectCreateDraft())
   const [projectCreateOpen,setProjectCreateOpen]=useState(false)
+  // User-authored setup commands, read fresh when the dialog opens. They live in the
+  // daemon config (Settings → General), never in a repository.
+  const [initScripts,setInitScripts]=useState<InitScript[]>([])
   const [projectsManagerOpen,setProjectsManagerOpen]=useState(false)
   // Which Project the registry should land on, and whether on its record or its
   // settings. Projects is the only per-Project editor, so every "project settings"
@@ -415,12 +423,19 @@ export function App() {
     const startX=event.clientX,startWidth=drawerWidth
     document.body.classList.add('sidebar-resizing')
     const move=(pointer:PointerEvent)=>setDrawerWidth(clampDrawerWidth(startWidth-(pointer.clientX-startX)))
+    // pointercancel too: on touch, a cancelled drag fires only that, and without
+    // it the pointermove listener and the `sidebar-resizing` body class both
+    // survive until some unrelated pointerup happens elsewhere.
     const stop=(pointer:PointerEvent)=>{
       persistDrawerWidth(startWidth-(pointer.clientX-startX))
       document.body.classList.remove('sidebar-resizing')
-      window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop)
+      window.removeEventListener('pointermove',move)
+      window.removeEventListener('pointerup',stop)
+      window.removeEventListener('pointercancel',stop)
     }
-    window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop,{once:true})
+    window.addEventListener('pointermove',move)
+    window.addEventListener('pointerup',stop,{once:true})
+    window.addEventListener('pointercancel',stop,{once:true})
   }
   // Transient touch feedback (which tab a swipe landed on, what a held Run
   // started). Purely visual, so it never enters layout or Project state.
@@ -517,6 +532,9 @@ export function App() {
   const layoutRevisions = useRef<Record<string,number>>({})
   const layoutWriteChains = useRef<Record<string,Promise<boolean>>>({})
   const layoutWriteGeneration = useRef<Record<string,number>>({})
+  // Highest event sequence this tab has seen; sent as ?after_seq on reconnect so
+  // the daemon replays what was actually missed instead of the oldest retained page.
+  const lastEventSeq = useRef(0)
   const requestedView = useRef(parseViewPreference(location.search))
   const focusMemory = useRef(parseFocusMemory(localStorage.getItem('mux.focus.v1')))
   const [focusHydrated,setFocusHydrated]=useState(false)
@@ -558,9 +576,13 @@ export function App() {
     const stop=(pointer:PointerEvent)=>{
       persistSidebarWidth(startWidth+pointer.clientX-startX)
       document.body.classList.remove('sidebar-resizing')
-      window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop)
+      window.removeEventListener('pointermove',move)
+      window.removeEventListener('pointerup',stop)
+      window.removeEventListener('pointercancel',stop)
     }
-    window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop,{once:true})
+    window.addEventListener('pointermove',move)
+    window.addEventListener('pointerup',stop,{once:true})
+    window.addEventListener('pointercancel',stop,{once:true})
   }
   const beginLongPress = (event: JSX.TargetedPointerEvent<HTMLElement>, open: (x:number,y:number)=>void) => {
     if (event.pointerType !== 'touch') return
@@ -597,7 +619,14 @@ export function App() {
         return [...nextSessions,...optimistic]
       })
       setProjects(nextProjects)
-      for(const project of nextProjects)layoutRevisions.current[project.id]=project.layout_revision
+      // A project with a layout PATCH in flight is deliberately skipped below, so
+      // its server revision must not advance either: adopting it here is what let
+      // a second drag base itself on the clobbered layout and then win the write,
+      // silently reverting the first move for every client.
+      for(const project of nextProjects){
+        if(layoutWriteChains.current[project.id]!==undefined)continue
+        layoutRevisions.current[project.id]=project.layout_revision
+      }
       setPreviews(Object.fromEntries(nextPreviews.items.map(item => [item.id, item])))
       setProjectGroups(nextGroups)
       setLayoutMap(current => {
@@ -605,6 +634,10 @@ export function App() {
         const live = new Set(nextSessions.filter(session => !['exited', 'crashed'].includes(session.state)).map(session => session.id))
         const livePreviews = new Set(nextPreviews.items.map(item => item.id))
         for (const project of nextProjects) {
+          // This GET may have been snapshotted before an in-flight layout PATCH
+          // committed. Overwriting optimistic state with it snaps a just-dropped
+          // tab back; the PATCH's own generation-guarded path reconciles instead.
+          if(layoutWriteChains.current[project.id]!==undefined)continue
           // History graduated from a per-project pane tab to a global overlay;
           // drop any persisted history leaf so old layouts don't dangle.
           let base=parseLayout(project.layout)
@@ -633,9 +666,42 @@ export function App() {
     return operation
   }
 
+  type AppConfig = {
+    theme:ThemeName
+    custom_theme:CustomTheme
+    xterm_scrollback_lines:number
+    terminal_renderer:TerminalRendererPreference
+  }&Record<string,unknown>
+
+  // One place that turns a daemon config into browser state. The boot path, the
+  // Settings-close path, and the configuration_changed handler each applied a
+  // *different subset*, so a renderer or scroll-sensitivity change made on
+  // another device silently never reached this tab. `includeTheme` is the only
+  // difference: theme is applied once at boot and by Settings itself.
+  const applyConfig = (config:AppConfig, includeTheme:boolean) => {
+    if (includeTheme) { configureCustomTheme(config.custom_theme); applyTheme(config.theme) }
+    applyNoteEditorConfig(config)
+    setXtermScrollback(config.xterm_scrollback_lines)
+    setTerminalRenderer(config.terminal_renderer)
+    // Value-compared, not replaced: a fresh object identity defeats TerminalPane's
+    // memo and remounts every terminal (socket torn down, xterm disposed, buffer
+    // replayed) on an unchanged setting.
+    const nextMobileInput = mobileInputSettings(config)
+    setMobileInput(current =>
+      JSON.stringify(current) === JSON.stringify(nextMobileInput) ? current : nextMobileInput)
+    setMobileGestures(mobileGestureSettings(config))
+    setSwipeAwayClose(swipeAwayCloseEnabled(config))
+    setClipboardEnabled(config.clipboard_history_enabled!==false)
+  }
+
+  const loadConfig = (includeTheme:boolean) =>
+    api<AppConfig>('GET','/api/config')
+      .then(config=>applyConfig(config,includeTheme))
+      .catch(()=>{})
+
   useEffect(() => {
     void refresh()
-    void api<{theme:ThemeName;custom_theme:CustomTheme;xterm_scrollback_lines:number;terminal_renderer:TerminalRendererPreference}&Record<string,unknown>>('GET','/api/config').then(config => { configureCustomTheme(config.custom_theme); applyTheme(config.theme); applyNoteEditorConfig(config); setXtermScrollback(config.xterm_scrollback_lines);setTerminalRenderer(config.terminal_renderer);setMobileInput(mobileInputSettings(config));setMobileGestures(mobileGestureSettings(config));setSwipeAwayClose(swipeAwayCloseEnabled(config));setClipboardEnabled(config.clipboard_history_enabled!==false) })
+    void loadConfig(true)
     void loadProfiles()
     void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>setVoiceStatus(null))
     void loadNotifications()
@@ -650,7 +716,21 @@ export function App() {
     const keyTimer = setInterval(keyTick, 30000)
     const onVisible = () => { if (!document.hidden) { void refresh(); loadKeys() } }
     document.addEventListener('visibilitychange', onVisible)
-    return () => { clearInterval(timer); clearInterval(keyTimer); document.removeEventListener('visibilitychange', onVisible) }
+    // Backstop for every `void api(...)` call site. Kill, create, and delete are
+    // all fire-and-forget: a rejected DELETE left the session in place with no
+    // toast and no console-surfaced message, indistinguishable from a dead
+    // button. Catching the rejection centrally means one missed try/catch cannot
+    // silently swallow a failure again.
+    const onUnhandled = (event: PromiseRejectionEvent) => {
+      const reason = event.reason
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+    window.addEventListener('unhandledrejection', onUnhandled)
+    return () => {
+      clearInterval(timer); clearInterval(keyTimer)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('unhandledrejection', onUnhandled)
+    }
   }, [])
 
   // Sidebar rows nest the long-running children a session spawned. The daemon's
@@ -767,7 +847,11 @@ export function App() {
       let next: WebSocket
       // Constructing a socket can throw outright (no route, blocked scheme). That must feed
       // the retry path rather than escape into the caller's timer.
-      try { next = openWebSocket('/events') } catch { socket = null; scheduleRetry(); return }
+      // Reconnects resume from the last event actually seen. Without the cursor the daemon
+      // cannot know what this client missed, so catch-up delivers history it already has
+      // and none of the gap.
+      const resume = lastEventSeq.current > 0 ? `?after_seq=${lastEventSeq.current}` : ''
+      try { next = openWebSocket(`/events${resume}`) } catch { socket = null; scheduleRetry(); return }
       socket = next
       handshakeTimer = window.setTimeout(() => {
         handshakeTimer = undefined
@@ -789,6 +873,10 @@ export function App() {
         queueRefresh()
         try {
           const event = JSON.parse(String(message.data))
+          // The daemon says the gap was wider than the replay window: nothing in the
+          // stream can reconstruct it, so fall back to a full REST refresh.
+          if (event.type === 'events_gap') { queueRefresh(); return }
+          if (typeof event.seq === 'number' && event.seq > lastEventSeq.current) lastEventSeq.current = event.seq
           // Catch-up events (marked replay by the daemon) are a historical resync sent on
           // every (re)connect. They must drive state refresh but never re-fire live-only
           // effects like notification sounds or voice autoplay, or reopening the app would
@@ -814,9 +902,10 @@ export function App() {
           if (event.type === 'clipboard_changed') window.dispatchEvent(new CustomEvent(CLIPBOARD_CHANGED_EVENT))
           if (event.type === 'configuration_changed') {
             void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>{})
-            // Clipboard capture is gated client-side, so a change made from another
-            // device (or the config file) has to reach this tab's gate too.
-            void api<Record<string,unknown>>('GET','/api/config').then(config=>{setClipboardEnabled(config.clipboard_history_enabled!==false);setMobileGestures(mobileGestureSettings(config));setSwipeAwayClose(swipeAwayCloseEnabled(config))}).catch(()=>{})
+            // A change made from another device (or by editing the config file)
+            // has to reach this tab's copy of *every* config-derived setting, not
+            // the subset this handler happened to list.
+            void loadConfig(false)
           }
           if(event.type==='project_files_changed')window.dispatchEvent(new CustomEvent('mux:project-files-changed',{detail:{projectId:event.payload?.project_id,paths:event.payload?.paths||[]}}))
           if(event.type==='project_note_changed'||event.type==='session_note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{projectId:String(event.payload?.project_id||''),kind:event.type==='session_note_changed'?'session-note':'note',noteId:event.type==='session_note_changed'?String(event.payload?.note_id||''):null,revision:String(event.payload?.revision||'')}}))
@@ -1138,6 +1227,14 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [confirmKillId])
 
+  // The command rail's End session button lives inside a memoized pane that
+  // deliberately ignores callback props, so it cannot read this state directly.
+  // Broadcasting the armed id (arming and disarming alike) keeps its label in step
+  // with the confirm window here instead of duplicating the timer over there.
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('mux:kill-armed', { detail: confirmKillId }))
+  }, [confirmKillId])
+
   // `options.argv` seeds an agent with a first prompt through the CLI's own argv, the same way
   // the cross-vendor review spawn does. That is deliberately not an inject-then-Enter dance: a
   // freshly spawned TUI is not ready for input for seconds, and anything written before it is
@@ -1260,8 +1357,15 @@ export function App() {
   }
 
   const createProject = async () => {
-    setProjectCreate({name:'',root:'',group_id:''})
+    setProjectCreate(emptyProjectCreateDraft())
+    setInitScripts([])
     setProjectCreateOpen(true)
+    try{
+      const config=await api<{project_init_scripts?:InitScript[]}>('GET','/api/config')
+      const scripts=config.project_init_scripts||[]
+      setInitScripts(scripts)
+      setProjectCreate(value=>({...value,scripts:defaultInitScriptSelection(scripts)}))
+    }catch{/* the dialog still registers a Project without its optional setup commands */}
   }
 
   const openProjectsManager=(focus?:{project:Project;tab?:ProjectsManagerTab})=>{
@@ -1304,9 +1408,24 @@ export function App() {
   }
 
   const submitProject=async()=>{
-    const next=await api<Project>('POST','/api/projects',{name:projectCreate.name,root:projectCreate.root,group_id:projectCreate.group_id||null})
+    const next=await api<Project>('POST','/api/projects',{
+      name:projectCreate.name,
+      root:projectCreateRoot(projectCreate),
+      group_id:projectCreate.group_id||null,
+      create_missing:projectCreate.mode==='new',
+    })
     setProjects(items=>[...items,next]);setProjectId(next.id);setProjectCreateOpen(false);setFolderPickerOpen(false)
     emitTutorialAction({action:'project-created'})
+    // The registration is already durable, so a setup command that fails to launch is
+    // reported without unwinding the Project the user just made.
+    const scripts=projectCreate.scripts.filter(id=>initScripts.some(script=>script.id===id))
+    if(!scripts.length)return
+    try{
+      const result=await api<{errors:{script:string;error:string}[]}>(
+        'POST',`/api/projects/${next.id}/init-scripts/run`,{script_ids:scripts})
+      if(result.errors.length)setError(result.errors.map(item=>`${item.script}: ${item.error}`).join(' · '))
+      await refresh()
+    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
 
   const submitGroup=async()=>{
@@ -2183,20 +2302,28 @@ export function App() {
     if (!split) return
     const rect = split.getBoundingClientRect()
     let latest = activeLayout
+    let moved = false
     const moveDivider = (pointer: PointerEvent) => {
       const ratio = direction === 'horizontal'
         ? (pointer.clientX - rect.left) / rect.width
         : (pointer.clientY - rect.top) / rect.height
+      moved = true
       latest = setSplitRatio(activeLayout, path, ratio)
       setLayoutMap(current => ({ ...current, [projectId]: latest }))
     }
+    // pointercancel, not just pointerup: a touch drag interrupted by palm
+    // rejection or an OS gesture fires only cancel, which left the global
+    // pointermove listener alive and then wrote a layout PATCH from stale
+    // pre-drag state at whatever unrelated pointerup came next.
     const stopResize = () => {
       window.removeEventListener('pointermove', moveDivider)
       window.removeEventListener('pointerup', stopResize)
-      void updateLayout(projectId, latest)
+      window.removeEventListener('pointercancel', stopResize)
+      if (moved) void updateLayout(projectId, latest)
     }
     window.addEventListener('pointermove', moveDivider)
     window.addEventListener('pointerup', stopResize, { once: true })
+    window.addEventListener('pointercancel', stopResize, { once: true })
   }
 
   const openSessionMenu = (session:Session,x:number,y:number,source:NonNullable<ContextState>['source']) => {
@@ -3055,8 +3182,37 @@ export function App() {
 
     {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} initialTab={projectsManagerFocus?.tab} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onNote={project=>{setProjectsManagerOpen(false);openProjectNotes(project)}} onFiles={project=>{setProjectsManagerOpen(false);openProjectFiles(project)}} onPatch={patchManagedProject} onDelete={deleteProject}/>}
 
-    {projectCreateOpen&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setProjectCreateOpen(false)}><form data-tutorial="project-form" class="modal" onSubmit={event=>{event.preventDefault();void submitProject()}}><div class="modal-heading"><div><span>PROJECT::CREATE</span><h2>Add a project</h2></div><button type="button" onClick={()=>setProjectCreateOpen(false)}>×</button></div><label>Name<input value={projectCreate.name} onInput={event=>setProjectCreate(value=>({...value,name:event.currentTarget.value}))} autofocus /></label><label>Folder<div class="project-folder-field"><input value={projectCreate.root} onInput={event=>setProjectCreate(value=>({...value,root:event.currentTarget.value}))} placeholder="D:\\projects\\horizon" /><button type="button" onClick={()=>setFolderPickerOpen(true)}>Browse…</button></div></label><label>Group<select value={projectCreate.group_id} onChange={event=>setProjectCreate(value=>({...value,group_id:event.currentTarget.value}))}><option value="">Ungrouped</option>{projectGroups.map(group=><option value={group.id}>{group.name}</option>)}</select></label><p class="modal-note">Creating the project initializes .swe-mux in this folder. Every session starts at this exact root.</p><div class="modal-footer"><button type="button" onClick={()=>setProjectCreateOpen(false)}>Cancel</button><button class="primary" type="submit" disabled={!projectCreate.name.trim()||!projectCreate.root.trim()}>Create project</button></div></form></div>}
-    {folderPickerOpen&&<DirectoryPicker initialPath={projectCreate.root} onCancel={()=>setFolderPickerOpen(false)} onSelect={root=>{setProjectCreate(value=>({...value,root,name:folderNameFromPath(root)}));setFolderPickerOpen(false)}} />}
+    {projectCreateOpen&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setProjectCreateOpen(false)}>
+      <form data-tutorial="project-form" class="modal" onSubmit={event=>{event.preventDefault();void submitProject()}}>
+        <div class="modal-heading"><div><span>PROJECT::CREATE</span><h2>Add a project</h2></div><button type="button" onClick={()=>setProjectCreateOpen(false)}>×</button></div>
+        {/* Registering a folder that exists and making a new one are the same
+            registration with a different first step, so they are two modes of one
+            form rather than two dialogs that would each need their own setup list. */}
+        <div class="project-create-mode" role="tablist" aria-label="How to add this project">
+          <button type="button" role="tab" aria-selected={projectCreate.mode==='existing'} class={projectCreate.mode==='existing'?'active':''} onClick={()=>setProjectCreate(value=>({...value,mode:'existing'}))}>Existing folder</button>
+          <button type="button" role="tab" aria-selected={projectCreate.mode==='new'} class={projectCreate.mode==='new'?'active':''} onClick={()=>setProjectCreate(value=>({...value,mode:'new'}))}>Create new folder</button>
+        </div>
+        <label>Name<input value={projectCreate.name} onInput={event=>setProjectCreate(value=>({...value,name:event.currentTarget.value}))} autofocus /></label>
+        {projectCreate.mode==='existing'
+          ?<label>Folder<div class="project-folder-field"><input value={projectCreate.root} onInput={event=>setProjectCreate(value=>({...value,root:event.currentTarget.value}))} placeholder="D:\\projects\\horizon" /><button type="button" onClick={()=>setFolderPickerOpen(true)}>Browse…</button></div></label>
+          :<>
+            <label>Parent folder<div class="project-folder-field"><input value={projectCreate.parent} onInput={event=>setProjectCreate(value=>({...value,parent:event.currentTarget.value}))} placeholder="D:\\projects" /><button type="button" onClick={()=>setFolderPickerOpen(true)}>Browse…</button></div></label>
+            <label>New folder name<input value={projectCreateFolder(projectCreate)} onInput={event=>setProjectCreate(value=>({...value,folder:event.currentTarget.value,folderTouched:true}))} placeholder={suggestFolderName(projectCreate.name)||'horizon'} /></label>
+          </>}
+        <label>Group<select value={projectCreate.group_id} onChange={event=>setProjectCreate(value=>({...value,group_id:event.currentTarget.value}))}><option value="">Ungrouped</option>{projectGroups.map(group=><option value={group.id}>{group.name}</option>)}</select></label>
+        {!!initScripts.length&&<details class="project-init-scripts">
+          <summary>Setup commands · {projectCreate.scripts.length} selected</summary>
+          {initScripts.map(script=><label class="check" key={script.id}>
+            <input type="checkbox" checked={projectCreate.scripts.includes(script.id)} onChange={event=>setProjectCreate(value=>({...value,scripts:toggleInitScript(value.scripts,script.id,event.currentTarget.checked)}))} />
+            <span><strong>{script.label}</strong><code>{script.command}</code></span>
+          </label>)}
+          <p class="modal-note">Each selected command opens its own terminal in the new Project, started in this order. They are your own commands from Settings → General, never anything read out of the folder.</p>
+        </details>}
+        <p class="modal-note">{projectCreate.mode==='new'?'The parent folder must already exist; only the new folder is created. ':''}Creating the project initializes .swe-mux in <code>{projectCreateRoot(projectCreate)||'the chosen folder'}</code>. Every session starts at this exact root.</p>
+        <div class="modal-footer"><button type="button" onClick={()=>setProjectCreateOpen(false)}>Cancel</button><button class="primary" type="submit" disabled={!projectCreateReady(projectCreate)}>Create project</button></div>
+      </form>
+    </div>}
+    {folderPickerOpen&&<DirectoryPicker initialPath={projectCreate.mode==='new'?projectCreate.parent:projectCreate.root} onCancel={()=>setFolderPickerOpen(false)} onSelect={root=>{setProjectCreate(value=>value.mode==='new'?{...value,parent:root}:{...value,root,name:folderNameFromPath(root)});setFolderPickerOpen(false)}} />}
 
     {groupEdit&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setGroupEdit(null)}><form class="modal rename-modal" onSubmit={event=>{event.preventDefault();void submitGroup()}}><div class="modal-heading"><div><span>GROUP::{groupEdit.id?'RENAME':'CREATE'}</span><h2>Sidebar group</h2></div><button type="button" onClick={()=>setGroupEdit(null)}>×</button></div><label>Name<input value={groupEdit.name} onInput={event=>setGroupEdit(current=>current?{...current,name:event.currentTarget.value}:current)} autofocus /></label><p class="modal-note">Groups only organize the sidebar. They never affect sessions, panes, or project data.</p><div class="modal-footer"><button type="button" onClick={()=>setGroupEdit(null)}>Cancel</button><button class="primary" type="submit" disabled={!groupEdit.name.trim()}>Save group</button></div></form></div>}
 
@@ -3066,7 +3222,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings initialSection={settingsSection} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void api<{xterm_scrollback_lines:number;terminal_renderer:TerminalRendererPreference}&Record<string,unknown>>('GET','/api/config').then(config=>{applyNoteEditorConfig(config);setXtermScrollback(config.xterm_scrollback_lines);setTerminalRenderer(config.terminal_renderer);setMobileInput(mobileInputSettings(config));setMobileGestures(mobileGestureSettings(config));setSwipeAwayClose(swipeAwayCloseEnabled(config));setClipboardEnabled(config.clipboard_history_enabled!==false)}) }} />}
+    {settingsOpen && <Settings initialSection={settingsSection} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={active?.backend} onClose={()=>setPromptLibraryOpen(false)} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}}))}/>}
 

@@ -76,6 +76,8 @@ BUILTIN_THEME_PAIRS = {
     "borland-dos": ("#0000a8", "#ffff54"),
 }
 CCUSAGE_PACKAGE = "ccusage@latest"
+MAX_PROJECT_INIT_SCRIPTS = 32
+INIT_SCRIPT_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 DEFAULT_PROJECT_IGNORE_PATTERNS = [
     ".git",
     ".swe-mux",
@@ -337,6 +339,7 @@ class Config:
     project_ignore_patterns: list[str] = field(
         default_factory=lambda: list(DEFAULT_PROJECT_IGNORE_PATTERNS)
     )
+    project_init_scripts: list[dict[str, Any]] = field(default_factory=list)
     automation_enabled: bool = False
     automation_retention_days: int = 90
     automation_concurrency: int = 2
@@ -398,6 +401,49 @@ class Config:
         # window using a documented 160-byte average, bounded for xterm.
         result["xterm_scrollback_lines"] = max(1_000, min(100_000, self.scrollback_bytes // 160))
         return result
+
+
+def _validate_project_init_scripts(config: Config, errors: dict[str, str]) -> None:
+    """Validate the user-authored commands offered when a Project is registered.
+
+    These are machine-local and typed by the user in Settings, never imported from a
+    repository, so the only thing enforced here is shape: a stable id to select by, a
+    label to show, and a command string. What the command does is the user's business.
+    """
+    scripts = config.project_init_scripts
+    if not isinstance(scripts, list) or len(scripts) > MAX_PROJECT_INIT_SCRIPTS:
+        errors["project_init_scripts"] = (
+            f"must be an array of at most {MAX_PROJECT_INIT_SCRIPTS} init scripts"
+        )
+        return
+    seen: set[str] = set()
+    for index, script in enumerate(scripts):
+        prefix = f"project_init_scripts.{index}"
+        if not isinstance(script, dict):
+            errors[prefix] = "must be an object with id, label, and command"
+            continue
+        unknown = set(script) - {"id", "label", "command", "default_enabled"}
+        if unknown:
+            errors[prefix] = f"unknown keys: {', '.join(sorted(unknown))}"
+        identifier = script.get("id")
+        if not isinstance(identifier, str) or not INIT_SCRIPT_ID.fullmatch(identifier):
+            errors[f"{prefix}.id"] = (
+                "must be 1–64 characters of letters, digits, hyphen, or underscore"
+            )
+        elif identifier in seen:
+            errors[f"{prefix}.id"] = f"duplicate init script id {identifier}"
+        else:
+            seen.add(identifier)
+        label = script.get("label")
+        if not isinstance(label, str) or not label.strip() or len(label) > 80:
+            errors[f"{prefix}.label"] = "must be a non-empty name of 80 characters or fewer"
+        command = script.get("command")
+        if not isinstance(command, str) or not command.strip() or len(command) > 4000:
+            errors[f"{prefix}.command"] = (
+                "must be a non-empty command of 4000 characters or fewer"
+            )
+        if not isinstance(script.get("default_enabled", False), bool):
+            errors[f"{prefix}.default_enabled"] = "must be a boolean"
 
 
 def _validate(config: Config) -> None:
@@ -639,6 +685,7 @@ def _validate(config: Config) -> None:
         errors["shell_profiles"] = "profile ids must be non-empty and unique"
     if config.shell_profiles and config.default_shell_profile not in ids:
         errors["default_shell_profile"] = "must reference an existing shell profile"
+    _validate_project_init_scripts(config, errors)
     for index, profile in enumerate(config.shell_profiles):
         prefix = f"shell_profiles.{index}"
         if not profile.label.strip() or not profile.executable.strip():
@@ -763,7 +810,17 @@ def load_config(path: Path | None = None) -> Config:
                 continue
             if key in raw:
                 setattr(cfg, key, Path(raw[key]) if key == "data_dir" else raw[key])
-        cfg.shell_profiles = [ShellProfile(**item) for item in raw.get("shell_profiles", [])]
+        # Unknown *top-level* keys are deliberately tolerated above; profile keys
+        # get the same treatment. Without it a mistyped key — or a profile field
+        # added by a newer build, which the redeploy rollback path makes real —
+        # kills startup with a raw TypeError instead of the clean invalid-config
+        # message, and an older daemon cannot start at all.
+        profile_fields = set(ShellProfile.__dataclass_fields__)
+        cfg.shell_profiles = [
+            ShellProfile(**{key: value for key, value in item.items() if key in profile_fields})
+            for item in raw.get("shell_profiles", [])
+            if isinstance(item, dict)
+        ]
         if (
             source_schema < 14
             and raw.get("stt_engine", "sapi") == "sapi"

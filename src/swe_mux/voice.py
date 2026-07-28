@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import os
 import re
 import shutil
@@ -24,24 +25,33 @@ import wave
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from .automation import MAX_SLICE_BYTES, TranscriptSliceService
+from .background_tasks import background
 from .config import Config
 from .event_bus import EventBus
 from .openrouter import OpenRouterClient, OpenRouterError
-from .sqlite_store import database_operation_lock, run_sqlite_operation
+from .sqlite_store import (
+    connect_or_quarantine,
+    database_operation_lock,
+    run_sqlite_operation,
+)
 from .subprocess_flags import background_creation_flags
 
 if TYPE_CHECKING:
     from .automation_store import AutomationStore
     from .session import SessionManager
 
+log = logging.getLogger(__name__)
+
 T = TypeVar("T")
 
 VOICE_RULE_ID = "builtin:voice-summary"
 VOICE_MODES = {"off", "on_demand", "auto"}
+VOICE_EVENT_LOOP = "voice-events"
 AGENT_BACKENDS = {"claude", "codex"}
 DEBOUNCE_SECONDS = 1.0
 ENGINE_TIMEOUT_SECONDS = 45.0
@@ -243,16 +253,21 @@ class VoiceStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
         self._operation_lock = database_operation_lock(path)
+        self._closed = False
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mux-voice-db")
         self._executor.submit(self._connect).result()
 
+    def _open(self) -> sqlite3.Connection:
+        db = sqlite3.connect(self._path, check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA synchronous=NORMAL")
+        db.execute("PRAGMA busy_timeout=5000")
+        return db
+
     def _connect(self) -> None:
         with self._operation_lock:
-            self._db = sqlite3.connect(self._path, check_same_thread=False)
-            self._db.row_factory = sqlite3.Row
-            self._db.execute("PRAGMA journal_mode=WAL")
-            self._db.execute("PRAGMA synchronous=NORMAL")
-            self._db.execute("PRAGMA busy_timeout=5000")
+            self._db = connect_or_quarantine(self._path, self._open)
             self._db.executescript(SCHEMA)
             self._db.commit()
 
@@ -265,7 +280,12 @@ class VoiceStore:
     async def add_clip(self, row: dict[str, Any]) -> None:
         def op() -> None:
             self._db.execute(
-                "INSERT INTO voice_clips VALUES("
+                # Named columns, not positional: adding a column would otherwise
+                # break every insert made by a rolled-back previous bundle.
+                "INSERT INTO voice_clips"
+                "(id,session_id,agent_run_id,created_at,trigger,content_mode,engine,voice,"
+                "text,file_path,format,size_bytes,duration_hint_s,status,error,model,"
+                "input_tokens,output_tokens,cost_usd) VALUES("
                 ":id,:session_id,:agent_run_id,:created_at,:trigger,:content_mode,"
                 ":engine,:voice,:text,:file_path,:format,:size_bytes,:duration_hint_s,"
                 ":status,:error,:model,:input_tokens,:output_tokens,:cost_usd)",
@@ -331,6 +351,14 @@ class VoiceStore:
 
         return await self._run(op)
 
+    async def clip_ids(self) -> set[str]:
+        def op() -> set[str]:
+            return {
+                str(row["id"]) for row in self._db.execute("SELECT id FROM voice_clips").fetchall()
+            }
+
+        return await self._run(op)
+
     async def prune(self, max_bytes: int) -> list[str]:
         """Drop stale failures and the oldest ready clips beyond the byte cap.
         Returns file paths whose backing audio should be removed."""
@@ -362,6 +390,14 @@ class VoiceStore:
         return await self._run(op)
 
     def close(self) -> None:
+        # Idempotent like every sibling store: a second close would otherwise
+        # raise "cannot schedule new futures after shutdown" from the executor,
+        # and in the server's shutdown sequence that skips the remaining closes
+        # and the clean-exit marker, making the next start report a false
+        # unclean-death forensic.
+        if self._closed:
+            return
+        self._closed = True
         self._executor.submit(self._db.close).result()
         self._executor.shutdown(wait=True)
 
@@ -436,14 +472,14 @@ class VoiceService:
     def start(self) -> None:
         if self._task:
             return
-        self._queue = self.events.subscribe()
-        self._task = asyncio.create_task(self._drain(), name="voice-events")
+        self._queue = self.events.subscribe(name="voice")
+        self._task = background.start(VOICE_EVENT_LOOP, self._drain)
 
     async def stop(self) -> None:
-        for task in (*self._debounce.values(), self._task):
-            if task:
-                task.cancel()
-        pending = [task for task in (*self._debounce.values(), self._task) if task]
+        await background.stop(VOICE_EVENT_LOOP)
+        for task in self._debounce.values():
+            task.cancel()
+        pending = list(self._debounce.values())
         self._debounce.clear()
         if self._queue:
             self.events.unsubscribe(self._queue)
@@ -457,11 +493,19 @@ class VoiceService:
         while True:
             event = await self._queue.get()
             try:
-                self._consider(event)
-            except Exception:  # noqa: BLE001 - the drain loop must survive anything
-                continue
+                with background.iteration(VOICE_EVENT_LOOP):
+                    self._consider(event)
+            finally:
+                self._queue.task_done()
 
     def _consider(self, event: Any) -> None:
+        if event.type in {"session_exited", "session_crashed"} and event.session_id:
+            # One lock per session ever seen is unbounded on a daemon designed to
+            # run for weeks; drop it with the session it belongs to.
+            lock = self._locks.get(event.session_id)
+            if lock is not None and not lock.locked():
+                self._locks.pop(event.session_id, None)
+            return
         if event.type != "turn_ended" or not self.config.tts_enabled:
             return
         session_id = event.session_id
@@ -599,10 +643,18 @@ class VoiceService:
         row["text"] = spoken
         destination = self.clip_directory / f"{row['id']}.{row['format']}"
         destination.parent.mkdir(parents=True, exist_ok=True)
-        async with self._engine_semaphore:
-            await asyncio.wait_for(
-                self._synthesize(spoken, destination), timeout=ENGINE_TIMEOUT_SECONDS
-            )
+        try:
+            async with self._engine_semaphore:
+                await asyncio.wait_for(
+                    self._synthesize(spoken, destination), timeout=ENGINE_TIMEOUT_SECONDS
+                )
+        except BaseException:
+            # The failed row is stored with file_path="", so a partial file left
+            # here has no row pointing at it and the byte-cap prune — which only
+            # walks row-listed paths — can never find it again.
+            with suppress(OSError):
+                destination.unlink(missing_ok=True)
+            raise
         row["file_path"] = str(destination)
         row["size_bytes"] = destination.stat().st_size
         row["duration_hint_s"] = estimate_duration_seconds(
@@ -779,6 +831,26 @@ class VoiceService:
         self._sapi_script_path = path
         return path
 
+    def _sweep_stale_utterances(self, directory: Path) -> None:
+        """Delete temporary utterances an abandoned transcription left behind.
+
+        A timed-out worker keeps its WAV open past the request, so the unlink in
+        `transcribe_wav` can lose the race and there is no other sweeper for this
+        directory. Anything older than the timeout window cannot belong to a live
+        request.
+        """
+        cutoff = time.time() - STT_TIMEOUT_SECONDS * 4
+        try:
+            entries = list(directory.iterdir())
+        except OSError:
+            return
+        for item in entries:
+            try:
+                if item.is_file() and item.stat().st_mtime < cutoff:
+                    item.unlink(missing_ok=True)
+            except OSError:
+                continue
+
     async def transcribe_wav(self, audio: bytes) -> str:
         """Transcribe one bounded speech utterance without retaining its audio."""
         if not self.config.stt_enabled:
@@ -788,6 +860,7 @@ class VoiceService:
             utterance_id = str(uuid.uuid4())
             directory = self.clip_directory / "stt"
             directory.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(self._sweep_stale_utterances, directory)
             audio_path = directory / f"{utterance_id}.wav"
             text_path = directory / f"{utterance_id}.txt"
             await asyncio.to_thread(audio_path.write_bytes, audio)
@@ -799,9 +872,23 @@ class VoiceService:
                     )
                 else:
                     text = await self._transcribe_sapi(audio_path, text_path)
+            except TimeoutError as exc:
+                # `asyncio.to_thread` cannot be cancelled, so the worker keeps
+                # transcribing with the WAV open: on Windows the unlink below then
+                # raises WinError 32 and *masks* the timeout with a PermissionError
+                # that voice_transcribe (VoiceError-only) turns into a 500.
+                raise VoiceError(
+                    "transcription timed out; try a shorter utterance"
+                ) from exc
             finally:
-                audio_path.unlink(missing_ok=True)
-                text_path.unlink(missing_ok=True)
+                # Best effort: a file the abandoned worker still holds is swept by
+                # `_sweep_stale_utterances`, so "audio is always deleted" holds
+                # even when the unlink here cannot win.
+                for temporary in (audio_path, text_path):
+                    try:
+                        temporary.unlink(missing_ok=True)
+                    except OSError:
+                        pass
             normalized = re.sub(r"\s+", " ", text).strip()
             if not normalized:
                 raise VoiceError("no speech was recognized")
@@ -956,7 +1043,35 @@ class VoiceService:
     async def _prune(self) -> None:
         removed = await self.store.prune(self.config.tts_cache_mb * 1024 * 1024)
         for file_path in removed:
-            await asyncio.to_thread(Path(file_path).unlink, True)
+            try:
+                await asyncio.to_thread(Path(file_path).unlink, True)
+            except OSError:
+                # A clip being streamed to the browser is held open without
+                # FILE_SHARE_DELETE, so this raises on Windows. Its row is already
+                # gone, so `_sweep_orphan_clips` is what eventually reclaims it —
+                # and letting the error escape here surfaced as an unhandled task
+                # exception (auto trigger) or a 500 after a successful clip.
+                log.warning("could not delete pruned voice clip %s", file_path, exc_info=True)
+        await asyncio.to_thread(self._sweep_orphan_clips, await self.store.clip_ids())
+
+    def _sweep_orphan_clips(self, known: set[str]) -> None:
+        """Delete audio files with no `voice_clips` row pointing at them.
+
+        Prune only walks row-listed paths, so any file whose row is gone (a
+        delete that lost a lock race, a synthesis that failed after writing) is
+        invisible to it and would stay for the life of the install.
+        """
+        try:
+            entries = list(self.clip_directory.iterdir())
+        except OSError:
+            return
+        for item in entries:
+            if not item.is_file() or item.suffix.lower() not in {".mp3", ".wav"}:
+                continue
+            if item.stem in known:
+                continue
+            with suppress(OSError):
+                item.unlink(missing_ok=True)
 
     async def status(self) -> dict[str, Any]:
         engine_available = True

@@ -24,12 +24,16 @@ def test_normal_ui_flows_do_not_use_browser_native_dialogs() -> None:
 
     assert "alert(" not in source
     assert "confirm(" not in source
-    # One deliberate exception: the note editor's manual-copy fallback fires only
-    # after the Clipboard API and selection fallbacks have both failed (insecure
-    # mobile contexts), where a native prompt is the last remaining surface.
-    assert source.count("prompt(") == 1
+    # Exactly two deliberate exceptions, both in the note editor and both reached
+    # only after the Clipboard API has already failed (an insecure mobile context,
+    # where there is no other surface): the manual-copy fallback, and the paste
+    # fallback for the same contexts in the other direction. Any third native
+    # dialog is a regression — normal flows use in-app surfaces.
+    assert source.count("prompt(") == 2
     editor = (root / "ProjectNoteEditor.tsx").read_text(encoding="utf-8")
+    assert editor.count("prompt(") == 2
     assert "window.prompt('Copy the text below:'" in editor
+    assert "window.prompt('Paste text:')" in editor
     assert "Access token required" not in source
     assert "mux.token" not in source
     assert "Create project" in source
@@ -176,7 +180,10 @@ def test_collapsed_sidebar_rail_keeps_sidebar_controls_reachable() -> None:
     assert "const opensDown=placement?placement==='down':compact" in accounts
     # One chip per provider, each identified by its own mark, showing weekly usage.
     assert "providerWeeklyUsage" in accounts
-    assert "const railChip=(provider:ProviderName)=>" in accounts
+    # One chip builder shared by the collapsed rail and the mobile toolbar, so the
+    # two surfaces cannot drift apart.
+    assert "const quotaChip=(provider:ProviderName,form:'rail'|'toolbar')=>" in accounts
+    assert "quotaChip(provider,'rail')" in accounts
     assert "providerGlyph(provider)" in accounts
     assert ".rail-quota .provider-glyph" in css
     # RAM, not CPU: a fluctuating percentage is not worth a permanent glance.
@@ -266,3 +273,62 @@ def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None
         "Open project note…</button>"
         not in app[app.index("{contextMenu &&") : app.index("{projectMenu &&")]
     )
+
+
+def test_event_stream_resumes_from_the_last_seen_sequence() -> None:
+    """Reconnect catch-up is only meaningful with a cursor.
+
+    Without one the daemon cannot know what this client missed, and its no-cursor
+    default served the oldest retained page — history the client already had, and
+    none of the gap.
+    """
+    app = (
+        Path(__file__).parents[1] / "frontend" / "src" / "App.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "lastEventSeq" in app
+    assert "?after_seq=${lastEventSeq.current}" in app
+    assert "openWebSocket(`/events${resume}`)" in app
+    # A gap wider than the replay window must trigger a full refresh, not be
+    # mistaken for "caught up".
+    assert "'events_gap'" in app
+
+
+def test_layout_refresh_defers_to_an_in_flight_layout_write() -> None:
+    """A GET snapshotted before a layout PATCH committed must not clobber it.
+
+    Overwriting optimistic state snapped a just-dropped tab back, and a second
+    drag in that window based itself on the clobbered layout and then won the
+    write — silently reverting the first move for every client.
+    """
+    app = (
+        Path(__file__).parents[1] / "frontend" / "src" / "App.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert app.count("if(layoutWriteChains.current[project.id]!==undefined)continue") == 2
+
+
+def test_terminal_pane_clears_per_session_state_on_a_session_switch() -> None:
+    """The pane is reused unkeyed across stack-tab switches.
+
+    Without an explicit reset, "Copy reply" copies (and records into clipboard
+    history) the previous session's reply.
+    """
+    pane = (
+        Path(__file__).parents[1] / "frontend" / "src" / "TerminalPane.tsx"
+    ).read_text(encoding="utf-8")
+
+    reset = pane[pane.index("setLastReply('')") : pane.index("},[session.id])")]
+    for setter in (
+        "setPreparedClipboard('')",
+        "setManualClipboard(false)",
+        "setSelectionText('')",
+        "setFindQuery('')",
+        "setFindResult('')",
+    ):
+        assert setter in reset, setter
+    # An empty last-reply response must clear the value rather than leave the
+    # previous session's text in place.
+    assert "if(!disposed)setLastReply(result.text||'')" in pane
+    # A renderer change has to reach panes whose other props are stable.
+    assert "a.rendererPreference === b.rendererPreference" in pane

@@ -8,9 +8,11 @@ id = "29a044bb-a06b-4216-95e4-39c5e91d48fb"
 Agentic Controle Plane (ACP)
 
 
+task list - that an agent can check off and add comments too - maybe replace or supercede the observability inbox
+
+- custom tasks - not just vscode tasks. probably good to just not rely on vscode conventions while still allowing importing of them though, but you can just define ur own swemux scripts for a project. agents can do that easily once the swemux mcp is up and can be queried for swe-mux development type info
 
 - command rail quick-model changes
-
 
 
 - should be able to resume sessions even when they weren't run in swe-mux
@@ -31,20 +33,20 @@ Agentic Controle Plane (ACP)
 	- continuity embedded: easy text search feature on command rail and gesture trigger (also hotkey ctrl+f on desktop). just for the currently focused window/note
 	
 	- continuity mobile embedded: any way to bring back the mobile drag handles on highlight select?
+	
+	- markdown horizontal breaks arent rendering, `---`
 
 
-- command rail option: end session (2 click/tap inline confirm)
+- [x] command rail option: end session (2 click/tap inline confirm)
 
 
-- session titler should prefer 2 or 3 word session titles. and short if possible. but must be accurate/descriptive 
+- [x] session titler should prefer 2 or 3 word session titles. and short if possible. but must be accurate/descriptive 
 
-
-
-
+prompt library ui in the right sidebar UI:
+	dont paste into notes or files panes. only paste into agent sessions
+	allow long press or right click prompts to bring up context menu to trigger send to specific in-current-project sessions or to send into a new session (claude or codex)
 
 - ability to click file paths from agent chats and they open
-	- and ability to click links and they open in external browser
-
 
 - maybe congifurable gesture zones? swipe left top half of screen does one thing, swipe left bottom half of screen does another
 	- what other ways to expose more UI in a clean and intuitive way?
@@ -54,11 +56,9 @@ Agentic Controle Plane (ACP)
 
 - allow making command rail be multiple rows? on mobile and/or desktop? and configuring what is on each row
 
-- [ ] the remaining roadmap updates starting with phase 3.5
-	- [ ] confirm phase 3.5 detections are all working
-		- they arent fully. it was asking for approval in a claude chat, and i approved it, and it went on working, but its status still said awaiting approval. once it finished it did properly update to 'ready' though
 
 - [ ] control plane updates
+- [ ] the remaining roadmap updates
 
 
 ability to tap, on mobile in agent sessions, to a specific part of your chat input (this doesn't work on native codex on desktop, but it works on claude code.. hmm). i wonder if we can just make it work foe both? to move the carat to wherever you tap or click in your currently being typed message in these agent cli sessions?
@@ -68,9 +68,11 @@ on mobile agent sessions:
 	want to fix tap and hold and drag highlighting not allowing you to drag if content is off of the current screen (somehow triggeting scroll while also highlighting)
 		pretty hard problem probably. evaluate and discuss if this is reasonably feasible
 
+agents with swemux mcp send tasks to other projects (swe-mux sending a task to continuity)
 
 scheduled agent runs, and repeated ones on a schedule
 
+jump to previous user messages in agent chats
 
 - speak system updates:
 	- user configurable trigger word + variants		- replace "mux" with "swe"?

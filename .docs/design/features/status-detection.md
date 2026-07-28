@@ -37,6 +37,39 @@ Source arbitration is unchanged from before this phase: priority `{pty:0, transc
 hook:2}` within a turn, released at new-turn boundaries, with `force` (interrupt/abort,
 process exit, lifecycle changes, transcript-authoritative closes) reclaiming authority.
 
+**Terminal latch.** `exited`/`crashed` is process ground truth, so once a record is in one of
+them only `source="daemon"` may move it out; every other source is refused and ledgered
+(`kind: transition_refused`, `reason: terminal_latch`). `force` does not override it — force
+reclaims arbitration *between live sources*, not from process reality. Without this, a hook
+that arrived after the PTY reported EOF (a `SessionEnd` the shim re-spooled after the file was
+unlinked) resurrected a dead session to `idle`, leaving a live-looking session on a dead PTY
+that fleet and status surfaces counted as active.
+
+### Hook spool replay
+
+Terminal hook events whose POST failed are appended to a per-session spool for the watchdog to
+replay. The spool file is keyed by mux session id, which outlives both the agent run and the
+session itself, so replay is guarded rather than unconditional:
+
+Blocking events (`PermissionRequest`, `Notification`, Codex approval/question requests) are
+spooled alongside the terminal ones. A permission dialog raised during a session-preserving
+daemon restart — a routine operation here — otherwise has no second source: the transcript
+tail reads "open" and the PTY reads "approval", so neither watchdog path can fire and the
+session sits displayed as "working" until the 900s no-evidence alarm.
+
+- Each entry is stamped with a wall-clock `spooled_at` by the shim.
+- At drain, an entry older than the current agent run's start **or** the current turn's start
+  is discarded and ledgered (`hook_spool_discarded`). A `Stop` from turn N must not close
+  turn N+1, and a leftover from a previous run must not close the first turn of the next one.
+  Entries with no stamp (written by an older shim) still replay.
+- A session in a terminal state discards its spool instead of replaying it.
+- `demote()`, `promote()` and `_mark_ended()` all discard the spool, so nothing survives into
+  a run it does not describe.
+- Consumption is by rename (`<sid>.jsonl` → `<sid>.jsonl.consuming`), so a shim append that
+  lands after the snapshot goes to a fresh file rather than being truncated away. On Windows
+  the rename simply fails while the shim holds the file, which correctly defers the drain one
+  poll instead of racing it.
+
 ### Awaiting sub-reasons
 
 | `awaiting_reason` | Set by |
@@ -49,6 +82,20 @@ process exit, lifecycle changes, transcript-authoritative closes) reclaiming aut
 `idle_prompt` maps to `idle` (ready), never `awaiting`. It does not clobber a pending
 approval unless this session's own screen proves the dialog is gone (see below).
 `SessionRecord.awaiting_reason` is cleared by every transition off `awaiting`.
+
+### Idle sub-reason
+
+| `idle_reason` | Set by |
+| --- | --- |
+| `waiting_on_background` | this session's own PTY tail showing the CLI's background-wait line after the last working marker |
+
+The idle-axis sibling of `awaiting_reason`, and deliberately *not* a state: the turn really
+did end, the composer accepts input, and `delivery_state` is unchanged. What it fixes is the
+reading — "ready · turn complete" says "finished, nothing more is coming", which is wrong
+while the agent has background work that will wake it back up. The UI renders
+"ready · background work running", and the completion sound and push alert skip that turn
+end (the next one is the moment worth the user's attention). Cleared by every transition off
+`idle`, so a self-wake into `working` clears it with no user prompt involved.
 
 ### Leaving `awaiting` (answered prompts)
 
@@ -102,16 +149,26 @@ the daemon more conservative (it vetoes clearing an awaiting and blocks the idle
 
 `watchdog_decision` (pure, shared with the harness) encodes the quiescence watchdog:
 
-- `awaiting` with the screen showing the working spinner for
+- `awaiting(approval)` with the screen showing the working spinner for
   ≥ `STATE_WATCHDOG_AWAITING_RESUME_SECONDS` (5s) → `resume_working`. Checked *before* the
   transcript-quiet gate, because after an approval the transcript is usually busy rather
-  than quiet, which would skip the pass entirely.
+  than quiet, which would skip the pass entirely. **Approval only**: it is the one block
+  whose dialog the tail classifier can recognize, so it is the one where "the spinner is up"
+  proves the block is gone. A Codex question or an elicitation shows neither an approval nor
+  an idle marker while redraw history still holds "esc to interrupt" from before the block —
+  resuming on that would hide a prompt the user must answer.
 - `working`/`awaiting` stalled ≥ `STATE_WATCHDOG_ENDED_STUCK_SECONDS` (6s) with a quiet
   transcript whose tail **proves** the turn ended → force idle (`watchdog`).
 - Tail `unknown`/`open` (schema drift, missing marker, observer on a sibling transcript)
   → only after `STATE_WATCHDOG_PTY_STUCK_SECONDS` (60s) **and** the screen's live frame is
   the idle prompt → force idle (`watchdog-pty`). A session parked at a real dialog reads
   `approval`, so the backstop can never force-idle it and hide the prompt.
+- A **missing or unreadable transcript** reaches that same backstop with verdict `unknown`
+  rather than returning early. Returning made the recovery the design promises for exactly
+  that case unreachable — and it is the case with no other recovery path.
+- Stall duration, screen verdict, and current state are **re-derived after** the threaded
+  tail read. They were captured before it, so an approval raised inside that window used to
+  be judged against pre-approval evidence and instantly resumed to `working`.
 - "esc to interrupt" on screen always reads busy: a genuine long tool is never cut short.
 
 All three classify as `inferred`, record the stall duration and tail verdict, and are

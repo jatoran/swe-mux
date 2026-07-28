@@ -12,7 +12,11 @@ inbox. Supported reasons are root turn complete, ready/waiting, approval or Q&A 
 failure, and confirmed unexpected quota reset. Reset sounds are emitted only after the durable
 quota classifier's timer, drop-size, floor, independent-confirmation, and account/auth gates all
 pass. EventBus semantic deduplication collapses hook and transcript duplicates; the browser adds
-a short sequence-aware guard. Events explicitly scoped to subagents/sidechains are rejected.
+a short sequence-aware guard. Events explicitly scoped to subagents/sidechains are rejected,
+and so is a turn end carrying `idle_reason: waiting_on_background`: the agent will resume
+itself when its background work lands, so that turn end is not the moment worth interrupting
+for. The one after it is — and suppressing here keeps "the completion chime means the agent
+is done" true instead of training the user to ignore it. The same rule gates web push.
 The account popover can persistently classify a Codex alert as manual usage or discard any alert
 as a detection error. Reviewed evidence remains in telemetry history but leaves the active alert
 summary; review cannot retract a sound already emitted for the original confirmed event.

@@ -25,6 +25,13 @@ class EventBus:
         self._clock = clock
         self._semantic_events: dict[tuple[object, ...], MuxEvent] = {}
         self._background: set[asyncio.Task[MuxEvent]] = set()
+        # A full subscriber queue drops events on the floor. That is the correct
+        # backpressure policy (one slow consumer must not stall the bus), but a
+        # silent drop is indistinguishable from "nothing happened" for durable
+        # consumers like Tier 0 — so every drop is attributed and counted.
+        self._labels: dict[int, str] = {}
+        self._drops: dict[str, int] = {}
+        self._last_drop_ts: dict[str, float] = {}
 
     def emit_background(
         self,
@@ -97,13 +104,49 @@ class EventBus:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                pass
+                self._record_drop(queue, event)
         return event
 
-    def subscribe(self) -> asyncio.Queue[MuxEvent]:
+    def _record_drop(self, queue: asyncio.Queue[MuxEvent], event: MuxEvent) -> None:
+        label = self._labels.get(id(queue), "anonymous")
+        count = self._drops.get(label, 0) + 1
+        self._drops[label] = count
+        self._last_drop_ts[label] = event.ts
+        # First drop per subscriber is loud (it means a consumer fell behind or
+        # died); afterwards the counter carries the signal without log spam.
+        if count == 1 or count % 1000 == 0:
+            log.warning(
+                "event bus dropped %s for subscriber %r (%d dropped total)",
+                event.type,
+                label,
+                count,
+            )
+
+    def drop_stats(self) -> dict[str, Any]:
+        """Per-subscriber drop counts for diagnostics.
+
+        Also reports live queue depth so a consumer that is merely slow can be
+        told apart from one that has stopped draining entirely.
+        """
+        depths: dict[str, int] = {}
+        for queue in self._subscribers:
+            depths[self._labels.get(id(queue), "anonymous")] = queue.qsize()
+        return {
+            "subscribers": len(self._subscribers),
+            "dropped": dict(self._drops),
+            "dropped_total": sum(self._drops.values()),
+            "last_drop_ts": dict(self._last_drop_ts),
+            "queue_depth": depths,
+        }
+
+    def subscribe(self, *, name: str = "anonymous") -> asyncio.Queue[MuxEvent]:
         queue: asyncio.Queue[MuxEvent] = asyncio.Queue(maxsize=1024)
         self._subscribers.add(queue)
+        self._labels[id(queue)] = name
         return queue
 
     def unsubscribe(self, queue: asyncio.Queue[MuxEvent]) -> None:
         self._subscribers.discard(queue)
+        # Drop counts outlive the subscription on purpose: a leaked or churned
+        # subscriber's losses must stay visible in diagnostics.
+        self._labels.pop(id(queue), None)

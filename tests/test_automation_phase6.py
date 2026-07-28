@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -18,7 +20,7 @@ from swe_mux.automation import (
     parse_rules,
     serialize_rules,
 )
-from swe_mux.automation_store import AutomationStore
+from swe_mux.automation_store import AUTOMATION_SCHEMA_VERSION, AutomationStore
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
 from swe_mux.git_projects import ProjectIdentity
@@ -26,6 +28,7 @@ from swe_mux.history import HistoryIndex
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.openrouter import OpenRouterError, OpenRouterResult
 from swe_mux.secret_store import PlatformSecretStore
+from swe_mux.sqlite_store import read_schema_version
 
 RULES = """
 version = 1
@@ -970,3 +973,224 @@ def test_builtin_rules_skip_without_agent_run(tmp_path: Path) -> None:
     event = normalized_event(record, 1, "turn_ended", agent_run_id=None)
     assert engine._builtin_rules(event) == []
     engine.store.close()
+
+
+@pytest.mark.asyncio
+async def test_prune_covers_every_growing_table(tmp_path: Path) -> None:
+    """Six tables previously had no DELETE anywhere; on a daemon designed for
+    weeks of uptime that is unbounded growth, not slow retention."""
+    store = AutomationStore(tmp_path / "mux.db")
+    old = time.time() - 400 * 86400
+    try:
+        firing_id = await store.create_firing(
+            event_seq=1,
+            event_type="turn_ended",
+            agent_run_id="run-1",
+            session_id="s1",
+            rule_id="r1",
+            rule_revision="rev",
+            chain_id="c1",
+            chain_depth=0,
+            shadow=False,
+            trace=[],
+        )
+        assert firing_id is not None
+        await store.action_result(firing_id, 0, "annotate", "ok", {})
+        await store.observer_started(
+            firing_id=firing_id,
+            rule_id="r1",
+            model="cheap",
+            input_hash="h",
+            input_bytes=1,
+        )
+        await store.notify(
+            agent_run_id="run-1", session_id="s1", rule_id="r1", kind="k", title="t", message="m"
+        )
+        await store.add_spend(
+            rule_id="r1",
+            model="cheap",
+            input_tokens=1,
+            output_tokens=1,
+            cost_usd=0.0,
+            call_id="call-1",
+        )
+        await store.create_batch("summary", ["run-1"])
+        await store.set_checkpoint("rule:r1:run-1", {"ts": 1})
+        await store.create_annotation(
+            agent_run_id="run-1",
+            session_id="s1",
+            tag="turn-summary",
+            content="c",
+            source_event_seq=1,
+            rule_id="r1",
+            rule_revision="rev",
+            provenance="observer",
+        )
+        await store.add_lineage("run-1", "run-2", "branch")
+        await store.add_experience(
+            project_scope_id="scope",
+            backend="claude",
+            error="boom",
+            resolution="fixed",
+            source_run_id="run-1",
+            confidence=0.5,
+        )
+
+        tables = (
+            "automation_firings",
+            "automation_action_results",
+            "automation_observer_calls",
+            "automation_notifications",
+            "automation_budget_ledger",
+            "observer_batches",
+            "automation_checkpoints",
+            "automation_annotations",
+            "session_lineage",
+            "experience_entries",
+        )
+
+        def counts() -> dict[str, int]:
+            return {
+                table: store._db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in tables
+            }
+
+        assert all(value == 1 for value in (await store._run(counts)).values())
+
+        # Nothing recent is removed.
+        await store.prune(90)
+        assert all(value == 1 for value in (await store._run(counts)).values())
+
+        # Age every row past both windows, then prune with an explicit durable
+        # window so the second retention class is exercised too.
+        def age() -> None:
+            for table in tables:
+                column = "updated_at" if table == "automation_checkpoints" else "created_at"
+                store._db.execute(f"UPDATE {table} SET {column}=?", (old,))
+            store._db.commit()
+
+        await store._run(age)
+        await store.prune(90)
+        remaining = await store._run(counts)
+        assert all(value == 0 for value in remaining.values()), remaining
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_prune_keeps_derived_knowledge_longer_than_the_operational_trail(
+    tmp_path: Path,
+) -> None:
+    store = AutomationStore(tmp_path / "mux.db")
+    try:
+        await store.notify(
+            agent_run_id="run-1", session_id="s1", rule_id=None, kind="k", title="t", message="m"
+        )
+        await store.create_annotation(
+            agent_run_id="run-1",
+            session_id="s1",
+            tag="turn-summary",
+            content="c",
+            source_event_seq=1,
+            rule_id=None,
+            rule_revision=None,
+            provenance="observer",
+        )
+        older_than_operational = time.time() - 120 * 86400
+
+        def age() -> None:
+            for table in ("automation_notifications", "automation_annotations"):
+                store._db.execute(f"UPDATE {table} SET created_at=?", (older_than_operational,))
+            store._db.commit()
+
+        await store._run(age)
+        await store.prune(90)
+
+        def counts() -> tuple[int, int]:
+            return (
+                store._db.execute("SELECT COUNT(*) FROM automation_notifications").fetchone()[0],
+                store._db.execute("SELECT COUNT(*) FROM automation_annotations").fetchone()[0],
+            )
+
+        notifications, annotations = await store._run(counts)
+        assert notifications == 0
+        assert annotations == 1  # run notes outlive the firing trail
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_annotations_anchor_to_a_project_and_dedupe_on_a_key(tmp_path: Path) -> None:
+    # Deterministic consumers need both anchors: a loop finding belongs to one
+    # agent run, while doc debt is a property of the project and has no run to
+    # attach to. Evidence is a list because a finding whose case rests on a set
+    # of facts is not traceable through a single event pointer.
+    store = AutomationStore(tmp_path / "mux.db")
+    try:
+        with pytest.raises(ValueError, match="anchored"):
+            await store.create_annotation(tag="doc-debt", content="c", provenance="detector")
+
+        first = await store.create_annotation(
+            project_id="project-1",
+            tag="doc-debt",
+            content="4 docs dirty",
+            evidence=[{"fact_id": "f1"}, {"fact_id": "f2"}],
+            dedupe_key="doc-debt:project-1:abc",
+            provenance="detector",
+        )
+        assert first["agent_run_id"] is None
+        assert json.loads(first["evidence_json"]) == [{"fact_id": "f1"}, {"fact_id": "f2"}]
+
+        again = await store.create_annotation(
+            project_id="project-1",
+            tag="doc-debt",
+            content="4 docs dirty",
+            dedupe_key="doc-debt:project-1:abc",
+            provenance="detector",
+        )
+        assert again["duplicate"] is True
+        assert again["id"] == first["id"]
+
+        by_project = await store.annotations(project_id="project-1")
+        assert [item["id"] for item in by_project] == [first["id"]]
+        assert await store.annotations(agent_run_id="project-1") == []
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_annotation_schema_is_migrated_in_place(tmp_path: Path) -> None:
+    # This store had no migration mechanism at all: CREATE TABLE IF NOT EXISTS
+    # no-ops on an existing table, so a new column existed only in fresh
+    # databases and every upgrade-in-place failed on the first insert naming it.
+    path = tmp_path / "mux.db"
+    legacy = sqlite3.connect(path)
+    legacy.execute(
+        "CREATE TABLE automation_annotations ("
+        "id TEXT PRIMARY KEY, agent_run_id TEXT NOT NULL, session_id TEXT,"
+        "tag TEXT NOT NULL, content TEXT NOT NULL, source_event_seq INTEGER,"
+        "rule_id TEXT, rule_revision TEXT, provenance TEXT NOT NULL,"
+        "requested_model TEXT, resolved_model TEXT, generation_id TEXT,"
+        "input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,"
+        "cost_usd REAL, confidence REAL, created_at REAL NOT NULL)"
+    )
+    legacy.execute(
+        "INSERT INTO automation_annotations"
+        "(id,agent_run_id,tag,content,provenance,created_at) VALUES(?,?,?,?,?,?)",
+        ("old-1", "run-1", "title", "Legacy title", "observer", time.time()),
+    )
+    legacy.commit()
+    legacy.close()
+
+    store = AutomationStore(path)
+    try:
+        kept = await store.annotations(agent_run_id="run-1")
+        assert [item["id"] for item in kept] == ["old-1"]
+        # The rebuild is what relaxes agent_run_id to nullable; ALTER cannot.
+        project_scoped = await store.create_annotation(
+            project_id="project-1", tag="doc-debt", content="c", provenance="detector"
+        )
+        assert project_scoped["project_id"] == "project-1"
+        assert read_schema_version(store._db, "automation") == AUTOMATION_SCHEMA_VERSION
+    finally:
+        store.close()

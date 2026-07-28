@@ -94,6 +94,19 @@ async def test_identity_repair_quarantines_false_run_and_reopens_root(
     assert reopened["final_state"] is None
     history.close()
 
+    # Reopening the database re-runs _migrate_schema. Its agent_visible backfill
+    # used to be unconditional, so every quarantined misattribution reappeared
+    # under the sibling's identity after one daemon restart — and restarts are
+    # routine here (session-preserving reload on every backend change).
+    reopened_index = HistoryIndex(tmp_path / "mux.db")
+    try:
+        still_hidden = await reopened_index.history_entry("false-run")
+        assert still_hidden is not None
+        assert still_hidden["agent_visible"] == 0
+        assert [row["id"] for row in await reopened_index.history()] == ["root"]
+    finally:
+        reopened_index.close()
+
 
 async def test_historical_provider_collision_is_repaired_after_session_exit(
     tmp_path: Path,

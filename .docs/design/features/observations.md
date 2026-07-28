@@ -27,6 +27,11 @@ project-owned resource file. Vision: `../../development/CONTROL_PLANE_ROADMAP.md
 
 - Append is conflict-free (no revision check); full replace is revision-checked and
   returns `409 revision_conflict` on staleness.
+- "Missing" and "unparseable" are different answers. A file that exists but does not parse
+  (a hand edit, merge-conflict markers) reports `status: "malformed"` and refuses both
+  writes with `409 observations_unreadable`. Reading it as an empty list meant the very next
+  captured note rewrote the file with a single item and silently destroyed every prior
+  observation — in a file whose whole content is the user's own notes.
 - The frontend reuses the terminal clipboard fallback: desktop copies silently, mobile /
   insecure contexts show the manual-copy overlay.
 

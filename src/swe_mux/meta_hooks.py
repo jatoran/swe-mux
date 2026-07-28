@@ -17,12 +17,15 @@ from urllib.parse import urlparse
 
 from aiohttp import ClientSession, ClientTimeout
 
+from .background_tasks import background
 from .event_bus import EventBus
 from .models import MuxEvent
 from .session import SessionManager
 from .subprocess_flags import background_creation_flags, reap_process_tree
 
 log = logging.getLogger(__name__)
+
+META_HOOKS_LOOP = "meta-hooks"
 
 MAX_HOOK_FILE_BYTES = 256 * 1024
 MAX_ACTION_TEXT_BYTES = 64 * 1024
@@ -149,12 +152,11 @@ class MetaHookEngine:
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
-        self._task = asyncio.create_task(self._run(), name="meta-hooks")
+        self._task = background.start(META_HOOKS_LOOP, self._run)
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            await asyncio.gather(self._task, return_exceptions=True)
+        await background.stop(META_HOOKS_LOOP)
+        self._task = None
 
     async def _reload(self) -> None:
         if not self.path.exists():
@@ -195,15 +197,17 @@ class MetaHookEngine:
         await self.events.emit("hook_rules_reloaded", source="hooks", rules=len(rules))
 
     async def _run(self) -> None:
-        queue = self.events.subscribe()
+        queue = self.events.subscribe(name="meta-hooks")
         try:
             while True:
-                await self._reload()
+                with background.iteration(META_HOOKS_LOOP):
+                    await self._reload()
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=2)
                 except TimeoutError:
                     continue
-                await self._handle(event)
+                with background.iteration(META_HOOKS_LOOP):
+                    await self._handle(event)
         finally:
             self.events.unsubscribe(queue)
 

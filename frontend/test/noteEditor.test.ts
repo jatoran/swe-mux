@@ -139,3 +139,65 @@ test('markdown files queue-save to the project file endpoint with their path', (
   const body = fileSaveTarget('project', 'docs/readme.md').body('# hi', 'rev0')
   assert.deepEqual(body, { path: 'docs/readme.md', text: '# hi', revision: 'rev0' })
 })
+
+test('the unload beacon sends the newest snapshot even while a save is in flight', async () => {
+  // While a PUT is in flight the newest text lives only in entry.pending, and
+  // that PUT is a plain non-keepalive fetch the unload can abort. Skipping the
+  // entry meant guaranteed loss of everything typed during the save.
+  const { transport, deferreds } = makeTransport()
+  const queue = new NoteSaveQueue(transport)
+  const key = noteQueueKey('p1', 'r1')
+  queue.reset(key, noteTarget, 'rev0')
+  queue.submit(key, 'saved so far')
+  queue.flush(key) // in flight
+  queue.submit(key, 'typed while saving')
+
+  const beacons: { url: string; body: unknown; keepalive: boolean }[] = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = ((url: string, init: RequestInit) => {
+    beacons.push({
+      url,
+      body: JSON.parse(String(init.body)),
+      keepalive: Boolean(init.keepalive),
+    })
+    return Promise.resolve(new Response('{}'))
+  }) as typeof fetch
+  try {
+    queue.beaconFlushAll()
+  } finally {
+    globalThis.fetch = realFetch
+  }
+
+  assert.equal(beacons.length, 1)
+  assert.equal(beacons[0].url, '/api/projects/p1/note')
+  assert.equal(beacons[0].keepalive, true)
+  assert.deepEqual(beacons[0].body, { markdown: 'typed while saving', revision: 'rev0' })
+  deferreds[0].resolve({ revision: 'rev1', status: 'ready' })
+  await tick()
+})
+
+test('the unload beacon skips entries with nothing pending and blocked entries', async () => {
+  const { transport, deferreds } = makeTransport()
+  const queue = new NoteSaveQueue(transport)
+  const clean = noteQueueKey('p1', 'clean')
+  const blocked = noteQueueKey('p1', 'blocked')
+  queue.reset(clean, noteTarget, 'rev0')
+  queue.reset(blocked, noteTarget, 'rev0')
+  queue.submit(blocked, 'conflicted')
+  queue.flush(blocked)
+  deferreds[0].resolve({ revision: 'rev9', status: 'conflict' })
+  await tick()
+
+  const beacons: string[] = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = ((url: string) => {
+    beacons.push(url)
+    return Promise.resolve(new Response('{}'))
+  }) as typeof fetch
+  try {
+    queue.beaconFlushAll()
+  } finally {
+    globalThis.fetch = realFetch
+  }
+  assert.deepEqual(beacons, [])
+})

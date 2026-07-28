@@ -4,11 +4,17 @@ import asyncio
 import json
 import os
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
 from ..codex_tui import with_scrollback_safe_tui
 from .base import SpawnOptions, SpawnSpec
+
+# Shared across every live Codex session: they all scan the same tree on the same
+# cadence, so one pass per window instead of one per session per tick.
+_ROLLOUT_CACHE_SECONDS = 2.0
+_ROLLOUT_CACHE: dict[str, tuple[float, list[tuple[float, Path]]]] = {}
 
 
 def codex_data_home() -> Path:
@@ -73,21 +79,43 @@ class CodexAdapter:
             pass
         return None
 
+    def _newest_rollouts(self, root: Path) -> list[tuple[float, Path]]:
+        """The 20 newest rollout files, cached briefly and shared across sessions.
+
+        Codex stores rollouts in a flat date tree that mux never prunes, and this
+        runs on a 2-second switch-watch tick *per live Codex session*. Re-globbing
+        and re-stat-ing thousands of files per tick, forever, was tens of
+        thousands of stat calls a second on an install with real history — pure
+        waste whenever no switch is happening. The window is short enough that a
+        genuine in-CLI resume is still noticed within one extra tick.
+        """
+        now = time.monotonic()
+        key = str(root)
+        cached = _ROLLOUT_CACHE.get(key)
+        if cached and now - cached[0] < _ROLLOUT_CACHE_SECONDS:
+            return cached[1]
+        found: list[tuple[float, Path]] = []
+        for path in root.glob("**/rollout-*.jsonl"):
+            try:
+                found.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+        found.sort(key=lambda item: item[0], reverse=True)
+        newest = found[:20]
+        _ROLLOUT_CACHE[key] = (now, newest)
+        return newest
+
     def recent_transcripts(self, cwd: Path, created_at: float) -> list[tuple[float, Path, str]]:
         root = codex_data_home() / "sessions"
         if not root.exists():
             return []
         resolved = str(cwd.resolve()).casefold()
         result: list[tuple[float, Path, str]] = []
-        paths = sorted(
-            root.glob("**/rollout-*.jsonl"),
-            key=lambda item: item.stat().st_mtime,
-            reverse=True,
-        )[:20]
-        for path in paths:
-            modified = path.stat().st_mtime
+        for modified, path in self._newest_rollouts(root):
+            if modified + 2 < created_at:
+                continue
             association = self._association(path)
-            if modified + 2 >= created_at and association and association[1].casefold() == resolved:
+            if association and association[1].casefold() == resolved:
                 result.append((modified, path, association[0]))
         return result
 

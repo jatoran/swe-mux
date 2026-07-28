@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +13,12 @@ from typing import Any
 from .adapters.codex import codex_data_home
 from .event_bus import EventBus
 from .models import SessionState
-from .session import Session, pty_tail_state, transition_proof
+from .session import (
+    Session,
+    pty_tail_state,
+    pty_tail_waiting_on_background,
+    transition_proof,
+)
 
 log = logging.getLogger(__name__)
 
@@ -227,12 +233,313 @@ def tool_call_evidence(tool_input: Any) -> tuple[str | None, str | None]:
     return target, content_hash
 
 
+# Bound for the `detail` string carried on a normalized tool_result event.
+TOOL_DETAIL_LIMIT = 4000
+# Only the tail of a very large result is scanned for a test summary: every
+# supported runner prints its counts last, and an unbounded regex sweep on the
+# event path is the one heavy operation this module must not introduce.
+_TEST_SCAN_TAIL_BYTES = 256 * 1024
+# Cheap pre-filter: skip the (bounded but non-trivial) parser entirely unless the
+# output contains a token every supported runner emits.
+_TEST_MARKERS = (
+    " passed",
+    " failed",
+    "--- FAIL",
+    "--- PASS",
+    "test result:",
+    "Ran ",
+    "Tests:",
+    "Test Files",
+    "no tests ran",
+)
+_MAX_FAILING_TESTS = 100
+_MAX_FAILING_TEST_CHARS = 200
+# Cap on in-flight tool-call correlations kept per session.
+_MAX_TRACKED_TOOL_CALLS = 512
+
+_PYTEST_SUMMARY_RE = re.compile(
+    r"^=*\s*(?P<body>(?:\d+\s+[a-z]+|no tests ran)(?:[,\s].*)?)\s+in\s+[\d.]+\s*s", re.IGNORECASE
+)
+_PYTEST_COUNT_RE = re.compile(
+    r"(\d+)\s+(passed|failed|error|errors|skipped|xfailed|xpassed)\b", re.IGNORECASE
+)
+_PYTEST_FAILING_RE = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)")
+_JEST_COUNT_RE = re.compile(r"^\s*Tests:\s+(?P<body>.+)$")
+_VITEST_COUNT_RE = re.compile(r"^\s*Tests\s+(?P<body>\d+\s+\w+.*)$")
+_JS_COUNT_TOKEN_RE = re.compile(r"(\d+)\s+(passed|failed|skipped|todo|pending|total)\b")
+_JEST_FAILING_RE = re.compile(r"^\s*(?:●|✕|×)\s+(.+?)\s*$")
+_GO_FAIL_RE = re.compile(r"^\s*--- FAIL:\s+(\S+)")
+_GO_PASS_RE = re.compile(r"^\s*--- PASS:\s+(\S+)")
+_GO_SKIP_RE = re.compile(r"^\s*--- SKIP:\s+(\S+)")
+_CARGO_RESULT_RE = re.compile(
+    r"^test result:\s+(?P<verdict>ok|FAILED)\.\s+(?P<body>.+)$", re.IGNORECASE
+)
+_CARGO_COUNT_RE = re.compile(r"(\d+)\s+(passed|failed|ignored|measured|filtered out)\b")
+_CARGO_FAILING_RE = re.compile(r"^test\s+(\S+)\s+\.\.\.\s+FAILED\s*$")
+_UNITTEST_RAN_RE = re.compile(r"^Ran\s+(\d+)\s+tests?\s+in\s+[\d.]+s")
+_UNITTEST_VERDICT_RE = re.compile(r"^(OK|FAILED)(?:\s*\((?P<body>.*)\))?\s*$")
+_UNITTEST_COUNT_RE = re.compile(r"(failures|errors|skipped|expected failures)=(\d+)")
+_UNITTEST_FAILING_RE = re.compile(r"^(?:FAIL|ERROR):\s+(.+?)\s*$")
+
+
+def bounded_detail(text: str, limit: int = TOOL_DETAIL_LIMIT) -> str:
+    """Bound tool output for an event payload without discarding its tail.
+
+    A head-only slice drops exactly the part that carries meaning for build and
+    test output — every runner prints its verdict last — so keep both ends with
+    an explicit marker for the dropped middle.
+    """
+    if len(text) <= limit:
+        return text
+    reserve = 64
+    head = max(0, (limit - reserve) // 2)
+    tail = max(0, limit - reserve - head)
+    dropped = len(text) - head - tail
+    marker = f"\n...[{dropped} chars truncated]...\n"
+    if not tail:
+        return (text[:head] + marker)[:limit]
+    return (text[:head] + marker + text[-tail:])[:limit]
+
+
+def _clean_test_ids(ids: list[str]) -> list[str]:
+    seen: list[str] = []
+    for raw in ids:
+        value = raw.strip()[:_MAX_FAILING_TEST_CHARS]
+        if value and value not in seen:
+            seen.append(value)
+        if len(seen) >= _MAX_FAILING_TESTS:
+            break
+    return seen
+
+
+def _test_outcome(
+    framework: str,
+    counts: dict[str, int],
+    failing: list[str],
+    *,
+    truncated: bool,
+) -> dict[str, Any]:
+    failed = counts.get("failed", 0) + counts.get("errors", 0)
+    outcome: dict[str, Any] = {
+        "framework": framework,
+        "passed": counts.get("passed", 0),
+        "failed": counts.get("failed", 0),
+        "errors": counts.get("errors", 0),
+        "skipped": counts.get("skipped", 0),
+        "failing_tests": _clean_test_ids(failing),
+        "ok": failed == 0,
+    }
+    if truncated:
+        outcome["scan_truncated"] = True
+    return outcome
+
+
+def _parse_pytest(lines: list[str]) -> tuple[dict[str, int], list[str]] | None:
+    counts: dict[str, int] | None = None
+    for line in reversed(lines):
+        match = _PYTEST_SUMMARY_RE.match(line.strip())
+        if not match:
+            continue
+        body = match.group("body")
+        found = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}
+        for value, label in _PYTEST_COUNT_RE.findall(body):
+            key = label.lower()
+            if key in {"error", "errors"}:
+                found["errors"] += int(value)
+            elif key in {"passed", "xpassed"}:
+                found["passed"] += int(value)
+            elif key in {"failed", "xfailed"}:
+                found["failed"] += int(value)
+            elif key == "skipped":
+                found["skipped"] += int(value)
+        counts = found
+        break
+    if counts is None:
+        return None
+    failing = [
+        match.group(1) for line in lines if (match := _PYTEST_FAILING_RE.match(line.strip()))
+    ]
+    return counts, failing
+
+
+def _parse_js(lines: list[str]) -> tuple[dict[str, int], list[str]] | None:
+    counts: dict[str, int] | None = None
+    for line in reversed(lines):
+        match = _JEST_COUNT_RE.match(line) or _VITEST_COUNT_RE.match(line)
+        if not match:
+            continue
+        tokens = _JS_COUNT_TOKEN_RE.findall(match.group("body"))
+        if not tokens:
+            continue
+        found = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}
+        for value, label in tokens:
+            key = label.lower()
+            if key in {"skipped", "todo", "pending"}:
+                found["skipped"] += int(value)
+            elif key in {"passed", "failed"}:
+                found[key] += int(value)
+        counts = found
+        break
+    if counts is None:
+        return None
+    failing = [match.group(1) for line in lines if (match := _JEST_FAILING_RE.match(line))]
+    return counts, failing
+
+
+def _parse_go(lines: list[str]) -> tuple[dict[str, int], list[str]] | None:
+    failing = [match.group(1) for line in lines if (match := _GO_FAIL_RE.match(line))]
+    passed = sum(1 for line in lines if _GO_PASS_RE.match(line))
+    skipped = sum(1 for line in lines if _GO_SKIP_RE.match(line))
+    if not failing and not passed and not skipped:
+        return None
+    counts = {"passed": passed, "failed": len(failing), "errors": 0, "skipped": skipped}
+    return counts, failing
+
+
+def _parse_cargo(lines: list[str]) -> tuple[dict[str, int], list[str]] | None:
+    counts: dict[str, int] | None = None
+    for line in reversed(lines):
+        match = _CARGO_RESULT_RE.match(line.strip())
+        if not match:
+            continue
+        found = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}
+        for value, label in _CARGO_COUNT_RE.findall(match.group("body")):
+            key = label.lower()
+            if key == "ignored":
+                found["skipped"] += int(value)
+            elif key in {"passed", "failed"}:
+                found[key] += int(value)
+        counts = found
+        break
+    if counts is None:
+        return None
+    failing = [match.group(1) for line in lines if (match := _CARGO_FAILING_RE.match(line.strip()))]
+    return counts, failing
+
+
+def _parse_unittest(lines: list[str]) -> tuple[dict[str, int], list[str]] | None:
+    ran: int | None = None
+    counts: dict[str, int] | None = None
+    for index, line in enumerate(lines):
+        match = _UNITTEST_RAN_RE.match(line.strip())
+        if not match:
+            continue
+        ran = int(match.group(1))
+        found = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}
+        for candidate in lines[index + 1 : index + 4]:
+            verdict = _UNITTEST_VERDICT_RE.match(candidate.strip())
+            if not verdict:
+                continue
+            for label, value in _UNITTEST_COUNT_RE.findall(verdict.group("body") or ""):
+                key = label.lower()
+                if key == "failures":
+                    found["failed"] += int(value)
+                elif key == "errors":
+                    found["errors"] += int(value)
+                elif key == "skipped":
+                    found["skipped"] += int(value)
+            break
+        counts = found
+    if ran is None or counts is None:
+        return None
+    counts["passed"] = max(
+        0, ran - counts["failed"] - counts["errors"] - counts["skipped"]
+    )
+    failing = [
+        match.group(1) for line in lines if (match := _UNITTEST_FAILING_RE.match(line.strip()))
+    ]
+    return counts, failing
+
+
+def parse_test_outcome(text: str) -> dict[str, Any] | None:
+    """Extract a structured test result (counts + failing ids) from tool output.
+
+    Deterministic Tier 0 capture (CONTROL_PLANE_ROADMAP §5.3): a test fact is
+    "pass/fail counts + failing-test ids", not a success boolean. Runs at the
+    adapter boundary while the full output is still in hand, because the bounded
+    `detail` carried on the event cannot be relied on to contain the summary.
+    Returns None when the output is not a recognized test run.
+    """
+    if not text:
+        return None
+    truncated = len(text) > _TEST_SCAN_TAIL_BYTES
+    window = text[-_TEST_SCAN_TAIL_BYTES:] if truncated else text
+    if not any(marker in window for marker in _TEST_MARKERS):
+        return None
+    lines = window.splitlines()
+    for framework, parser in (
+        ("pytest", _parse_pytest),
+        ("jest", _parse_js),
+        ("cargo", _parse_cargo),
+        ("go", _parse_go),
+        ("unittest", _parse_unittest),
+    ):
+        parsed = parser(lines)
+        if parsed is not None:
+            counts, failing = parsed
+            return _test_outcome(framework, counts, failing, truncated=truncated)
+    return None
+
+
+def tool_result_evidence(text: str) -> tuple[str | None, dict[str, Any] | None]:
+    """Derive a content hash and a structured test outcome from a tool result.
+
+    The hash covers the *full* result text (the exact bytes the agent saw), which
+    is what closes the Tier 0 read-side hash gap: a `Read` result hashes the file
+    content the agent actually consumed, race-free, without re-reading it off
+    disk. Identical repeated command output also hashes identically, which is the
+    no-progress signal loop detection queries.
+    """
+    if not text:
+        return None, None
+    content_hash = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+    return content_hash, parse_test_outcome(text)
+
+
 def _tool_names(session: Session) -> dict[str, str]:
     names = getattr(session, "tool_names", None)
     if names is None:
         names = {}
         session.tool_names = names
     return names
+
+
+def _tool_targets(session: Session) -> dict[str, str]:
+    targets = getattr(session, "tool_targets", None)
+    if targets is None:
+        targets = {}
+        session.tool_targets = targets
+    return targets
+
+
+def _remember_tool_call(
+    session: Session, call_id: str, name: str, target: str | None
+) -> None:
+    """Correlate a tool invocation id with its name and target.
+
+    Tool results identify their call only by opaque id, so a result would
+    otherwise carry no target at all — collapsing every Tier 0 result fingerprint
+    onto one value. Both maps are bounded: a call whose result never arrives (an
+    interrupted turn) must not accumulate for the session's lifetime.
+    """
+    if not call_id:
+        return
+    names = _tool_names(session)
+    targets = _tool_targets(session)
+    names[call_id] = name
+    if target:
+        targets[call_id] = target
+    for bucket in (names, targets):
+        while len(bucket) > _MAX_TRACKED_TOOL_CALLS:
+            bucket.pop(next(iter(bucket)))
+
+
+def _recall_tool_call(
+    session: Session, call_id: str, fallback: str = "tool"
+) -> tuple[str, str | None]:
+    if not call_id:
+        return fallback, None
+    return _tool_names(session).pop(call_id, fallback), _tool_targets(session).pop(call_id, None)
 
 
 class JsonlTailer:
@@ -742,6 +1049,24 @@ async def _begin_root_turn(
     await events.emit("turn_started", session_id=session.record.id, source=source, scope="root")
 
 
+def _background_wait_reason(session: Session) -> str | None:
+    """`waiting_on_background` when the CLI says it will resume itself.
+
+    Read from this session's own screen, which is the one source that cannot be
+    mis-attributed. `delivery_state` is deliberately untouched: the composer does
+    accept input and a write is safe — the sub-reason exists so "ready" does not
+    read as "finished, nothing more is coming".
+    """
+    scrollback = getattr(session, "scrollback", None)
+    if scrollback is None:
+        return None
+    try:
+        tail = scrollback.bytes()[-8192:].decode("utf-8", "replace")
+    except Exception:
+        return None
+    return "waiting_on_background" if pty_tail_waiting_on_background(tail) else None
+
+
 async def _finish_root_turn(
     session: Session,
     events: EventBus,
@@ -774,9 +1099,10 @@ async def _finish_root_turn(
         # Recovery inferences stay visible in the event stream, not only the ledger.
         payload.setdefault("inferred", True)
     if outcome == "completed":
+        idle_reason = _background_wait_reason(session)
         await _transition(
             session, events, "idle", source=source, force=force,
-            evidence=evidence, inferred=inferred,
+            evidence=evidence, inferred=inferred, idle_reason=idle_reason,
         )
         await events.emit(
             "turn_ended",
@@ -784,6 +1110,10 @@ async def _finish_root_turn(
             source=source,
             scope="root",
             outcome=outcome,
+            # Consumers that decide whether to interrupt the user (sounds, push,
+            # attention) need this on the event, not only on the record: the turn
+            # ended, but the agent is going to resume itself.
+            idle_reason=idle_reason,
             **payload,
         )
     else:
@@ -830,6 +1160,47 @@ def hook_event_scope(event_type: str, payload: dict[str, Any]) -> str:
     return "root"
 
 
+_HOOK_NATIVE_ID = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+async def _bind_native_id_from_hook(
+    session: Session, payload: dict[str, Any], events: EventBus
+) -> None:
+    """Adopt the conversation id the CLI reports for itself, when we have none.
+
+    `claude --continue` / `claude -r <term>` let the CLI choose the conversation,
+    so the launcher shim cannot inject or read a `--session-id` and promotes with
+    an empty native id. The root `SessionStart` hook arrives over this session's
+    own loopback ingress authenticated with this session's own secret, which makes
+    it the strongest available proof of which conversation this PTY is running —
+    stronger than the sole-unclaimed-candidate heuristic it replaces here.
+
+    Deliberately one-way: it only fills an *unknown* id and never overwrites one
+    the daemon already established, so a hook cannot rekey a bound session.
+    """
+    if session.record.backend not in {"claude", "codex"}:
+        return
+    if _HOOK_NATIVE_ID.fullmatch(session.record.native_session_id or ""):
+        return
+    native_id = str(payload.get("session_id") or payload.get("sessionId") or "")
+    if not _HOOK_NATIVE_ID.fullmatch(native_id):
+        return
+    session.record.native_session_id = native_id
+    if not session.agent_lifecycle_id:
+        session.agent_lifecycle_id = native_id
+    await events.emit(
+        "agent_native_id_bound",
+        session_id=session.record.id,
+        source="hook",
+        scope="root",
+        backend=session.record.backend,
+        native_session_id=native_id,
+    )
+    session.publish_update()
+
+
 async def apply_hook_observation(
     session: Session,
     event_type: str,
@@ -853,6 +1224,7 @@ async def apply_hook_observation(
     # turn as "working"). Turn-end, approval, and notification hooks below stay
     # live because they carry signals the transcript lacks or delivers later.
     if event_type == "SessionStart":
+        await _bind_native_id_from_hook(session, payload, events)
         await _transition(session, events, "idle", source="hook", evidence="hook:SessionStart")
     elif event_type in {"UserPromptSubmit", "turn_started", "task_started"}:
         if _transcript_authoritative(session):
@@ -974,6 +1346,7 @@ async def _transition(
     evidence: str | None = None,
     inferred: bool | None = None,
     awaiting_reason: str | None = None,
+    idle_reason: str | None = None,
 ) -> bool:
     if getattr(session, "observation_replay", False):
         return False
@@ -990,6 +1363,7 @@ async def _transition(
             evidence=evidence,
             inferred=inferred,
             awaiting_reason=awaiting_reason,
+            idle_reason=idle_reason,
             force=force,
         )
         if not accepted:
@@ -1079,7 +1453,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                 if not isinstance(block, dict) or block.get("type") != "tool_result":
                     continue
                 tool_use_id = str(block.get("tool_use_id") or "")
-                tool = _tool_names(session).pop(tool_use_id, "tool")
+                tool, target = _recall_tool_call(session, tool_use_id)
                 result_content = block.get("content")
                 if isinstance(result_content, list):
                     detail = " ".join(
@@ -1089,6 +1463,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                     )
                 else:
                     detail = str(result_content or "")
+                content_hash, test_outcome = tool_result_evidence(detail)
                 await events.emit(
                     "tool_result",
                     session_id=session.record.id,
@@ -1096,9 +1471,13 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                     scope="root",
                     tool=tool,
                     call_id=tool_use_id or None,
+                    target=target,
+                    content_hash=content_hash,
+                    test_outcome=test_outcome,
                     success=not bool(block.get("is_error")),
                     exit_code=None,
-                    detail=detail[:4000],
+                    parser_version=OBSERVATION_SCHEMA_VERSION,
+                    detail=bounded_detail(detail),
                 )
                 if tool in {"Agent", "Task"}:
                     await events.emit(
@@ -1138,9 +1517,8 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
             elif isinstance(block, dict) and block.get("type") == "tool_use":
                 name = str(block.get("name") or "tool")
                 tool_use_id = str(block.get("id") or "")
-                if tool_use_id:
-                    _tool_names(session)[tool_use_id] = name
                 target, content_hash = tool_call_evidence(block.get("input"))
+                _remember_tool_call(session, tool_use_id, name, target)
                 await _transition(
                     session, events, "working", name, evidence="tool_use_record"
                 )
@@ -1297,11 +1675,10 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
     elif payload_type in {"function_call", "custom_tool_call"}:
         name = str(payload.get("name") or "tool")
         call_id = str(payload.get("call_id") or payload.get("id") or "")
-        if call_id:
-            _tool_names(session)[call_id] = name
         target, content_hash = tool_call_evidence(
             payload.get("arguments") or payload.get("input")
         )
+        _remember_tool_call(session, call_id, name, target)
         await _begin_root_turn(
             session, events, source="transcript", evidence=str(payload_type)
         )
@@ -1338,7 +1715,7 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         "exec_command_end",
     }:
         call_id = str(payload.get("call_id") or payload.get("id") or "")
-        tool = _tool_names(session).pop(call_id, str(payload.get("name") or "tool"))
+        tool, target = _recall_tool_call(session, call_id, str(payload.get("name") or "tool"))
         exit_code_value = payload.get("exit_code")
         try:
             exit_code = int(exit_code_value) if exit_code_value is not None else None
@@ -1352,6 +1729,7 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             or payload.get("message")
             or ""
         )
+        content_hash, test_outcome = tool_result_evidence(detail)
         await events.emit(
             "tool_result",
             session_id=session.record.id,
@@ -1359,11 +1737,14 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             scope="root",
             tool=tool,
             call_id=call_id or None,
+            target=target,
+            content_hash=content_hash,
+            test_outcome=test_outcome,
             success=success,
             exit_code=exit_code,
             duration_ms=payload.get("duration_ms"),
             parser_version=OBSERVATION_SCHEMA_VERSION,
-            detail=detail[:4000],
+            detail=bounded_detail(detail),
         )
     elif payload_type in {"patch_apply_end", "mcp_tool_call_end", "web_search_end"}:
         tool = {
@@ -1376,13 +1757,16 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         success = (
             bool(success_value) if success_value is not None else status not in {"failed", "error"}
         )
+        call_id = str(payload.get("call_id") or payload.get("id") or "")
+        _, target = _recall_tool_call(session, call_id, tool)
         await events.emit(
             "tool_result",
             session_id=session.record.id,
             source="transcript",
             scope="root",
             tool=tool,
-            call_id=str(payload.get("call_id") or payload.get("id") or "") or None,
+            call_id=call_id or None,
+            target=target,
             success=success,
             exit_code=None,
             duration_ms=payload.get("duration_ms"),

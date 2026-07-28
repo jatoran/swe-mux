@@ -103,6 +103,12 @@ translate transcript tokens into provider quota weighting.
   identity/source identity.
 - A bounded background reconciliation scans recent Claude/Codex transcript tails, at most
   32 MiB per file and 2,000 histories per pass. It runs after startup and hourly.
+- The event consumer and the hourly prune/reconcile loop both run under the shared
+  background-task supervisor. A transient SQLite error costs one iteration, not the feature:
+  unguarded, the consumer's death silently ended tool and compaction capture, and the hourly
+  loop's death ended *all* retention enforcement, for the remainder of a daemon lifetime that
+  session-preserving reload is designed to measure in weeks. Loop liveness, fault counts and
+  last fault are at `GET /api/diagnostics/background`.
 - Reconciliation loads possible live duplicates once per transcript and batch-inserts native
   tool/compaction evidence. It never performs one SQLite lookup per parsed tool event or blocks
   terminal visibility/attachment while durable telemetry is queued.

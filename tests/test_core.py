@@ -173,6 +173,35 @@ def test_agent_launchers_inject_mux_wiring(tmp_path: Path, monkeypatch: pytest.M
     assert env["MUX_SHIM_DIR"] == str(tmp_path / "bin")
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--continue"],
+        ["-c"],
+        ["--resume"],
+        ["-r"],
+        ["-r", "some search term"],
+        ["--continue", "--fork-session"],
+    ],
+)
+def test_claude_shim_never_injects_a_session_id_over_a_resume(argv: list[str]) -> None:
+    # The CLI hard-rejects `--session-id` alongside continue/resume, so injecting
+    # one turns an ordinary `claude --continue` into an exit-1 launch. And a
+    # value-less `--resume` (or `-r <search term>`) has no id to capture: reading
+    # the next token blindly filed a flag or a prompt as the conversation id.
+    _, args, native_id = _claude(list(argv))
+    assert "--session-id" not in args
+    assert native_id == ""
+
+
+def test_claude_shim_captures_an_explicit_resume_conversation_id() -> None:
+    native = "0f9c8b7a-1234-4321-8888-abcdefabcdef"
+    for flag in ("--resume", "-r"):
+        _, args, native_id = _claude([flag, native])
+        assert native_id == native
+        assert "--session-id" not in args
+
+
 def test_agent_launcher_demotes_terminal_when_agent_exits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

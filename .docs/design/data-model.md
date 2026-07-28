@@ -38,9 +38,11 @@
   explicit provider evidence plus versioned parser coverage. These are rebuildable for one
   session after a proven identity repair; its process evidence is retained and re-attributed.
 - `tier0_facts`: deterministic no-model fact capture (file writes, commands, tests, git, tools)
-  with `content_hash`, canonical `fingerprint`, and a `source_seq` pointer into the event log.
-  Command text is never stored beyond bounded detail. Per-project opt-in and gated; see
-  `features/tier0-facts.md`.
+  with `content_hash`, canonical `fingerprint`, the owning `agent_run_id`/`project_id`, and a
+  `source_seq` pointer into the event log. Test results additionally carry structured
+  pass/fail counts and failing-test ids inside the bounded detail. Command text is never
+  stored beyond bounded detail, and that detail is bounded per value so the row always
+  re-parses. Per-project opt-in and gated; see `features/tier0-facts.md`.
 - `clipboard_entries`: the clipboard-history ring — copied text with a unique `content_hash`
   (re-copying promotes rather than duplicates), character/line counts, provenance
   (`source`, `session_id`, `project_id`, `device`), and `pinned`. **Unlike every other table here
@@ -50,8 +52,19 @@
   `features/ui.md`.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
+- `automation_annotations`: observer/rule/detector output. Anchored to `agent_run_id` **or**
+  `project_id` — both nullable, at least one required — because a project-scoped detector
+  (doc debt) has no run to attach to. Alongside the single `source_event_seq` it carries
+  `evidence_json`, the *set* of Tier 0 facts a finding rests on: a loop's case is "this
+  fingerprint repeated three times", which one pointer cannot express. `dedupe_key` makes a
+  re-running detector idempotent — a conflicting write returns the existing row.
 - Automation, notification, lineage, experience, batch, and voice tables retain their
-  feature-specific contracts.
+  feature-specific contracts. `AutomationStore` has an additive migration path; the
+  annotations rebuild that relaxed `agent_run_id` to nullable is gated on the new column
+  being absent, so it runs once.
+- `schema_versions(store, version)`: per-store schema version on the shared file.
+  `PRAGMA user_version` is a property of the *database*, so several stores stamping it made
+  the last connect overwrite the rest and each store read a neighbour's number.
 - History, operational telemetry, automation, and voice use separate serialized connections to
   one WAL database plus a process-wide per-database operation coordinator. Complete operations
   cannot compete for SQLite's single writer slot; every failed worker operation rolls back, and
@@ -97,6 +110,15 @@ OpenRouter key are never stored in SQLite or project files. Raw operational tele
 quota samples roll into daily summaries before deletion. Process and operational retention
 are independently configurable. Quota history contains account IDs and utilization, never
 credentials; process history contains command hashes, never command text.
+
+Retention runs at startup **and hourly** from the daemon's supervised retention loop, not at
+startup only: session-preserving reload makes weeks-long uptimes the norm, so a startup-only
+prune means "bounded by age" holds only across restarts. Every automation table with
+unbounded growth is covered — firings, action results, observer calls, notifications, the
+spend ledger, observer batches and rule checkpoints on the configured
+`automation_retention_days`, and the three derived-knowledge tables (run-note annotations,
+learned resolutions, session lineage) on a deliberately longer window, because a user reads
+those long after the operational trail that produced them.
 
 Clipboard history is the one store that holds arbitrary user text verbatim, so it is the one
 store that defaults to keeping nothing durable: memory-only unless persistence is opted into,

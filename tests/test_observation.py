@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -102,6 +103,12 @@ async def test_claude_parser_tracks_tools_completion_and_current_context() -> No
         "detail": "pytest failed",
         "scope": "root",
         "call_id": "tool-1",
+        "target": None,
+        # The exact bytes the agent saw, hashed before the detail bound is
+        # applied: the read-side hash Tier 0 provenance joins on.
+        "content_hash": hashlib.sha256(b"pytest failed").hexdigest(),
+        "test_outcome": None,
+        "parser_version": "2",
     }
     assert "turn_ended" in emitted
 
@@ -242,6 +249,9 @@ async def test_codex_parser_correlates_tool_result_and_exit_code() -> None:
         "detail": "command failed",
         "scope": "root",
         "call_id": "call-1",
+        "target": None,
+        "content_hash": hashlib.sha256(b"command failed").hexdigest(),
+        "test_outcome": None,
         "duration_ms": None,
         "parser_version": "2",
     }
@@ -556,7 +566,7 @@ def _open_tail_transcript(path: Path) -> None:
     )
 
 
-def _watchdog_session(path: Path, now: float, scrollback: bytes) -> Any:
+def _watchdog_session(path: Path | None, now: float, scrollback: bytes) -> Any:
     session = SimpleNamespace(
         record=record("claude"),
         observation_replay=False,
@@ -639,6 +649,52 @@ async def test_watchdog_pty_backstop_spares_open_tail_while_cli_busy(
 
     await SessionManager._watchdog_check_session(mgr, session, now)
 
+    assert calls == []
+    assert session.record.state == "working"
+
+
+async def test_watchdog_pty_backstop_covers_a_missing_transcript(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # The documented promise is that a wrong-or-missing transcript still recovers
+    # through the PTY backstop. Returning early on "no transcript" made exactly
+    # that case unreachable — and it is the case with no other recovery path.
+    from swe_mux.session import SessionManager
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake_finish(_session: Any, _events: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr("swe_mux.observation._finish_root_turn", fake_finish)
+
+    now = time.time() + 10.0
+    session = _watchdog_session(None, now, b"idle output\n? for shortcuts\n")
+    await SessionManager._watchdog_check_session(_fake_manager(), session, now)
+    assert [call["source"] for call in calls] == ["watchdog-pty"]
+
+    # ...and an unreadable transcript path behaves the same way.
+    calls.clear()
+    session = _watchdog_session(tmp_path / "gone.jsonl", now, b"idle\n? for shortcuts\n")
+    await SessionManager._watchdog_check_session(_fake_manager(), session, now)
+    assert [call["source"] for call in calls] == ["watchdog-pty"]
+
+
+async def test_watchdog_missing_transcript_still_spares_a_busy_cli(
+    monkeypatch: Any,
+) -> None:
+    from swe_mux.session import SessionManager
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake_finish(_session: Any, _events: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr("swe_mux.observation._finish_root_turn", fake_finish)
+
+    now = time.time() + 10.0
+    session = _watchdog_session(None, now, b"running a tool...\nesc to interrupt\n")
+    await SessionManager._watchdog_check_session(_fake_manager(), session, now)
     assert calls == []
     assert session.record.state == "working"
 

@@ -41,8 +41,32 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   Whole-row pointer dragging and Move up/down actions use the same persisted reorder contract.
 - Creating a Project validates the root and initializes `.swe-mux/config.toml` plus
   `.swe-mux/notes/project.md`. The registration is not inferred from Git or current cwd.
+- Add project has two modes of one form: register a folder that exists, or create a new folder
+  inside an existing parent. Create mode makes exactly one directory, so a mistyped deep path is
+  an error rather than a silently materialized tree, and the duplicate-root and group checks run
+  before anything is created. Two dialogs were rejected because each would need its own copy of
+  the setup-command list below.
 - A Project cannot be deleted while live or historical sessions reference it. Deleting a Group
   ungroups its Projects and changes nothing else.
+
+## Project setup commands
+
+Add project offers the user's own setup commands as checkboxes, unchecked unless their
+definition opts in. They are defined in Settings → General, stored in the machine-local daemon
+config (`project_init_scripts`: `id`, `label`, `command`, `default_enabled`), and never read
+from a folder. There is no built-in scaffolding matrix — git, a workspace file, a virtualenv,
+and anything else are whatever the user writes in a command.
+
+Each selected command becomes one ordinary one-shot shell terminal owned by the new Project and
+rooted at its canonical folder, started in configured order. Start order is all that is
+promised: a step that must finish before the next begins belongs in the same command, using the
+shell's own `&&` or `;`. The registration is already durable when they run, so a command that
+fails to launch is reported and never unwinds the Project.
+
+This is not an exception to the repository-configuration boundary. A Project Action is imported
+from the checkout and therefore needs exact-content approval; a setup command is typed by the
+user into their own settings, so authoring it is the authorization. Execution reuses the Project
+Action spawn contract, and nothing here reads repository content.
 
 ## Configuration boundary
 
@@ -80,7 +104,9 @@ complete permutation of every registered Project ID and normalized transactional
 - `src/swe_mux/projects.py`
 - `src/swe_mux/history.py`
 - `src/swe_mux/project_files.py`
+- `src/swe_mux/project_init.py`
 - `frontend/src/ProjectsManager.tsx`
+- `frontend/src/projectCreate.ts`
 - `frontend/src/App.tsx`
 - `src/swe_mux/project_actions.py`
 

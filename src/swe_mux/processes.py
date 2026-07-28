@@ -5,10 +5,12 @@ import os
 import signal
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from .background_tasks import background
 from .event_bus import EventBus
 from .operational_telemetry import command_hash, process_identity
 from .session import Session, SessionManager
@@ -18,6 +20,10 @@ try:
 except ImportError:  # pragma: no cover - diagnostics cover an unsynchronized dev venv
     psutil = None
 
+PROCESS_INSPECTOR_LOOP = "process-inspector"
+# Creation times round-trip through float seconds on both sides; the existing
+# ownership re-check uses the same tolerance.
+_CREATE_TIME_TOLERANCE_SECONDS = 0.01
 MAX_PROCESSES_PER_SESSION = 256
 ENDED_RETENTION_SECONDS = 24 * 60 * 60.0
 # How long a detected preview outlives its listener. Dev servers rebind constantly
@@ -188,17 +194,17 @@ class ProcessInspector:
         return psutil is not None
 
     def start(self) -> None:
-        self._task = asyncio.create_task(self._run(), name="process-inspector")
+        self._task = background.start(PROCESS_INSPECTOR_LOOP, self._run)
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            await asyncio.gather(self._task, return_exceptions=True)
+        await background.stop(PROCESS_INSPECTOR_LOOP)
+        self._task = None
 
     async def _run(self) -> None:
         while True:
             await asyncio.sleep(self.cadence)
-            await self.reconcile()
+            with background.iteration(PROCESS_INSPECTOR_LOOP):
+                await self.reconcile()
 
     async def reconcile(self, *, startup: bool = False) -> None:
         if psutil is None:
@@ -672,9 +678,27 @@ class ProcessInspector:
     ) -> list[OwnedProcess]:
         if psutil is None or session.record.pid <= 0:
             return []
+        # Ended sessions stay listed (the user keeps them for scrollback) with
+        # record.pid never cleared. Walking that pid is the one place the
+        # PID+creation-time discipline used to be skipped: Windows recycles pids
+        # aggressively, so an unrelated tree would be attributed to the dead
+        # session as high-confidence evidence, with terminate offered on it.
+        if session.record.state in {"exited", "crashed"}:
+            return []
         processes = self._tree_handles(session.record.pid, MAX_PROCESSES_PER_SESSION)
         if not processes:
             return []
+        # The root's creation time was captured at spawn; a mismatch means this
+        # pid now belongs to someone else. Sessions adopted from an older
+        # supervisor have no reference and fall back to pid-only, as before.
+        expected_start = session.record.root_started_at
+        if expected_start is not None:
+            try:
+                actual_start = float(processes[0].create_time())
+            except Exception:  # noqa: BLE001 - psutil raises provider-specific errors
+                return []
+            if abs(actual_start - expected_start) > _CREATE_TIME_TOLERANCE_SECONDS:
+                return []
         result: list[OwnedProcess] = []
         for process in processes:
             pid = int(process.pid)
@@ -1008,19 +1032,33 @@ class ProcessInspector:
         if action == "interrupt":
             if session and pid == session.record.pid:
                 session.pty.write(b"\x03")
+            elif os.name == "nt":
+                # psutil rejects SIGINT on Windows, so this action was unusable
+                # for every non-root descendant on the primary platform. A console
+                # child in its own group takes CTRL_BREAK; anything else has no
+                # interrupt at all, and saying so beats a raw psutil ValueError.
+                try:
+                    await asyncio.to_thread(
+                        process.send_signal, getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM)
+                    )
+                except (OSError, ValueError, psutil.Error) as exc:
+                    raise ValueError(
+                        "this process cannot be interrupted on Windows; "
+                        "use terminate instead"
+                    ) from exc
             else:
                 await asyncio.to_thread(process.send_signal, signal.SIGINT)
         elif action == "terminate":
             await asyncio.to_thread(process.terminate)
         elif action == "terminate_tree":
             children = await asyncio.to_thread(process.children, recursive=True)
-            owned_pids = {
-                item.pid
-                for item in self.owned.values()
-                if item.session_id == session_id and item.exited_at is None
-            }
+            # Descendants of a fingerprint-verified root are part of the tree by
+            # construction. Matching them against the owned set by *raw pid* let a
+            # child that respawned since the last sample (a dev server restarting)
+            # survive "terminate tree" while the user believed it was gone — and
+            # let a recycled pid be matched on nothing but its number.
             for child in reversed(children):
-                if child.pid in owned_pids:
+                with suppress(psutil.Error, OSError):
                     child.terminate()
             process.terminate()
         else:

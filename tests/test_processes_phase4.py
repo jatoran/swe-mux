@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
+import time
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -37,7 +41,11 @@ class FakeInspector:
 
 
 def fake_sessions() -> Any:
-    session = SimpleNamespace(record=SimpleNamespace(id="session-a", project_id="default", pid=10))
+    session = SimpleNamespace(
+        record=SimpleNamespace(
+            id="session-a", project_id="default", pid=10, state="running", root_started_at=None
+        )
+    )
     return SimpleNamespace(
         sessions={"session-a": session},
         resolve=lambda identity: session if identity == "session-a" else None,
@@ -74,7 +82,13 @@ class ProjectInspector:
 def project_sessions() -> Any:
     sessions = {
         identity: SimpleNamespace(
-            record=SimpleNamespace(id=identity, project_id="project-a", pid=pid)
+            record=SimpleNamespace(
+                id=identity,
+                project_id="project-a",
+                pid=pid,
+                state="running",
+                root_started_at=None,
+            )
         )
         for identity, pid in (("frontend", 11), ("backend", 12))
     }
@@ -826,6 +840,8 @@ def test_sampling_reuses_process_handles_across_passes(
         agent_run_id=None,
         process_job_assignment="job",
         last_activity_ts=0.0,
+        state="running",
+        root_started_at=7.0,
     )
     sessions = SimpleNamespace(sessions={"session-a": SimpleNamespace(record=record)})
     inspector = ProcessInspector(cast(Any, sessions), EventBus())
@@ -1008,3 +1024,184 @@ def test_a_recycled_pid_rebuilds_its_cached_handle(
     inspector._handle(55)
 
     assert constructed == [55, 55]
+
+
+def _recycling_psutil(create_time: float) -> Any:
+    class Fake:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def create_time(self) -> float:
+            return create_time
+
+        def oneshot(self) -> Any:
+            return self
+
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def ppid(self) -> int:
+            return 1
+
+        def name(self) -> str:
+            return f"proc-{self.pid}"
+
+        def cmdline(self) -> list[str]:
+            return [f"proc-{self.pid}"]
+
+        def cpu_times(self) -> Any:
+            return SimpleNamespace(user=1.0, system=0.0)
+
+        def memory_info(self) -> Any:
+            return SimpleNamespace(rss=1024)
+
+    return SimpleNamespace(
+        Process=Fake,
+        NoSuchProcess=RuntimeError,
+        AccessDenied=PermissionError,
+        _ppid_map=lambda: {100: 1},
+    )
+
+
+def _inspector_for(record: Any, monkeypatch: pytest.MonkeyPatch, create_time: float) -> Any:
+    from swe_mux import processes
+
+    monkeypatch.setattr(processes, "psutil", _recycling_psutil(create_time))
+    sessions = SimpleNamespace(sessions={"session-a": SimpleNamespace(record=record)})
+    inspector = ProcessInspector(cast(Any, sessions), EventBus())
+    inspector._refresh_tree()
+    return inspector, sessions
+
+
+def _process_record(**overrides: Any) -> Any:
+    base = dict(
+        id="session-a",
+        pid=100,
+        project_id="project-a",
+        agent_run_id=None,
+        process_job_assignment="job",
+        last_activity_ts=0.0,
+        state="running",
+        root_started_at=7.0,
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def test_exited_session_root_pid_is_never_walked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ended sessions stay listed with record.pid intact.
+
+    Windows recycles pids aggressively, so walking that pid attributed an
+    unrelated process tree to the dead session as high-confidence evidence — with
+    interrupt/terminate offered on it.
+    """
+    record = _process_record(state="exited")
+    inspector, sessions = _inspector_for(record, monkeypatch, 7.0)
+    assert inspector._collect_session(cast(Any, sessions.sessions["session-a"]), {}) == []
+    record.state = "crashed"
+    assert inspector._collect_session(cast(Any, sessions.sessions["session-a"]), {}) == []
+
+
+def test_recycled_root_pid_fails_the_creation_time_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same pid, different process: the tree belongs to someone else now."""
+    record = _process_record(root_started_at=7.0)
+    inspector, sessions = _inspector_for(record, monkeypatch, 9999.0)
+    assert inspector._collect_session(cast(Any, sessions.sessions["session-a"]), {}) == []
+
+
+def test_live_root_with_matching_creation_time_is_collected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _process_record(root_started_at=7.0)
+    inspector, sessions = _inspector_for(record, monkeypatch, 7.0)
+    collected = inspector._collect_session(cast(Any, sessions.sessions["session-a"]), {})
+    assert [item.pid for item in collected] == [100]
+
+
+def test_session_without_a_recorded_start_falls_back_to_pid_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sessions adopted from a supervisor predating the field keep working."""
+    record = _process_record(root_started_at=None)
+    inspector, sessions = _inspector_for(record, monkeypatch, 1234.0)
+    collected = inspector._collect_session(cast(Any, sessions.sessions["session-a"]), {})
+    assert [item.pid for item in collected] == [100]
+
+
+@pytest.mark.asyncio
+async def test_preview_capture_reports_unavailable_and_resolves_the_shot_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The capture endpoint shipped with its control-plane checkbox ticked and no
+    # test: a regression in the `.swe-mux/preview-shots` fallback or in the
+    # unavailable-Playwright shape would not have failed CI. Both halves are
+    # testable without Chromium.
+    from types import SimpleNamespace
+
+    from swe_mux import server
+    from swe_mux.config import Config
+    from swe_mux.server import capture_preview
+
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    item = SimpleNamespace(id="pv1", host="127.0.0.1", port=5173, session_id="s1")
+    record = SimpleNamespace(project_root=str(project_root), spawn_project_root=None,
+                             project_id="p1")
+    app = {
+        "previews": SimpleNamespace(items={"pv1": item}),
+        "config": Config(data_dir=tmp_path / "data"),
+        "sessions": SimpleNamespace(sessions={"s1": SimpleNamespace(record=record)}),
+        "projects": SimpleNamespace(projects={}),
+    }
+
+    async def body() -> dict[str, object]:
+        return {}
+
+    request = SimpleNamespace(
+        match_info={"preview_id": "pv1"}, app=app, can_read_body=True, json=body
+    )
+
+    # Backend missing: a typed unavailable state with an install hint, never a 500.
+    monkeypatch.setattr(server, "capture_available", lambda: False)
+    payload = json.loads((await capture_preview(request)).body)  # type: ignore[arg-type]
+    assert payload["available"] is False
+    assert payload["install"]
+
+    # Backend present: the shot lands in the owning Project, not the data dir.
+    captured: dict[str, Path] = {}
+
+    async def fake_capture(url: str, out_path: Path, **_kwargs: object) -> None:
+        captured["path"] = out_path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(b"png")
+
+    monkeypatch.setattr(server, "capture_available", lambda: True)
+    monkeypatch.setattr(server, "capture_loopback", fake_capture)
+    payload = json.loads((await capture_preview(request)).body)  # type: ignore[arg-type]
+    assert payload["available"] is True
+    assert captured["path"].parent == project_root / ".swe-mux" / "preview-shots"
+    assert Path(payload["path"]).is_file()
+
+
+@pytest.mark.asyncio
+async def test_preview_shots_expire_but_recent_ones_survive(tmp_path: Path) -> None:
+    # They live inside the user's repository and a UI-iteration session takes
+    # dozens a day, so "no sweep" meant unbounded growth in the checkout.
+    from swe_mux.server import PREVIEW_SHOT_TTL_SECONDS, cleanup_expired_preview_shots
+
+    shots = tmp_path / ".swe-mux" / "preview-shots"
+    shots.mkdir(parents=True)
+    old, fresh = shots / "old.png", shots / "fresh.png"
+    old.write_bytes(b"png")
+    fresh.write_bytes(b"png")
+    now = time.time()
+    os.utime(old, (now - PREVIEW_SHOT_TTL_SECONDS - 60, now - PREVIEW_SHOT_TTL_SECONDS - 60))
+
+    assert cleanup_expired_preview_shots([tmp_path], now) == 1
+    assert not old.exists()
+    assert fresh.exists()

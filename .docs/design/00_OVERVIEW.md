@@ -32,6 +32,7 @@
 - Automation and OpenRouter observers: `features/automation.md`
 - Automation enablement (per-project opt-in DAG): `features/automation-enablement.md`
 - Tier 0 deterministic facts: `features/tier0-facts.md`
+- Model-free control-plane detectors: `features/deterministic-consumers.md`
 - Observation inbox: `features/observations.md`
 - Backend detection and observation: `features/backends.md`
 - Evidence replay and delivery readiness: `features/delivery-readiness.md`

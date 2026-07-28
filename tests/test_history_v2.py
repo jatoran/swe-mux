@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from swe_mux.history import HistoryIndex
 from swe_mux.history_backfill import HistoryBackfillManager
@@ -73,6 +74,44 @@ def test_scan_scopes_descendant_cwds_but_not_siblings(tmp_path: Path) -> None:
     # outside the root, so the owner check downstream would drop it. Here we
     # only assert the descendant is always captured.
     assert "child" in {item.native_id for item in scoped}
+
+
+def test_scan_ignores_claude_orphaned_housekeeping_files(tmp_path: Path) -> None:
+    # `<id>.orphaned-<ts>-<hash>.jsonl` still carries the original conversation's
+    # sessionId, so indexing it maps the fragment onto the real conversation's
+    # history row: the two then alternate ownership of one watermark and both
+    # re-parse on every startup, with a stale snippet shown as the conversation.
+    home = tmp_path / "home"
+    root = tmp_path / "repo"
+    real = write_claude_transcript(home, root, "conversation")
+    orphan = real.with_name("conversation.orphaned-1712345678-ab12cd.jsonl")
+    orphan.write_bytes(real.read_bytes())
+
+    found = scan_external_transcripts(home, limit=None, roots=[root])
+    assert [item.path.name for item in found] == [real.name]
+
+
+def test_scan_survives_a_transcript_deleted_mid_walk(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # Provider transcript cleanup runs in these very directories, so a file can
+    # vanish between glob and stat. One raced file used to abort the whole scan
+    # with no log, leaving every remaining transcript unindexed.
+    home = tmp_path / "home"
+    root = tmp_path / "repo"
+    write_claude_transcript(home, root, "survivor")
+    ghost = write_claude_transcript(home, root, "vanishing")
+    ghost.unlink()
+    real_glob = Path.glob
+
+    def glob_with_ghost(self: Path, pattern: str) -> Any:
+        yield from real_glob(self, pattern)
+        if pattern.endswith("*.jsonl"):
+            yield ghost
+
+    monkeypatch.setattr(Path, "glob", glob_with_ghost)
+    found = scan_external_transcripts(home, limit=None, roots=[root])
+    assert [item.native_id for item in found] == ["survivor"]
 
 
 def test_scan_cancels_and_reports_progress(tmp_path: Path) -> None:
@@ -359,3 +398,52 @@ async def test_project_backfill_discovers_assigns_and_indexes_all_native_history
     assert backfills.get(repeated["id"])["unchanged"] == 1
     await backfills.stop()
     history.close()
+
+
+async def test_a_scan_cannot_reassign_a_run_owned_by_another_project(tmp_path: Path) -> None:
+    # `ORDER BY external ASC` prefers the mux-owned canonical row for a native
+    # id, so without an ownership guard a scan of Project A rewrites the history
+    # of a session that ran under nested Project B. A run's Project is decided at
+    # spawn and is not a scan's to change.
+    history = HistoryIndex(tmp_path / "mux.db")
+    try:
+        owner = SessionRecord(
+            "sid-1",
+            "agent",
+            "project-b",
+            "claude",
+            "shared-native",
+            str(tmp_path),
+            "claude.exe",
+            [],
+            state="idle",
+        )
+        owner.agent_run_id = "sid-1"
+        await history.session_started(owner, None)
+
+        assert (
+            await history.assign_native_project(
+                "claude",
+                "shared-native",
+                project_id="project-a",
+                project_label="A",
+                project_root=str(tmp_path / "a"),
+            )
+            is None
+        )
+        row = await history.history_entry("sid-1")
+        assert row is not None and row["project_id"] == "project-b"
+
+        # Re-assigning to the same Project (an ordinary re-scan) is still allowed.
+        assert (
+            await history.assign_native_project(
+                "claude",
+                "shared-native",
+                project_id="project-b",
+                project_label="B",
+                project_root=str(tmp_path / "b"),
+            )
+            == "sid-1"
+        )
+    finally:
+        history.close()

@@ -10,8 +10,23 @@ from .layouts import normalize_layout
 from .models import ProjectGroupRecord, ProjectRecord
 
 
-def canonical_project_root(value: str | Path) -> Path:
+def canonical_project_root(value: str | Path, *, create: bool = False) -> Path:
+    """Resolve a Project root, optionally creating the folder itself.
+
+    ``create`` makes exactly one directory: the parent must already exist. A typo in a
+    deep path is then a clear error instead of a silently materialized tree, and the
+    folder picker's flow (choose an existing parent, name the new folder) is the only
+    shape the create path has to support. An already-existing folder is accepted as-is,
+    so retrying a create that half-succeeded is not an error.
+    """
     root = Path(value).expanduser().resolve()
+    if create and not root.exists():
+        parent = root.parent
+        if parent == root:
+            raise ValueError(f"cannot create a project folder at a filesystem root: {root}")
+        if not parent.is_dir():
+            raise ValueError(f"parent folder does not exist: {parent}")
+        root.mkdir()
     if not root.exists():
         raise ValueError(f"project folder does not exist: {root}")
     if not root.is_dir():
@@ -67,16 +82,29 @@ class ProjectManager:
         if [item.position for item in ordered] != list(range(len(ordered))):
             await self._apply_order([item.id for item in ordered])
 
-    async def create(self, name: str, root: str, *, group_id: str | None = None) -> ProjectRecord:
+    async def create(
+        self,
+        name: str,
+        root: str,
+        *,
+        group_id: str | None = None,
+        create_missing: bool = False,
+    ) -> ProjectRecord:
         label = name.strip()
         if not label:
             raise ValueError("project name is required")
-        canonical = canonical_project_root(root)
-        key = os.path.normcase(str(canonical))
+        if not str(root).strip():
+            # An empty root used to resolve to the daemon's own working directory.
+            raise ValueError("project folder is required")
+        # Registration conflicts and an unknown group are checked before the folder is
+        # created, so a rejected request never leaves a stray directory behind.
+        resolved = Path(root).expanduser().resolve()
+        key = os.path.normcase(str(resolved))
         if any(os.path.normcase(item.root) == key for item in self.projects.values()):
             raise ValueError("that folder is already registered as a project")
         if group_id is not None and group_id not in self.groups:
             raise ValueError("unknown project group")
+        canonical = canonical_project_root(resolved, create=create_missing)
         initialize_project_files(canonical, label)
         project = ProjectRecord(
             id=str(uuid.uuid4()),

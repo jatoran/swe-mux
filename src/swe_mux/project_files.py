@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
-from .git_projects import ProjectIdentity, resolve_project
+from .git_projects import ProjectIdentity, rebase_identity, resolve_project
 
 PROJECT_CONFIG_VERSION = 1
 PROJECT_CONFIG_FIELDS = {
@@ -432,8 +432,19 @@ def write_project_file(
     return read_project_file(root, relative_path)
 
 
-async def project_status(cwd: str | Path) -> tuple[ProjectIdentity, Path]:
+async def project_status(
+    cwd: str | Path, *, canonical_root: str | Path | None = None
+) -> tuple[ProjectIdentity, Path]:
+    """Resolve the identity to report and the ``.swe-mux`` directory to use.
+
+    ``canonical_root`` is the explicit Project root when the caller already knows
+    which Project owns the request. It is authoritative for paths: without it, a
+    Project registered inside a larger worktree re-resolves to the enclosing
+    toplevel and reads/writes that Project's notes, config, and observations.
+    """
     project = await resolve_project(cwd)
+    if canonical_root is not None:
+        project = rebase_identity(project, canonical_root)
     return project, Path(project.root) / ".swe-mux"
 
 
@@ -558,14 +569,18 @@ async def read_project_config(
 
 
 async def write_project_config(
-    cwd: str | Path, values: dict[str, Any], expected_revision: str
+    cwd: str | Path,
+    values: dict[str, Any],
+    expected_revision: str,
+    *,
+    project: ProjectIdentity | None = None,
 ) -> dict[str, Any]:
-    current = await read_project_config(cwd)
+    current = await read_project_config(cwd, project=project)
     if current["revision"] != expected_revision:
         raise ValueError("project config changed externally; reload before saving")
     data = serialize_project_config(values)
     _atomic_write(Path(current["path"]), data)
-    return await read_project_config(cwd)
+    return await read_project_config(cwd, project=project)
 
 
 OBSERVATIONS_VERSION = 1
@@ -573,13 +588,25 @@ MAX_OBSERVATIONS = 500
 MAX_OBSERVATION_CHARS = 2000
 
 
+class ObservationsUnreadableError(ValueError):
+    """The inbox file exists but cannot be parsed.
+
+    Distinct from "missing" on purpose: an unparseable file (hand edit, merge
+    conflict markers) read as an empty list means the next captured note rewrites
+    it with one item and silently discards every prior observation.
+    """
+
+
 def _load_observations(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
-    parsed = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ObservationsUnreadableError(f"observations.json is unreadable: {exc}") from exc
     items = parsed.get("observations") if isinstance(parsed, dict) else None
     if not isinstance(items, list):
-        return []
+        raise ObservationsUnreadableError("observations.json has no observations list")
     result: list[dict[str, Any]] = []
     for item in items:
         if not isinstance(item, dict) or not isinstance(item.get("id"), str):
@@ -638,33 +665,47 @@ async def read_observations(
     else:
         mux_dir = Path(project.root) / ".swe-mux"
     path = mux_dir / "observations.json"
-    data = path.read_bytes() if path.is_file() else None
+    try:
+        data = path.read_bytes() if path.is_file() else None
+    except OSError:
+        data = None
     try:
         observations = _load_observations(path)
-    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
-        observations = []
+    except ObservationsUnreadableError as exc:
+        return {
+            "project": asdict(project),
+            "path": str(path),
+            "exists": True,
+            "revision": revision(data),
+            "observations": [],
+            "status": "malformed",
+            "error": str(exc),
+        }
     return {
         "project": asdict(project),
         "path": str(path),
         "exists": path.is_file(),
         "revision": revision(data),
         "observations": observations,
+        "status": "ready",
     }
 
 
-async def append_observation(cwd: str | Path, body: str) -> dict[str, Any]:
+async def append_observation(
+    cwd: str | Path, body: str, *, project: ProjectIdentity | None = None
+) -> dict[str, Any]:
     """Append one observation. Append-only capture is conflict-free, so no revision check."""
     text = body.strip()
     if not text:
         raise ValueError("observation body must not be empty")
     if len(text) > MAX_OBSERVATION_CHARS:
         raise ValueError(f"observation body must be {MAX_OBSERVATION_CHARS} characters or fewer")
-    project, mux_dir = await project_status(cwd)
+    if project is None:
+        project, mux_dir = await project_status(cwd)
+    else:
+        mux_dir = Path(project.root) / ".swe-mux"
     path = mux_dir / "observations.json"
-    try:
-        current = _load_observations(path)
-    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
-        current = []
+    current = _load_observations(path)
     if len(current) >= MAX_OBSERVATIONS:
         raise ValueError(f"observation inbox is full ({MAX_OBSERVATIONS} items); clear some first")
     current.append(
@@ -680,21 +721,32 @@ async def append_observation(cwd: str | Path, body: str) -> dict[str, Any]:
 
 
 async def write_observations(
-    cwd: str | Path, observations: list[dict[str, Any]], expected_revision: str
+    cwd: str | Path,
+    observations: list[dict[str, Any]],
+    expected_revision: str,
+    *,
+    project: ProjectIdentity | None = None,
 ) -> dict[str, Any]:
     """Replace the whole inbox (toggle done, delete, reorder) with a revision check."""
-    current = await read_observations(cwd)
+    current = await read_observations(cwd, project=project)
+    if current.get("status") == "malformed":
+        raise ObservationsUnreadableError(str(current.get("error") or "observations.json"))
     if current["revision"] != expected_revision:
         raise ValueError("observations changed externally; reload before saving")
     cleaned = _validate_observations(observations)
     _atomic_write(Path(current["path"]), _serialize_observations(cleaned))
-    return await read_observations(cwd)
+    return await read_observations(cwd, project=project)
 
 
-async def read_note(cwd: str | Path, kind: str, identity: str) -> dict[str, Any]:
+async def read_note(
+    cwd: str | Path, kind: str, identity: str, *, project: ProjectIdentity | None = None
+) -> dict[str, Any]:
     if kind not in NOTE_KINDS:
         raise ValueError("note kind must be projects or sessions")
-    project, mux_dir = await project_status(cwd)
+    if project is None:
+        project, mux_dir = await project_status(cwd)
+    else:
+        mux_dir = Path(project.root) / ".swe-mux"
     path = (
         mux_dir / "notes" / "project.md"
         if kind == "projects"
@@ -745,10 +797,12 @@ async def write_note(
     identity: str,
     markdown: str,
     expected_revision: str,
+    *,
+    project: ProjectIdentity | None = None,
 ) -> dict[str, Any]:
     if len(markdown.encode("utf-8")) > 1024 * 1024:
         raise ValueError("note exceeds the 1 MiB limit")
-    current = await read_note(cwd, kind, identity)
+    current = await read_note(cwd, kind, identity, project=project)
     if current["revision"] != expected_revision:
         raise ValueError("note changed externally; reload before saving")
     header = f"---\nswe_mux_note = 1\nkind = {json.dumps(kind)}\nid = {json.dumps(identity)}\n---\n"
@@ -756,15 +810,17 @@ async def write_note(
     if not markdown.startswith("---\nswe_mux_note = 1\n"):
         body = header + markdown
     _atomic_write(Path(current["path"]), body.encode("utf-8"))
-    return await read_note(cwd, kind, identity)
+    return await read_note(cwd, kind, identity, project=project)
 
 
-async def initialize_note(cwd: str | Path, kind: str, identity: str) -> dict[str, Any]:
+async def initialize_note(
+    cwd: str | Path, kind: str, identity: str, *, project: ProjectIdentity | None = None
+) -> dict[str, Any]:
     """Create an empty durable note without overwriting an existing note."""
-    current = await read_note(cwd, kind, identity)
+    current = await read_note(cwd, kind, identity, project=project)
     if current["exists"]:
         return current
     path = Path(current["path"])
     header = f"---\nswe_mux_note = 1\nkind = {json.dumps(kind)}\nid = {json.dumps(identity)}\n---\n"
     _create_note_file(path, header)
-    return await read_note(cwd, kind, identity)
+    return await read_note(cwd, kind, identity, project=project)

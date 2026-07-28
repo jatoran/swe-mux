@@ -21,6 +21,7 @@ from swe_mux.session import (
     fleet_status_health,
     pty_tail_appears_idle,
     pty_tail_state,
+    pty_tail_waiting_on_background,
     transition_proof,
     watchdog_decision,
 )
@@ -168,6 +169,45 @@ def test_watchdog_decision_pins_thresholds(
             pty_state=pty_state,
         )
         == expected
+    )
+
+
+def test_resume_working_is_confined_to_answered_approvals() -> None:
+    # Approval is the only block whose dialog the tail classifier can recognize.
+    # A Codex question or an elicitation shows neither marker, while redraw
+    # history in the same tail still holds "esc to interrupt" from before the
+    # block — resuming on that would hide a prompt the user has not answered,
+    # which the design forbids outright.
+    for reason in ("question", "elicitation", "rate_limit"):
+        assert (
+            watchdog_decision(
+                "awaiting",
+                stalled_seconds=STATE_WATCHDOG_AWAITING_RESUME_SECONDS,
+                tail_verdict=None,
+                pty_state="working",
+                awaiting_reason=reason,
+            )
+            == "none"
+        ), reason
+    assert (
+        watchdog_decision(
+            "awaiting",
+            stalled_seconds=STATE_WATCHDOG_AWAITING_RESUME_SECONDS,
+            tail_verdict=None,
+            pty_state="working",
+            awaiting_reason="approval",
+        )
+        == "resume_working"
+    )
+    # An unset reason keeps the historical behavior (approval is the default).
+    assert (
+        watchdog_decision(
+            "awaiting",
+            stalled_seconds=STATE_WATCHDOG_AWAITING_RESUME_SECONDS,
+            tail_verdict=None,
+            pty_state="working",
+        )
+        == "resume_working"
     )
 
 
@@ -498,3 +538,36 @@ def test_fleet_status_health_alarm_bounds() -> None:
     shell = ReplaySession("claude")
     shell.record.backend = "shell"
     assert fleet_status_health([shell], now=now)["sessions"] == []
+
+
+def test_background_wait_is_an_idle_sub_reason_not_a_state() -> None:
+    # `✻ Waiting for N background tasks to finish` means the turn genuinely ended
+    # — the composer accepts input and delivery is safe — while the agent is
+    # going to wake itself. Rendering that as a plain "ready · turn complete" is
+    # true and misleading at once, so it becomes an idle sub-reason.
+    assert pty_tail_waiting_on_background("✻ Waiting for 2 background tasks to finish") is True
+    assert pty_tail_waiting_on_background("running a background task…") is True
+    # A live turn is `working`, never a background wait.
+    assert (
+        pty_tail_waiting_on_background("Waiting for tasks\nthinking… (esc to interrupt)") is False
+    )
+    assert pty_tail_waiting_on_background("❯ ? for shortcuts") is False
+    assert pty_tail_waiting_on_background("") is False
+    # The state itself is unchanged: this never invents or blocks a state.
+    assert pty_tail_state("✻ Waiting for 2 background tasks to finish") == "unknown"
+
+
+def test_idle_reason_is_ledgered_and_cleared_by_leaving_idle() -> None:
+    session = ReplaySession("claude")
+    assert session.transition(
+        "idle", None, source="transcript", evidence="end_turn", idle_reason="waiting_on_background"
+    )
+    assert session.record.idle_reason == "waiting_on_background"
+    entry = [e for e in session.state_transitions if e["kind"] == "transition"][-1]
+    assert entry["idle_reason"] == "waiting_on_background"
+    # The self-wake back into a turn clears it, like awaiting_reason.
+    assert session.transition("working", None, source="transcript", evidence="tool_use_record")
+    assert session.record.idle_reason is None
+    # ...and an ordinary idle does not inherit the previous sub-reason.
+    assert session.transition("idle", None, source="transcript", evidence="end_turn")
+    assert session.record.idle_reason is None

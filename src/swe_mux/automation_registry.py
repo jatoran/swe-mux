@@ -8,7 +8,7 @@ from dataclasses import dataclass
 # or spends; consumers are assembled from substrate. A consumer is only *effective*
 # when the full transitive closure of its dependencies is also opted in — this is
 # the gate that keeps nothing running without the foundation it reads from. See
-# .docs/development/CONTROL_PLANE_IDEAS.md §8.
+# .docs/development/CONTROL_PLANE_ROADMAP.md §8.
 
 SUBSTRATE = "substrate"
 CONSUMER = "consumer"
@@ -20,31 +20,78 @@ class Automation:
     kind: str
     label: str
     requires: tuple[str, ...] = ()
+    # False while the automation is a reserved id with no implementation behind
+    # it. The toggle surface renders dependencies straight from this registry, so
+    # a placeholder edge presented as a complete dependency set would let a user
+    # switch on something that then does nothing — and would contradict the
+    # published design while looking authoritative.
+    implemented: bool = True
 
 
 _AUTOMATIONS: tuple[Automation, ...] = (
     # Substrate.
     Automation("raw_store", SUBSTRATE, "Raw transcript store"),
     Automation("tier0", SUBSTRATE, "Deterministic fact capture", ("raw_store",)),
-    Automation("project_card", SUBSTRATE, "Project card"),
-    Automation("scan_timeline", SUBSTRATE, "Scan timeline", ("tier0", "raw_store")),
-    # Consumers.
+    Automation("project_card", SUBSTRATE, "Project card", implemented=False),
+    Automation(
+        "scan_timeline", SUBSTRATE, "Scan timeline", ("tier0", "raw_store"), implemented=False
+    ),
+    # Consumers. The deterministic four (control-plane step 3) are model-free
+    # queries over Tier 0 and ship together; everything below them needs a layer
+    # that does not exist yet and is marked unimplemented rather than toggleable.
     Automation("provenance_graph", CONSUMER, "Provenance graph", ("tier0",)),
     Automation("declared_vs_verified", CONSUMER, "Declared vs verified", ("tier0",)),
     Automation("loop_detection", CONSUMER, "Loop / stall detection", ("tier0",)),
-    Automation("doc_debt", CONSUMER, "Doc-debt ledger", ("tier0", "project_card")),
-    Automation("dead_end_memory", CONSUMER, "Dead-end memory", ("tier0", "scan_timeline")),
-    Automation("continuous_title", CONSUMER, "Continuous session title", ("scan_timeline",)),
+    # Doc debt derives its file → owning-doc map from the repository's own docs,
+    # so it needs Tier 0 and nothing else. It previously claimed a project_card
+    # dependency that its implementation does not use.
+    Automation("doc_debt", CONSUMER, "Doc-debt ledger", ("tier0",)),
+    Automation(
+        "dead_end_memory",
+        CONSUMER,
+        "Dead-end memory",
+        ("tier0", "scan_timeline"),
+        implemented=False,
+    ),
+    Automation(
+        "continuous_title",
+        CONSUMER,
+        "Continuous session title",
+        ("scan_timeline",),
+        implemented=False,
+    ),
     Automation(
         "cross_session_interlocks",
         CONSUMER,
         "Cross-session interlocks",
         ("provenance_graph",),
+        implemented=False,
     ),
-    Automation("absence_report", CONSUMER, "Absence report / digest", ("scan_timeline",)),
-    Automation("attention_ranking", CONSUMER, "Attention ranking", ("tier0",)),
+    Automation(
+        "absence_report",
+        CONSUMER,
+        "Absence report / digest",
+        ("scan_timeline",),
+        implemented=False,
+    ),
+    # "← everything" in the design: ranking has nothing to rank without the
+    # detectors and the timeline that feed it. The old `("tier0",)` would have let
+    # the toggle surface present a one-dependency tree as complete.
+    Automation(
+        "attention_ranking",
+        CONSUMER,
+        "Attention ranking",
+        (
+            "tier0",
+            "scan_timeline",
+            "loop_detection",
+            "declared_vs_verified",
+            "doc_debt",
+        ),
+        implemented=False,
+    ),
     Automation("observation_inbox", CONSUMER, "Observation inbox"),
-    Automation("screenshot_to_agent", CONSUMER, "Screenshot to agent", ("project_card",)),
+    Automation("screenshot_to_agent", CONSUMER, "Screenshot to agent"),
 )
 
 REGISTRY: dict[str, Automation] = {automation.id: automation for automation in _AUTOMATIONS}

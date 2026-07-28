@@ -42,9 +42,19 @@ test('placement splits the strip from the drawer without hiding anything', () =>
   // is now visible in the drawer instead of hidden behind a settings trip.
   assert.equal(strip.includes('esc'), true)
   assert.equal(strip.includes('home'), false)
-  assert.deepEqual(drawer, ['home', 'end', 'ctrlHome', 'ctrlEnd', 'newline', 'clearInput', 'rewind'])
+  assert.deepEqual(drawer, ['home', 'end', 'ctrlHome', 'ctrlEnd', 'newline', 'clearInput', 'rewind', 'endSession'])
   // Every built-in lands in exactly one host.
   assert.deepEqual([...strip, ...drawer].sort(), BUILTIN_RAIL.filter(item => railItemVisible(item, ctx)).map(item => item.id).sort())
+})
+
+test('end session ships in the drawer for every backend, never on the strip', () => {
+  // It is the one destructive built-in, so it must not default next to the arrow keys;
+  // moving it onto the strip stays a deliberate settings choice.
+  for (const backend of ['claude', 'codex', 'shell'] as const) {
+    const ctx = { platform: 'mobile', backend } as const
+    assert.equal(resolveRail(BUILTIN_RAIL, ctx).some(item => item.id === 'endSession'), false)
+    assert.equal(resolveRail(BUILTIN_RAIL, ctx, 'drawer').some(item => item.id === 'endSession'), true)
+  }
 })
 
 test('a pre-placement save that switched an item off means "not on the strip"', () => {

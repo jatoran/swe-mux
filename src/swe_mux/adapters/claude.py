@@ -16,6 +16,20 @@ def encode_cwd(cwd: Path | str) -> str:
     return re.sub(r"[^A-Za-z0-9-]", "-", str(Path(cwd).resolve()))
 
 
+def is_conversation_transcript(path: Path) -> bool:
+    """True when the file name is a plain conversation id, not CLI housekeeping.
+
+    Claude Code renames a session file it can no longer attribute to
+    ``<id>.orphaned-<ts>-<hash>.jsonl``. Its stem still *starts* with the original
+    conversation id, so anything deriving a native id from the stem maps the
+    fragment onto the real conversation's history row: the two files then alternate
+    ownership of one per-path watermark and both re-parse on every startup, with a
+    stale fragment shown as the conversation. A dot inside the stem is the exact
+    discriminator — a conversation id never contains one.
+    """
+    return "." not in path.stem
+
+
 def claude_data_home() -> Path:
     configured = os.environ.get("CLAUDE_CONFIG_DIR")
     return Path(configured).expanduser() if configured else Path.home() / ".claude"
@@ -109,11 +123,20 @@ class ClaudeAdapter:
         root = claude_data_home() / "projects" / encode_cwd(cwd)
         if not root.exists():
             return []
-        return [
-            (path.stat().st_mtime, path, path.stem)
-            for path in root.glob("*.jsonl")
-            if path.stat().st_mtime + 2 >= created_at
-        ]
+        recent: list[tuple[float, Path, str]] = []
+        for path in root.glob("*.jsonl"):
+            if not is_conversation_transcript(path):
+                continue
+            # Claude's own startup cleanup deletes stale transcripts in this very
+            # directory, so a file can vanish between glob and stat. One raced
+            # candidate must not kill the caller's detection loop.
+            try:
+                modified = path.stat().st_mtime
+            except OSError:
+                continue
+            if modified + 2 >= created_at:
+                recent.append((modified, path, path.stem))
+        return recent
 
     async def await_transcript(
         self, native_id: str, cwd: Path, created_at: float, stop: asyncio.Event

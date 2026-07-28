@@ -12,6 +12,14 @@
   periodic `psutil` reconciliation records descendant appearance and exit. The assignment
   result, parent lineage, Project/run owner, first/last seen, exit evidence, command hash,
   and confidence persist as bounded observations; command text does not.
+- The PID+creation-time rule covers the **root** too. Ended sessions stay listed (the user
+  keeps them for scrollback) with `record.pid` never cleared, so collection skips any session
+  in `exited`/`crashed` outright, and for a live one verifies the root's creation time against
+  the value captured at spawn (`SessionRecord.root_started_at`) before walking the tree.
+  Without that gate a recycled root pid attributed an unrelated process tree to the dead
+  session as `active`/`high` evidence — persisted, listed in the fleet, emitting
+  `listener_detected` under the wrong session, and offering terminate on it. Sessions adopted
+  from a supervisor predating the field have no reference and fall back to pid-only.
 - Snapshots cap retained records and expose parent, executable label/command, start/exit,
   CPU, RSS, listeners, and measurable warning conditions. The inspector nests descendants
   by PID/parent PID; processes whose parent is outside the owned snapshot remain visible as
@@ -46,6 +54,14 @@
   scrollback and exit evidence remain available.
 - If optional process inspection support is unavailable, the API returns a typed diagnostic
   and all terminal/session behavior continues.
+- `interrupt` on the session root writes Ctrl-C to its PTY. On Windows a non-root descendant
+  gets `CTRL_BREAK_EVENT` (psutil rejects SIGINT there, which made the action unusable for
+  every descendant on the primary platform) and a typed "cannot be interrupted; use
+  terminate" error when even that is not deliverable — never a raw psutil failure.
+- `terminate_tree` terminates the descendants of a root whose PID *and* creation time were
+  just revalidated. Matching children against the last sample's owned set by raw PID let a
+  child that respawned since (a dev server restarting) survive the action while the user
+  believed the tree was gone.
 - The inspector opens from session/terminal right-click, pane-header `proc`, sidebar
   `: menu` Process fleet, or the command palette. Fleet mode uses the coherent all-session
   snapshot when available and falls back to aggregating session-scoped snapshots for an
@@ -206,6 +222,10 @@ more — swe-mux does not reap or share language servers.
 - The PNG is saved into the owning Project's `.swe-mux/preview-shots/` (falling back to the
   data dir), so a local agent can read it in the repo it is already working in. The absolute
   path is returned for the copied reference.
+- Shots expire after 7 days through the daemon's media-cleanup loop, across every registered
+  Project root plus the data-dir fallback. They live *inside the user's repository*, and a
+  UI-iteration session takes dozens of multi-hundred-KB PNGs a day; the window is longer than
+  pasted media because an agent may reasonably read one days later.
 
 ## Key files
 

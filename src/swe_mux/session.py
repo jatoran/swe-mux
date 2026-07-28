@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .adapters import BackendAdapter, SpawnOptions
+from .background_tasks import background
 from .event_bus import EventBus
 from .git_projects import ProjectIdentity, resolve_project
 from .history import HistoryIndex
@@ -60,6 +62,29 @@ OBSERVER_RESTART_BACKOFF_MAX_SECONDS = 30.0
 # state from the transcript tail and, only when that tail proves the turn is over,
 # forces the session idle.  A tool in flight never reads as over, so a genuinely
 # long tool call is never cut short.
+try:  # psutil is optional; process identity degrades to pid-only without it.
+    import psutil
+except ImportError:  # pragma: no cover - diagnostics cover an unsynchronized dev venv
+    psutil = None
+
+
+def process_started_at(pid: int) -> float | None:
+    """OS creation time for a pid, or None when it cannot be read.
+
+    Pairing a pid with its creation time is what makes it an identity: Windows
+    recycles pids aggressively, and exited sessions are retained with their pid
+    intact, so anything that walks `record.pid` later must be able to prove it is
+    still the same process.
+    """
+    if psutil is None or pid <= 0:
+        return None
+    try:
+        return float(psutil.Process(pid).create_time())
+    except Exception:  # noqa: BLE001 - psutil raises provider-specific errors
+        return None
+
+
+STATE_WATCHDOG_LOOP = "state-watchdog"
 STATE_WATCHDOG_POLL_SECONDS = 5.0
 # When the transcript tail *proves* the turn ended, a residual "working" is a
 # stale hook or a missed close, not real work, so recover quickly. The longer
@@ -242,6 +267,74 @@ def transition_proof(source: str, inferred: bool | None = None) -> str:
     return "inferred" if inferred else "proven"
 
 
+# Claude is spawned with an injected `--session-id <uuid>`, and the transcript
+# stem is that uuid. A native id in this shape is therefore authoritative: no
+# other file in the shared per-cwd directory belongs to this session.
+_CLAUDE_NATIVE_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
+)
+# Allowance between "the agent run began" and "the CLI created its transcript",
+# absorbing clock granularity and CLI startup ordering.
+_TRANSCRIPT_CREATION_SLACK_SECONDS = 5.0
+
+
+def file_created_at(path: Path) -> float | None:
+    """Creation time for a transcript, or None when it cannot be read.
+
+    `st_birthtime` is the real creation time where the platform provides it
+    (Windows always does); `st_ctime` is the documented fallback.
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    birthtime = getattr(stat, "st_birthtime", None)
+    if isinstance(birthtime, int | float) and birthtime > 0:
+        return float(birthtime)
+    return float(stat.st_ctime)
+
+
+def _consuming_spool_path(spool: Path) -> Path:
+    """Sibling name used while a spool file is being replayed.
+
+    Suffix-appended rather than suffix-replaced so a session id containing a dot
+    cannot collide with the live spool.
+    """
+    return spool.parent / f"{spool.name}.consuming"
+
+
+# Once a session reaches one of these the process is gone. Only the daemon (which
+# observed the exit and wrote the durable history rows) may move it out again —
+# e.g. relaunch, which constructs a fresh record anyway.
+TERMINAL_STATES = frozenset({"exited", "crashed"})
+
+
+def _record_transition_refusal(
+    session: Any,
+    state: SessionState,
+    source: str,
+    evidence: str | None,
+    now: float,
+    monotonic_now: float,
+) -> None:
+    """Ledger a rejected transition so a refused resurrection is diagnosable."""
+    ledger = getattr(session, "state_transitions", None)
+    if ledger is None:
+        return
+    ledger.append(
+        {
+            "ts": now,
+            "monotonic": monotonic_now,
+            "kind": "transition_refused",
+            "state": state,
+            "previous": getattr(session.record, "state", None),
+            "source": source,
+            "evidence": evidence,
+            "reason": "terminal_latch",
+        }
+    )
+
+
 def apply_state_transition(
     session: Any,
     state: SessionState,
@@ -251,6 +344,7 @@ def apply_state_transition(
     evidence: str | None = None,
     inferred: bool | None = None,
     awaiting_reason: str | None = None,
+    idle_reason: str | None = None,
     force: bool = False,
     now: float | None = None,
     monotonic_now: float | None = None,
@@ -264,6 +358,15 @@ def apply_state_transition(
     """
     now = time.time() if now is None else now
     monotonic_now = time.monotonic() if monotonic_now is None else monotonic_now
+    record_state = getattr(session.record, "state", None)
+    if record_state in TERMINAL_STATES and state not in TERMINAL_STATES and source != "daemon":
+        # Terminal latch. Exit is owned by the daemon (it saw the process end and
+        # wrote the durable history rows); a late hook — a spooled SessionEnd that
+        # the shim recreated after the unlink, say — must not resurrect a dead
+        # session to idle. `force` deliberately does not override this: force
+        # reclaims arbitration between live sources, not from process reality.
+        _record_transition_refusal(session, state, source, evidence, now, monotonic_now)
+        return False
     if force:
         # Authoritative evidence (interrupt/abort markers, process exit,
         # lifecycle ownership changes) reclaims arbitration from any source.
@@ -274,12 +377,16 @@ def apply_state_transition(
     record = session.record
     if state != "awaiting":
         awaiting_reason = None
+    if state != "idle":
+        idle_reason = None
     previous = record.state
     previous_awaiting = getattr(record, "awaiting_reason", None)
+    previous_idle_reason = getattr(record, "idle_reason", None)
     changed = (
         previous != state
         or record.state_detail != detail
         or previous_awaiting != awaiting_reason
+        or previous_idle_reason != idle_reason
     )
     session.state_source_priority = priority
     if not changed:
@@ -315,6 +422,7 @@ def apply_state_transition(
         "state": state,
         "detail": detail,
         "awaiting_reason": awaiting_reason,
+        "idle_reason": idle_reason,
         "source": source,
         "priority": priority,
         "evidence": evidence,
@@ -351,6 +459,8 @@ def apply_state_transition(
     record.state_detail = detail
     if hasattr(record, "awaiting_reason"):
         record.awaiting_reason = awaiting_reason
+    if hasattr(record, "idle_reason"):
+        record.idle_reason = idle_reason
     return True
 
 
@@ -396,6 +506,26 @@ PTY_APPROVAL_MARKERS = (
     "allow codex to",
 )
 PTY_IDLE_MARKERS = ("? for shortcuts",)
+# The CLI's own line for "my turn is over but background work is still running"
+# (`✻ Waiting for 2 background tasks to finish`). This is an *idle sub-reason*,
+# never a state: the composer accepts input and delivery is safe either way.
+PTY_BACKGROUND_WAIT_MARKERS = ("waiting for", "background task")
+
+
+def pty_tail_waiting_on_background(tail: str) -> bool:
+    """True when the live frame shows the CLI waiting on its own background work.
+
+    Ordering-aware like `pty_tail_state`: the marker must appear *after* the last
+    idle prompt, because the retained tail also holds the frame from before the
+    turn ended.
+    """
+    lowered = tail.lower()
+    marker = max((lowered.rfind(item) for item in PTY_BACKGROUND_WAIT_MARKERS), default=-1)
+    if marker < 0:
+        return False
+    working = max((lowered.rfind(item) for item in PTY_WORKING_MARKERS), default=-1)
+    # A live turn ("esc to interrupt") is `working`, not a background wait.
+    return marker > working
 
 
 def pty_tail_state(tail: str) -> PtyTailState:
@@ -431,6 +561,7 @@ def watchdog_decision(
     stalled_seconds: float,
     tail_verdict: str | None,
     pty_state: PtyTailState,
+    awaiting_reason: str | None = None,
 ) -> WatchdogAction:
     """Pure quiescence-watchdog decision, shared with the replay harness.
 
@@ -454,6 +585,13 @@ def watchdog_decision(
         return "none"
     if (
         state == "awaiting"
+        # Approval is the only block whose dialog the tail classifier can see, so
+        # it is the only one where "the spinner is up" proves the block is gone.
+        # A Codex question or an elicitation shows neither an approval nor an idle
+        # marker, while redraw history in the same tail still holds "esc to
+        # interrupt" from before the block — which would resume the session to
+        # `working` and hide a prompt the user must answer.
+        and (awaiting_reason or "approval") == "approval"
         and pty_state == "working"
         and stalled_seconds >= STATE_WATCHDOG_AWAITING_RESUME_SECONDS
     ):
@@ -577,6 +715,9 @@ class Session:
         # and user keystrokes. Without this, two attached xterms both answer
         # device-status queries and the duplicate response appears at the prompt.
         self.input_owner: str | None = None
+        # The owner's socket, so a displaced owner can be told it lost the claim.
+        # Silent displacement left the previous client typing into a void.
+        self.input_owner_socket: Any = None
         self.revision = 0
         self.state_source_priority = -1
         # Diagnostics for end-detection health: when the state last changed, when a
@@ -632,6 +773,9 @@ class Session:
         # Set when this PTY was promoted around a nested agent CLI; used to
         # ignore shell-prompt echoes from just before/around the promotion.
         self.agent_promoted_at: float | None = None
+        # Agent backends whose name has appeared in this (still unpromoted) shell's
+        # output: an agent launch is in flight and will create a transcript here.
+        self.pending_agent_backends: set[str] = set()
         self.agent_exit_check_task: asyncio.Task[Any] | None = None
         self.agent_ready_task: asyncio.Task[Any] | None = None
         self.output_window: deque[tuple[float, int]] = deque()
@@ -639,6 +783,10 @@ class Session:
         # this correlation in memory only; normalized events expose the stable
         # tool name without persisting backend-specific transcript identifiers.
         self.tool_names: dict[str, str] = {}
+        # Same correlation for the tool's normalized target, so a tool_result can
+        # carry the target its tool_use captured (Tier 0 fingerprints results
+        # per-action rather than collapsing them onto one value).
+        self.tool_targets: dict[str, str] = {}
         # Supervisor-backed sessions mirror their metadata (record snapshot,
         # hook secret, transcript path) into the supervisor so a future daemon
         # can rebuild this Session after a restart. None for in-process PTYs.
@@ -735,6 +883,7 @@ class Session:
         evidence: str | None = None,
         inferred: bool | None = None,
         awaiting_reason: str | None = None,
+        idle_reason: str | None = None,
         force: bool = False,
     ) -> bool:
         """Apply a state transition only when its observation source is authoritative.
@@ -751,6 +900,7 @@ class Session:
             evidence=evidence,
             inferred=inferred,
             awaiting_reason=awaiting_reason,
+            idle_reason=idle_reason,
             force=force,
         )
         if changed:
@@ -859,6 +1009,9 @@ class SessionManager:
         # sessions survive a daemon restart; in-process spawning remains the
         # fallback whenever the supervisor is unreachable.
         self.supervisor = supervisor
+        # Supervised sessions this daemon could not rebuild at adoption. They keep
+        # running with no UI handle, so the count is surfaced at /health.
+        self.unadopted_supervisor_sessions = 0
         self.sessions: dict[str, Session] = {}
         # Repairs discovered while adopting supervisor metadata are consumed by
         # the composition root to invalidate rebuildable provider telemetry.
@@ -986,6 +1139,12 @@ class SessionManager:
                 env=merge_environment(env_base, env_extra),
                 graceful_exit=adapter.graceful_exit_keys(),
                 max_scrollback=self.max_scrollback,
+                # Adoptable from its first instant. The meta mirror is coalesced
+                # (~0.5s), so a daemon crash inside that window used to leave the
+                # supervisor holding a live session with meta {} — permanently
+                # unadoptable, invisible in the UI, and stoppable only by reaping
+                # every session.
+                meta={"record": record.snapshot(), "hook_secret": hook_secret},
             )
             remote.prepare()
             try:
@@ -1014,6 +1173,7 @@ class SessionManager:
             await asyncio.to_thread(pty.spawn)
         startup_timing_ms["pty_spawn"] = round((time.perf_counter() - pty_started_at) * 1000, 1)
         record.pid = pty.pid
+        record.root_started_at = await asyncio.to_thread(process_started_at, record.pid)
         record.process_job_assignment = pty.reaper_assignment
         registration_started_at = time.perf_counter()
         ownership_job: ReaperJob | None = None
@@ -1243,13 +1403,41 @@ class SessionManager:
             ]
             if exact:
                 return max(exact)[1]
-            if len(candidates) == 1:
+            if len(candidates) == 1 and self._may_adopt_sole_candidate(
+                session, candidates[0][1], started
+            ):
                 return candidates[0][1]
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=0.5)
             except TimeoutError:
                 pass
         return None
+
+    @staticmethod
+    def _may_adopt_sole_candidate(session: Session, candidate: Path, started: float) -> bool:
+        """Gate the single-unclaimed-candidate fallback.
+
+        The candidate pool is the backend's shared per-cwd transcript directory, so
+        "the only unclaimed file" can easily be an unmanaged CLI's conversation (a
+        headless `claude -p` from a script, a plain-terminal run). Adopting it
+        rekeys native_session_id, rebinds the history row, and renders the
+        outsider's status and tokens under this session's identity.
+
+        Two independent gates:
+
+        - When the CLI was told which conversation to write (claude's injected
+          `--session-id`), that id is authoritative. Nothing else is ours, so the
+          fallback is refused outright rather than guessing.
+        - Otherwise the file must have been *created* after this agent run began.
+          A conversation that already existed cannot have been started by it.
+        """
+        record = session.record
+        if _CLAUDE_NATIVE_ID.fullmatch(record.native_session_id or ""):
+            return False
+        created = file_created_at(candidate)
+        if created is None:
+            return False
+        return created >= started - _TRANSCRIPT_CREATION_SLACK_SECONDS
 
     def _adoption_transcript_claims(
         self,
@@ -1477,6 +1665,7 @@ class SessionManager:
             records[sid] = parsed_record
             metas[sid] = pre_meta
         adopted = 0
+        self.unadopted_supervisor_sessions = 0
         for info in client.initial_sessions:
             sid = str(info.get("sid") or "")
             if not sid or sid in self.sessions:
@@ -1487,12 +1676,15 @@ class SessionManager:
             if not isinstance(record_snapshot, dict):
                 # Nothing to rebuild from. Leave the entry untouched: killing it
                 # would violate the survival contract, and a daemon that does
-                # know it may still come back.
+                # know it may still come back. Counted, because otherwise a live
+                # agent running with no UI handle is visible only as a log line.
                 log.warning("supervised session %s has no metadata; not adopting", sid)
+                self.unadopted_supervisor_sessions += 1
                 continue
             record = records.get(sid)
             if record is None:
                 log.warning("could not rebuild session record for %s", sid)
+                self.unadopted_supervisor_sessions += 1
                 continue
             if record.state in {"exited", "crashed"}:
                 # Fully ended and already persisted by a previous daemon; the
@@ -1506,6 +1698,7 @@ class SessionManager:
             except Exception:
                 log.exception("could not subscribe to supervised session %s", sid)
                 client.unregister_host(host)
+                self.unadopted_supervisor_sessions += 1
                 continue
             transcript_path, bad_run_id, previous_identity = (
                 self._reconcile_adopted_root_identity(record, meta, records, metas)
@@ -1529,6 +1722,19 @@ class SessionManager:
                 session.agent_promoted_at = time.time()
             self.sessions[sid] = session
             self._attach_meta_sink(session)
+            # Identity repair mutates record.state directly (it runs before the
+            # Session exists). Ledger it now that one does, so the state-log after
+            # a restart does not start with a state nothing explains — the
+            # scenario where the ledger is most needed.
+            if previous_identity is not None:
+                apply_state_transition(
+                    session,
+                    record.state,
+                    record.state_detail,
+                    source="daemon",
+                    evidence="adoption:identity_repair",
+                    force=True,
+                )
             session.tasks.add(asyncio.create_task(self._fanout(session), name=f"fanout-{sid}"))
             session.tasks.add(asyncio.create_task(self._ticker(session), name=f"ticker-{sid}"))
             if host.isalive():
@@ -1600,7 +1806,11 @@ class SessionManager:
         detection_started_at = time.time()
         agent_names = [name for name in self.adapters if name != "shell"]
         max_name_len = max((len(name) for name in agent_names), default=0)
-        seen_names: set[str] = set()
+        # Published on the session so a sibling agent's transcript-switch watcher
+        # can see that an unpromoted agent launch is in flight in this cwd and
+        # refuse to adopt the transcript that launch is about to create.
+        seen_names: set[str] = session.pending_agent_backends
+        seen_names.clear()
         carry = b""
         while not session.stop_event.is_set() and session.pty.isalive():
             if session.record.backend != "shell":
@@ -1631,15 +1841,21 @@ class SessionManager:
                 except TimeoutError:
                     pass
                 continue
-            candidates = [
-                (modified, adapter.name, path, native_id)
-                for adapter in launched
-                for modified, path, native_id in adapter.recent_transcripts(
-                    Path(session.record.runtime_cwd or session.record.cwd),
-                    detection_started_at,
-                )
-                if (adapter.name, native_id) not in session.ignored_detection_runs
-            ]
+            try:
+                candidates = [
+                    (modified, adapter.name, path, native_id)
+                    for adapter in launched
+                    for modified, path, native_id in adapter.recent_transcripts(
+                        Path(session.record.runtime_cwd or session.record.cwd),
+                        detection_started_at,
+                    )
+                    if (adapter.name, native_id) not in session.ignored_detection_runs
+                ]
+            except OSError:
+                # The CLI's own startup cleanup deletes old transcripts under the
+                # glob. One unlucky stat must not kill the shim-less promotion
+                # fallback for the rest of the session's life.
+                candidates = []
             claimed_ids, claimed_paths = self._live_transcript_claims(session)
             distinct = {
                 (backend, native_id, self._path_key(path)): (
@@ -1725,6 +1941,8 @@ class SessionManager:
             return session
         session.ignored_detection_runs.discard((backend, native_id))
         session.agent_lifecycle_id = native_id
+        # Anything spooled before this promotion belongs to a run that is over.
+        self.discard_hook_spool(session.record.id)
         await self._begin_agent_run(session, launch_cwd)
         adapter = self.adapters[backend]
         session.adapter = adapter
@@ -1815,6 +2033,9 @@ class SessionManager:
         session.observation_replay = False
         session.agent_promoted_at = None
         session.transcript_path = None
+        # The spool is keyed by mux session id, which survives demotion. Anything
+        # the ending agent run left behind would replay into the next promotion.
+        self.discard_hook_spool(session.record.id)
         session.record.agent_run_id = None
         session.record.agent_run_started_at = None
         session.record.run_cwd = None
@@ -1940,19 +2161,29 @@ class SessionManager:
             return cwd
 
     def _has_transcript_sibling(self, session: Session, cwd: Path) -> bool:
-        """True when another live agent session writes transcripts into this cwd."""
+        """True when another live session may write this backend's transcripts here.
+
+        Same-backend agent sessions are the obvious case. An *unpromoted shell*
+        that has already echoed the agent's name counts too: its shim-less launch
+        is about to create a transcript in this cwd, and this session's 2s switch
+        watcher can beat that shell's 0.5s detection loop to the claim — stealing
+        the new CLI's conversation and permanently rekeying this record's native id.
+        """
         try:
             key = cwd.resolve()
         except OSError:
             key = cwd
+        backend = session.record.backend
         for other in self.sessions.values():
             if other is session:
                 continue
-            if other.record.backend != session.record.backend:
+            if other.record.state in TERMINAL_STATES:
                 continue
-            if other.record.state in {"exited", "crashed"}:
+            if self._resolved_cwd(other.record) != key:
                 continue
-            if self._resolved_cwd(other.record) == key:
+            if other.record.backend == backend:
+                return True
+            if other.record.backend == "shell" and backend in other.pending_agent_backends:
                 return True
         return False
 
@@ -2000,9 +2231,36 @@ class SessionManager:
                 continue
             if now - modified > TRANSCRIPT_SWITCH_FRESH_SECONDS:
                 continue
+            if not self._session_could_have_written(session, path):
+                continue
             if best is None or modified > best[0]:
                 best = (modified, path)
         return best[1] if best else None
+
+    @staticmethod
+    def _session_could_have_written(session: Session, candidate: Path) -> bool:
+        """Corroborate that *this* PTY produced the candidate transcript.
+
+        The candidate pool is the backend's shared per-cwd transcript directory,
+        which every CLI on the machine writes into — a VS Code Claude extension or
+        a one-off terminal `claude` in the same repo lands there too. Without
+        corroboration an idle mux session adopts that outsider's conversation,
+        rekeys its own native_session_id, rebinds its history row, and renders the
+        outsider's status and tokens as its own.
+
+        The corroboration is cheap and hard to fake: if this session's CLI wrote
+        the file, this session's PTY produced output while the file was being
+        written. An outside CLI leaves our PTY silent.
+        """
+        created = file_created_at(candidate)
+        if created is None:
+            return False
+        last_output = session.record.last_activity_ts
+        if not last_output:
+            return False
+        # Output must have continued after the candidate appeared, with a small
+        # allowance for the CLI writing its first record before it repaints.
+        return last_output >= created - TRANSCRIPT_SWITCH_QUIET_SECONDS
 
     async def state_watchdog_loop(self) -> None:
         """Safety net for a session left "working"/"awaiting" after its turn ended.
@@ -2015,15 +2273,13 @@ class SessionManager:
         never cut short.
         """
         while True:
-            try:
-                await asyncio.sleep(STATE_WATCHDOG_POLL_SECONDS)
+            await asyncio.sleep(STATE_WATCHDOG_POLL_SECONDS)
+            # Never let the safety net die silently; the guard also publishes the
+            # loop's liveness and fault count to /api/diagnostics/background.
+            with background.iteration(STATE_WATCHDOG_LOOP):
                 now = time.time()
                 for session in tuple(self.sessions.values()):
                     await self._watchdog_check_session(session, now)
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # never let the safety net die silently
-                log.exception("state watchdog iteration failed")
 
     async def _watchdog_check_session(self, session: Session, now: float) -> None:
         """Re-derive one session's true state and force idle if its turn is over.
@@ -2055,6 +2311,7 @@ class SessionManager:
                 stalled_seconds=stalled,
                 tail_verdict=None,
                 pty_state=pty_state,
+                awaiting_reason=record.awaiting_reason,
             )
             == "resume_working"
         ):
@@ -2069,16 +2326,34 @@ class SessionManager:
         if stalled < STATE_WATCHDOG_ENDED_STUCK_SECONDS:
             return
         path = session.transcript_path
+        verdict: str | None
         if path is None:
+            # No transcript at all (never bound, or bound to a file that has since
+            # gone) is exactly the case the PTY backstop is documented to cover:
+            # returning here made "wrong/missing transcript still recovers"
+            # unreachable, which is also the case with no other recovery path.
+            verdict = "unknown"
+        else:
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                verdict = "unknown"
+            else:
+                if now - mtime < STATE_WATCHDOG_TRANSCRIPT_QUIET_SECONDS:
+                    # The transcript is still moving; the live observer owns it.
+                    return
+                verdict = await asyncio.to_thread(
+                    transcript_tail_turn_state, record.backend, path
+                )
+        # Re-derive after the await. `stalled`/`pty_state`/`record.state` were
+        # captured before a threaded tail read that can take real time, and an
+        # approval raised inside that window would otherwise be judged against
+        # pre-approval evidence and instantly resumed to `working` — hiding a
+        # prompt the user has not answered, the one outcome this design forbids.
+        if record.state not in {"working", "awaiting"}:
             return
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
-            return
-        if now - mtime < STATE_WATCHDOG_TRANSCRIPT_QUIET_SECONDS:
-            # The transcript is still moving; the live observer owns it.
-            return
-        verdict = await asyncio.to_thread(transcript_tail_turn_state, record.backend, path)
+        stalled = time.time() - session.last_state_change_ts
+        pty_state = self._pty_tail_state(session)
         # PTY ground-truth backstop. The transcript may give no proof the turn
         # ended: "unknown" (schema drift) or "open" (the tail is a tool_use/
         # tool_result, so by the record the model still owes a response). Both
@@ -2094,6 +2369,7 @@ class SessionManager:
             stalled_seconds=stalled,
             tail_verdict=verdict,
             pty_state=pty_state,
+            awaiting_reason=record.awaiting_reason,
         )
         if action == "none":
             return
@@ -2105,17 +2381,49 @@ class SessionManager:
             tail_verdict=verdict,
         )
 
+    def _hook_spool_path(self, session_id: str) -> Path | None:
+        # getattr keeps lifecycle paths callable from the partially-constructed
+        # managers the unit tests build; a real manager always sets the field.
+        spool_dir: Path | None = getattr(self, "hook_spool_dir", None)
+        if spool_dir is None:
+            return None
+        return spool_dir / f"{session_id}.jsonl"
+
+    def discard_hook_spool(self, session_id: str) -> None:
+        """Drop any spooled hooks belonging to a run that is over.
+
+        The spool file is keyed by mux session id, which is stable across
+        demote/re-promote — so a terminal event left behind by one agent run would
+        otherwise replay into the next one and force it idle mid-turn.
+        """
+        path = self._hook_spool_path(session_id)
+        if path is None:
+            return
+        path.unlink(missing_ok=True)
+        _consuming_spool_path(path).unlink(missing_ok=True)
+
     async def _drain_hook_spool(self, session: Session) -> None:
         """Replay hook events the shim spooled to disk after a failed POST.
 
         Stop/SessionEnd delivered over a lost HTTP request would otherwise vanish;
         the shim appends them here as a durable fallback that the daemon consumes.
+
+        A spooled event is only replayed when it can still be true: it must be
+        newer than the current agent run's start (a leftover from a previous run
+        is not evidence about this one) and newer than the current turn's start (a
+        Stop from turn N must not close turn N+1).
         """
-        if self.hook_spool_dir is None:
+        path = self._hook_spool_path(session.record.id)
+        if path is None:
             return
         from .observation import apply_hook_observation
 
-        path = self.hook_spool_dir / f"{session.record.id}.jsonl"
+        record = session.record
+        if record.state in TERMINAL_STATES:
+            # The process is gone; nothing spooled can be about a live turn, and
+            # replaying a SessionEnd here used to resurrect the session to idle.
+            self.discard_hook_spool(record.id)
+            return
         try:
             stat = path.stat()
         except OSError:
@@ -2126,18 +2434,38 @@ class SessionManager:
         # parsed and a concurrent write is not truncated away.
         if time.time() - stat.st_mtime < 1.0:
             return
+        # Consume by rename: a shim append landing after this snapshot goes to a
+        # fresh file instead of being truncated away by the rewrite that used to
+        # follow the read.
+        consuming = _consuming_spool_path(path)
         try:
-            data = path.read_bytes()
+            if consuming.exists():
+                # A previous drain died mid-replay: fold the live spool onto the
+                # leftover so nothing is lost, then consume the combined file.
+                consuming.write_bytes(consuming.read_bytes() + path.read_bytes())
+                path.unlink(missing_ok=True)
+            else:
+                # On Windows this fails outright while the shim holds the file
+                # open, which is the desired outcome: retry on the next pass
+                # rather than truncate an append away.
+                path.replace(consuming)
+            data = consuming.read_bytes()
         except OSError:
             return
         consumed = data.rfind(b"\n") + 1
-        if not consumed:
-            return
         remainder = data[consumed:]
         try:
-            path.write_bytes(remainder)
+            if remainder:
+                # A trailing partial line goes back to the live spool so the
+                # shim's completion of it is not orphaned.
+                tail = path.read_bytes() if path.exists() else b""
+                path.write_bytes(remainder + tail)
+            consuming.unlink(missing_ok=True)
         except OSError:
+            pass
+        if not consumed:
             return
+        floor = self._hook_spool_floor(session)
         for line in data[:consumed].split(b"\n"):
             line = line.strip()
             if not line:
@@ -2152,6 +2480,21 @@ class SessionManager:
             payload = item.get("payload")
             if not event_type or not isinstance(payload, dict):
                 continue
+            raw_spooled_at = item.get("spooled_at")
+            spooled_at = (
+                float(raw_spooled_at) if isinstance(raw_spooled_at, int | float) else None
+            )
+            if spooled_at is not None and spooled_at < floor:
+                session.state_transitions.append(
+                    {
+                        "ts": time.time(),
+                        "kind": "hook_spool_discarded",
+                        "event": event_type,
+                        "spooled_at": spooled_at,
+                        "floor": floor,
+                    }
+                )
+                continue
             session.last_hook_ts = time.time()
             session.state_transitions.append(
                 {"ts": time.time(), "kind": "hook_spool_replay", "event": event_type}
@@ -2160,6 +2503,18 @@ class SessionManager:
                 await apply_hook_observation(session, event_type, payload, self.events)
             except Exception:
                 log.exception("failed to replay spooled hook %s", event_type)
+
+    @staticmethod
+    def _hook_spool_floor(session: Session) -> float:
+        """Oldest spool timestamp that can still describe the session's live turn."""
+        record = session.record
+        floor = float(record.agent_run_started_at or record.created_at)
+        observation_state = getattr(session, "observation_state", None)
+        if isinstance(observation_state, dict):
+            turn_started = observation_state.get("turn_started_at")
+            if isinstance(turn_started, int | float):
+                floor = max(floor, float(turn_started))
+        return floor
 
     @staticmethod
     def _pty_tail_state(session: Session) -> PtyTailState:
@@ -2178,6 +2533,8 @@ class SessionManager:
         return self._pty_tail_state(session) == "idle"
 
     async def _fanout(self, session: Session) -> None:
+        # unsupervised-loop-ok: scoped to one session, not the daemon. It ends with
+        # its PTY, so it has no place in a registry keyed by singleton loop name.
         while True:
             chunk = await session.pty.output_queue.get()
             if chunk == b"":
@@ -2475,8 +2832,7 @@ class SessionManager:
             await self.history.agent_run_ended(session.record, final_reason)
         for adapter in self.adapters.values():
             adapter.cleanup(session.record.id)
-        if self.hook_spool_dir is not None:
-            (self.hook_spool_dir / f"{session.record.id}.jsonl").unlink(missing_ok=True)
+        self.discard_hook_spool(session.record.id)
         if session.ownership_job:
             session.ownership_job.close()
             session.ownership_job = None
@@ -2520,6 +2876,20 @@ class SessionManager:
         in-process fallback sessions — which die with this process regardless —
         are stopped cleanly.
         """
+        preserved = [
+            session
+            for session in self.sessions.values()
+            if intent == "detach" and isinstance(session.pty, RemotePtyHost)
+        ]
+        # Stop the per-session tickers of preserved sessions *first*. Once the
+        # client disconnects, `RemotePtyHost.isalive()` is False by definition, so
+        # one more tick would call `_mark_ended` on every live remote session and
+        # persist a spurious exit for an agent that is still running.
+        for session in preserved:
+            session.stopping = True
+            for task in tuple(session.tasks):
+                if task.get_name().startswith("ticker-"):
+                    task.cancel()
         targets = [
             sid
             for sid, session in self.sessions.items()

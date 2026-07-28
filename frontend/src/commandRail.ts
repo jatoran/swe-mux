@@ -104,6 +104,10 @@ export const BUILTIN_RAIL: RailItem[] = [
   // Opens Claude's interactive /rewind picker (there is no one-shot,
   // conversation-only variant, so this just launches the picker).
   { id: 'rewind', type: 'slash', text: 'rewind', label: 'Rewind…', submit: true, backends: ['claude'], title: 'Open Claude /rewind (interactive checkpoint picker)', placement: 'drawer' },
+  // Ends the session the rail belongs to. Destructive, so it defaults to the
+  // drawer rather than the strip — a kill button one mis-tap away from the arrow
+  // keys is the wrong default even with the two-click confirm behind it.
+  { id: 'endSession', type: 'action', action: 'endSession', label: 'End session', className: 'rail-danger', title: 'End this session (click twice to confirm)', placement: 'drawer' },
 ]
 
 /** Custom items (skills, slash commands, literal text) default to the drawer:

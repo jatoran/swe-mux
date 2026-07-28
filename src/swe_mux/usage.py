@@ -10,10 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .background_tasks import background
 from .config import CCUSAGE_PACKAGE, Config
 from .event_bus import EventBus
 from .subprocess_flags import background_creation_flags, reap_process_tree
 
+USAGE_REFRESH_LOOP = "usage-refresh"
 MAX_USAGE_OUTPUT_BYTES = 10 * 1024 * 1024
 USAGE_TIMEOUT_SECONDS = 30.0
 CACHE_VERSION = 2
@@ -227,12 +229,11 @@ class UsageManager:
             return {}
 
     def start(self) -> None:
-        self._task = asyncio.create_task(self._background(), name="usage-refresh")
+        self._task = background.start(USAGE_REFRESH_LOOP, self._background)
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            await asyncio.gather(self._task, return_exceptions=True)
+        await background.stop(USAGE_REFRESH_LOOP)
+        self._task = None
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -359,5 +360,6 @@ class UsageManager:
                 await asyncio.sleep(60)
                 continue
             await asyncio.sleep(minutes * 60)
-            if self.config.ccusage_enabled and not self._lock.locked():
-                await self.refresh()
+            with background.iteration(USAGE_REFRESH_LOOP):
+                if self.config.ccusage_enabled and not self._lock.locked():
+                    await self.refresh()

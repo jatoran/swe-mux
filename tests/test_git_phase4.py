@@ -6,27 +6,74 @@ from pathlib import Path
 import pytest
 
 from swe_mux import git_monitor
-from swe_mux.git_monitor import read_git_state, read_unique_git_states
+from swe_mux.git_monitor import read_git_reading, read_git_state, read_unique_git_states
 from swe_mux.server import _parse_worktrees
+
+_FULL_SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+
+
+def _fake_git_responses(porcelain: str) -> dict[tuple[str, ...], tuple[int, str]]:
+    return {
+        ("rev-parse", "--show-toplevel"): (0, "C:/repo"),
+        ("branch", "--show-current"): (0, ""),
+        ("status", "--porcelain"): (0, porcelain),
+        ("rev-list", "--left-right", "--count", "HEAD...@{upstream}"): (1, ""),
+        ("rev-parse", "HEAD"): (0, _FULL_SHA),
+        ("rev-parse", "--short", "HEAD"): (0, "a1b2c3d"),
+    }
 
 
 @pytest.mark.asyncio
 async def test_detached_head_uses_short_sha(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
         del cwd, timeout_seconds
-        responses = {
-            ("rev-parse", "--show-toplevel"): (0, "C:/repo"),
-            ("branch", "--show-current"): (0, ""),
-            ("status", "--porcelain"): (0, " M file.txt"),
-            ("rev-list", "--left-right", "--count", "HEAD...@{upstream}"): (1, ""),
-            ("rev-parse", "--short", "HEAD"): (0, "a1b2c3d"),
-        }
-        return responses[args]
+        return _fake_git_responses(" M file.txt")[args]
 
     monkeypatch.setattr(git_monitor, "_git", fake_git)
     state = await read_git_state("C:/repo")
     assert state.branch == "a1b2c3d"
     assert state.dirty == 1
+
+
+@pytest.mark.asyncio
+async def test_git_reading_carries_head_and_dirty_hash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tier 0 provenance needs commit identity, not just a dirty file count."""
+    porcelain = {"value": " M file.txt\n?? new.txt"}
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        return _fake_git_responses(porcelain["value"])[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    reading = await read_git_reading("C:/repo")
+    assert reading.evidence.head == _FULL_SHA
+    first = reading.evidence.dirty_hash
+    assert first
+
+    # Order-independent: the same change set hashes identically...
+    porcelain["value"] = "?? new.txt\n M file.txt"
+    assert (await read_git_reading("C:/repo")).evidence.dirty_hash == first
+    # ...and a different change set does not.
+    porcelain["value"] = " M other.txt"
+    assert (await read_git_reading("C:/repo")).evidence.dirty_hash != first
+    # A clean tree has no dirty hash at all.
+    porcelain["value"] = ""
+    assert (await read_git_reading("C:/repo")).evidence.dirty_hash is None
+
+
+@pytest.mark.asyncio
+async def test_unborn_branch_reports_no_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A repo with no commits must report head=None rather than an error string."""
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        responses = _fake_git_responses("")
+        responses[("rev-parse", "HEAD")] = (128, "fatal: ambiguous argument 'HEAD'")
+        return responses[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    reading = await read_git_reading("C:/repo")
+    assert reading.evidence.head is None
 
 
 @pytest.mark.asyncio

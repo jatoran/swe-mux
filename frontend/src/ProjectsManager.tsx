@@ -29,6 +29,110 @@ type ProjectConfig = {
   values: PortableValues
 }
 
+type AutomationEntry = {
+  id: string
+  kind: 'substrate' | 'consumer'
+  label: string
+  requires: string[]
+  implemented: boolean
+}
+type AutomationState = {
+  revision: string
+  requested: Record<string, boolean>
+  enabled: string[]
+  blocked: Record<string, string[]>
+  automations: AutomationEntry[]
+}
+
+/**
+ * Per-project control-plane opt-in, rendered as a dependency tree rather than a
+ * flat checkbox list.
+ *
+ * The distinction is the whole point: a consumer is only *effective* when its
+ * substrate is enabled too, so a checkbox that reads "on" while the thing it
+ * reads from is off would be a lie. Toggling a consumer therefore names what it
+ * needs and offers to enable that closure in the same click. Enabling anything
+ * here is what makes it run at all — nothing in this layer touches a project
+ * that did not opt in.
+ */
+function AutomationOptIns({ project, busy, onError }: {
+  project: Project
+  busy: boolean
+  onError: (message: string) => void
+}) {
+  const [state, setState] = useState<AutomationState | null>(null)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    let stale = false
+    setState(null)
+    api<AutomationState>('GET', `/api/projects/${project.id}/automations`)
+      .then(result => { if (!stale) setState(result) })
+      .catch(cause => { if (!stale) onError(cause instanceof Error ? cause.message : String(cause)) })
+    return () => { stale = true }
+  }, [project.id])
+
+  const write = async (next: Record<string, boolean>) => {
+    if (!state) return
+    setSaving(true)
+    try {
+      const result = await api<AutomationState>('PUT', `/api/projects/${project.id}/automations`, {
+        automations: next, revision: state.revision,
+      })
+      setState(result)
+    } catch (cause) { onError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setSaving(false) }
+  }
+
+  if (!state) return <div class="project-automations"><h4>Control-plane automations</h4><p>Loading…</p></div>
+  const byId = new Map(state.automations.map(item => [item.id, item]))
+  // Enabling a consumer enables its whole transitive closure: the alternative is
+  // a toggle that appears on and silently does nothing.
+  const closure = (id: string, seen = new Set<string>()): Set<string> => {
+    if (seen.has(id)) return seen
+    seen.add(id)
+    for (const dependency of byId.get(id)?.requires || []) closure(dependency, seen)
+    return seen
+  }
+  const toggle = (id: string, on: boolean) => {
+    const next = { ...state.requested }
+    if (on) for (const item of closure(id)) next[item] = true
+    else {
+      delete next[id]
+      // Turning substrate off turns off everything that reads from it, rather
+      // than leaving dependents enabled-but-inert.
+      for (const item of state.automations) if (closure(item.id).has(id)) delete next[item.id]
+    }
+    void write(next)
+  }
+  const row = (item: AutomationEntry) => {
+    const on = state.requested[item.id] === true
+    const missing = state.blocked[item.id] || []
+    const disabled = busy || saving || !item.implemented
+    return <li key={item.id} class={item.implemented ? '' : 'unavailable'}>
+      <label class="check">
+        <span class="project-setting-name">{item.label}
+          <em class="project-setting-chip">{item.kind}</em>
+          {!item.implemented && <em class="project-setting-chip">not built yet</em>}
+        </span>
+        <input type="checkbox" disabled={disabled} checked={on}
+          onChange={event => toggle(item.id, event.currentTarget.checked)} />
+      </label>
+      {item.requires.length > 0 && <p class="project-automation-deps">
+        needs {item.requires.map(id => byId.get(id)?.label || id).join(' · ')}
+        {missing.length > 0 && <strong> — {missing.length} still off</strong>}
+      </p>}
+    </li>
+  }
+  const substrate = state.automations.filter(item => item.kind === 'substrate')
+  const consumers = state.automations.filter(item => item.kind === 'consumer')
+  return <div class="project-automations">
+    <h4>Control-plane automations<em class="project-setting-chip">repo</em></h4>
+    <p>Per-project opt-in. Substrate records facts and never acts or spends; a consumer reads substrate and needs it enabled to do anything. Nothing here runs on a project that did not opt in.</p>
+    <ul class="project-automation-list">{substrate.map(row)}</ul>
+    <ul class="project-automation-list">{consumers.map(row)}</ul>
+  </div>
+}
+
 export type ProjectPatch =
   Partial<Pick<Project, 'name' | 'group_id' | 'sidebar_visible'>>
   & { default_backend?: ProjectBackend | null; default_profile_id?: string | null }
@@ -91,7 +195,10 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
     if(!selected){setConfig(null);setValues({});setSavedValues({});return}
     let stale=false
     setConfig(null);setValues({});setSavedValues({})
-    api<ProjectConfig>('GET',`/api/project/config?cwd=${encodeURIComponent(selected.root)}`)
+    // project_id names the registered Project explicitly: without it the daemon
+    // re-resolves the root through Git, and a Project registered inside a larger
+    // worktree edits the enclosing worktree's config instead of its own.
+    api<ProjectConfig>('GET',`/api/project/config?cwd=${encodeURIComponent(selected.root)}&project_id=${encodeURIComponent(selected.id)}`)
       .then(result=>{if(stale)return;setConfig(result);setValues(result.values);setSavedValues(result.values)})
       .catch(cause=>{if(!stale)setError(cause instanceof Error?cause.message:String(cause))})
     return ()=>{stale=true}
@@ -139,7 +246,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
           ...values,
           ...(values.ignore_patterns?{ignore_patterns:normalizeIgnorePatterns(values.ignore_patterns)}:{}),
         }
-        const result=await api<ProjectConfig>('PUT','/api/project/config',{cwd:selected.root,values:payload,revision:config.revision})
+        const result=await api<ProjectConfig>('PUT','/api/project/config',{cwd:selected.root,project_id:selected.id,values:payload,revision:config.revision})
         setConfig(result);setValues(result.values);setSavedValues(result.values)
       }
     }
@@ -208,6 +315,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
               </label>
               <p>One glob per line, added to the global ignore list. A name such as <code>node_modules</code> matches that folder at any depth. These rules affect the file tree and resource watchers, not Git. Only typed presentation preferences are portable — never commands, hooks, credentials, or anything that runs.</p>
               <div><button disabled={busy||!config} onClick={()=>setValues({})}>Reset repo options to inherited</button></div>
+              <AutomationOptIns project={selected} busy={busy} onError={setError} />
             </div>}
           </div>
           {error&&<p class="projects-manager-error" role="alert">{error}</p>}

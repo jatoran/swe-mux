@@ -19,12 +19,14 @@ It should call domain packages rather than acquire their storage or process resp
 | `scrollback.py` | byte-exact scrollback ring (append/seed/replay cursoring) shared by daemon sessions and the supervisor | subscribers, persistence |
 | `subprocess_flags.py` | consoleless flags for daemon-owned Windows background commands; `popen_outside_job` breakaway spawn (with plain-spawn fallback) for children that must outlive any inherited Job object | interactive ConPTY children |
 | `lifecycle.py` | daemon death forensics: rewritten heartbeat record, append-only lifecycle ledger, unclean-death detection at startup, clean-exit marking | logging configuration, process supervision |
+| `background_tasks.py` | supervision and health for the daemon's long-lived loops: per-iteration fault guard, restart with capped backoff, per-loop health snapshot | PTY host processes (that is `supervisor.py`), any domain logic |
 | `logsetup.py` | rotating `daemon.log`/`access.log` handlers, faulthandler `crash.log`, runtime root-logger level control | the supervisor's logging (stdlib-inline there to keep its closure frozen) |
 | `build_support.py` | lock-safe staged frontend publication for desktop packaging | Vite compilation, runtime asset serving |
 | `projects.py` | Project/Group validation and lifecycle | Git-derived identity, file content |
 | `project_files.py` | safe Project config, notes, tree, bounded recursive name/content search, file reads/writes | layout placement, browser drafts |
 | `project_watcher.py` | leased non-recursive directory watches | recursive Project crawl |
 | `project_actions.py` | inert task import, normalization, exact fingerprint trust, per-step spawn requests (shell quoting, PATH/shim resolution) | automatic execution, UI placement, session ownership |
+| `project_init.py` | user-authored setup commands from the daemon config: catalog, id selection in configured order, one step per command | trust fingerprints, repository reads (there are none), spawn execution |
 | `spawn_contract.py` | spawn field validation: bounded env, cwd containment, Claude marker scrubbing | project ownership (the caller supplies the root) |
 | `history.py` | shared schema, Project/layout persistence, run history, search index | live PTY lifecycle |
 | `history_backfill.py` | bounded cancellable complete-history jobs | durable job scheduling, native file mutation |
@@ -37,7 +39,8 @@ It should call domain packages rather than acquire their storage or process resp
 | `processes.py` | descendant inspection/actions; Project-wide loopback registration, discovery, listener attribution, and route maps | proxy transport, authoritative ownership from PID alone |
 | `adapters/` | provider command/resume/transcript/state normalization | public HTTP shapes |
 | `automation_registry.py` | control-plane enablement DAG: substrate/consumer deps, cycle-checked resolution | storage, execution |
-| `tier0_store.py` | deterministic no-model fact capture (Tier 0 substrate), gated per-project, source pointers | model calls, actuation |
+| `tier0_store.py` | deterministic no-model fact capture (Tier 0 substrate), gated per-project, source pointers, run/project fact queries | model calls, actuation |
+| `deterministic_consumers.py` | model-free detectors over Tier 0 (loop/stall, declared-vs-verified, doc debt, provenance edges) and the turn-boundary runner | model calls, spend, anything that writes toward a session |
 | `preview_capture.py` | optional headless preview screenshot (Playwright), typed-unavailable | proxy transport, PTY writes |
 | `clipboard_store.py` | in-memory clipboard-history ring (dedupe by content hash, pins, count/time bounds, secret-shape refusal) plus its opt-in SQLite mirror | reading or polling the OS clipboard, deciding where inserted text goes |
 
@@ -68,6 +71,31 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
 
 - Blocking ConPTY creation, filesystem scans, Git probes, and SQLite work stay off the asyncio
   event loop.
+- **Every long-lived loop is supervised.** A bare `while True:` dies permanently on its first
+  uncaught exception with no log at failure time, no restart, and no health signal — and this
+  daemon is designed to run for weeks behind the PTY supervisor, so that is not a degradation
+  but a feature that silently stops. Two layers, both required (`background_tasks.py`):
+  wrap the *iteration* in `background.iteration(name)` so a transient fault costs one cycle and
+  is attributed, and start the *loop* with `background.start(name, factory)` so anything that
+  escapes anyway is restarted with capped backoff. `factory` must be a factory, not an
+  already-created coroutine. Health is surfaced at `GET /api/diagnostics/background`; a new
+  loop that appears there with `running: false` is the diagnostic that used to be missing.
+  `tests/test_background_tasks.py` sweeps the source for unguarded `while True:` and fails
+  on any new one. A loop that genuinely should not join the registry — scoped to a single
+  connection or session, or already guarded in place — opts out with an inline
+  `# unsupervised-loop-ok: <reason>` marker, so the exemption is reviewable where it lives
+  instead of in a list that quietly grows.
+- The lifecycle heartbeat is supervised for a sharper reason than the rest: its death is
+  indistinguishable from the daemon's. One failed write used to end it silently, after which
+  the daemon kept running normally while every later start reported it as "died without a
+  clean shutdown" — a false forensic that sends the next investigation after a crash that
+  never happened.
+- A `stat()` in a polling watcher belongs inside the try. Editors save by delete+rename, so
+  `exists()` and `stat()` genuinely disagree; treat the failure as "unchanged".
+- The PTY read path must never fabricate end-of-output. A cross-thread handoff that cannot
+  complete is backpressure (the correct response is to keep waiting while the child is alive),
+  and `b""` reaching the supervisor is checked against `isalive()` before it is believed —
+  the removal path closes a kill-on-close job, so a fabricated exit kills a live agent tree.
 - Interactive readiness and durable registration are distinct. Once a ConPTY is usable, publish
   the in-memory session and return; serialize history registration behind it.
 - Keep root-process identity separate from active nested-agent identity. Promotion is a
@@ -160,10 +188,19 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
 - Preview registration identity is Project endpoint, not clicked terminal. Resolve listener
   ownership across live sessions before attachment; do not weaken the iframe sandbox or let a
   browser dial raw loopback for cross-service traffic.
-- Once a route has resolved an explicit Project, Project-resource helpers must receive/use that
-  canonical identity. Re-running Git discovery on `project.root` can silently retarget a nested
-  registered Project to its enclosing worktree; this remains a known note-path defect until the
-  helpers accept the explicit Project identity.
+- Once a route has resolved an explicit Project, Project-resource helpers must receive that
+  canonical identity (`_registered_identity(project)` → the `project=` keyword on
+  `read_note`/`write_note`/`initialize_note`/`read_project_config`/`write_project_config`/
+  the observation helpers). Git discovery answers "which worktree contains this path", which
+  is the wrong question once the owner is known: a Project registered *inside* a larger
+  worktree resolves to the enclosing toplevel, and every derived path — notes, config,
+  observations — lands in the wrong Project. `git_projects.rebase_identity` re-anchors the
+  root/scope while keeping repository-group metadata describing the real worktree.
+- Detectors and observers are different tiers and must not blur. Anything under
+  `deterministic_consumers.py` is a query over Tier 0 facts: no model call, no spend, no
+  transcript interpretation beyond a literal claim pattern, and no output but annotations.
+  A finding carries the *set* of facts it rests on, because a single event pointer cannot
+  express "this repeated three times and nothing moved".
 
 ## Related design
 

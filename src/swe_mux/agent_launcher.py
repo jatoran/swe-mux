@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -41,18 +42,51 @@ def _demote(backend: str, native_id: str) -> None:
 
 
 def _value_after(args: list[str], flag: str) -> str | None:
+    """The token after ``flag``, only when it is a value rather than the next flag.
+
+    ``--resume`` takes an *optional* id: bare ``claude --resume`` opens the picker,
+    and reading the next token unconditionally captures whatever followed it (a
+    flag, a prompt) as a conversation id.
+    """
     try:
-        return args[args.index(flag) + 1]
-    except (ValueError, IndexError):
+        index = args.index(flag)
+    except ValueError:
         return None
+    if index + 1 >= len(args):
+        return None
+    candidate = args[index + 1]
+    return None if candidate.startswith("-") else candidate
+
+
+_CLAUDE_SESSION_ID = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+# Every documented form that makes the CLI attach to an existing conversation.
+# `--session-id` is mutually exclusive with all of them (the CLI exits 1), so the
+# shim must recognize each one rather than only the long resume spelling.
+_CLAUDE_RESUME_FLAGS = ("--resume", "-r")
+_CLAUDE_CONTINUE_FLAGS = ("--continue", "-c")
 
 
 def _claude(args: list[str]) -> tuple[str, list[str], str]:
     exe = os.environ.get("MUX_CLAUDE_EXE", "claude.exe")
-    native_id = _value_after(args, "--session-id") or _value_after(args, "--resume")
+    native_id = _value_after(args, "--session-id") or ""
+    resuming = any(flag in args for flag in (*_CLAUDE_RESUME_FLAGS, *_CLAUDE_CONTINUE_FLAGS))
     if not native_id:
+        for flag in _CLAUDE_RESUME_FLAGS:
+            value = _value_after(args, flag)
+            if value and _CLAUDE_SESSION_ID.fullmatch(value):
+                native_id = value
+                break
+    if not native_id and not resuming:
         native_id = str(uuid.uuid4())
         args = ["--session-id", native_id, *args]
+    if not _CLAUDE_SESSION_ID.fullmatch(native_id):
+        # `--continue`, `--resume` with no id, or `-r <search term>`: the CLI picks
+        # the conversation, so the shim does not know its id and must not claim
+        # one. Promotion reports it empty and the daemon binds the transcript from
+        # the CLI's own SessionStart hook instead of guessing.
+        native_id = ""
     settings = os.environ.get("MUX_CLAUDE_SETTINGS")
     if settings and "--settings" not in args:
         args = ["--settings", settings, *args]

@@ -71,6 +71,11 @@ export function classifySoundEvent(event:NormalizedMuxEvent):{event:SoundEvent;r
   if(event.type==='unexpected_quota_reset')return {event:'reset',reason:'confirmed unexpected quota reset'}
   if(event.type==='approval_needed')return {event:'attention',reason:payload.kind==='input'?'root agent asked a question':'root agent needs approval'}
   if(event.type==='turn_failed'||event.type==='turn_aborted'||event.type==='session_crashed'||(event.type==='state_changed'&&payload.state==='crashed'))return {event:'failure',reason:'root agent failed'}
+  // The turn ended but the agent will wake itself when its background work
+  // finishes, so this is not the moment that wants the user's attention — the
+  // one after it is. Suppressing here keeps "the completion chime means the
+  // agent is done" true instead of training the user to ignore it.
+  if(payload.idle_reason==='waiting_on_background')return null
   if(event.type==='turn_ended')return {event:'complete',reason:'root agent turn completed'}
   if(event.type==='state_changed'&&payload.state==='idle')return {event:'waiting',reason:'root agent is ready for input'}
   return null

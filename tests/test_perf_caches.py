@@ -55,6 +55,73 @@ def test_transcript_cache_hits_and_invalidates_on_change(tmp_path: Path, monkeyp
     assert third[0]["content"][0]["text"] == "changed"
 
 
+def test_transcript_cache_invalidates_on_size_at_an_unchanged_mtime(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Windows mtime granularity is a timer tick, so a transcript appended twice
+    # inside one tick keeps the same st_mtime_ns. A mtime-only key then serves
+    # the pre-append parse — the one watermark in the codebase that did not pair
+    # mtime with size.
+    tv._cache.clear()
+    path = tmp_path / "t.jsonl"
+    path.write_text(
+        json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n", encoding="utf-8"
+    )
+    stamp = path.stat()
+    calls = {"n": 0}
+    real = tv.parse_transcript
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(tv, "parse_transcript", counting)
+    assert len(tv.parse_transcript_cached(path, "claude")) == 1
+
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"type": "user", "message": {"content": "again"}}) + "\n")
+    os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    assert path.stat().st_mtime_ns == stamp.st_mtime_ns
+
+    assert len(tv.parse_transcript_cached(path, "claude")) == 2
+    assert calls["n"] == 2
+
+
+def test_transcript_parse_skips_claude_sidechain_records(tmp_path: Path) -> None:
+    # Subagent turns are written into the root transcript tagged isSidechain.
+    # Indexing them pollutes history search, and letting one win min/max makes a
+    # subagent's clock the run's first/last message time.
+    tv._cache.clear()
+    path = tmp_path / "t.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "user",
+                        "timestamp": "2025-01-01T00:00:00Z",
+                        "message": {"content": "root ask"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "timestamp": "2025-01-01T00:00:05Z",
+                        "isSidechain": True,
+                        "message": {"content": [{"type": "text", "text": "subagent chatter"}]},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    messages = tv.parse_transcript(path, "claude")
+    assert [message["content"][0]["text"] for message in messages] == ["root ask"]
+    summary = tv.transcript_time_summary(path, "claude")
+    assert summary["last_message_ts"] == "2025-01-01T00:00:00Z"
+
+
 def test_transcript_cache_keys_on_backend_and_max_bytes(tmp_path: Path, monkeypatch) -> None:
     tv._cache.clear()
     path = tmp_path / "t.jsonl"

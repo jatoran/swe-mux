@@ -13,11 +13,20 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, TypeVar
 
+from .background_tasks import background
 from .event_bus import EventBus
 from .models import MuxEvent
-from .sqlite_store import database_operation_lock, run_sqlite_operation
+from .sqlite_store import (
+    connect_or_quarantine,
+    database_operation_lock,
+    run_sqlite_operation,
+    write_schema_version,
+)
 
 T = TypeVar("T")
+
+TELEMETRY_EVENT_LOOP = "operational-telemetry"
+TELEMETRY_RETENTION_LOOP = "telemetry-retention"
 
 TELEMETRY_SCHEMA_VERSION = 3
 TOOL_PARSER_VERSION = "phase2-v1"
@@ -64,6 +73,11 @@ CODEX_KNOWN_PAYLOADS = {
     "web_search_end",
 }
 RESET_EXPECTED_TOLERANCE_SECONDS = 15 * 60
+# Rebound a confirming sample may show over the reset's post-value and still
+# count as "stayed low". A provider that reports whole percents needs the wider
+# band, because rounding alone can move the reading several points.
+RESET_STABLE_TOLERANCE_POINTS = 2.0
+RESET_STABLE_TOLERANCE_POINTS_ROUNDED = 5.0
 RESET_UNEXPECTED_MIN_TIME_TO_EXPECTED_SECONDS = 60 * 60
 RESET_CONFIRMATION_MIN_SECONDS = 5 * 60
 RESET_CONFIRMATION_MAX_SECONDS = 45 * 60
@@ -352,17 +366,23 @@ class OperationalTelemetryStore:
         self.sessions: Any = None
         self.history: Any = None
 
+    def _open(self) -> sqlite3.Connection:
+        db = sqlite3.connect(self.path, check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA synchronous=NORMAL")
+        db.execute("PRAGMA busy_timeout=5000")
+        db.execute("PRAGMA cache_size=-12000")
+        return db
+
     def _connect(self) -> None:
         with self._operation_lock:
-            self._db = sqlite3.connect(self.path, check_same_thread=False)
-            self._db.row_factory = sqlite3.Row
-            self._db.execute("PRAGMA synchronous=NORMAL")
-            self._db.execute("PRAGMA busy_timeout=5000")
-            self._db.execute("PRAGMA cache_size=-12000")
+            self._db = connect_or_quarantine(self.path, self._open)
             self._db.executescript(SCHEMA)
             self._migrate_schema()
             self._repair_legacy_reset_classifications()
-            self._db.execute(f"PRAGMA user_version={TELEMETRY_SCHEMA_VERSION}")
+            # Per-store row, not PRAGMA user_version: that pragma is per *file*
+            # and Tier 0 shares mux.db, so the two stores overwrote each other.
+            write_schema_version(self._db, "telemetry", TELEMETRY_SCHEMA_VERSION)
             self._db.commit()
 
     def _migrate_schema(self) -> None:
@@ -439,21 +459,17 @@ class OperationalTelemetryStore:
         self.sessions = sessions
         self.history = history
         self._event_bus = events
-        self._event_queue = events.subscribe()
-        self._event_task = asyncio.create_task(self._consume_events(), name="operational-telemetry")
-        self._reconcile_task = asyncio.create_task(
-            self._reconcile_loop(), name="historical-operational-telemetry"
-        )
+        self._event_queue = events.subscribe(name="operational-telemetry")
+        # Supervised: one transient SQLite error used to end tool/compaction
+        # capture and ALL retention enforcement for the daemon's lifetime.
+        self._event_task = background.start(TELEMETRY_EVENT_LOOP, self._consume_events)
+        self._reconcile_task = background.start(TELEMETRY_RETENTION_LOOP, self._reconcile_loop)
 
     async def stop(self) -> None:
-        if self._event_task:
-            self._event_task.cancel()
-            await asyncio.gather(self._event_task, return_exceptions=True)
-            self._event_task = None
-        if self._reconcile_task:
-            self._reconcile_task.cancel()
-            await asyncio.gather(self._reconcile_task, return_exceptions=True)
-            self._reconcile_task = None
+        await background.stop(TELEMETRY_EVENT_LOOP)
+        self._event_task = None
+        await background.stop(TELEMETRY_RETENTION_LOOP)
+        self._reconcile_task = None
         if self._event_bus and self._event_queue:
             self._event_bus.unsubscribe(self._event_queue)
         self._event_bus = None
@@ -464,18 +480,20 @@ class OperationalTelemetryStore:
         while True:
             event = await self._event_queue.get()
             try:
-                if event.type == "context_compacted":
-                    await self.record_compaction(event)
-                elif event.type in {"tool_use", "tool_result", "skill_invoked"}:
-                    await self.record_tool_event(event)
+                with background.iteration(TELEMETRY_EVENT_LOOP):
+                    if event.type == "context_compacted":
+                        await self.record_compaction(event)
+                    elif event.type in {"tool_use", "tool_result", "skill_invoked"}:
+                        await self.record_tool_event(event)
             finally:
                 self._event_queue.task_done()
 
     async def _reconcile_loop(self) -> None:
         await asyncio.sleep(5)
         while True:
-            await self.prune(process_retention_days=self.process_retention_days)
-            await self.reconcile_transcripts()
+            with background.iteration(TELEMETRY_RETENTION_LOOP):
+                await self.prune(process_retention_days=self.process_retention_days)
+                await self.reconcile_transcripts()
             await asyncio.sleep(60 * 60)
 
     async def reconcile_transcripts(self, *, limit: int = 2000) -> dict[str, int]:
@@ -1089,8 +1107,14 @@ class OperationalTelemetryStore:
             if pending:
                 pending_handled = True
                 age = float(current["sampled_at"]) - float(pending["observed_at"])
-                stable_low = float(after) <= float(pending["after_value"]) + max(
-                    2.0, int(current["raw_precision"] == 0)
+                # `max(2.0, int(precision == 0))` could only ever be 2.0 — the
+                # precision term was dead. An integer-rounded provider genuinely
+                # needs the wider band: a post-reset sample rounding 2% -> 5%
+                # reads as a 3-point rebound and would suppress a real reset.
+                stable_low = float(after) <= float(pending["after_value"]) + (
+                    RESET_STABLE_TOLERANCE_POINTS
+                    if current["raw_precision"]
+                    else RESET_STABLE_TOLERANCE_POINTS_ROUNDED
                 )
                 candidate_sample = self._db.execute(
                     "SELECT * FROM quota_samples WHERE id=?", (pending["after_sample_id"],)
@@ -1099,6 +1123,14 @@ class OperationalTelemetryStore:
                     candidate_sample
                     and int(current["account_active"]) == int(candidate_sample["account_active"])
                     and current["auth_state"] == candidate_sample["auth_state"]
+                    # The slot's credential can be swapped mid-window. Confirming
+                    # account X's reset with account Y's fresh low sample is the
+                    # cross-account confirmation the design says is suppressed.
+                    and (
+                        not owner
+                        or not candidate_sample["provider_account_uuid"]
+                        or candidate_sample["provider_account_uuid"] == owner
+                    )
                 )
                 expected = pending["expected_reset_at"]
                 before_expected_boundary = bool(
@@ -1516,7 +1548,12 @@ class OperationalTelemetryStore:
             ).fetchall()
             for row in old:
                 self._db.execute(
-                    "INSERT OR REPLACE INTO quota_sample_rollups VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    # Named columns so a future rollup column cannot silently
+                    # break this write (or a rolled-back build's copy of it).
+                    "INSERT OR REPLACE INTO quota_sample_rollups"
+                    "(provider,account_id,day,samples,errors,session_min,session_max,"
+                    "session_first,session_last,weekly_min,weekly_max,weekly_first,"
+                    "weekly_last) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     tuple(row),
                 )
             deleted_samples = self._db.execute(

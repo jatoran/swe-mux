@@ -37,6 +37,18 @@ export function awaitingLabel(session: Session): string {
   }
 }
 
+/**
+ * Idle label by typed sub-reason. The turn really did end and delivery really is
+ * safe, so this stays on the idle axis — but "ready · turn complete" reads as
+ * "finished, nothing more is coming", which is wrong while the agent has
+ * background work that will wake it back up.
+ */
+export function idleLabel(session: Session): string {
+  return session.idle_reason === 'waiting_on_background'
+    ? 'ready · background work running'
+    : 'ready · turn complete'
+}
+
 function isAgentBackend(session: Session): boolean {
   return session.backend === 'claude' || session.backend === 'codex'
 }
@@ -47,7 +59,7 @@ export function sessionStatus(session: Session): string {
   const context = session.context_pct > 0 ? ` · ${Math.round(session.context_pct * 100)}%` : ''
   const compactions = session.compaction_count > 0 ? ` · compacted ${session.compaction_count}×` : ''
   if (session.state === 'working') return `working${session.state_detail ? ` · ${session.state_detail}` : ''}${context}${compactions}`
-  if (session.state === 'idle') return `ready · turn complete${context}${compactions}`
+  if (session.state === 'idle') return `${idleLabel(session)}${context}${compactions}`
   if (session.state === 'awaiting') return `${awaitingLabel(session)}${session.state_detail ? ` · ${session.state_detail}` : ''}${context}${compactions}`
   if (session.state === 'starting') return 'starting agent…'
   return `${session.state}${context}${compactions}`

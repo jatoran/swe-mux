@@ -290,7 +290,14 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   },[])
 
   useEffect(()=>{
-    if(resource.kind==='file')fileDrafts.set(resourceKey,{revision,text,baseline,status,saveState,error})
+    if(resource.kind!=='file')return
+    // Retained so reparenting a tab between panes never discards an unsaved
+    // edit — but *only* while there is something to protect. A clean draft is
+    // identical to what a refetch would produce, and keeping every file ever
+    // opened accumulated megabytes of strings for the page's lifetime (this app
+    // is designed to stay open for days).
+    if(text===baseline&&saveState!=='error'){fileDrafts.delete(resourceKey);return}
+    fileDrafts.set(resourceKey,{revision,text,baseline,status,saveState,error})
   },[resource.kind,resourceKey,revision,text,baseline,status,saveState,error])
 
   useEffect(()=>{

@@ -580,3 +580,98 @@ async def test_supervisor_adoption_repairs_legacy_identity_and_persists_it(
     )
     manager.history.reopen_agent_run.assert_awaited_once_with(root.id)
     assert (root.id, codex_path) in observed
+
+
+# ---- transcript adoption / switch: non-mux writers ---------------------------
+
+
+def test_transcript_switch_refuses_a_transcript_this_pty_did_not_write(
+    tmp_path: Path,
+) -> None:
+    """A VS Code Claude extension or a plain-terminal `claude` in the same repo
+    writes into the same shared per-cwd directory. Adopting it rekeys this
+    session's native id and streams the outsider's status and tokens as its own.
+    """
+    manager, session, current, _fresh = _switch_fixture(tmp_path)
+    # This session's PTY has been silent since well before the candidate appeared,
+    # so its CLI cannot be the one writing it.
+    session.record.last_activity_ts = time.time() - 600
+    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+
+
+def test_transcript_switch_allows_a_transcript_this_pty_was_active_for(
+    tmp_path: Path,
+) -> None:
+    manager, session, current, fresh = _switch_fixture(tmp_path)
+    session.record.last_activity_ts = time.time()
+    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+
+
+def test_transcript_switch_blocked_by_an_unpromoted_shell_launching_this_backend(
+    tmp_path: Path,
+) -> None:
+    """A shim-less `claude` in a sibling shell races detection.
+
+    The shell's 0.5s detection loop usually wins the claim, but when it does not,
+    this session adopts the new CLI's transcript and the shell never promotes.
+    """
+    manager, session, current, _fresh = _switch_fixture(tmp_path)
+    shell = SimpleNamespace(
+        record=agent_record("shell", str(tmp_path)),
+        transcript_path=None,
+        pending_agent_backends={"claude"},
+    )
+    manager.sessions["shell"] = shell
+    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+
+
+def test_transcript_switch_ignores_a_plain_shell_with_no_agent_launch(
+    tmp_path: Path,
+) -> None:
+    """A shell that has never echoed an agent name is not a blocking sibling."""
+    manager, session, current, fresh = _switch_fixture(tmp_path)
+    shell = SimpleNamespace(
+        record=agent_record("shell", str(tmp_path)),
+        transcript_path=None,
+        pending_agent_backends=set(),
+    )
+    manager.sessions["shell"] = shell
+    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+
+
+def test_sole_candidate_is_refused_when_the_spawn_named_the_conversation(
+    tmp_path: Path,
+) -> None:
+    """Claude is spawned with `--session-id <uuid>`; nothing else is ours.
+
+    Taking the single-unclaimed-candidate fallback here binds the session to an
+    unmanaged CLI's conversation and permanently rekeys native_session_id.
+    """
+    outsider = tmp_path / "outsider.jsonl"
+    outsider.write_text("{}\n", encoding="utf-8")
+    session = fake_agent_session("claude", None, cwd=str(tmp_path))
+    session.record.native_session_id = "123e4567-e89b-12d3-a456-426614174000"
+    assert (
+        SessionManager._may_adopt_sole_candidate(session, outsider, time.time() - 60) is False
+    )
+
+
+def test_sole_candidate_is_accepted_for_a_shim_less_promotion(tmp_path: Path) -> None:
+    """Without an injected id the fallback is the only route to the transcript."""
+    own = tmp_path / "own.jsonl"
+    own.write_text("{}\n", encoding="utf-8")
+    session = fake_agent_session("claude", None, cwd=str(tmp_path))
+    session.record.native_session_id = session.record.id  # mux id, not a uuid
+    assert SessionManager._may_adopt_sole_candidate(session, own, time.time() - 60) is True
+
+
+def test_sole_candidate_predating_the_run_is_refused(tmp_path: Path) -> None:
+    """A conversation that already existed cannot have been started by this run."""
+    older = tmp_path / "older.jsonl"
+    older.write_text("{}\n", encoding="utf-8")
+    session = fake_agent_session("codex", None, cwd=str(tmp_path))
+    session.record.native_session_id = session.record.id
+    # Started an hour after the file was created.
+    assert (
+        SessionManager._may_adopt_sole_candidate(session, older, time.time() + 3600) is False
+    )

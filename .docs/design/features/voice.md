@@ -59,6 +59,15 @@ affect the PTY, session state, transcripts, history, or projects.
   mirroring `HistoryIndex`, so nothing blocks the event loop. Public snapshots
   (`clip_snapshot`) never expose daemon file paths. A byte-cap prune (`tts_cache_mb`) deletes
   oldest ready clips; stale failed rows expire after a day.
+- Files and rows are reconciled, not assumed to agree. Prune only walks row-listed paths, so
+  a failed synthesis (stored with an empty `file_path`) or a delete that lost a lock race on
+  Windows would leave audio nothing can ever find again: synthesis failure unlinks its
+  destination, an unlink that raises is logged rather than escaping as an unhandled task
+  exception, and a sweep removes clip-directory files with no matching row.
+- Temporary STT utterances are swept too. `asyncio.to_thread` cannot be cancelled, so a
+  timed-out transcription keeps its WAV open past the request and the inline unlink can lose;
+  a timeout surfaces as a typed `VoiceError` and anything older than the timeout window is
+  deleted on the next transcription, keeping "audio is always deleted" true.
 - `GET /voice/clips/{id}/audio` serves the file (range support via `FileResponse`); the
   browser player is one HTML5 audio element, so seeking is native. `voice_clip_ready` /
   `voice_clip_failed` events drive the UI and autoplay. Autoplay fires only for live events:

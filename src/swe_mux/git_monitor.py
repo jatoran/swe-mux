@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable
+import hashlib
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
+from typing import TypeVar
 
+from .background_tasks import background
 from .event_bus import EventBus
 from .models import GitState
 from .session import Session, SessionManager
 from .subprocess_flags import background_creation_flags, reap_process_tree
 
+GIT_MONITOR_LOOP = "git-monitor"
 GIT_TIMEOUT_SECONDS = 4.0
 GIT_CONCURRENCY = 4
+
+T = TypeVar("T")
 
 
 async def _git(
@@ -41,14 +48,46 @@ async def _git(
         return 1, ""
 
 
-async def read_git_state(cwd: str) -> GitState:
+@dataclass(slots=True, frozen=True)
+class GitEvidence:
+    """Deterministic Tier 0 git facts for one repository root.
+
+    `head` is the exact commit the work happened at; `dirty_hash` fingerprints the
+    working-tree change set (paths + status codes, order-independent). Together
+    they let a provenance consumer say *which* tree a fact was produced against
+    — `GitState` alone only reports a dirty file count, which is not an identity.
+    """
+
+    head: str | None = None
+    dirty_hash: str | None = None
+
+    def as_payload(self) -> dict[str, str | None]:
+        return {"head": self.head, "dirty_hash": self.dirty_hash}
+
+
+@dataclass(slots=True, frozen=True)
+class GitReading:
+    state: GitState
+    evidence: GitEvidence
+
+
+def _dirty_hash(porcelain: str) -> str | None:
+    """Order-independent fingerprint of the working-tree change set."""
+    lines = sorted(line.strip() for line in porcelain.splitlines() if line.strip())
+    if not lines:
+        return None
+    return hashlib.sha256("\n".join(lines).encode("utf-8", "replace")).hexdigest()[:16]
+
+
+async def read_git_reading(cwd: str) -> GitReading:
     code, root = await _git(cwd, "rev-parse", "--show-toplevel")
     if code or not root:
-        return GitState()
-    (_, branch), (_, porcelain), (upstream_code, counts) = await asyncio.gather(
+        return GitReading(GitState(), GitEvidence())
+    (_, branch), (_, porcelain), (upstream_code, counts), (head_code, head) = await asyncio.gather(
         _git(cwd, "branch", "--show-current"),
         _git(cwd, "status", "--porcelain"),
         _git(cwd, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"),
+        _git(cwd, "rev-parse", "HEAD"),
     )
     if not branch:
         _, branch = await _git(cwd, "rev-parse", "--short", "HEAD")
@@ -57,18 +96,37 @@ async def read_git_state(cwd: str) -> GitState:
         parts = counts.replace("\t", " ").split()
         if len(parts) == 2:
             ahead, behind = int(parts[0]), int(parts[1])
-    return GitState(branch, len(porcelain.splitlines()), ahead, behind)
+    # An unborn branch (no commits yet) reports a non-zero code and no oid.
+    commit = head.strip() if not head_code and head.strip() else None
+    return GitReading(
+        GitState(branch, len(porcelain.splitlines()), ahead, behind),
+        GitEvidence(head=commit, dirty_hash=_dirty_hash(porcelain)),
+    )
 
 
-async def read_unique_git_states(cwds: Iterable[str]) -> dict[str, GitState]:
+async def read_git_state(cwd: str) -> GitState:
+    return (await read_git_reading(cwd)).state
+
+
+async def _read_unique[T](
+    cwds: Iterable[str], read_one: Callable[[str], Awaitable[T]]
+) -> dict[str, T]:
     """Poll unique roots concurrently while keeping subprocess pressure bounded."""
     semaphore = asyncio.Semaphore(GIT_CONCURRENCY)
 
-    async def read(cwd: str) -> tuple[str, GitState]:
+    async def read(cwd: str) -> tuple[str, T]:
         async with semaphore:
-            return cwd, await read_git_state(cwd)
+            return cwd, await read_one(cwd)
 
     return dict(await asyncio.gather(*(read(cwd) for cwd in dict.fromkeys(cwds))))
+
+
+async def read_unique_git_states(cwds: Iterable[str]) -> dict[str, GitState]:
+    return await _read_unique(cwds, lambda cwd: read_git_state(cwd))
+
+
+async def read_unique_git_readings(cwds: Iterable[str]) -> dict[str, GitReading]:
+    return await _read_unique(cwds, read_git_reading)
 
 
 class GitMonitor:
@@ -79,39 +137,48 @@ class GitMonitor:
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
-        self._task = asyncio.create_task(self._run(), name="git-monitor")
+        self._task = background.start(GIT_MONITOR_LOOP, self._run)
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            await asyncio.gather(self._task, return_exceptions=True)
+        await background.stop(GIT_MONITOR_LOOP)
+        self._task = None
 
     async def _run(self) -> None:
         while True:
-            attached = [
-                session for session in self.sessions.sessions.values() if session.subscribers
-            ]
-            by_cwd: dict[str, list[Session]] = {}
-            for session in attached:
-                by_cwd.setdefault(session.record.git_cwd, []).append(session)
-            states = await read_unique_git_states(by_cwd)
-            for cwd, sessions in by_cwd.items():
-                state = states[cwd]
-                for session in sessions:
-                    if session.record.git != state:
-                        session.record.git = state
-                        session.publish_update()
-                        await self.events.emit(
-                            "git_changed",
-                            session_id=session.record.id,
-                            source="daemon",
-                            git=state.__dict__
-                            if hasattr(state, "__dict__")
-                            else {
-                                "branch": state.branch,
-                                "dirty": state.dirty,
-                                "ahead": state.ahead,
-                                "behind": state.behind,
-                            },
-                        )
+            with background.iteration(GIT_MONITOR_LOOP):
+                await self._poll()
             await asyncio.sleep(self.cadence)
+
+    async def _poll(self) -> None:
+        attached = [
+            session for session in self.sessions.sessions.values() if session.subscribers
+        ]
+        by_cwd: dict[str, list[Session]] = {}
+        for session in attached:
+            by_cwd.setdefault(session.record.git_cwd, []).append(session)
+        readings = await read_unique_git_readings(by_cwd)
+        for cwd, sessions in by_cwd.items():
+            reading = readings[cwd]
+            state = reading.state
+            for session in sessions:
+                if session.record.git != state:
+                    session.record.git = state
+                    session.publish_update()
+                    await self.events.emit(
+                        "git_changed",
+                        session_id=session.record.id,
+                        source="daemon",
+                        git=state.__dict__
+                        if hasattr(state, "__dict__")
+                        else {
+                            "branch": state.branch,
+                            "dirty": state.dirty,
+                            "ahead": state.ahead,
+                            "behind": state.behind,
+                        },
+                        # Tier 0 provenance reads these: which commit, which
+                        # working-tree change set. The UI ignores them.
+                        content_hash=reading.evidence.head,
+                        target=cwd,
+                        **reading.evidence.as_payload(),
+                    )

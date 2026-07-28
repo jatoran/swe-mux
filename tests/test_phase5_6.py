@@ -162,6 +162,7 @@ async def test_fallback_detection_ignores_a_native_run_that_already_exited(
         stop_event=asyncio.Event(),
         scrollback=SimpleNamespace(position=0, bytes_since=lambda _position: b"PS> claude"),
         ignored_detection_runs={("claude", "native-ended")},
+        pending_agent_backends=set(),
     )
     manager = cast(Any, SessionManager.__new__(SessionManager))
     manager.adapters = {"shell": SimpleNamespace(name="shell"), "claude": adapter}
@@ -199,6 +200,7 @@ async def test_fallback_detection_ignores_agent_names_retained_before_demotion(
         stop_event=asyncio.Event(),
         scrollback=scrollback,
         ignored_detection_runs=set(),
+        pending_agent_backends=set(),
     )
     manager = cast(Any, SessionManager.__new__(SessionManager))
     manager.adapters = {"shell": SimpleNamespace(name="shell"), "codex": adapter}

@@ -64,6 +64,18 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
   helps-today siblings (observation inbox, preview screenshot capture). Step 1 retains one
   known gap: git commit/tree hashes and read-side file hashes, which block the provenance
   graph.
+- Control-plane build-order step 3 (Phase 3.7): the four model-free detectors over Tier 0
+  (loop/stall with a no-progress gate, declared-vs-verified, doc-debt ledger, provenance
+  edges), the annotation anchor/evidence/dedupe schema they needed, and the per-project
+  enablement toggle surface. `design/features/deterministic-consumers.md`.
+- The 2026-07-27 hardening audit backlog is closed (P0/P1 in the prior pass, P2 and the
+  Appendix A leads in this one). Highlights: per-store schema versions and a corrupt-database
+  quarantine replacing a startup crash, `AutomationStore` migrations and named-column writes,
+  explicit-Project identity threaded through every project-resource helper (the nested-Project
+  bleed), transcript sidechain/orphan-file exclusion and size-keyed parse caching, supervisor
+  liveness distinguished from supervisor death, watchdog re-derivation after the threaded tail
+  read, `resume_working` confined to answered approvals, durable blocking-hook spooling, and
+  the `idle(waiting_on_background)` sub-state.
 - Session-preserving daemon reload (`pty_supervisor_enabled`, default off): an out-of-process
   PTY supervisor owns ConPTYs/scrollback/reaper Job so a daemon restart leaves agents running
   and the next daemon reattaches; intent-signaled shutdown (desktop Quit/Restart, terminal
@@ -80,7 +92,7 @@ Phase 1  Evidence replay + delivery-readiness contract
   -> Phase 2  Durable process/quota/session telemetry
     -> Phase 3  Daily-workflow UX, prompts, config, and notifications
       -> Phase 3.5  Agent status-detection hardening and regression defense
-        -> Phase 3.7  Control-plane deterministic consumers          [CP step 1 gap + 3]
+        -> Phase 3.7  Control-plane deterministic consumers  [done: CP step 3]
           -> Phase 4  Persistent manual prompt queue
             -> Phase 4.5  mux MCP v0: read + discovery surface        [CP step 2.5, §7.5]
               -> Phase 5  Gated auto-delivery + mailbox + bounded agent communication
@@ -116,10 +128,10 @@ document and are not duplicated here.
 | Control-plane step (§9) | Roadmap v2 phase | Cross-track dependency |
 |---|---|---|
 | 0 · Enablement framework | shipped (Implemented baseline) | — |
-| 1 · Tier 0 + raw store | shipped, one gap | git/read hashes block CP 6.1 |
+| 1 · Tier 0 + raw store | shipped | write/read hashes are not equality-joinable; §6.1's edge is restated as `target` + time order (CP §9 step 1) |
 | 2 · Helps-today siblings | shipped (Implemented baseline) | observation inbox is where `requestSpawn` drafts land |
 | 2.5 · mux MCP v0 | **Phase 4.5** | needs Phase 3.5 status contract; independent of Phase 4 |
-| 3 · Deterministic consumers | **Phase 3.7** | writes drafts through the Phase 4 queue once it exists |
+| 3 · Deterministic consumers | shipped (Phase 3.7) | writes drafts through the Phase 4 queue once it exists |
 | 4–5 · Project card + scan timeline | **Phase 5.5** | first model-cost layer; no Phase 5 dependency |
 | 6–7 · Narration + attention ranking | **Phase 6.5** | needs Phase 2 telemetry and Phase 3 notification channels |
 | 8 · Cross-session + mux MCP v1 | **Phase 7.5** | needs CP 4–5 substrate and the Phase 7 typed daemon operations |
@@ -468,8 +480,11 @@ conformance harness (`tests/test_live_agent_conformance.py`), and the `GET
 - [x] Extend the live-agent conformance harness to diff captured `state-log` transitions
   against expected proven-transition shapes for scripted real-CLI runs, flagging any run that
   reached a terminal status only via inference.
-- [x] Bound and alarm on the health metrics in soak: define the acceptable inferred-recovery
-  rate for a healthy fleet and fail the soak matrix when it is exceeded.
+- [x] Bound and alarm on the health metrics: the acceptable inferred-recovery rate for a
+  healthy fleet is defined, exposed with an `alarm` flag at
+  `GET /api/diagnostics/status-health`, and unit-covered
+  (`test_fleet_status_health_alarm_bounds`). The *soak run* that asserts against it lands
+  with the Phase 7 quality matrix, which is where the soak matrix itself is built.
 
 ### UI reflection correctness
 
@@ -502,24 +517,39 @@ into user-visible judgements, and it is deliberately model-free: every detector 
 query over deterministic facts, writing to `annotations`. Design detail lives in the
 control-plane document; this phase exists to fix its position in the delivery order.
 
-- [ ] Close the step 1 substrate gap: git commit/tree hashes and read-side file hashes
-  (`CONTROL_PLANE_ROADMAP.md` §5.3). The provenance graph cannot ship without them.
-- [ ] Loop/stall deterministic half (CP §6.4) — pure Tier 0 fingerprint query; build first
-  because it needs no new capture.
-- [ ] Declared-vs-verified (CP §6.3) — Tier 0 test facts plus completion-claim detection.
-- [ ] Doc-debt ledger (CP §6.5) — Tier 0 files-changed against the `.docs/CLAUDE.md` routing
-  table.
-- [ ] Provenance graph (CP §6.1) — unblocked by the hash work above.
-- [ ] Ship the enablement-DAG toggle surface (CP §9 UI work) or accept that enabling any of
-  these still means hand-editing `.swe-mux/config.toml`. Do not ship a fourth consumer
-  without the toggle.
+Substrate status going in (2026-07-27 hardening pass): the step 1 defects that would have
+been discovered mid-phase are closed — silent 4 KB fact drops, NULL run/project ownership,
+`tool_result` fingerprint collapse, missing structured test facts, and git commit/tree plus
+read-side hashes. See `CONTROL_PLANE_ROADMAP.md` §9 step 1 for exactly what shipped.
+
+Behavior and rules are documented in `design/features/deterministic-consumers.md`.
+
+- [x] Close the one remaining step 1 gap. **Decision: restate §6.1's edge as `target` + time
+  order**, carrying the writer's content hash as what was written, with an `ambiguous` marker
+  when another write to the same target intervenes. The rejected alternative — a per-backend
+  normalizer reconstructing file bytes from the CLI's rendering — depends on a lossy format
+  that drifts per version and is impossible for a truncated read.
+- [x] Annotation anchor + evidence schema: nullable `agent_run_id` beside a `project_id`
+  anchor, `evidence_json` for the fact *set*, `dedupe_key` for idempotence, and the additive
+  migration path `AutomationStore` previously lacked.
+- [x] Loop/stall deterministic half (CP §6.4) — fingerprint repeat ≥3 behind the no-progress
+  gate.
+- [x] Declared-vs-verified (CP §6.3) — Tier 0 test facts plus completion-claim detection,
+  reported as three separate facts.
+- [x] Doc-debt ledger (CP §6.5) — ownership inverted from each doc's literal "Key files"
+  section, because the routing table is keyed by change *type* and cannot be matched to a
+  path by machine.
+- [x] Provenance graph (CP §6.1).
+- [x] Ship the enablement-DAG toggle surface (CP §9 UI work), including an `implemented` flag
+  so a reserved id cannot be switched on into a no-op.
 
 ### Phase 3.7 exit criteria
 
-- [ ] Each detector is per-project opt-in through the existing DAG, inert when disabled, and
+- [x] Each detector is per-project opt-in through the existing DAG, inert when disabled, and
   spends no model tokens.
-- [ ] Every annotation these produce is traceable to the exact Tier 0 fact(s) that caused it.
-- [ ] No detector writes toward a session. Output is annotations only until the Phase 4 queue
+- [x] Every annotation these produce is traceable to the exact Tier 0 fact(s) that caused it:
+      `evidence_json` carries the fact set, not one `source_event_seq`.
+- [x] No detector writes toward a session. Output is annotations only until the Phase 4 queue
   gives it a `queue_draft` path (`CONTROL_PLANE_ROADMAP.md` §13).
 
 ## Phase 4 — Persistent manual prompt queue
@@ -648,6 +678,27 @@ one the UI reads) and on shipped history/transcript search. It does not depend o
   would invalidate every live session's credential on each reload.
 - [ ] Scope a token to its session's Project by default. Cross-project reads are a separate
   explicit grant, consistent with per-project opt-in.
+- [ ] **Decide and record the same-host caller boundary before the endpoint ships.** Verified
+  2026-07-27: every mutating HTTP route — spawn, kill, `POST /sessions/{id}/input`, settings —
+  is callable from localhost behind the Host/Origin middleware alone, with no credential, and
+  every spawned session is handed the daemon's ingress URL in its environment. A prompt-injected
+  agent does not need an MCP tool to type into a sibling's PTY; it can curl the un-tokened
+  superset API on the same port. So the per-session token is an *identity* mechanism, not an
+  authorization boundary, unless the same check is extended to the mutating HTTP routes.
+  Pick one and write it down:
+  - extend the token check to mutating `/api` routes (the browser gets a daemon-local bearer
+    at page load; sessions never receive it), **or**
+  - state explicitly that same-host agents are fully trusted, in which case Phase 5's
+    budget/allowlist/cycle machinery bounds well-behaved callers only and must say so.
+  The existing trust model (Tailscale device admission) addresses the network-peer boundary
+  and says nothing about same-host children.
+- [ ] Close the human-input evidence hole before Phase 5 arming trusts it:
+  `POST /sessions/{id}/input` and broadcast fan-out write to the PTY without advancing
+  `input_revision` / `last_input_event_ts` or emitting `terminal_input`, and without an
+  ended-session guard — while the WS and voice paths do all three. Delivery-readiness therefore
+  reports `partial_input_absent`/`operator_quiet` as satisfied for text that is sitting
+  undelivered in a composer, corrupting the shadow-metric baseline the Phase 4 gate is being
+  validated against.
 
 ### v0 tool surface (read-only)
 

@@ -258,6 +258,10 @@ class SupervisorClient:
         self.initial_sessions: list[dict[str, Any]] = list(info.get("sessions") or [])
         self.hosts: dict[str, RemotePtyHost] = {}
         self.connected = True
+        # True when the connection dropped while the supervisor process is still
+        # alive: sessions are running but unreachable, which is a different (and
+        # recoverable) condition from "no supervisor".
+        self.lost = False
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[tuple[dict[str, Any], bytes]]] = {}
         self._meta_pending: dict[str, dict[str, Any]] = {}
@@ -440,13 +444,26 @@ class SupervisorClient:
         if not self.connected:
             return
         self.connected = False
-        log.warning("supervisor %s; marking %d remote session(s) dead", reason, len(self.hosts))
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(SupervisorUnavailable(reason))
-        # The supervisor holds the kill-on-close Job: if it is truly gone, every
-        # supervised process tree is already being terminated. Surface that as
-        # normal end-of-output so sessions end through the standard path.
+        # "The socket broke" and "the supervisor died" are different facts. Only
+        # the second one means the kill-on-close Jobs already closed and the
+        # process trees are gone. Treating a transient read fault as death used to
+        # fabricate an exit for every live session — the agents kept running
+        # invisibly, history recorded false exits, and the next daemon re-adopted
+        # sessions the user had watched end.
+        self.lost = _pid_running(self.supervisor_pid)
+        if self.lost:
+            log.error(
+                "supervisor connection %s but pid %d is still alive; %d session(s) are "
+                "running unreachable — restart the daemon to reattach",
+                reason,
+                self.supervisor_pid,
+                len(self.hosts),
+            )
+            return
+        log.warning("supervisor %s; marking %d remote session(s) dead", reason, len(self.hosts))
         for host in tuple(self.hosts.values()):
             host._mark_dead(None)
 
@@ -540,12 +557,51 @@ class SupervisorClient:
                 pass
 
 
+def _discovery_pid(data_dir: Path) -> int:
+    try:
+        info = json.loads(discovery_path(data_dir).read_text(encoding="utf-8"))
+        return int(info.get("pid", -1))
+    except (OSError, ValueError, TypeError):
+        return -1
+
+
+def _terminate_supervisor(pid: int) -> bool:
+    """Last-resort reap: closing the supervisor's Job kills every session tree.
+
+    Used only when the protocol handshake cannot be completed (a supervisor from
+    a previous build after a PROTOCOL_VERSION bump). Without it the documented
+    "force quit everything" action fails and the only remaining recovery is the
+    manual taskkill the design says must never be required.
+    """
+    try:
+        import psutil
+
+        process = psutil.Process(pid)
+        if "swe" not in (process.name() or "").casefold():
+            return False
+        process.terminate()
+        process.wait(timeout=10)
+        return True
+    except Exception:
+        log.exception("could not terminate supervisor pid %d", pid)
+        return False
+
+
 async def kill_server(config: Config) -> bool:
     """Explicit kill-server: reap every supervised session and stop the supervisor."""
+    pid = _discovery_pid(config.data_dir)
     try:
         client = await SupervisorClient.connect(config.data_dir)
-    except SupervisorUnavailable:
-        return False
+    except SupervisorUnavailable as exc:
+        if pid <= 0 or not _pid_running(pid):
+            return False
+        # Reachable-but-unusable is not "absent": a protocol-version mismatch
+        # leaves live sessions running that this daemon cannot address.
+        log.warning("supervisor pid %d is alive but unusable (%s); terminating it", pid, exc)
+        if not await asyncio.to_thread(_terminate_supervisor, pid):
+            return False
+        _clear_discovery(config.data_dir, pid)
+        return True
     pid = client.supervisor_pid
     await client.reap_all_and_exit()
     await client.close()
@@ -554,14 +610,18 @@ async def kill_server(config: Config) -> bool:
         if not _pid_running(pid):
             break
         await asyncio.sleep(0.2)
-    discovery = discovery_path(config.data_dir)
+    _clear_discovery(config.data_dir, pid)
+    return True
+
+
+def _clear_discovery(data_dir: Path, pid: int) -> None:
+    discovery = discovery_path(data_dir)
     try:
         info = json.loads(discovery.read_text(encoding="utf-8"))
         if int(info.get("pid", -1)) == pid:
             discovery.unlink(missing_ok=True)
     except (OSError, ValueError):
         pass
-    return True
 
 
 def _pid_running(pid: int) -> bool:

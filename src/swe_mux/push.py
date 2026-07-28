@@ -32,15 +32,20 @@ from cryptography.hazmat.primitives import serialization
 from py_vapid import Vapid01
 from pywebpush import WebPushException, webpush
 
+from .background_tasks import background
 from .event_bus import EventBus
 from .models import MuxEvent
 from .settings_store import SettingsStore, in_quiet_time
 
 log = logging.getLogger(__name__)
 
+PUSH_SENDER_LOOP = "push-sender"
 VAPID_SUB = "mailto:swe-mux@localhost"
 _MAX_SUBSCRIPTIONS = 50
 _DEDUP_WINDOW = 8.0  # seconds: collapse duplicate (session, category) notifications
+# A rotated endpoint can time out forever instead of returning 410; drop it after
+# this many consecutive non-410 failures so it stops costing every notification.
+_MAX_CONSECUTIVE_FAILURES = 5
 _PRESENCE_MAX_TTL = 120.0
 
 
@@ -90,6 +95,10 @@ def classify_notification(event: MuxEvent) -> dict[str, str] | None:
             "title": "swe-mux — failed",
             "body": "The agent run failed.",
         }
+    if payload.get("idle_reason") == "waiting_on_background":
+        # The agent will resume itself when its background work lands, so this is
+        # not the moment worth a lock-screen alert; the next completion is.
+        return None
     if kind == "turn_ended":
         return {"category": "complete", "title": "swe-mux", "body": "The agent finished a turn."}
     if kind == "state_changed" and payload.get("state") == "idle":
@@ -213,16 +222,15 @@ class PushSender:
         self._events = events
         self._clock = clock
         self._recent: dict[tuple[str, str], float] = {}
+        self._failures: dict[str, int] = {}
 
     async def run(self) -> None:
-        queue = self._events.subscribe()
+        queue = self._events.subscribe(name="push")
         try:
             while True:
                 event = await queue.get()
-                try:
+                with background.iteration(PUSH_SENDER_LOOP):
                     await self._handle(event)
-                except Exception:
-                    log.exception("push notification handling failed")
         finally:
             self._events.unsubscribe(queue)
 
@@ -238,7 +246,7 @@ class PushSender:
         if self._recent.get(dedup_key, 0.0) > now - _DEDUP_WINDOW:
             return
         self._recent = {key: at for key, at in self._recent.items() if at > now - 60}
-        delivered = False
+        targets = []
         for sub in subs:
             settings = self._settings.notifications(str(sub.get("profile", "mobile")))
             if not settings.get("enabled"):
@@ -251,12 +259,21 @@ class PushSender:
                 str(sub["endpoint"]), now
             ):
                 continue
-            await self._send(sub, note)
-            delivered = True
-        if delivered:
+            targets.append(sub)
+        if not targets:
+            return
+        # Concurrently: one stale endpoint that times out rather than returning
+        # 410 otherwise delays every later endpoint by the full 10s push timeout,
+        # and on a busy fleet the queue backs up until lock-screen alerts arrive
+        # minutes late — the exact moment the feature exists for.
+        results = await asyncio.gather(*(self._send(sub, note) for sub in targets))
+        # Only a real delivery arms the dedup window. Counting a failed send as
+        # delivered swallowed the follow-up event too, so a transient push-service
+        # outage produced no notification at all.
+        if any(results):
             self._recent[dedup_key] = now
 
-    async def _send(self, sub: dict[str, Any], note: dict[str, str]) -> None:
+    async def _send(self, sub: dict[str, Any], note: dict[str, str]) -> bool:
         payload = json.dumps(
             {
                 "title": note["title"],
@@ -279,8 +296,30 @@ class PushSender:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             if status in (404, 410):
                 self._store.remove(str(sub["endpoint"]))
+                self._failures.pop(str(sub["endpoint"]), None)
                 log.info("pruned expired push subscription (%s)", status)
             else:
                 log.warning("web push delivery failed: %s", exc)
+                self._note_failure(str(sub["endpoint"]))
+            return False
         except Exception:
             log.exception("web push delivery raised")
+            self._note_failure(str(sub["endpoint"]))
+            return False
+        self._failures.pop(str(sub["endpoint"]), None)
+        return True
+
+    def _note_failure(self, endpoint: str) -> None:
+        """Quarantine an endpoint that keeps failing without ever returning 410.
+
+        A rotated FCM endpoint can time out indefinitely instead of reporting
+        itself gone, and every timeout is paid on the notification path.
+        """
+        count = self._failures.get(endpoint, 0) + 1
+        self._failures[endpoint] = count
+        if count >= _MAX_CONSECUTIVE_FAILURES:
+            self._store.remove(endpoint)
+            self._failures.pop(endpoint, None)
+            log.warning(
+                "removed push subscription after %d consecutive failures", _MAX_CONSECUTIVE_FAILURES
+            )

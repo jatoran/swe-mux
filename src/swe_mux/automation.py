@@ -4,15 +4,18 @@ import asyncio
 import fnmatch
 import hashlib
 import json
+import logging
 import re
 import time
 import tomllib
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from .automation_store import AutomationStore
+from .background_tasks import background
 from .config import Config
 from .event_bus import EventBus
 from .models import MuxEvent, SessionRecord
@@ -20,8 +23,23 @@ from .openrouter import OpenRouterClient, OpenRouterError, OpenRouterResult
 from .session import SessionManager
 from .transcript_view import parse_transcript_cached
 
+AUTOMATION_INGEST_LOOP = "automation-ingest"
+AUTOMATION_WATCH_LOOP = "automation-watch"
+AUTOMATION_INTERVAL_LOOP = "automation-intervals"
+AUTOMATION_WORKER_LOOP = "automation-worker"
+
+log = logging.getLogger(__name__)
+
 EVENT_SCHEMA_VERSION = 1
 MAX_CHAIN_DEPTH = 4
+# Cost reconciliation is what makes the dollar budget a bound rather than an
+# estimate, so a transient provider error retries instead of dropping the call.
+RECONCILE_ATTEMPTS = 3
+RECONCILE_BACKOFF_SECONDS = 2.0
+# Conservative per-call ceiling used when the model catalog cannot price a model.
+# Skipping the dollar preflight entirely (what happened on an empty cache) turns
+# the dollar budget off exactly when the daemon knows least.
+UNPRICED_CALL_ESTIMATE_USD = 0.50
 MAX_EVENT_TEXT = 4096
 MAX_SLICE_BYTES = 512 * 1024
 MAX_SLICE_MESSAGES = 24
@@ -690,7 +708,12 @@ class AutomationEngine:
         )
         self.queue_dropped = 0
         self.loop_rejections = 0
+        # Worker failures are distinct from rules-file diagnostics: they must not
+        # be misread as a rules problem, and must not vanish on the next reload.
+        self.worker_failures = 0
+        self.worker_last_error: str | None = None
         self._tasks: list[asyncio.Task[Any]] = []
+        self._loop_names: list[str] = []
         self._event_queue: asyncio.Queue[MuxEvent] | None = None
         self._background: set[asyncio.Task[Any]] = set()
         self._debounce_tasks: dict[tuple[str, str], asyncio.Task[Any]] = {}
@@ -701,25 +724,53 @@ class AutomationEngine:
         self._unique_inflight: set[tuple[str, str]] = set()
         self._interval_next: dict[str, float] = {}
         self._source_probes: dict[str, dict[str, Any]] = {}
+        # A dropped cost reconcile leaves the ledger under-counting that call, so
+        # the dollar budget loosens invisibly. Counted and reported, not silent.
+        self._unreconciled_calls = 0
+        self._last_reconcile_error: str | None = None
         self._mtime = 0
         self.slices = TranscriptSliceService()
 
+    def forget_session(self, session_id: str) -> None:
+        """Drop per-session accumulators when a session goes away.
+
+        These are small per session but the daemon is designed to run for weeks
+        behind the PTY supervisor, so "one entry per session ever spawned" is an
+        unbounded growth path, and stale probes skew the source-health view.
+        """
+        self._source_probes.pop(session_id, None)
+
     def start(self) -> None:
-        if self._tasks:
+        if self._tasks or self._loop_names:
             return
         self.reload()
-        self._event_queue = self.events.subscribe()
-        self._tasks.append(asyncio.create_task(self._ingest(), name="automation-ingest"))
-        self._tasks.append(asyncio.create_task(self._watch(), name="automation-watch"))
-        self._tasks.append(asyncio.create_task(self._intervals(), name="automation-intervals"))
-        self._tasks.extend(
-            asyncio.create_task(self._worker(), name=f"automation-worker-{index}")
-            for index in range(self.config.automation_concurrency)
-        )
+        self._event_queue = self.events.subscribe(name="automation")
+        # Supervised: rule hot reload, event ingest and timer triggers each used to
+        # die permanently on their first exception (a TOCTOU stat race is enough).
+        for name, factory in (
+            (AUTOMATION_INGEST_LOOP, self._ingest),
+            (AUTOMATION_WATCH_LOOP, self._watch),
+            (AUTOMATION_INTERVAL_LOOP, self._intervals),
+        ):
+            self._loop_names.append(name)
+            self._tasks.append(background.start(name, factory))
+        for index in range(self.config.automation_concurrency):
+            name = f"{AUTOMATION_WORKER_LOOP}-{index}"
+            self._loop_names.append(name)
+            self._tasks.append(background.start(name, self._worker_factory(name)))
+
+    def _worker_factory(self, name: str) -> Callable[[], Awaitable[None]]:
+        async def run() -> None:
+            await self._worker(name)
+
+        return run
 
     async def stop(self) -> None:
         if self._event_queue:
             self.events.unsubscribe(self._event_queue)
+        for name in self._loop_names:
+            await background.stop(name)
+        self._loop_names.clear()
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -740,33 +791,50 @@ class AutomationEngine:
         self.rules = rules
         self.diagnostic = None
         self.last_loaded_at = time.time()
-        self._mtime = self.path.stat().st_mtime_ns if self.path.exists() else 0
+        try:
+            self._mtime = self.path.stat().st_mtime_ns
+        except OSError:
+            self._mtime = 0
 
     async def _watch(self) -> None:
         while True:
             await asyncio.sleep(1)
-            current = self.path.stat().st_mtime_ns if self.path.exists() else 0
-            if current != self._mtime:
-                self.reload()
+            with background.iteration(AUTOMATION_WATCH_LOOP):
+                # A delete+rename save (every editor does this) makes exists()
+                # and stat() disagree; treating that as "unchanged" costs one
+                # poll instead of hot reload for the daemon's lifetime.
+                try:
+                    current = self.path.stat().st_mtime_ns
+                except OSError:
+                    current = self._mtime if self.path.exists() else 0
+                if current != self._mtime:
+                    self.reload()
 
     async def _ingest(self) -> None:
         assert self._event_queue is not None
         while True:
             event = await self._event_queue.get()
-            session = self.sessions.sessions.get(event.session_id or "")
-            if session:
-                await self._probe_sources(event, session.record)
-            normalized = normalize_event(
-                event,
-                session.record if session else None,
-                attended=bool(session and session.subscribers),
-            )
-            if normalized.chain_depth > MAX_CHAIN_DEPTH:
-                continue
             try:
-                self.queue.put_nowait(normalized)
-            except asyncio.QueueFull:
-                self.queue_dropped += 1
+                with background.iteration(AUTOMATION_INGEST_LOOP):
+                    await self._ingest_one(event)
+            finally:
+                self._event_queue.task_done()
+
+    async def _ingest_one(self, event: MuxEvent) -> None:
+        session = self.sessions.sessions.get(event.session_id or "")
+        if session:
+            await self._probe_sources(event, session.record)
+        normalized = normalize_event(
+            event,
+            session.record if session else None,
+            attended=bool(session and session.subscribers),
+        )
+        if normalized.chain_depth > MAX_CHAIN_DEPTH:
+            return
+        try:
+            self.queue.put_nowait(normalized)
+        except asyncio.QueueFull:
+            self.queue_dropped += 1
 
     async def _probe_sources(self, event: MuxEvent, record: SessionRecord) -> None:
         capabilities = ADAPTER_CAPABILITIES.get(record.backend, {})
@@ -830,34 +898,45 @@ class AutomationEngine:
         probe["last_hook_at"] = ts if ts is not None else time.time()
         probe["degraded"] = False
 
-    async def _worker(self) -> None:
+    async def _worker(self, loop_name: str) -> None:
         while True:
             event = await self.queue.get()
             try:
                 await self.evaluate(event)
             except Exception as exc:  # Automation must never terminate its worker.
-                self.diagnostic = f"automation worker: {type(exc).__name__}: {exc}"
+                # Worker faults get their own counter and last-error field: they
+                # used to share the single `diagnostic` slot with rules-file
+                # errors and were cleared by the next reload.
+                self.worker_failures += 1
+                self.worker_last_error = f"{type(exc).__name__}: {exc}"[:400]
+                background.note_fault(loop_name, exc)
+            else:
+                background.note_progress(loop_name)
             finally:
                 self.queue.task_done()
 
     async def _intervals(self) -> None:
         while True:
             await asyncio.sleep(1)
-            now = time.time()
-            for rule in self.rules:
-                interval = float(rule.trigger_options.get("interval_s") or 0)
-                if not rule.enabled or rule.trigger != "timer" or interval < 5:
-                    continue
-                due = self._interval_next.setdefault(rule.id, now + interval)
-                if now < due:
-                    continue
-                self._interval_next[rule.id] = now + interval
-                await self.events.emit(
-                    "timer",
-                    source="automation",
-                    rule_id=rule.id,
-                    interval_s=interval,
-                )
+            with background.iteration(AUTOMATION_INTERVAL_LOOP):
+                await self._fire_due_intervals()
+
+    async def _fire_due_intervals(self) -> None:
+        now = time.time()
+        for rule in self.rules:
+            interval = float(rule.trigger_options.get("interval_s") or 0)
+            if not rule.enabled or rule.trigger != "timer" or interval < 5:
+                continue
+            due = self._interval_next.setdefault(rule.id, now + interval)
+            if now < due:
+                continue
+            self._interval_next[rule.id] = now + interval
+            await self.events.emit(
+                "timer",
+                source="automation",
+                rule_id=rule.id,
+                interval_s=interval,
+            )
 
     async def evaluate(
         self,
@@ -1090,14 +1169,17 @@ class AutomationEngine:
                 return False
             if not crossing:
                 return False
+        # The unique reservation is taken last, after every remaining guard has
+        # passed. Taking it earlier leaked the key on any later early return (a
+        # user-authored rule reusing the builtin titler id plus `unless_annotation`
+        # is enough), and the leaked key then blocked that run's title forever.
+        unique_key: tuple[str, str] | None = None
         if rule.id == "builtin.session-titler" and event.agent_run_id:
             if await self.store.recent_annotation(event.agent_run_id, "title", 0):
                 return False
             unique_key = self._unique_guard_key(rule, event)
             if unique_key in self._unique_inflight:
                 return False
-            if not dry_run and unique_key:
-                self._unique_inflight.add(unique_key)
         if event.agent_run_id and options.get("unless_annotation"):
             recent = await self.store.recent_annotation(
                 event.agent_run_id,
@@ -1106,6 +1188,8 @@ class AutomationEngine:
             )
             if recent:
                 return False
+        if unique_key and not dry_run:
+            self._unique_inflight.add(unique_key)
         return True
 
     async def _set_guard_checkpoint(self, rule: Rule, event: NormalizedEvent) -> None:
@@ -1297,12 +1381,15 @@ class AutomationEngine:
             estimate += self.config.automation_max_output_tokens * float(
                 metadata.get("completion_price") or 0
             )
-            if estimate > self.config.automation_daily_budget_usd - float(global_spend["cost_usd"]):
-                raise ValueError("conservative preflight estimate exceeds the global budget")
-            if estimate > self.config.automation_rule_daily_budget_usd - float(
-                rule_spend["cost_usd"]
-            ):
-                raise ValueError("conservative preflight estimate exceeds the rule budget")
+        else:
+            # An unknown or uncached model used to skip the dollar preflight
+            # entirely, so an empty catalog (first run, a failed refresh) silently
+            # disabled the dollar bound. Price it conservatively instead.
+            estimate = UNPRICED_CALL_ESTIMATE_USD
+        if estimate > self.config.automation_daily_budget_usd - float(global_spend["cost_usd"]):
+            raise ValueError("conservative preflight estimate exceeds the global budget")
+        if estimate > self.config.automation_rule_daily_budget_usd - float(rule_spend["cost_usd"]):
+            raise ValueError("conservative preflight estimate exceeds the rule budget")
         schema_name = str(action["schema"])
         prompt = str(action.get("prompt") or "Analyze the transcript and return JSON.")
         call_id = await self.store.observer_started(
@@ -1376,11 +1463,37 @@ class AutomationEngine:
             task.add_done_callback(self._background.discard)
 
     async def _reconcile_cost(self, call_id: str, generation_id: str) -> None:
-        try:
-            cost = await self.provider.generation_cost(generation_id)
+        """Land a call's real cost in the ledger, or record that it never landed.
+
+        A dropped reconcile is not neutral: the ledger keeps the 0 that
+        `add_spend` wrote, so the daily dollar budget under-counts that call
+        forever and the bound silently loosens with every failure. Bounded
+        retries first; a give-up is counted and logged rather than swallowed.
+        """
+        for attempt in range(RECONCILE_ATTEMPTS):
+            try:
+                cost = await self.provider.generation_cost(generation_id)
+            except asyncio.CancelledError:
+                self._unreconciled_calls += 1
+                raise
+            except OpenRouterError as exc:
+                if attempt == RECONCILE_ATTEMPTS - 1:
+                    self._unreconciled_calls += 1
+                    self._last_reconcile_error = str(exc)[:200]
+                    log.warning(
+                        "observer cost reconcile failed for %s: %s; the daily dollar "
+                        "budget under-counts this call",
+                        call_id,
+                        exc,
+                    )
+                    return
+                await asyncio.sleep(RECONCILE_BACKOFF_SECONDS * (attempt + 1))
+                continue
             if cost is not None:
                 await self.store.reconcile_spend(call_id, cost)
-        except OpenRouterError:
+            else:
+                self._unreconciled_calls += 1
+                self._last_reconcile_error = "provider reported no cost for the generation"
             return
 
     async def _observer_result(
@@ -1490,8 +1603,11 @@ class AutomationEngine:
                             "input": {"slice": "last_turn"},
                             "prompt": (
                                 "Create a compact task-oriented title for a terminal tab and "
-                                "sidebar. Use 2-6 words and describe the concrete user goal or "
-                                "work topic. Never prefix with Terminal Session, Session, Claude, "
+                                "sidebar. Prefer 2-3 words and never exceed 4; the tab is narrow, "
+                                "so shorter wins whenever it stays accurate. Describe the "
+                                "concrete user goal or work topic, and drop filler words rather "
+                                "than the distinguishing one. "
+                                "Never prefix with Terminal Session, Session, Claude, "
                                 "Codex, User, or Conversation. Do not label simple greetings as "
                                 "greetings. Return only the schema."
                             ),
@@ -1647,6 +1763,16 @@ class AutomationEngine:
                 "capacity": self.queue.maxsize,
                 "dropped": self.queue_dropped,
                 "loop_rejections": self.loop_rejections,
+                "worker_failures": self.worker_failures,
+                "worker_last_error": self.worker_last_error,
+                # Calls whose real cost never made it into the ledger. A nonzero
+                # count means the daily dollar budget is under-counting by an
+                # unknown amount, which is the difference between a bound and a
+                # guess.
+                "unreconciled_calls": self._unreconciled_calls,
+                "last_reconcile_error": self._last_reconcile_error,
+                # Events dropped before automation ever saw them, per subscriber.
+                "bus": self.events.drop_stats(),
             },
             "capabilities": {
                 "event_schema_version": EVENT_SCHEMA_VERSION,

@@ -165,6 +165,7 @@ class ReplaySession:
         evidence: str | None = None,
         inferred: bool | None = None,
         awaiting_reason: str | None = None,
+        idle_reason: str | None = None,
         force: bool = False,
     ) -> bool:
         return apply_state_transition(
@@ -175,6 +176,7 @@ class ReplaySession:
             evidence=evidence,
             inferred=inferred,
             awaiting_reason=awaiting_reason,
+            idle_reason=idle_reason,
             force=force,
             now=self.clock.wall(),
             monotonic_now=self.clock.monotonic(),

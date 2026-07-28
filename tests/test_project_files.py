@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from swe_mux.git_projects import ProjectIdentity
+from swe_mux.git_projects import ProjectIdentity, rebase_identity
 from swe_mux.project_files import (
+    ObservationsUnreadableError,
+    append_observation,
     effective_project_ignores,
     ignored_project_path,
     initialize_note,
@@ -14,9 +16,11 @@ from swe_mux.project_files import (
     note_exists,
     parse_project_config,
     read_note,
+    read_observations,
     read_project_config,
     search_project_files,
     write_note,
+    write_observations,
     write_project_config,
 )
 
@@ -54,6 +58,67 @@ async def test_project_config_reuses_a_resolved_project(
 
     assert result["status"] == "missing"
     assert result["project"]["id"] == "project-id"
+
+
+async def test_explicit_project_identity_keeps_a_nested_project_out_of_its_worktree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A Project registered *inside* a larger worktree: Git discovery answers
+    # "which worktree contains this path", which is the wrong question once a
+    # route already knows the owning Project. Without the explicit identity every
+    # derived path (notes, config, observations) lands in the enclosing Project.
+    outer = tmp_path / "worktree"
+    inner = outer / "packages" / "app"
+    inner.mkdir(parents=True)
+
+    async def resolve_to_outer(_cwd: str | Path) -> ProjectIdentity:
+        return ProjectIdentity("outer-scope", "worktree", str(outer), "git-worktree", "grp", "g")
+
+    monkeypatch.setattr("swe_mux.project_files.resolve_project", resolve_to_outer)
+
+    bled = await read_note(inner, "projects", "inner-project")
+    assert Path(bled["path"]) == outer / ".swe-mux" / "notes" / "project.md"
+
+    identity = ProjectIdentity("inner-project", "app", str(inner), "registered")
+    scoped = await read_note(inner, "projects", "inner-project", project=identity)
+    assert Path(scoped["path"]) == inner / ".swe-mux" / "notes" / "project.md"
+
+    written = await write_note(
+        inner, "projects", "inner-project", "# App\n", "missing", project=identity
+    )
+    assert Path(written["path"]).is_file()
+    assert not (outer / ".swe-mux" / "notes" / "project.md").exists()
+
+
+async def test_rebase_identity_reanchors_only_the_root_not_the_repo_group() -> None:
+    outer = ProjectIdentity("outer", "worktree", r"C:\repo", "git-worktree", "grp-id", "grp")
+    inner = rebase_identity(outer, r"C:\repo\packages\app")
+    assert inner.root == str(Path(r"C:\repo\packages\app").resolve())
+    assert inner.id != outer.id
+    # Repository-group metadata still describes the real worktree.
+    assert (inner.repo_group_id, inner.repo_group_label) == ("grp-id", "grp")
+    # A root that already matches is returned untouched.
+    assert rebase_identity(outer, outer.root) is outer
+
+
+async def test_corrupt_observations_are_refused_rather_than_clobbered(tmp_path: Path) -> None:
+    # observations.json is project-owned and hand-editable, so it can acquire
+    # merge-conflict markers. Reading it as an empty list means the next captured
+    # note rewrites the file with one item and silently destroys the rest.
+    inbox = tmp_path / ".swe-mux" / "observations.json"
+    inbox.parent.mkdir(parents=True)
+    inbox.write_text("<<<<<<< HEAD\n{not json}\n", encoding="utf-8")
+
+    listing = await read_observations(tmp_path)
+    assert listing["status"] == "malformed"
+    assert listing["observations"] == []
+
+    with pytest.raises(ObservationsUnreadableError):
+        await append_observation(tmp_path, "a note worth keeping")
+    with pytest.raises(ObservationsUnreadableError):
+        await write_observations(tmp_path, [], listing["revision"])
+    # Nothing was written over the user's file.
+    assert inbox.read_text(encoding="utf-8").startswith("<<<<<<<")
 
 
 async def test_project_note_round_trips_and_detects_external_edits(tmp_path: Path) -> None:

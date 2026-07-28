@@ -12,22 +12,49 @@ opt-in and gated (`automation-enablement.md`). Vision: `../../development/CONTRO
 - **Fact**: one deterministic observation — `kind`, `target`, `content_hash`,
   `fingerprint`, bounded `detail`, and a `source_seq` pointer into the event log / raw store.
 - **Source pointer**: `source_seq` (event sequence) ties every fact to its origin so it can
-  be rehydrated; a summary is never the only copy.
-- **Fingerprint**: canonical action signature (`event_type`, `kind`, casefolded `target`,
-  exit class, `content_hash`) for loop detection. Identical repeated edits share a
-  fingerprint (loop signal); changed content differs (progress). Strips volatile detail.
-- **Content hash**: computed at the adapter boundary from the tool input (the exact bytes
-  the agent wrote), not by reading the file back off disk — race-free. File content is not
-  re-hashed on the event path.
+  be rehydrated; a summary is never the only copy. It is **best-effort**, not a guarantee:
+  the event log is capped by row count while facts are bounded by age, so on a busy fleet an
+  older fact's pointer can outlive the event it names. Anything that must survive that
+  window reads the fact's own bounded `detail` (or the transcript-anchored `source_ref`),
+  which is why `detail` is bounded per value rather than by slicing the serialization.
+- **Ownership**: every fact carries the `agent_run_id` and `project_id` it belongs to,
+  resolved at capture time. `session_id` alone cannot answer per-run questions — a session
+  is resumed, promoted and branched across many runs.
+- **Fingerprint**: canonical action signature (`event_type`, `kind`, tool, casefolded
+  `target`, exit class, `content_hash`, progress state) for loop detection. Identical
+  repeated edits share a fingerprint (loop signal); changed content differs (progress).
+  Strips volatile detail. The progress-state component is the failing-test set for test
+  results and the working-tree hash for git facts, so "the same action against the same
+  unchanged state" is one fingerprint rather than one per exit class.
+- **Content hash**: computed at the adapter boundary, never by reading a file back off
+  disk — race-free. On the write side it is the exact bytes the agent wrote
+  (`tool_call_evidence`); on the read/result side it is the exact bytes the agent saw
+  (`tool_result_evidence`, hashed before the payload's `detail` is bounded). The two sides
+  hash different representations — a `Read` result is the CLI's rendering of a file, not the
+  file — so they are **not** joinable by equality; use `target` plus time order for
+  write→read lineage, and hash equality only within one side.
+- **Test outcome**: a structured `{framework, passed, failed, errors, skipped,
+  failing_tests[]}` parsed from the full tool output at the adapter boundary (pytest,
+  jest/vitest, go, cargo, unittest). It is parsed there, not from the fact's bounded
+  `detail`, because every runner prints its verdict last.
 
 ## Data model
 
 - Table `tier0_facts` on the shared WAL `mux.db`:
   `id, session_id, agent_run_id, project_id, kind, target, content_hash, fingerprint,
   detail_json, source_seq, source_ref, created_at`. Indexed by session/time, kind/time,
-  content_hash, and (session, fingerprint). Command text is never stored beyond bounded detail.
+  content_hash, (session, fingerprint), and the two shapes the consumers query —
+  (agent_run_id, time) and (project_id, time). Command text is never stored beyond bounded
+  detail.
 - `kind` derives from the event: tool classification (`file_write | file_read | command |
-  test | tool`), plus `git`, `compaction`.
+  test | tool`), the matching `_result` variant for the outcome of each
+  (`command_result`, `file_write_result`, …), `test_result` for any result carrying a parsed
+  test outcome, plus `git` and `compaction`.
+- `detail_json` is bounded to 4 KiB by truncating payload **values** and, if still over
+  budget, dropping whole keys widest-first (recorded as `_truncated` / `_dropped_keys`);
+  structural keys (`tool`, `success`, `exit_code`, `test_outcome`, `scope`, `call_id`)
+  are never dropped. The bound is never applied to the serialization itself — that
+  produced rows `json.loads` could not read, and the fact was discarded whole.
 
 ## Operations
 
@@ -35,15 +62,24 @@ opt-in and gated (`automation-enablement.md`). Vision: `../../development/CONTRO
   `context_compacted`); everything else is ignored so capture stays cheap.
 - Capture runs off the event loop on a single-worker executor behind the shared SQLite
   operation coordinator; failures can never break the event loop or a terminal.
+- A capture failure is counted, stamped and logged (first occurrence, then rate-limited),
+  never silently swallowed: for a durable-evidence substrate, a silent drop is
+  indistinguishable from "nothing happened".
 - The adapter emits a normalized `target` + parse-time `content_hash` on `tool_use`
-  (`observation.tool_call_evidence`); Tier 0 prefers those, falling back to key-scan.
+  (`observation.tool_call_evidence`) and correlates the same `target` onto the matching
+  `tool_result` by call id; Tier 0 prefers those, falling back to key-scan.
+- `git_changed` carries the commit `head` and a `dirty_hash` of the working-tree change set
+  (`git_monitor.GitEvidence`), so a fact records which tree it was produced against.
 - Gated per session: capture only for sessions whose owning Project opted `tier0` in,
-  resolved off the loop with a short TTL cache.
-- Retention: bounded by age (`prune`), reusing the process-evidence retention window.
+  resolved off the loop with a short TTL cache. The gate resolver returns the session's
+  `Tier0Context` (run + project) rather than a bare bool.
+- Retention: bounded by age (`prune`), reusing the process-evidence retention window. Run at
+  startup and hourly by the daemon's supervised retention loop.
 
 ## API surface
 
-- None yet. Read internally by future consumers; no dedicated route.
+- No dedicated route. Capture health (captured/dropped counts, last error) is reported under
+  `tier0_capture` in `GET /api/diagnostics/background`.
 
 ## Configuration
 
@@ -53,10 +89,13 @@ opt-in and gated (`automation-enablement.md`). Vision: `../../development/CONTRO
 ## Key files
 
 - Store + extraction + gated consumer: `src/swe_mux/tier0_store.py`
-- Adapter-boundary target/content-hash: `src/swe_mux/observation.py` (`tool_call_evidence`)
+- Adapter-boundary evidence: `src/swe_mux/observation.py` (`tool_call_evidence`,
+  `tool_result_evidence`, `parse_test_outcome`, `bounded_detail`)
+- Git commit/tree evidence: `src/swe_mux/git_monitor.py` (`GitEvidence`, `read_git_reading`)
 - Construction, prune, gate resolver, lifecycle: `src/swe_mux/server.py`
 
 ## Relates to
 
 - `automation-enablement.md` — the opt-in DAG that gates capture.
+- `deterministic-consumers.md` — the model-free detectors that query these facts.
 - `../technical/backend/sqlite.md` — shared `mux.db` operation-coordinator rules.

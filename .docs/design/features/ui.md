@@ -119,6 +119,10 @@ responsive controls.
   look wrong, it silently swallows taps on the dialog's own header, which is where close and
   primary actions live. On phones the sticky mobile toolbar previously covered the Projects
   registry header, so `+ Add project` rendered but could not be tapped.
+- Add project is one form with an `Existing folder` / `Create new folder` mode strip. Create
+  mode asks for a parent plus a folder name (prefilled from the Project name until edited) and
+  shows the exact canonical root it will register. Optional setup commands sit in a collapsed
+  `<details>` and start unchecked, so the common path stays name, folder, Enter.
 - Backdrop clicks close Settings. Dirty settings first open an in-app Save/Discard decision;
   interaction with that confirmation is inside the modal boundary and cannot also trigger the
   Settings backdrop.
@@ -346,13 +350,23 @@ responsive controls.
   toggle set. Phones keep two grid rows per item: name + reorder, then the toggles.
 - The Commands tab is session-scoped but renders outside the terminal pane, so it activates items
   over the same `mux:terminal-action` bus (`sendKey`, `insertText`, `copyReply`, `copyResume`,
-  `branch`, `relaunch`): the pane stays the single owner of terminal writes, so broadcast, replay,
-  and read/select mode keep applying. With no terminal focused the tab says so instead of rendering
+  `branch`, `relaunch`, `endSession`): the pane stays the single owner of terminal writes, so
+  broadcast, replay, and read/select mode keep applying. With no terminal focused the tab says so instead of rendering
   dead buttons. Keys inject
   raw bytes on the normal input path. The rail overflows on narrow panes and scrolls
   horizontally (touch drag, scrollbar, or mouse wheel); it never wraps. Voice controls are not
   here — they are in the pane header (`voice.md`), because the rail is a scroller the user pages
   through and they kept scrolling out of reach.
+- **End session** is the rail's one destructive item, so it ships in the drawer rather than on the
+  strip — a kill button one mis-tap from the arrow keys is the wrong default even behind a confirm.
+  Both hosts route it to the workspace's `session.kill` command, which already owns the two-click
+  confirm (2 s window), the pty stop, and the layout/focus cleanup; neither host reimplements any
+  of that. The armed id is broadcast on `mux:kill-armed` (App, on every change to `confirmKillId`)
+  because the pane is memoized against callback props and could not otherwise see it: both the rail
+  button and the drawer button read that broadcast instead of running a second timer, so their
+  label can never disagree with what the next click does. On an exited or crashed session the
+  button relabels to Remove, matching the command's own fallback. The drawer deliberately stays
+  open on the arming click — closing it would leave nowhere to make the second one.
 - Copy reply, Branch, and Paste render as icons alone; every other action keeps its text. The
   rail is width-starved — those three cost 74 px each on desktop and 96 px on a phone, which is
   most of a screen's worth of rail before the terminal keys begin — and their marks (offset
@@ -434,6 +448,15 @@ responsive controls.
 - Every width change reflows the pane tree and refits its terminals, which sends a resize to each
   PTY and makes agent TUIs redraw. That is why the drawer never opens itself, its width persists,
   and the drag commits on pointer-up rather than per-frame.
+- **Which tab a reopen lands on is a property of the entry point, not of the drawer.** The last
+  tab is device-local state (`mux.drawer.tab.v1`), written on every selection and read at boot, so
+  `drawer.toggle` — the gesture, the menu row, the palette — always reopens where you left it,
+  across a close, a sidebar stealing the screen, or a PWA relaunch. The per-tab commands
+  (`drawer.<tab>`, `clipboard.open` behind the rail's Clip button, the bell, "Browse files…")
+  deliberately force their own tab: they name a surface, so honouring a remembered tab would
+  ignore what was asked for. Binding one of those to the gesture you *open the panel* with is
+  therefore indistinguishable from the drawer forgetting its tab, which is why the keybinding
+  catalog's labels say outright which commands restore the last tab and which always force one.
 - Desktop additionally has an always-visible 40 px **icon rail** on the far right, one icon per tab,
   with a badge for unread notifications. The rail is the part that actually fixes discoverability:
   the surfaces are visible without a menu, a chord, or any configuration. Mobile reaches the same

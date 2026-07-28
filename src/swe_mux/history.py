@@ -14,7 +14,11 @@ from typing import Any, TypeVar
 from .git_projects import ProjectIdentity
 from .models import MuxEvent, ProjectGroupRecord, ProjectRecord, SessionRecord
 from .spawn_contract import infer_agent_executable_backend
-from .sqlite_store import database_operation_lock, run_sqlite_operation
+from .sqlite_store import (
+    connect_or_quarantine,
+    database_operation_lock,
+    run_sqlite_operation,
+)
 from .transcript_view import (
     TRANSCRIPT_PARSER_VERSION,
     parse_transcript,
@@ -23,6 +27,15 @@ from .transcript_view import (
 )
 
 T = TypeVar("T")
+
+# Exit reasons that mark a run as deliberately hidden because it was proven to be
+# a cross-attribution artifact. No migration or backfill may make these visible
+# again; only an explicit repair path may.
+QUARANTINE_EXIT_REASONS = (
+    "root_identity_reconciled",
+    "historical_provider_collision_reconciled",
+)
+_QUARANTINE_REASON_SQL = ",".join(f"'{reason}'" for reason in QUARANTINE_EXIT_REASONS)
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -178,12 +191,16 @@ class HistoryIndex:
         # additionally tolerates benign cross-thread introspection (tests reading
         # ``_db`` directly, a fallback close) without weakening that guarantee.
         with self._operation_lock:
-            self._db = sqlite3.connect(self._path, check_same_thread=False)
-            self._db.row_factory = sqlite3.Row
-            _tune_connection(self._db)
+            self._db = connect_or_quarantine(self._path, self._open)
             self._db.executescript(SCHEMA)
             self._migrate_schema()
             self._db.commit()
+
+    def _open(self) -> sqlite3.Connection:
+        db = sqlite3.connect(self._path, check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        _tune_connection(db)
+        return db
 
     async def _run(self, fn: Callable[[], T]) -> T:
         loop = asyncio.get_running_loop()
@@ -239,6 +256,7 @@ class HistoryIndex:
             or "last_message_role" not in columns
             or "native_started_at" not in columns
         )
+        agent_visible_added = "agent_visible" not in columns
         for column, statement in migrations.items():
             if column not in columns:
                 self._db.execute(statement)
@@ -266,7 +284,16 @@ class HistoryIndex:
                     for row in rows
                 ],
             )
-        self._db.execute("UPDATE history SET agent_visible=1 WHERE backend IN ('claude','codex')")
+        if agent_visible_added:
+            # One-shot backfill for rows written before the column existed. It
+            # must never run again: quarantine sets agent_visible=0 and leaves the
+            # row otherwise intact, so an unconditional backfill resurrected every
+            # misattributed run on every daemon start — silently undoing the
+            # cross-attribution repair layer within one session-preserving reload.
+            self._db.execute(
+                "UPDATE history SET agent_visible=1 WHERE backend IN ('claude','codex') "
+                f"AND (exit_reason IS NULL OR exit_reason NOT IN ({_QUARANTINE_REASON_SQL}))"
+            )
         self._db.execute(
             "DELETE FROM history WHERE backend='shell' AND agent_visible=0 AND "
             "(transcript_path IS NULL OR transcript_path='')"
@@ -817,7 +844,17 @@ class HistoryIndex:
                     "project_id=COALESCE(excluded.project_id,history.project_id),"
                     "note_id=COALESCE(history.note_id,excluded.note_id),"
                     "transcript_path=excluded.transcript_path,repository_id=excluded.repository_id,"
-                    "project_label=excluded.project_label,project_root=excluded.project_root,"
+                    # A row already assigned to a canonical Project keeps that
+                    # Project's label/root. Startup reconcile re-derives them from
+                    # Git and supplies no project_id, so without this guard every
+                    # changed external row loses its backfill-assigned, most-
+                    # specific-root attribution back to the enclosing worktree.
+                    "project_label=CASE WHEN history.project_id IS NOT NULL "
+                    "AND excluded.project_id IS NULL THEN history.project_label "
+                    "ELSE excluded.project_label END,"
+                    "project_root=CASE WHEN history.project_id IS NOT NULL "
+                    "AND excluded.project_id IS NULL THEN history.project_root "
+                    "ELSE excluded.project_root END,"
                     "context_window=excluded.context_window,"
                     "final_context_pct=excluded.final_context_pct,"
                     "peak_context_pct=excluded.peak_context_pct,tokens_in=excluded.tokens_in,"
@@ -914,15 +951,25 @@ class HistoryIndex:
         project_label: str,
         project_root: str,
     ) -> str | None:
-        """Attach a discovered native run to one registered Project."""
+        """Attach a *discovered* native run to one registered Project.
+
+        A scan may only claim rows that have no canonical owner yet. `ORDER BY
+        external ASC` prefers the mux-owned canonical row for a native id, so
+        without the ownership guard a scan of Project A reassigns the history of a
+        session that ran under nested Project B — the run's Project is decided at
+        spawn and is not a scan's to change.
+        """
 
         def op() -> str | None:
             row = self._db.execute(
-                "SELECT id FROM history WHERE backend=? AND native_id=? "
+                "SELECT id,project_id,external FROM history WHERE backend=? AND native_id=? "
                 "ORDER BY external ASC LIMIT 1",
                 (backend, native_id),
             ).fetchone()
             if not row:
+                return None
+            owner = str(row["project_id"] or "")
+            if owner and owner != project_id and not int(row["external"] or 0):
                 return None
             self._db.execute(
                 "UPDATE history SET project_id=?,project_label=?,project_root=? WHERE id=?",
@@ -1684,6 +1731,38 @@ class HistoryIndex:
         def op() -> list[dict[str, Any]]:
             rows = self._db.execute(sql, args).fetchall()
             return [{**dict(r), "payload": json.loads(r["payload_json"])} for r in rows]
+
+        return await self._run(op)
+
+    async def recent_events(
+        self, *, session_id: str | None = None, limit: int = 500
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """The NEWEST retained events, oldest-first, plus a truncation flag.
+
+        `events()` walks forward from a cursor, which is right for resuming a
+        known position but wrong for a cold open: with no cursor it returns the
+        oldest rows in a 90-day/100k-row table. A client reconnecting after a gap
+        needs the tail, and needs to know when the tail does not cover the gap.
+        """
+        sql = "SELECT seq,ts,session_id,source,type,payload_json FROM events"
+        args: list[Any] = []
+        if session_id:
+            sql += " WHERE session_id=?"
+            args.append(session_id)
+        # One extra row distinguishes "exactly filled the window" from "there is
+        # more history than the window carries".
+        sql += " ORDER BY seq DESC LIMIT ?"
+        args.append(max(1, limit) + 1)
+
+        def op() -> tuple[list[dict[str, Any]], bool]:
+            rows = self._db.execute(sql, args).fetchall()
+            truncated = len(rows) > limit
+            kept = rows[:limit]
+            kept.reverse()
+            return (
+                [{**dict(r), "payload": json.loads(r["payload_json"])} for r in kept],
+                truncated,
+            )
 
         return await self._run(op)
 

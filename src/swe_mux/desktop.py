@@ -396,6 +396,23 @@ class DesktopRuntime:
         except RuntimeError as exc:
             show_desktop_warning("Restart failed", str(exc))
 
+    def _reap_supervisor(self) -> None:
+        """Reap supervised sessions ourselves when the daemon runs out of budget.
+
+        The tray holds the config, so it can do what the daemon did not finish.
+        The supervisor's Job close is the authoritative reap; history
+        finalization is worth losing next to leaving agents running invisibly.
+        """
+        try:
+            import asyncio
+
+            from .supervisor_client import kill_server
+
+            if asyncio.run(kill_server(self.config)):
+                ledger(self.config.data_dir, "tray reaped the PTY supervisor on quit")
+        except Exception as exc:
+            ledger(self.config.data_dir, f"tray could not reap the PTY supervisor: {exc}")
+
     def quit(self, *_: object) -> None:
         if self.exiting:
             return
@@ -411,6 +428,12 @@ class DesktopRuntime:
                 and self.child is not None
                 and self.child.poll() is None
             ):
+                # The daemon overran its budget mid-teardown, so the supervisor
+                # may never have received `reap_all_and_exit`. Terminating the
+                # daemon alone would leave the supervisor and its remaining
+                # agents running headless — the user believes everything quit
+                # while sessions keep consuming quota and reappear next launch.
+                self._reap_supervisor()
                 self.child.terminate()
         elif self.child is None and health_snapshot(self.url) is not None:
             show_desktop_warning(

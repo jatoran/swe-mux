@@ -314,3 +314,97 @@ async def test_server_broadcast_targets_each_included_live_session_once() -> Non
 
     assert result == {"delivered": ["included"], "skipped": ["dead"]}
     assert writes == {"source": [], "included": ["hello"], "dead": [], "other": []}
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_pty_ws_unsubscribes_when_the_replay_send_fails() -> None:
+    """An exception in the attach/replay window must not orphan the subscriber.
+
+    A mid-replay disconnect (slow mobile link) used to skip the unsubscribe
+    entirely, leaving the session permanently reported as attended — which
+    suppresses unattended-attention automation and fleet absence reporting for
+    that session's whole lifetime.
+    """
+    record = SessionRecord(
+        "mux-id", "shell", "default", "shell", "mux-id", ".", "pwsh.exe", [], state="running"
+    )
+    pty = cast(
+        Any,
+        SimpleNamespace(
+            write=lambda _data: None,
+            resize=lambda _cols, _rows: None,
+            isalive=lambda: True,
+        ),
+    )
+    session = Session(record, pty, cast(Any, SimpleNamespace()), 1024, "secret")
+    session.scrollback.append(b"scrollback")
+    manager = SimpleNamespace(resolve=lambda identity: session, sessions={record.id: session})
+    app = web.Application()
+    app["sessions"] = manager
+    app["events"] = EventBus()
+
+    async def failing_pty_ws(request: web.Request) -> web.WebSocketResponse:
+        real_prepare = web.WebSocketResponse.prepare
+
+        async def prepare(self: web.WebSocketResponse, req: web.Request) -> Any:
+            prepared = await real_prepare(self, req)
+            original = self.send_bytes
+
+            async def send_bytes(data: bytes, compress: int | None = None) -> None:
+                del data, compress
+                raise ConnectionResetError("client vanished mid-replay")
+
+            self.send_bytes = send_bytes  # type: ignore[method-assign]
+            del original
+            return prepared
+
+        web.WebSocketResponse.prepare = prepare  # type: ignore[method-assign]
+        try:
+            return await pty_ws(request)
+        finally:
+            web.WebSocketResponse.prepare = real_prepare  # type: ignore[method-assign]
+
+    app.router.add_get("/pty/{sid}", failing_pty_ws)
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/mux-id")
+        assert (await ws.receive_json())["type"] == "state"
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        await asyncio.sleep(0.05)
+        await ws.close()
+
+    await asyncio.sleep(0.05)
+    assert session.subscribers == set()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_pty_ws_unsubscribes_for_an_already_ended_session() -> None:
+    record = SessionRecord(
+        "mux-id", "shell", "default", "shell", "mux-id", ".", "pwsh.exe", [], state="exited"
+    )
+    pty = cast(
+        Any,
+        SimpleNamespace(
+            write=lambda _data: None,
+            resize=lambda _cols, _rows: None,
+            isalive=lambda: False,
+        ),
+    )
+    session = Session(record, pty, cast(Any, SimpleNamespace()), 32, "secret")
+    manager = SimpleNamespace(resolve=lambda identity: session, sessions={record.id: session})
+    app = web.Application()
+    app["sessions"] = manager
+    app["events"] = EventBus()
+    app.router.add_get("/pty/{sid}", pty_ws)
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/mux-id")
+        assert (await ws.receive_json())["type"] == "state"
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert (await ws.receive_json())["type"] == "replay_end"
+        assert (await ws.receive_json())["reason"] == "already_ended"
+        await ws.close()
+
+    await asyncio.sleep(0.05)
+    assert session.subscribers == set()

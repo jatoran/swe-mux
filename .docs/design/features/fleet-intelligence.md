@@ -56,9 +56,22 @@ evidence and always returns `authorized: false`. Unknown evidence fails closed. 
 may annotate, notify, summarize, suggest, and report; they never type, approve, spawn,
 execute, relay, or mutate a project.
 
+## Reliability
+
+Both loops — the 5s inspection pass and the event consumer — run under the shared
+background-task supervisor, so a single failure costs one iteration rather than every
+detector for the rest of the daemon's life. This is not hypothetical: the interlock emit
+suspends on the durable event sink, and the server pops sessions concurrently, so the
+subsequent lookup could raise `KeyError` and silently take stall, unattended, runaway,
+context-pressure, interlock and digest detection with it. Health is at
+`GET /api/diagnostics/background`; per-session accumulators (including the delivery-readiness
+tracker's) are dropped on `session_exited`/`session_crashed`, and in-flight claim checks are
+strongly referenced and cancelled at `stop()`.
+
 ## Key files
 
 - `src/swe_mux/fleet_intelligence.py`
+- `src/swe_mux/background_tasks.py`
 - `src/swe_mux/processes.py`
 - `src/swe_mux/history.py`
 - `src/swe_mux/server.py`

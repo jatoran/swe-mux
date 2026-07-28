@@ -89,12 +89,22 @@
 - Claude uses the OAuth usage endpoint. An authorization failure may rotate the public
   Claude Code refresh token; rotated credentials update the saved snapshot and, when
   still matched to live system auth, the system auth file. A login changed during the network
-  request is never overwritten.
+  request is never overwritten: the slot's digest is re-checked against the one read at the
+  start of the refresh, and a mismatch skips the write with an audited `rotation_skipped`.
+  The rotation write itself keeps the previous credential as `.prev` and appends an audit
+  entry like every other credential write — a background rotation is exactly the silent
+  rewrite the audit trail exists to explain afterwards.
 - Codex uses the CLI backend usage endpoint. Authorization failure falls back to a bounded
   `codex app-server` JSON-RPC request in a temporary auth-only `CODEX_HOME`; refreshed auth
   is copied back without retaining the temporary home.
 - A failed refresh preserves the last success as `stale` for 30 minutes. Older data clears
   to `error`. Terminal/session operations never wait for background polling.
+- The quota poll and turn-refresh loops run under the shared background-task supervisor, so a
+  single failure costs one cycle rather than ending quota sampling, reset detection and
+  managed-token rotation for the daemon's lifetime. The manifest's atomic replace additionally
+  retries a transient Windows `PermissionError` (antivirus or a backup agent holding the
+  destination), which was the concrete way that loop died. Loop liveness and last fault are at
+  `GET /api/diagnostics/background`.
 - A downward movement is scheduled when its advertised reset boundary falls between the two
   fresh samples, so a delayed poll does not mislabel it. Unexpected candidates require a reset
   timer at least one hour away, a drop of at least 20 percentage points, and a landing no higher

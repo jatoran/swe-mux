@@ -3,6 +3,63 @@
 Pre-roadmap-continuation audit of the entire shipped system, run before starting Phase 3.7
 (control-plane deterministic consumers) / Phase 4 (prompt queue) / Phase 4.5 (mux MCP v0).
 
+> **Status: worked through.** P0 and P1 were fixed in the pass that produced this report;
+> P2, the Appendix A leads, and the requested `idle(waiting_on_background)` sub-state were
+> fixed alongside Phase 3.7. See "Remediation" below for what closed and what was
+> deliberately answered by a decision rather than code. The findings text is preserved
+> unchanged as the record of what was found and why it mattered.
+
+## Remediation
+
+**Closed in the P0/P1 pass:** Tier 0 substrate defects (4 KB drop, NULL run/project
+ownership, `tool_result` fingerprint collapse, structured test facts, git/read hashes),
+quarantine resurrection, the supervised-task wrapper and EventBus drop counters,
+`AutomationStore` prune coverage plus the hourly retention loop, `/events` catch-up,
+`pty_ws`/`events_ws` subscriber leaks, the process-inspector raw-PID gate, transcript
+adoption hardening, hook-spool identity/staleness/terminal latch, the PTY reader
+put-timeout, and the frontend `lastReply`/layout/pagehide fixes.
+
+**Closed in this pass (P2 + Appendix A):**
+
+- *Storage*: per-store `schema_versions` replacing the shared `PRAGMA user_version`;
+  `connect_or_quarantine` so a corrupt `mux.db` is renamed aside instead of crashing
+  startup; `AutomationStore` migrations; named-column writes everywhere; clipboard rows
+  outside the adopted window deleted.
+- *Project isolation*: explicit-Project identity threaded through every project-resource
+  helper (`rebase_identity`), closing the nested-Project notes/config/observations bleed;
+  a history scan can no longer reassign a run owned by another Project; reconcile no longer
+  clobbers backfill-assigned labels.
+- *Transcripts*: sidechain records excluded from indexing and time bounds; `.orphaned-*`
+  housekeeping files excluded; the parse cache keyed on size as well as mtime; the message
+  watermark taken from the same stat as the parse; streamed reads on the indexing path;
+  per-file failures skipped rather than aborting a scan.
+- *Status detection*: watchdog stall/screen/state re-derived after the threaded tail read;
+  `resume_working` confined to answered approvals; the PTY backstop reachable for a
+  missing/unreadable transcript; blocking hooks spooled durably; the new
+  `idle(waiting_on_background)` sub-state.
+- *Supervisor*: a lost connection distinguished from a dead supervisor (no fabricated
+  exits); unadopted sessions counted at `/health`; adoptable metadata mirrored with the
+  spawn RPC; detach stops preserved sessions' tickers first; a version-mismatched supervisor
+  can still be reaped; the tray reaps it when the daemon overruns its quit budget.
+- *Everything else*: voice STT timeout/orphans/close guard, watcher lease caps and failure
+  cooldown, tailnet-bind degradation, config profile-key tolerance, Codex rollout-scan
+  cache, `git_projects` cache eviction, push concurrency and delivery accounting,
+  input-owner handoff notification, preview-shot retention, `hook_ingress` window sweep,
+  redeploy `--config` and atomic lock, provider rotation audit trail, telemetry reset
+  tolerance and account-scoped confirmation, prior-resolution retrieval by exact
+  fingerprint, `_source_probes`/`_unique_inflight` leaks, unpriced-model dollar preflight
+  and cost-reconcile retries, Windows interrupt/terminate-tree semantics, corrupt
+  `observations.json` refusal, and the frontend items (unhandled-rejection backstop,
+  `applyConfig` single path, `pointercancel`, hidden-tab provider polling, draft eviction).
+
+**Answered by decision, not code:** the Tier 0 write/read hash join. Provenance edges are
+restated as `target` + time order with an `ambiguous` marker; see
+`design/features/deterministic-consumers.md` and `CONTROL_PLANE_ROADMAP.md` §9 step 1.
+
+**Still open, deliberately:** the Phase 4.5 same-host caller boundary (a product decision
+recorded in `ROADMAP.md` Phase 4.5), the continuous-titler doc/code divergence (needs the
+scan timeline, CP §6.11), and bundling Chromium for preview capture (Phase 11 packaging).
+
 **Method.** Ten parallel domain auditors (session state, transcript/history, SQLite stores,
 PTY supervisor, server/API, telemetry/processes, automation/control-plane, frontend,
 config/spawn, roadmap-vs-code drift) each read their design docs first, then the code in

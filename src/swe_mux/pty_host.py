@@ -8,6 +8,7 @@ import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 import psutil
 import winpty
@@ -20,6 +21,9 @@ log = logging.getLogger(__name__)
 # Upper bound on a single coalesced read handoff. Caps per-handoff memory and keeps a
 # firehose from starving the drain loop while still collapsing typical bursts into one put.
 _MAX_COALESCE_BYTES = 256 * 1024
+# How often a blocked cross-thread handoff re-checks whether the child is still
+# alive. Not a deadline: a live child keeps its reader waiting indefinitely.
+_QUEUE_PUT_POLL_SECONDS = 5.0
 _CONPTY_CREATE_ATTEMPTS = 3
 _CONSOLE_HOST_NAMES = {"conhost", "conhost.exe", "openconsole", "openconsole.exe"}
 _PTY_SPAWN_LOCK = threading.Lock()
@@ -194,10 +198,8 @@ class PtyHost:
                         self._first_output_at = time.perf_counter()
                     # A single blocking put per drain preserves backpressure (a slow
                     # consumer throttles the child) while amortizing the round-trip cost.
-                    future = asyncio.run_coroutine_threadsafe(
-                        self._queue.put(bytes(buffer)), self._loop
-                    )
-                    future.result(timeout=5)
+                    if not self._put_with_backpressure(bytes(buffer), pty):
+                        break
                 elif not pty.isalive():
                     break
                 else:
@@ -207,6 +209,40 @@ class PtyHost:
                 asyncio.run_coroutine_threadsafe(self._queue.put(b""), self._loop).result(timeout=2)
             except Exception:
                 pass
+
+    def _put_with_backpressure(self, payload: bytes, pty: Any) -> bool:
+        """Hand a chunk to the loop, waiting as long as the child is alive.
+
+        Timing out here used to abort the reader thread, which injected the b""
+        end-of-output sentinel in the finally — fabricating an exit for a session
+        that was merely backpressured. The supervisor then treated that sentinel
+        as a real exit and closed the session's kill-on-close job, killing a live
+        agent tree. Slow consumers must throttle the child, never end it.
+
+        Returns False only when the reader should stop: the PTY is genuinely
+        gone, a stop was requested, or the loop itself is unusable.
+        """
+        assert self._queue is not None and self._loop is not None
+        future = asyncio.run_coroutine_threadsafe(self._queue.put(payload), self._loop)
+        while True:
+            try:
+                future.result(timeout=_QUEUE_PUT_POLL_SECONDS)
+                return True
+            except TimeoutError:
+                if self._stop.is_set():
+                    future.cancel()
+                    return False
+                if not pty.isalive():
+                    # The child is gone; the pending put may never be consumed,
+                    # so stop waiting on it and let the sentinel be written.
+                    future.cancel()
+                    return False
+                # Still alive and still backed up: keep waiting. This is the
+                # backpressure the design intends.
+                continue
+            except (RuntimeError, asyncio.CancelledError):
+                # The event loop is closing (daemon teardown) — nothing to deliver.
+                return False
 
     def write(self, data: str | bytes) -> None:
         if not self._pty:

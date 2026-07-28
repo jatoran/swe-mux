@@ -174,6 +174,32 @@ async def test_persistence_round_trips_and_purges_when_switched_off(tmp_path: Pa
         reopened.close()
 
 
+async def test_load_deletes_rows_outside_the_adopted_window(tmp_path: Path) -> None:
+    # Rows beyond the adopted window are unreachable by every later path: not in
+    # the picker, not expired by retention, not removed by "clear history". They
+    # would keep verbatim copied text on disk forever, against the count/time
+    # bound this store promises. Lowering the limit is the ordinary way in.
+    database = tmp_path / "mux.db"
+    store = ClipboardStore(database, persist=True, limit=8)
+    try:
+        for index in range(6):
+            await store.capture(f"copy {index}", source="terminal")
+        assert len(_rows(database)) == 6
+    finally:
+        store.close()
+
+    narrowed = ClipboardStore(database, persist=True, limit=1)
+    try:
+        assert await narrowed.load() == 1
+        # Two rows are adopted (limit * 2) and pruned to one; the four the new
+        # limit can never reach again are deleted rather than left behind.
+        assert [row["text"] for row in _rows(database)] == [
+            item.text for item in narrowed.entries()
+        ]
+    finally:
+        narrowed.close()
+
+
 async def test_clipboard_api_capture_read_pin_delete_and_clear(tmp_path: Path) -> None:
     events: list[tuple[str, dict[str, Any]]] = []
 

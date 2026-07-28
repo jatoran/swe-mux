@@ -39,10 +39,13 @@ from .automation import (
     serialize_rules,
     validate_observer_result,
 )
+from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
+from .background_tasks import background
 from .clipboard_store import ClipboardStore
 from .config import Config, load_config, update_config
+from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
 from .event_bus import EventBus
 from .file_manager import open_in_file_manager
 from .fleet_intelligence import FleetIntelligence
@@ -77,6 +80,7 @@ from .processes import PreviewRegistry, ProcessInspector
 from .profiles import profile_payload, resolve_profile
 from .project_actions import ProjectActionService, action_spawn_body
 from .project_files import (
+    ObservationsUnreadableError,
     append_observation,
     effective_project_ignores,
     initialize_note,
@@ -100,6 +104,7 @@ from .project_files import (
 from .project_files import (
     revision as file_revision,
 )
+from .project_init import init_script_step, select_init_scripts
 from .project_watcher import ProjectFileWatcher
 from .projects import ProjectManager
 from .prompt_library import PromptLibrary, PromptScope
@@ -108,10 +113,10 @@ from .provider_accounts import (
     ProviderAccountError,
     ProviderAccountManager,
 )
-from .push import PushSender, PushStore
+from .push import PUSH_SENDER_LOOP, PushSender, PushStore
 from .reconcile import reconcile_external_history
 from .secret_store import PlatformSecretStore, SecretStoreError
-from .session import Session, SessionManager
+from .session import STATE_WATCHDOG_LOOP, Session, SessionManager
 from .settings_store import SettingsStore
 from .spawn_contract import SpawnRequest, resolve_contained_cwd, scrub_claude_session_markers
 from .subprocess_flags import background_creation_flags, popen_outside_job
@@ -121,8 +126,8 @@ from .tailscale import (
     is_tailscale_ip,
     tailscale_status,
 )
-from .tier0_store import Tier0Store
-from .transcript_view import parse_transcript_cached
+from .tier0_store import Tier0Context, Tier0Store
+from .transcript_view import parse_transcript_with_watermark
 from .usage import UsageManager
 from .voice import VoiceError, VoiceService, VoiceStore, clip_snapshot, last_reply_text
 from .win_jobobj import ReaperJob
@@ -137,9 +142,23 @@ PREVIEW_WS_MESSAGE_BYTES = 4 * 1024 * 1024
 PREVIEW_WS_IDLE_SECONDS = 30 * 60
 PREVIEW_WS_LIFETIME_SECONDS = 12 * 60 * 60
 SESSION_MEDIA_TTL_SECONDS = 24 * 60 * 60
+# Preview screenshots live inside the user's repository, so they get a longer
+# window than pasted media (an agent may read one days later) but still expire.
+PREVIEW_SHOT_TTL_SECONDS = 7 * 24 * 60 * 60
 PTY_ATTACH_READY_TIMEOUT_SECONDS = 0.25
 HOOK_RATE_WINDOW_SECONDS = 10.0
 HOOK_RATE_LIMIT = 500
+# Sweep rate-limit windows for sessions that no longer exist once the map grows
+# past a size no live fleet reaches.
+HOOK_WINDOW_SWEEP_AT = 256
+CONFIG_WATCH_LOOP = "config-watch"
+LIFECYCLE_HEARTBEAT_LOOP = "lifecycle-heartbeat"
+MEDIA_CLEANUP_LOOP = "media-cleanup"
+RETENTION_LOOP = "store-retention"
+# Retained events replayed to a reconnecting /events client when it supplies no
+# cursor: the NEWEST N, never the oldest — catch-up that replays ancient history
+# delivers exactly the events the client already has and none that it missed.
+EVENTS_CATCHUP_LIMIT = 2000
 _OSC_DEFAULT_COLOR_RESPONSE = re.compile(
     r"(?:\x1b\](?:10|11);"
     r"(?:rgb:[0-9a-f]{1,4}(?:/[0-9a-f]{1,4}){2}"
@@ -165,6 +184,14 @@ def _is_codex_default_color_response(backend: str, data: str) -> bool:
 
 def json_response(data: Any, status: int = 200) -> web.Response:
     return web.json_response(data, status=status)
+
+
+def _log_task_failure(task: asyncio.Task[Any]) -> None:
+    """Surface a one-shot background task's death instead of swallowing it."""
+    if task.cancelled():
+        return
+    if (error := task.exception()) is not None:
+        log.error("background task %s failed", task.get_name(), exc_info=error)
 
 
 @web.middleware
@@ -382,11 +409,14 @@ def create_app(
             web.get("/api/projects/{project_id}/actions", list_project_actions),
             web.post("/api/projects/{project_id}/actions/trust", trust_project_actions),
             web.post("/api/projects/{project_id}/actions/run", run_project_action),
+            web.post("/api/projects/{project_id}/init-scripts/run", run_project_init_scripts),
             web.get("/api/projects/{project_id}/note", get_project_note),
             web.put("/api/projects/{project_id}/note", put_project_note),
             web.get("/api/projects/{project_id}/observations", get_observations),
             web.post("/api/projects/{project_id}/observations", post_observation),
             web.put("/api/projects/{project_id}/observations", put_observations),
+            web.get("/api/projects/{project_id}/automations", get_project_automations),
+            web.put("/api/projects/{project_id}/automations", put_project_automations),
             web.get("/api/session-notes", list_session_notes),
             web.get("/api/projects/{project_id}/session-notes/{note_id}", get_session_note),
             web.post("/api/projects/{project_id}/session-notes/{note_id}", initialize_session_note),
@@ -419,6 +449,7 @@ def create_app(
             web.get("/api/sessions/{sid}", get_session),
             web.get("/api/sessions/{sid}/state-log", get_session_state_log),
             web.get("/api/diagnostics/status-health", get_status_health),
+            web.get("/api/diagnostics/background", get_background_health),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
             web.patch("/api/sessions/{sid}", patch_session),
             web.delete("/api/sessions/{sid}", delete_session),
@@ -523,9 +554,19 @@ def create_app(
 
 
 async def _lifecycle_heartbeat_loop(data_dir: Path) -> None:
+    """Keep the heartbeat fresh so the next daemon can judge how this one died.
+
+    Supervised like every other loop, and for a sharper reason than most: this
+    loop's own death is indistinguishable from the daemon's death. One failed
+    write (a locked file, a full disk) used to end it silently, after which the
+    daemon kept running perfectly while every subsequent start reported it as
+    "died without a clean shutdown" — a false forensic that sends the next
+    investigation after a crash that never happened.
+    """
     while True:
         await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
-        await asyncio.to_thread(heartbeat, data_dir)
+        with background.iteration(LIFECYCLE_HEARTBEAT_LOOP):
+            await asyncio.to_thread(heartbeat, data_dir)
 
 
 async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
@@ -534,9 +575,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # shutdown while this daemon is still barely started, then keep our own
     # heartbeat fresh so the next daemon can do the same for us.
     daemon_started(config.data_dir, log)
-    lifecycle_task = asyncio.create_task(
-        _lifecycle_heartbeat_loop(config.data_dir), name="lifecycle-heartbeat"
-    )
+    background.start(LIFECYCLE_HEARTBEAT_LOOP, lambda: _lifecycle_heartbeat_loop(config.data_dir))
     history = HistoryIndex(config.database_path)
     events = EventBus(history.append_event)
     telemetry = OperationalTelemetryStore(
@@ -663,6 +702,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     fleet = FleetIntelligence(
         sessions, events, automation_store, process_inspector, previews, config
     )
+    fleet.automation = automation
     voice_store = VoiceStore(config.database_path)
     voice = VoiceService(config, events, sessions, voice_store, automation_store, openrouter)
     prompt_library = PromptLibrary(config.data_dir)
@@ -684,32 +724,75 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     project_watcher = ProjectFileWatcher(projects, events, config)
     telemetry.start(events, sessions=sessions, history=history)
 
-    tier0_enabled_cache: dict[str, tuple[float, bool]] = {}
+    automation_gate_cache: dict[str, tuple[float, frozenset[str]]] = {}
 
-    async def tier0_enabled(session_id: str) -> bool:
-        # The per-project enablement gate: Tier 0 only captures for a session
-        # whose owning project opted it in. Resolved off-loop with a short TTL
-        # cache so the event path never blocks on a config read.
+    async def _enabled_automations(root: str) -> frozenset[str]:
+        """Per-project opt-in closure, resolved off-loop with a short TTL cache.
+
+        Shared by Tier 0 capture and the deterministic consumers so a project can
+        never have one running under a stale answer the other already refreshed.
+        """
+        now = time.monotonic()
+        cached = automation_gate_cache.get(root)
+        if cached and now - cached[0] < 5.0:
+            return cached[1]
+        project_map = await asyncio.to_thread(project_automations, root)
+        enabled = resolve_automation_config(project_map).enabled
+        automation_gate_cache[root] = (now, enabled)
+        return enabled
+
+    def _session_project_root(session_id: str) -> tuple[Any, str] | None:
         session = sessions.sessions.get(session_id)
         if session is None:
-            return False
+            return None
         record = session.record
         root = record.project_root or record.spawn_project_root
         if not root and record.project_id:
             project = projects.projects.get(record.project_id)
             root = project.root if project else None
-        if not root:
-            return False
-        now = time.monotonic()
-        cached = tier0_enabled_cache.get(root)
-        if cached and now - cached[0] < 5.0:
-            return cached[1]
-        project_map = await asyncio.to_thread(project_automations, root)
-        enabled = resolve_automation_config(project_map).is_enabled("tier0")
-        tier0_enabled_cache[root] = (now, enabled)
-        return enabled
+        return (record, root) if root else None
 
-    tier0.start(events, resolve_enabled=tier0_enabled)
+    async def consumer_context(session_id: str) -> ConsumerContext | None:
+        resolved = _session_project_root(session_id)
+        if resolved is None:
+            return None
+        record, root = resolved
+        if not record.project_id:
+            return None
+        enabled = await _enabled_automations(root)
+        return ConsumerContext(
+            project_id=record.project_id,
+            project_root=root,
+            agent_run_id=record.agent_run_id or None,
+            enabled=enabled,
+        )
+
+    async def tier0_context(session_id: str) -> Tier0Context | None:
+        # The per-project enablement gate: Tier 0 only captures for a session
+        # whose owning project opted it in. Resolved off-loop with a short TTL
+        # cache so the event path never blocks on a config read. Returns the
+        # session's ownership context so every fact is stamped with the run and
+        # project it belongs to — per-run/per-project queries are the substrate's
+        # whole purpose and cannot be recovered from session_id alone once a
+        # session is resumed, promoted, or branched.
+        resolved = _session_project_root(session_id)
+        if resolved is None:
+            return None
+        record, root = resolved
+        if "tier0" not in await _enabled_automations(root):
+            return None
+        return Tier0Context(
+            agent_run_id=record.agent_run_id or None,
+            project_id=record.project_id or None,
+        )
+
+    tier0.start(events, resolve_context=tier0_context)
+    # Phase 3.7: model-free detectors over the facts Tier 0 just captured. Same
+    # gate, same cache; writes annotations and nothing else.
+    consumers = DeterministicConsumerService(
+        tier0, automation_store, sessions, events, resolve_context=consumer_context
+    )
+    consumers.start()
     git_monitor.start()
     hooks.start()
     automation.start()
@@ -721,21 +804,23 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     fleet.start()
     voice.start()
     project_watcher.start()
-    config_watch = asyncio.create_task(_watch_config(app), name="config-watch")
-    media_cleanup_task = asyncio.create_task(
-        _media_cleanup_loop(config.data_dir), name="media-cleanup"
-    )
-    state_watchdog_task = asyncio.create_task(
-        sessions.state_watchdog_loop(), name="state-watchdog"
-    )
-    push_task = asyncio.create_task(
-        PushSender(push_store, settings_store, events).run(), name="push-sender"
-    )
+    # Every long-lived loop runs under the background-task supervisor: restarted
+    # with capped backoff, faults counted, health surfaced at
+    # /api/diagnostics/background. An unsupervised loop that dies is invisible.
+    background.start(CONFIG_WATCH_LOOP, lambda: _watch_config(app))
+    background.start(MEDIA_CLEANUP_LOOP, lambda: _media_cleanup_loop(config.data_dir, projects))
+    background.start(RETENTION_LOOP, lambda: _retention_loop(automation_store, tier0, config))
+    background.start(STATE_WATCHDOG_LOOP, sessions.state_watchdog_loop)
+    push_sender = PushSender(push_store, settings_store, events)
+    background.start(PUSH_SENDER_LOOP, push_sender.run)
     reconcile_task: asyncio.Task[int] | None = None
     if config.reconcile_external_history:
         reconcile_task = asyncio.create_task(
             reconcile_external_history(history), name="history-reconcile"
         )
+        # A one-shot task that dies is silent by default; the scan's failure mode
+        # is "external history is quietly stale", which nothing else reports.
+        reconcile_task.add_done_callback(_log_task_failure)
     app.update(
         history=history,
         events=events,
@@ -753,6 +838,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         usage=usage,
         telemetry=telemetry,
         tier0=tier0,
+        deterministic_consumers=consumers,
         provider_accounts=provider_accounts,
         process_inspector=process_inspector,
         previews=previews,
@@ -776,16 +862,17 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     for task in tuple(app["automation_tasks"]):
         task.cancel()
     await asyncio.gather(*app["automation_tasks"], return_exceptions=True)
-    config_watch.cancel()
-    await asyncio.gather(config_watch, return_exceptions=True)
-    media_cleanup_task.cancel()
-    await asyncio.gather(media_cleanup_task, return_exceptions=True)
-    state_watchdog_task.cancel()
-    await asyncio.gather(state_watchdog_task, return_exceptions=True)
-    push_task.cancel()
-    await asyncio.gather(push_task, return_exceptions=True)
+    for loop_name in (
+        CONFIG_WATCH_LOOP,
+        MEDIA_CLEANUP_LOOP,
+        RETENTION_LOOP,
+        STATE_WATCHDOG_LOOP,
+        PUSH_SENDER_LOOP,
+    ):
+        await background.stop(loop_name)
     await hooks.stop()
     await automation.stop()
+    await consumers.stop()
     await voice.stop()
     await project_watcher.stop()
     await usage.stop()
@@ -820,10 +907,22 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     tier0.close()
     clipboard.close()
     reaper.close()
-    lifecycle_task.cancel()
-    await asyncio.gather(lifecycle_task, return_exceptions=True)
+    await background.stop(LIFECYCLE_HEARTBEAT_LOOP)
     # Last so an exception anywhere above still reads as an unclean exit.
     await asyncio.to_thread(daemon_clean_exit, config.data_dir, intent)
+
+
+def _config_mtime(path: Path) -> int:
+    """Config mtime, or 0 when the file is absent or momentarily unreadable.
+
+    Editors save by delete+rename, so `exists()` and `stat()` genuinely disagree.
+    An unguarded stat here used to kill config hot reload for the daemon's
+    lifetime on a single unlucky poll.
+    """
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
 
 
 async def _watch_config(app: web.Application) -> None:
@@ -831,31 +930,34 @@ async def _watch_config(app: web.Application) -> None:
     path = config.config_path
     if path is None:
         return
-    modified = path.stat().st_mtime_ns if path.exists() else 0
+    modified = _config_mtime(path)
     while True:
         await asyncio.sleep(1)
-        current = path.stat().st_mtime_ns if path.exists() else 0
-        if current == modified:
-            continue
-        modified = current
-        try:
-            loaded = load_config(path)
-            if loaded.public_dict() == config.public_dict():
+        with background.iteration(CONFIG_WATCH_LOOP):
+            current = _config_mtime(path)
+            if current == modified:
                 continue
-            changed = {
-                field_name
-                for field_name in Config.__dataclass_fields__
-                if getattr(config, field_name) != getattr(loaded, field_name)
-            }
-            loaded.revision = config.revision + 1
-            for field_name in Config.__dataclass_fields__:
-                setattr(config, field_name, getattr(loaded, field_name))
-            _apply_runtime_config(app, changed)
-            await app["events"].emit(
-                "configuration_changed", source="external_file", revision=config.revision
-            )
-        except (OSError, ValueError, TypeError, tomllib.TOMLDecodeError) as exc:
-            await app["events"].emit("configuration_error", source="external_file", error=str(exc))
+            modified = current
+            try:
+                loaded = load_config(path)
+                if loaded.public_dict() == config.public_dict():
+                    continue
+                changed = {
+                    field_name
+                    for field_name in Config.__dataclass_fields__
+                    if getattr(config, field_name) != getattr(loaded, field_name)
+                }
+                loaded.revision = config.revision + 1
+                for field_name in Config.__dataclass_fields__:
+                    setattr(config, field_name, getattr(loaded, field_name))
+                _apply_runtime_config(app, changed)
+                await app["events"].emit(
+                    "configuration_changed", source="external_file", revision=config.revision
+                )
+            except (OSError, ValueError, TypeError, tomllib.TOMLDecodeError) as exc:
+                await app["events"].emit(
+                    "configuration_error", source="external_file", error=str(exc)
+                )
 
 
 def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
@@ -945,12 +1047,23 @@ async def health(request: web.Request) -> web.Response:
     sessions: SessionManager = request.app.get("sessions")
     live = sum(s.pty.isalive() for s in sessions.sessions.values()) if sessions else 0
     supervisor = request.app.get("supervisor")
+    connected = bool(supervisor is not None and supervisor.connected)
+    # "lost" is deliberately distinct from "false": the supervisor is alive and
+    # still holds live sessions, this daemon just cannot reach them. Reporting it
+    # as absent hides sessions that are running and unkillable from here.
+    lost = bool(supervisor is not None and getattr(supervisor, "lost", False))
+    unadopted = int(getattr(sessions, "unadopted_supervisor_sessions", 0) or 0) if sessions else 0
     return json_response(
         {
             "ok": True,
             "live_sessions": live,
             "version": "0.1.0",
-            "supervisor": bool(supervisor is not None and supervisor.connected),
+            "supervisor": connected,
+            "supervisor_state": "connected" if connected else ("lost" if lost else "absent"),
+            # Supervised sessions this daemon could not rebuild (snapshot drift,
+            # a crash inside the spawn-meta window). They keep running under the
+            # supervisor with no UI handle, so the count must be visible.
+            "supervisor_unadopted": unadopted,
         }
     )
 
@@ -1158,6 +1271,24 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
             },
             409,
         )
+    lock_path = config.data_dir / "redeploy.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    # `_redeploy_lock_pid` already reported no live redeploy, so any file still
+    # here is stale (a crash between claiming the lock and writing the pid).
+    # Leaving it would make O_EXCL refuse every future redeploy.
+    with suppress(OSError):
+        lock_path.unlink(missing_ok=True)
+    try:
+        # Claimed atomically *before* the spawn. Writing it afterwards let a
+        # double-submit (desktop plus phone, or a double tap) start two staged
+        # redeploys that then race the same dist/.staging tree and the swap.
+        lock_handle = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return json_response(
+            {"error": "redeploy_in_progress", "message": "a redeploy is already starting"},
+            409,
+        )
+    os.close(lock_handle)
     log_path = config.data_dir / "redeploy.log"
     command = [
         uv,
@@ -1168,24 +1299,35 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
         str(root / "packaging" / "redeploy_desktop.py"),
         "--hidden",
     ]
+    # Without this the script targets ~/.mux, so a daemon on an alternate config
+    # reads the wrong supervisor discovery file and aborts — or worse,
+    # detach-stops a *different* instance while swapping the shared bundle.
+    if (config_path := getattr(config, "config_path", None)) is not None:
+        command += ["--config", str(config_path)]
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("wb", buffering=0) as log_file:
-        # Detached from this daemon's process group, lifetime, and any Job it
-        # inherited: the script stops this very daemon mid-run, so it must not
-        # die with it. cwd is the source root (never inside dist/, which would
-        # lock the rebuild) and the env is scrubbed of parent-Claude session
-        # markers.
-        process = popen_outside_job(  # noqa: ASYNC220 - non-blocking Popen
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            cwd=str(root),
-            env=scrub_claude_session_markers(os.environ),
-            creationflags=background_creation_flags()
-            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-        )
-    (config.data_dir / "redeploy.lock").write_text(str(process.pid), encoding="ascii")
+    try:
+        with log_path.open("wb", buffering=0) as log_file:
+            # Detached from this daemon's process group, lifetime, and any Job it
+            # inherited: the script stops this very daemon mid-run, so it must not
+            # die with it. cwd is the source root (never inside dist/, which would
+            # lock the rebuild) and the env is scrubbed of parent-Claude session
+            # markers.
+            process = popen_outside_job(  # noqa: ASYNC220 - non-blocking Popen
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                cwd=str(root),
+                env=scrub_claude_session_markers(os.environ),
+                creationflags=background_creation_flags()
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+            )
+    except OSError:
+        # The placeholder lock must not outlive a spawn that never happened.
+        with suppress(OSError):
+            lock_path.unlink(missing_ok=True)
+        raise
+    lock_path.write_text(str(process.pid), encoding="ascii")
     response = json_response(
         {"status": "redeploying", "pid": process.pid, "log": str(log_path)}, 202
     )
@@ -2194,13 +2336,36 @@ async def list_profiles(request: web.Request) -> web.Response:
     return json_response(profile_payload(request.app["config"]))
 
 
+def _config_identity(request: web.Request, project_id: str) -> ProjectIdentity | None:
+    """Registered identity for an explicit `project_id`, when the caller named one.
+
+    The route is cwd-addressed for the Git-scope path, but the per-Project
+    settings editor always addresses a registered Project. Naming it keeps a
+    Project registered inside a larger worktree from editing the enclosing
+    worktree's `.swe-mux/config.toml`.
+    """
+    if not project_id:
+        return None
+    project = request.app["projects"].projects.get(project_id)
+    if not project:
+        raise ValueError("unknown project")
+    return _registered_identity(project)
+
+
 async def get_project_config(request: web.Request) -> web.Response:
-    return json_response(await read_project_config(request.query.get("cwd") or str(Path.cwd())))
+    identity = _config_identity(request, request.query.get("project_id") or "")
+    return json_response(
+        await read_project_config(
+            request.query.get("cwd") or str(Path.cwd()),
+            project=identity,
+        )
+    )
 
 
 async def put_project_config(request: web.Request) -> web.Response:
     body = await request.json()
     values = dict(body.get("values") or {})
+    identity = _config_identity(request, str(body.get("project_id") or ""))
     project_cwd = Path(str(body.get("cwd") or Path.cwd())).resolve()
     if values.get("default_shell_profile"):
         try:
@@ -2214,6 +2379,7 @@ async def put_project_config(request: web.Request) -> web.Response:
             str(project_cwd),
             values,
             str(body.get("revision") or "missing"),
+            project=identity,
         )
     except ValueError as exc:
         if "changed externally" in str(exc):
@@ -2319,12 +2485,25 @@ async def favorite_prompt(request: web.Request) -> web.Response:
     )
 
 
+def _registered_identity(project) -> ProjectIdentity:  # type: ignore[no-untyped-def]
+    """Identity for an explicitly registered Project.
+
+    Once a route has resolved an explicit Project, its canonical root is
+    authoritative. Letting a Project-resource helper re-run Git discovery on that
+    root silently retargets a Project registered inside a larger worktree to the
+    enclosing toplevel, bleeding notes, config, and observations across Projects.
+    """
+    return ProjectIdentity(project.id, project.name, project.root, "registered")
+
+
 async def get_project_note(request: web.Request) -> web.Response:
     project_id = request.match_info["project_id"]
     project = request.app["projects"].projects.get(project_id)
     if not project:
         raise ValueError("unknown project")
-    note = await read_note(project.root, "projects", project.id)
+    note = await read_note(
+        project.root, "projects", project.id, project=_registered_identity(project)
+    )
     note.update({"project_id": project.id, "project_name": project.name})
     return json_response(note)
 
@@ -2342,6 +2521,7 @@ async def put_project_note(request: web.Request) -> web.Response:
             project.id,
             str(body.get("markdown") or ""),
             str(body.get("revision") or "missing"),
+            project=_registered_identity(project),
         )
     except ValueError as exc:
         if "changed externally" in str(exc):
@@ -2366,7 +2546,7 @@ def _observations_project(request: web.Request):  # type: ignore[no-untyped-def]
 
 async def get_observations(request: web.Request) -> web.Response:
     project = _observations_project(request)
-    result = await read_observations(project.root)
+    result = await read_observations(project.root, project=_registered_identity(project))
     result.update({"project_id": project.id, "project_name": project.name})
     return json_response(result)
 
@@ -2374,7 +2554,14 @@ async def get_observations(request: web.Request) -> web.Response:
 async def post_observation(request: web.Request) -> web.Response:
     project = _observations_project(request)
     body = await request.json()
-    result = await append_observation(project.root, str(body.get("body") or ""))
+    try:
+        result = await append_observation(
+            project.root, str(body.get("body") or ""), project=_registered_identity(project)
+        )
+    except ObservationsUnreadableError as exc:
+        # Refusing beats "read as empty, then clobber": the file holds the user's
+        # own notes and the next append would be the thing that destroys them.
+        return json_response({"error": str(exc), "code": "observations_unreadable"}, 409)
     result.update({"project_id": project.id, "project_name": project.name})
     return json_response(result)
 
@@ -2387,14 +2574,107 @@ async def put_observations(request: web.Request) -> web.Response:
         raise ValueError("observations must be a list")
     try:
         result = await write_observations(
-            project.root, observations, str(body.get("revision") or "missing")
+            project.root,
+            observations,
+            str(body.get("revision") or "missing"),
+            project=_registered_identity(project),
         )
+    except ObservationsUnreadableError as exc:
+        return json_response({"error": str(exc), "code": "observations_unreadable"}, 409)
     except ValueError as exc:
         if "changed externally" in str(exc):
             return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
         raise
     result.update({"project_id": project.id, "project_name": project.name})
     return json_response(result)
+
+
+async def get_project_automations(request: web.Request) -> web.Response:
+    """The per-project control-plane opt-in state, with its dependency graph.
+
+    The registry ships with the response deliberately: a toggle surface has to
+    show *why* a consumer is unavailable ("dead-end memory needs Tier 0 and the
+    scan timeline"), and a flat checkbox list cannot. `implemented` marks ids
+    that are reserved but have no code behind them yet, so the UI never presents
+    a placeholder as ready to switch on.
+    """
+    project = _observations_project(request)
+    identity = _registered_identity(project)
+    config = await read_project_config(project.root, project=identity)
+    values = config["values"] if config["status"] in {"ready", "read-only"} else {}
+    requested = {
+        key: bool(value)
+        for key, value in (values.get("automations") or {}).items()
+        if key in AUTOMATION_REGISTRY
+    }
+    resolution = resolve_automation_config(requested)
+    return json_response(
+        {
+            "project_id": project.id,
+            "revision": config["revision"],
+            "status": config["status"],
+            "requested": requested,
+            "enabled": sorted(resolution.enabled),
+            "blocked": {key: list(value) for key, value in resolution.blocked.items()},
+            "automations": [
+                {
+                    "id": automation.id,
+                    "kind": automation.kind,
+                    "label": automation.label,
+                    "requires": list(automation.requires),
+                    "implemented": automation.implemented,
+                }
+                for automation in sorted(AUTOMATION_REGISTRY.values(), key=lambda a: a.id)
+            ],
+        }
+    )
+
+
+async def put_project_automations(request: web.Request) -> web.Response:
+    """Replace a project's opt-in table.
+
+    Writes through the ordinary project-config path, so the file stays the source
+    of truth and the revision check still guards a concurrent edit.
+    """
+    project = _observations_project(request)
+    identity = _registered_identity(project)
+    body = await request.json()
+    requested = body.get("automations")
+    if not isinstance(requested, dict):
+        raise ValueError("automations must be a table of boolean opt-ins")
+    unknown = sorted(set(requested) - set(AUTOMATION_REGISTRY))
+    if unknown:
+        raise ValueError(f"unknown automations: {', '.join(unknown)}")
+    unimplemented = sorted(
+        key
+        for key, value in requested.items()
+        if value and not AUTOMATION_REGISTRY[key].implemented
+    )
+    if unimplemented:
+        # Refusing beats a toggle that reads as on and does nothing.
+        return json_response(
+            {
+                "error": f"not implemented yet: {', '.join(unimplemented)}",
+                "code": "automation_not_implemented",
+            },
+            409,
+        )
+    current = await read_project_config(project.root, project=identity)
+    values = dict(current["values"]) if current["status"] != "malformed" else {}
+    values["automations"] = {key: bool(value) for key, value in requested.items() if value}
+    try:
+        await write_project_config(
+            project.root,
+            values,
+            str(body.get("revision") or current["revision"]),
+            project=identity,
+        )
+    except ValueError as exc:
+        if "changed externally" in str(exc):
+            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        raise
+    await request.app["events"].emit("project_configuration_changed", project_id=project.id)
+    return await get_project_automations(request)
 
 
 async def list_session_notes(request: web.Request) -> web.Response:
@@ -2458,14 +2738,18 @@ async def _session_note_owner(request: web.Request):  # type: ignore[no-untyped-
 
 async def get_session_note(request: web.Request) -> web.Response:
     project, note_id = await _session_note_owner(request)
-    note = await read_note(project.root, "sessions", note_id)
+    note = await read_note(
+        project.root, "sessions", note_id, project=_registered_identity(project)
+    )
     note.update({"project_id": project.id, "project_name": project.name})
     return json_response(note)
 
 
 async def initialize_session_note(request: web.Request) -> web.Response:
     project, note_id = await _session_note_owner(request)
-    note = await initialize_note(project.root, "sessions", note_id)
+    note = await initialize_note(
+        project.root, "sessions", note_id, project=_registered_identity(project)
+    )
     await request.app["events"].emit(
         "session_note_initialized", source="user", project_id=project.id, note_id=note_id
     )
@@ -2483,6 +2767,7 @@ async def put_session_note(request: web.Request) -> web.Response:
             note_id,
             str(body.get("markdown") or ""),
             str(body.get("revision") or "missing"),
+            project=_registered_identity(project),
         )
     except ValueError as exc:
         if "changed externally" in str(exc):
@@ -2949,6 +3234,28 @@ async def get_status_health(request: web.Request) -> web.Response:
     return json_response(fleet_status_health(request.app["sessions"].sessions.values()))
 
 
+async def get_background_health(request: web.Request) -> web.Response:
+    """Background-task diagnostic: which long-lived loops are alive and faulting.
+
+    Every loop is supervised (restart with capped backoff) and every event-bus
+    drop is attributed, so a dead poller or a starved consumer is visible here
+    rather than presenting as a feature that quietly stopped working.
+    """
+    tier0: Tier0Store = request.app["tier0"]
+    events: EventBus = request.app["events"]
+    consumers: DeterministicConsumerService = request.app["deterministic_consumers"]
+    return json_response(
+        {
+            **background.health(),
+            "event_bus": events.drop_stats(),
+            "tier0_capture": tier0.capture_stats(),
+            # A detector that stopped producing findings is indistinguishable from
+            # a quiet fleet unless the loop's own liveness is reported.
+            "deterministic_consumers": consumers.status(),
+        }
+    )
+
+
 async def patch_session(request: web.Request) -> web.Response:
     session = request.app["sessions"].resolve(request.match_info["sid"])
     body = await request.json()
@@ -3302,10 +3609,20 @@ def cleanup_expired_session_media(data_dir: Path, now: float) -> int:
         return 0
     removed = 0
     cutoff = now - SESSION_MEDIA_TTL_SECONDS
-    for directory in root.iterdir():
+    try:
+        directories = list(root.iterdir())
+    except OSError:
+        return 0
+    for directory in directories:
         if not directory.is_dir() or directory.is_symlink():
             continue
-        for path in directory.iterdir():
+        try:
+            # A session deleted mid-sweep used to end media cleanup for the
+            # daemon's lifetime, after which 10 MiB clipboard images accumulated.
+            entries = list(directory.iterdir())
+        except OSError:
+            continue
+        for path in entries:
             try:
                 if path.is_file() and not path.is_symlink() and path.stat().st_mtime < cutoff:
                     path.unlink()
@@ -3317,9 +3634,58 @@ def cleanup_expired_session_media(data_dir: Path, now: float) -> int:
     return removed
 
 
-async def _media_cleanup_loop(data_dir: Path) -> None:
+def cleanup_expired_preview_shots(roots: list[Path], now: float) -> int:
+    """Age out headless preview screenshots.
+
+    They are saved into the owning Project (data-dir fallback) so a local agent
+    can read them, which also means they accumulate inside the user's repository:
+    a UI-iteration session takes dozens of multi-hundred-KB PNGs a day and nothing
+    ever removed them.
+    """
+    removed = 0
+    cutoff = now - PREVIEW_SHOT_TTL_SECONDS
+    for root in roots:
+        directory = root / ".swe-mux" / "preview-shots" if root.name != "preview-shots" else root
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        try:
+            entries = list(directory.iterdir())
+        except OSError:
+            continue
+        for path in entries:
+            try:
+                if path.is_file() and not path.is_symlink() and path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                continue
+    return removed
+
+
+async def _media_cleanup_loop(data_dir: Path, projects: ProjectManager) -> None:
     while True:
-        await asyncio.to_thread(cleanup_expired_session_media, data_dir, time.time())
+        with background.iteration(MEDIA_CLEANUP_LOOP):
+            now = time.time()
+            await asyncio.to_thread(cleanup_expired_session_media, data_dir, now)
+            roots = [Path(project.root) for project in projects.projects.values()]
+            roots.append(data_dir / "preview-shots")
+            await asyncio.to_thread(cleanup_expired_preview_shots, roots, now)
+        await asyncio.sleep(60 * 60)
+
+
+async def _retention_loop(
+    automation_store: AutomationStore, tier0: Tier0Store, config: Config
+) -> None:
+    """Periodic retention for the stores that only pruned at startup.
+
+    Session-preserving reload makes weeks-long uptimes the norm, so a
+    startup-only prune means "bounded by age" holds only across restarts.
+    """
+    await asyncio.sleep(60)
+    while True:
+        with background.iteration(RETENTION_LOOP):
+            await automation_store.prune(config.automation_retention_days)
+            await tier0.prune()
         await asyncio.sleep(60 * 60)
 
 
@@ -3454,10 +3820,13 @@ async def _project_snapshot(request: web.Request, project) -> dict[str, Any]:  #
 
 async def create_project(request: web.Request) -> web.Response:
     body = await request.json()
+    if not isinstance(body.get("create_missing", False), bool):
+        raise ValueError({"create_missing": "must be a boolean"})
     project = await request.app["projects"].create(
         str(body.get("name") or Path(str(body.get("root") or "")).name or "New project"),
         str(body.get("root") or ""),
         group_id=str(body["group_id"]) if body.get("group_id") else None,
+        create_missing=bool(body.get("create_missing", False)),
     )
     await request.app["events"].emit(
         "project_created", source="user", project_id=project.id, root=project.root
@@ -3547,6 +3916,19 @@ async def trust_project_actions(request: web.Request) -> web.Response:
     return json_response(catalog.snapshot())
 
 
+async def _project_profile_id(request: web.Request, project) -> str:  # type: ignore[no-untyped-def]
+    """The shell profile a Project-owned command should be launched through."""
+    portable = await read_project_config(
+        project.root, project=ProjectIdentity(project.id, project.name, project.root, "registered")
+    )
+    values = portable["values"] if portable["status"] in {"ready", "read-only"} else {}
+    return str(
+        project.default_profile_id
+        or values.get("default_shell_profile")
+        or request.app["config"].default_shell_profile
+    )
+
+
 async def run_project_action(request: web.Request) -> web.Response:
     project = _action_project(request)
     body = await request.json()
@@ -3567,15 +3949,7 @@ async def run_project_action(request: web.Request) -> web.Response:
         )
     except KeyError as exc:
         raise ValueError(f"unknown Project Action: {action_id}") from exc
-    portable = await read_project_config(
-        project.root, project=ProjectIdentity(project.id, project.name, project.root, "registered")
-    )
-    values = portable["values"] if portable["status"] in {"ready", "read-only"} else {}
-    profile_id = (
-        project.default_profile_id
-        or values.get("default_shell_profile")
-        or request.app["config"].default_shell_profile
-    )
+    profile_id = await _project_profile_id(request, project)
     sessions: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     for batch in action.batches:
@@ -3618,6 +3992,55 @@ async def run_project_action(request: web.Request) -> web.Response:
         {"action": action.snapshot(), "sessions": sessions, "errors": errors},
         201 if not errors else 207,
     )
+
+
+async def run_project_init_scripts(request: web.Request) -> web.Response:
+    """Run the selected user-authored init scripts inside a Project.
+
+    Each script becomes one visible one-shot terminal at the Project root, started in
+    configured order. Start order is all that is promised: a script that must finish
+    before the next one begins belongs in the same script, using the shell's own `&&`
+    or `;`. Nothing here reads or trusts repository content, so no fingerprint approval
+    is involved (see project_init.py).
+    """
+    project = _action_project(request)
+    body = await request.json()
+    raw_ids = body.get("script_ids")
+    if not isinstance(raw_ids, list) or any(not isinstance(item, str) for item in raw_ids):
+        raise ValueError({"script_ids": "must be an array of init script ids"})
+    config: Config = request.app["config"]
+    chosen, unknown = select_init_scripts(config, [str(item) for item in raw_ids])
+    if unknown:
+        raise ValueError({"script_ids": f"unknown init scripts: {', '.join(unknown)}"})
+    profile_id = await _project_profile_id(request, project)
+    sessions: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for script in chosen:
+        step = init_script_step(script, root=project.root)
+        try:
+            session = await _spawn_from_body(
+                request.app,
+                action_spawn_body(
+                    step, project_id=project.id, config=config, profile_id=profile_id
+                ),
+            )
+        except Exception as exc:  # one failed launch must not strand the rest
+            errors.append({"script": script["id"], "error": str(exc)})
+            continue
+        # Same rationale as a Project Action step: the exact argv is retained, so the
+        # terminal rail can offer an in-place Relaunch.
+        session.record.relaunchable = True
+        session.publish_update()
+        sessions.append(session.record.snapshot())
+    await request.app["events"].emit(
+        "project_init_scripts_started",
+        source="user",
+        project_id=project.id,
+        script_ids=[script["id"] for script in chosen],
+        session_ids=[item["id"] for item in sessions],
+        failures=len(errors),
+    )
+    return json_response({"sessions": sessions, "errors": errors}, 201 if not errors else 207)
 
 
 async def list_project_groups(request: web.Request) -> web.Response:
@@ -3765,7 +4188,8 @@ async def ignore_project_resource(request: web.Request) -> web.Response:
             )
         return json_response({"ok": True, "scope": scope, "pattern": pattern, "added": added})
 
-    current = await read_project_config(project.root)
+    identity = _registered_identity(project)
+    current = await read_project_config(project.root, project=identity)
     if current["status"] == "malformed":
         raise ValueError("project config is malformed; fix it before adding an ignore")
     values = dict(current["values"])
@@ -3773,7 +4197,7 @@ async def ignore_project_resource(request: web.Request) -> web.Response:
     added = pattern not in patterns
     if added:
         values["ignore_patterns"] = [*patterns, pattern]
-        await write_project_config(project.root, values, current["revision"])
+        await write_project_config(project.root, values, current["revision"], project=identity)
         await request.app["events"].emit("project_configuration_changed", project_id=project.id)
     return json_response({"ok": True, "scope": scope, "pattern": pattern, "added": added})
 
@@ -3865,14 +4289,15 @@ async def history_transcript(request: web.Request) -> web.Response:
             {"error": "native transcript is unavailable", "code": "transcript_unavailable"},
             409,
         )
-    # Parse off the event loop and reuse the shared (path, mtime, backend,
+    # Parse off the event loop and reuse the shared (path, mtime, size, backend,
     # max_bytes) cache; large transcripts otherwise block the loop on every open.
-    messages = await asyncio.to_thread(
-        parse_transcript_cached, Path(transcript), str(row["backend"])
+    # The watermark comes back from the same call, so it can never claim to cover
+    # bytes this parse did not read.
+    messages, mtime_ns, size = await asyncio.to_thread(
+        parse_transcript_with_watermark, Path(transcript), str(row["backend"])
     )
-    stat = await asyncio.to_thread(Path(transcript).stat)
     await request.app["history"].replace_history_messages(
-        str(row["id"]), messages, mtime_ns=stat.st_mtime_ns, size=stat.st_size
+        str(row["id"]), messages, mtime_ns=mtime_ns, size=size
     )
     row = await request.app["history"].history_entry(str(row["id"])) or row
     matches = await request.app["history"].history_message_matches(
@@ -4790,6 +5215,7 @@ async def _proxy_websocket(request: web.Request, target: str, origin: str) -> we
         await downstream.prepare(request)
 
         async def relay(source: Any, destination: Any) -> None:
+            # unsupervised-loop-ok: lives for one preview websocket, not the daemon.
             while True:
                 message = await asyncio.wait_for(source.receive(), timeout=PREVIEW_WS_IDLE_SECONDS)
                 if message.type == WSMsgType.TEXT:
@@ -5006,6 +5432,12 @@ async def hook_ingress(request: web.Request) -> web.Response:
         raise web.HTTPForbidden(text="invalid hook secret")
     now = time.monotonic()
     windows: dict[str, deque[float]] = request.app["hook_ingress_windows"]
+    if len(windows) > HOOK_WINDOW_SWEEP_AT:
+        # One entry plus up to HOOK_RATE_LIMIT timestamps per session that ever
+        # received a hook, retained for the daemon's (weeks-long) lifetime.
+        live = request.app["sessions"].sessions
+        for stale in [sid for sid in windows if sid not in live]:
+            windows.pop(stale, None)
     window = windows.setdefault(session.record.id, deque())
     while window and now - window[0] >= HOOK_RATE_WINDOW_SECONDS:
         window.popleft()
@@ -5169,182 +5601,79 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     )
     session.attachments_seen += 1
     snapshot, revision, replay, subscriber = session.replay_and_subscribe()
-    request.app["events"].emit_background(
-        "terminal_attached",
-        session_id=session.record.id,
-        source="daemon",
-        connections=len(session.subscribers),
-    )
-    await ws.send_json({"type": "state", "snapshot": snapshot, "revision": revision})
-    pending_messages: list[Any] = []
-    attach_deadline = asyncio.get_running_loop().time() + PTY_ATTACH_READY_TIMEOUT_SECONDS
-    attach_closed = False
-    while True:
-        remaining = attach_deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            break
-        try:
-            initial_message = await asyncio.wait_for(ws.receive(), timeout=remaining)
-        except TimeoutError:
-            break
-        if initial_message.type == WSMsgType.TEXT:
-            initial_frame = json.loads(initial_message.data)
-            if initial_frame.get("type") in {"attach_ready", "resize"}:
-                session.pty.resize(
-                    int(initial_frame["cols"]), int(initial_frame["rows"])
-                )
-                break
-            pending_messages.append(initial_message)
-        elif initial_message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
-            attach_closed = True
-            break
-        else:
-            pending_messages.append(initial_message)
-
-    if attach_closed:
-        session.unsubscribe(subscriber)
+    # Everything after the subscribe runs inside the try, so no path can exit
+    # without unsubscribing. A mid-replay disconnect (a slow mobile link is the
+    # realistic case) used to orphan the subscriber, permanently marking the
+    # session "attended" — which suppresses unattended-attention automation and
+    # fleet absence reporting for that session's whole lifetime.
+    sender_task: asyncio.Task[None] | None = None
+    try:
         request.app["events"].emit_background(
-            "terminal_detached",
+            "terminal_attached",
             session_id=session.record.id,
             source="daemon",
             connections=len(session.subscribers),
         )
-        return ws
-
-    await ws.send_json(
-        {
-            "type": "replay_start",
-            "reason": "attach",
-            "allow_terminal_responses": allow_terminal_responses,
-        }
-    )
-    if replay:
-        await ws.send_bytes(replay)
-    await ws.send_json({"type": "replay_end", "reason": "attach"})
-
-    async def sender() -> None:
+        await ws.send_json({"type": "state", "snapshot": snapshot, "revision": revision})
+        pending_messages: list[Any] = []
+        attach_deadline = asyncio.get_running_loop().time() + PTY_ATTACH_READY_TIMEOUT_SECONDS
+        attach_closed = False
+        # unsupervised-loop-ok: bounded attach handshake for one websocket.
         while True:
-            message = await subscriber.queue.get()
-            if isinstance(message, bytes):
-                await ws.send_bytes(message)
-            elif message.get("type") == "resync":
-                (
-                    dropped_bytes,
-                    dropped_chunks,
-                    replay_bytes,
-                    current,
-                    current_revision,
-                    exit_frame,
-                ) = session.take_resync(subscriber)
-                await ws.send_json(
-                    {
-                        "type": "gap",
-                        "dropped_bytes": dropped_bytes,
-                        "dropped_chunks": dropped_chunks,
-                    }
-                )
-                await ws.send_json({"type": "replay_start", "reason": "resync"})
-                if replay_bytes:
-                    await ws.send_bytes(replay_bytes)
-                await ws.send_json({"type": "replay_end", "reason": "resync"})
-                await ws.send_json(
-                    {"type": "update", "snapshot": current, "revision": current_revision}
-                )
-                if exit_frame:
-                    await ws.send_json(exit_frame)
-                    return
+            remaining = attach_deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            try:
+                initial_message = await asyncio.wait_for(ws.receive(), timeout=remaining)
+            except TimeoutError:
+                break
+            if initial_message.type == WSMsgType.TEXT:
+                initial_frame = json.loads(initial_message.data)
+                if initial_frame.get("type") in {"attach_ready", "resize"}:
+                    session.pty.resize(int(initial_frame["cols"]), int(initial_frame["rows"]))
+                    break
+                pending_messages.append(initial_message)
+            elif initial_message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
+                attach_closed = True
+                break
             else:
-                await ws.send_json(message)
-                if message.get("type") == "exit":
-                    return
+                pending_messages.append(initial_message)
 
-    if snapshot["state"] in {"exited", "crashed"}:
+        if attach_closed:
+            return ws
+
         await ws.send_json(
             {
-                "type": "exit",
-                "snapshot": snapshot,
-                "revision": revision,
-                "reason": "already_ended",
+                "type": "replay_start",
+                "reason": "attach",
+                "allow_terminal_responses": allow_terminal_responses,
             }
         )
-        session.unsubscribe(subscriber)
-        return ws
-
-    async def handle_client_message(message: Any) -> None:
-        if message.type == WSMsgType.BINARY:
-            if session.input_owner == connection_id:
-                session.pty.write(message.data)
-                now = time.monotonic()
-                session.input_revision += 1
-                session.last_input_event_ts = now
-                if now - session.last_input_report_ts >= 2:
-                    session.last_input_report_ts = now
-                    request.app["events"].emit_background(
-                        "terminal_input",
-                        session_id=session.record.id,
-                        source="daemon",
-                        input_owner=True,
-                        bytes=len(message.data),
-                    )
-        elif message.type == WSMsgType.TEXT:
-            frame = json.loads(message.data)
-            if frame.get("type") == "claim_input":
-                session.input_owner = connection_id
-                await ws.send_json({"type": "input_owner", "active": True})
-            elif frame.get("type") == "input" and session.input_owner == connection_id:
-                data = str(frame.get("data", ""))
-                if _is_codex_default_color_response(session.record.backend, data):
-                    return
-                session.pty.write(data)
-                is_terminal_response = frame.get("kind") == "terminal_response"
-                now = time.monotonic()
-                if not is_terminal_response:
-                    session.input_revision += 1
-                    session.last_input_event_ts = now
-                if not is_terminal_response and now - session.last_input_report_ts >= 2:
-                    session.last_input_report_ts = now
-                    request.app["events"].emit_background(
-                        "terminal_input",
-                        session_id=session.record.id,
-                        source="daemon",
-                        input_owner=True,
-                        bytes=len(data.encode("utf-8")),
-                    )
-                if frame.get("broadcast") and not is_terminal_response:
-                    await deliver_broadcast(
-                        request.app["sessions"],
-                        data,
-                        request.app["events"],
-                        source_id=session.record.id,
-                    )
-            elif frame.get("type") == "terminal_state" and session.input_owner == connection_id:
-                mode = str(frame.get("mode") or "")
-                if mode not in {"normal", "alternate"}:
-                    raise ValueError("terminal mode must be normal or alternate")
-                changed = session.terminal_mode != mode
-                session.terminal_mode = mode
-                session.terminal_mode_updated_at = time.monotonic()
-                if changed:
-                    request.app["events"].emit_background(
-                        "terminal_mode_changed",
-                        session_id=session.record.id,
-                        source="browser",
-                        mode=mode,
-                    )
-            elif frame.get("type") in {"attach_ready", "resize"}:
-                session.pty.resize(int(frame["cols"]), int(frame["rows"]))
-
-    task = asyncio.create_task(sender())
-    try:
+        if replay:
+            await ws.send_bytes(replay)
+        await ws.send_json({"type": "replay_end", "reason": "attach"})
+        if snapshot["state"] in {"exited", "crashed"}:
+            await ws.send_json(
+                {
+                    "type": "exit",
+                    "snapshot": snapshot,
+                    "revision": revision,
+                    "reason": "already_ended",
+                }
+            )
+            return ws
+        sender_task = asyncio.create_task(_pty_sender(ws, session, subscriber))
         for pending_message in pending_messages:
-            await handle_client_message(pending_message)
+            await _handle_pty_client_message(request, ws, session, connection_id, pending_message)
         async for message in ws:
-            await handle_client_message(message)
+            await _handle_pty_client_message(request, ws, session, connection_id, message)
     finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        if sender_task is not None:
+            sender_task.cancel()
+            await asyncio.gather(sender_task, return_exceptions=True)
         if session.input_owner == connection_id:
             session.input_owner = None
+            session.input_owner_socket = None
         session.unsubscribe(subscriber)
         request.app["events"].emit_background(
             "terminal_detached",
@@ -5355,18 +5684,164 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+async def _pty_sender(
+    ws: web.WebSocketResponse, session: Session, subscriber: Any
+) -> None:
+    # unsupervised-loop-ok: lives for one PTY websocket, not the daemon.
+    while True:
+        message = await subscriber.queue.get()
+        if isinstance(message, bytes):
+            await ws.send_bytes(message)
+        elif message.get("type") == "resync":
+            (
+                dropped_bytes,
+                dropped_chunks,
+                replay_bytes,
+                current,
+                current_revision,
+                exit_frame,
+            ) = session.take_resync(subscriber)
+            await ws.send_json(
+                {
+                    "type": "gap",
+                    "dropped_bytes": dropped_bytes,
+                    "dropped_chunks": dropped_chunks,
+                }
+            )
+            await ws.send_json({"type": "replay_start", "reason": "resync"})
+            if replay_bytes:
+                await ws.send_bytes(replay_bytes)
+            await ws.send_json({"type": "replay_end", "reason": "resync"})
+            await ws.send_json(
+                {"type": "update", "snapshot": current, "revision": current_revision}
+            )
+            if exit_frame:
+                await ws.send_json(exit_frame)
+                return
+        else:
+            await ws.send_json(message)
+            if message.get("type") == "exit":
+                return
+
+
+async def _handle_pty_client_message(
+    request: web.Request,
+    ws: web.WebSocketResponse,
+    session: Session,
+    connection_id: str,
+    message: Any,
+) -> None:
+    if message.type == WSMsgType.BINARY:
+        if session.input_owner == connection_id:
+            session.pty.write(message.data)
+            now = time.monotonic()
+            session.input_revision += 1
+            session.last_input_event_ts = now
+            if now - session.last_input_report_ts >= 2:
+                session.last_input_report_ts = now
+                request.app["events"].emit_background(
+                    "terminal_input",
+                    session_id=session.record.id,
+                    source="daemon",
+                    input_owner=True,
+                    bytes=len(message.data),
+                )
+    elif message.type == WSMsgType.TEXT:
+        frame = json.loads(message.data)
+        if frame.get("type") == "claim_input":
+            displaced = session.input_owner_socket
+            previous = session.input_owner
+            session.input_owner = connection_id
+            session.input_owner_socket = ws
+            await ws.send_json({"type": "input_owner", "active": True})
+            if displaced is not None and previous != connection_id:
+                # Losing ownership used to be silent, so a desktop pane that still
+                # had DOM focus kept typing into a session the phone had claimed
+                # and every keystroke was dropped with no feedback — the terminal
+                # just looked hung.
+                with suppress(ConnectionResetError, RuntimeError, ValueError):
+                    await displaced.send_json(
+                        {"type": "input_owner", "active": False, "reason": "claimed_elsewhere"}
+                    )
+        elif frame.get("type") == "input" and session.input_owner == connection_id:
+            data = str(frame.get("data", ""))
+            if _is_codex_default_color_response(session.record.backend, data):
+                return
+            session.pty.write(data)
+            is_terminal_response = frame.get("kind") == "terminal_response"
+            now = time.monotonic()
+            if not is_terminal_response:
+                session.input_revision += 1
+                session.last_input_event_ts = now
+            if not is_terminal_response and now - session.last_input_report_ts >= 2:
+                session.last_input_report_ts = now
+                request.app["events"].emit_background(
+                    "terminal_input",
+                    session_id=session.record.id,
+                    source="daemon",
+                    input_owner=True,
+                    bytes=len(data.encode("utf-8")),
+                )
+            if frame.get("broadcast") and not is_terminal_response:
+                await deliver_broadcast(
+                    request.app["sessions"],
+                    data,
+                    request.app["events"],
+                    source_id=session.record.id,
+                )
+        elif frame.get("type") == "terminal_state" and session.input_owner == connection_id:
+            mode = str(frame.get("mode") or "")
+            if mode not in {"normal", "alternate"}:
+                raise ValueError("terminal mode must be normal or alternate")
+            changed = session.terminal_mode != mode
+            session.terminal_mode = mode
+            session.terminal_mode_updated_at = time.monotonic()
+            if changed:
+                request.app["events"].emit_background(
+                    "terminal_mode_changed",
+                    session_id=session.record.id,
+                    source="browser",
+                    mode=mode,
+                )
+        elif frame.get("type") in {"attach_ready", "resize"}:
+            session.pty.resize(int(frame["cols"]), int(frame["rows"]))
+
+
 async def events_ws(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
     bus: EventBus = request.app["events"]
-    queue = bus.subscribe()
-    last_sequence = int(request.query.get("after_seq", 0))
+    session_filter = request.query.get("session")
+    # Parsed before subscribing: an int() failure between subscribe and the try
+    # leaked a dead 1024-slot subscriber that kept paying per-event fanout cost
+    # until the daemon restarted.
+    raw_cursor = request.query.get("after_seq", "")
     try:
-        catch_up = await request.app["history"].events(
-            session_id=request.query.get("session"),
-            limit=2000,
-            after_seq=last_sequence,
-        )
+        last_sequence = int(raw_cursor) if raw_cursor else 0
+    except ValueError:
+        raise web.HTTPBadRequest(text="after_seq must be an integer") from None
+    queue = bus.subscribe(name="events-ws")
+    try:
+        if last_sequence > 0:
+            # Resume: everything the client missed, oldest first.
+            catch_up = await request.app["history"].events(
+                session_id=session_filter,
+                limit=EVENTS_CATCHUP_LIMIT,
+                after_seq=last_sequence,
+            )
+            truncated = len(catch_up) >= EVENTS_CATCHUP_LIMIT
+        else:
+            # Cold open: the NEWEST retained events. Serving the oldest is what
+            # the "after_seq absent" default used to do, which on any established
+            # install replayed days-old history and delivered none of the events
+            # the client actually missed.
+            catch_up, truncated = await request.app["history"].recent_events(
+                session_id=session_filter, limit=EVENTS_CATCHUP_LIMIT
+            )
+        if truncated:
+            # More was missed than the replay carries: the client must full-refresh
+            # rather than assume the gap is covered.
+            await ws.send_json({"type": "events_gap", "reason": "catchup_truncated"})
         for event in catch_up:
             # Catch-up events are a historical replay for state reconstruction, not
             # live activity. Mark them so the browser suppresses live-only side effects
@@ -5375,12 +5850,37 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
             event["replay"] = True
             await ws.send_json(event)
             last_sequence = max(last_sequence, int(event["seq"]))
-        while True:
-            event = await queue.get()
-            if event.seq <= last_sequence:
-                continue
-            await ws.send_json(event.snapshot())
-            last_sequence = event.seq
+
+        async def watch_client() -> None:
+            """Read the socket purely to observe the client going away.
+
+            `/events` is server-to-client only, but a handler that never reads
+            cannot see a close frame or process heartbeat pongs — so a suspended
+            tab's socket lingers, holding a 1024-slot queue and paying per-event
+            fanout, until some later send happens to fail.
+            """
+            # unsupervised-loop-ok: lives for one /events websocket, not the daemon.
+            async for _ in ws:
+                pass
+
+        reader = asyncio.create_task(watch_client())
+        try:
+            while True:
+                getter = asyncio.create_task(queue.get())
+                done, _pending = await asyncio.wait(
+                    (reader, getter), return_when=asyncio.FIRST_COMPLETED
+                )
+                if reader in done:
+                    getter.cancel()
+                    break
+                event = getter.result()
+                if event.seq <= last_sequence:
+                    continue
+                await ws.send_json(event.snapshot())
+                last_sequence = event.seq
+        finally:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
     except (asyncio.CancelledError, ConnectionResetError):
         pass
     finally:

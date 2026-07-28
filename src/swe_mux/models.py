@@ -33,12 +33,23 @@ class SessionRecord:
     shell_profile_id: str | None = None
     auto_named: bool = True
     pid: int = -1
+    # OS creation time of the root process, captured at spawn. A PID alone is not
+    # an identity on Windows — it is recycled aggressively — and exited sessions
+    # are retained with their pid intact, so evidence collection pairs the two.
+    root_started_at: float | None = None
     process_job_assignment: str = "unknown"
     created_at: float = field(default_factory=time.time)
     state: SessionState = "starting"
     state_detail: str | None = None
     # Set whenever state == "awaiting"; cleared by every transition elsewhere.
     awaiting_reason: str | None = None
+    # The idle-axis sibling of `awaiting_reason`. `waiting_on_background` means
+    # the turn genuinely ended (the composer accepts input, delivery is safe) but
+    # the agent has background work running and will resume itself. Rendering that
+    # as a plain "ready · turn complete" is true and misleading at the same time:
+    # it invites the user to treat the session as finished. Cleared by every
+    # transition off `idle`.
+    idle_reason: str | None = None
     tokens_in: int = 0
     tokens_out: int = 0
     context_window: int = 0

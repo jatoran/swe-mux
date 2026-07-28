@@ -8,6 +8,7 @@ from pathlib import Path
 
 from watchfiles import Change, awatch
 
+from .background_tasks import background
 from .config import Config
 from .event_bus import EventBus
 from .project_files import (
@@ -17,8 +18,17 @@ from .project_files import (
 )
 from .projects import ProjectManager
 
+PROJECT_WATCH_LOOP = "project-file-watches"
 WATCH_LEASE_SECONDS = 45.0
 MAX_WATCHED_DIRECTORIES = 64
+# Per-call caps bound one client; these bound the daemon. Every browser tab (and
+# any client minting fresh watch_ids in a retry loop) adds a lease, and each
+# distinct watched directory costs an OS watch handle and a Rust notify thread.
+MAX_WATCH_LEASES = 16
+MAX_WATCHED_KEYS = 256
+# A watcher whose directory was deleted fails immediately; without a cooldown the
+# reconcile pass re-creates it every second forever.
+WATCH_FAILURE_COOLDOWN_SECONDS = 30.0
 
 
 @dataclass(slots=True)
@@ -42,15 +52,16 @@ class ProjectFileWatcher:
         self._watchers: dict[
             tuple[str, str, str, tuple[str, ...]], asyncio.Task[None]
         ] = {}
+        self._failed_until: dict[tuple[str, str, str, tuple[str, ...]], float] = {}
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
         if self._task is None:
-            self._task = asyncio.create_task(self._run(), name="project-file-watches")
+            self._task = background.start(PROJECT_WATCH_LOOP, self._run)
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
+        await background.stop(PROJECT_WATCH_LOOP)
+        self._task = None
         for task in self._watchers.values():
             task.cancel()
         await asyncio.gather(
@@ -76,7 +87,10 @@ class ProjectFileWatcher:
         for value in paths:
             target = project_path(project.root, value)
             if not target.is_dir():
-                raise ValueError(f"watch path is not a directory: {value}")
+                # Skipped, not rejected: a renewal that happens to include a
+                # folder the user just deleted would otherwise fail as a whole
+                # and silently drop that client's entire watch set.
+                continue
             relative = (
                 target.relative_to(Path(project.root).resolve()).as_posix()
                 if target != Path(project.root).resolve()
@@ -93,6 +107,13 @@ class ProjectFileWatcher:
             time.monotonic() + WATCH_LEASE_SECONDS,
         )
         self.leases[(project_id, identity)] = lease
+        # Oldest-expiring first, so a renewing client keeps its lease and an
+        # abandoned one is what gets dropped.
+        while len(self.leases) > MAX_WATCH_LEASES:
+            oldest = min(self.leases.values(), key=lambda item: item.expires_at)
+            if (oldest.project_id, oldest.watch_id) == (project_id, identity):
+                break
+            self.leases.pop((oldest.project_id, oldest.watch_id), None)
         return lease
 
     def remove(self, project_id: str, watch_id: str) -> None:
@@ -100,33 +121,49 @@ class ProjectFileWatcher:
 
     async def _run(self) -> None:
         while True:
-            now = time.monotonic()
-            self.leases = {
-                key: lease for key, lease in self.leases.items() if lease.expires_at > now
-            }
-            desired: set[tuple[str, str, str, tuple[str, ...]]] = set()
-            for lease in self.leases.values():
-                project = self.projects.projects.get(lease.project_id)
-                if project is None:
-                    continue
-                patterns = tuple(
-                    effective_project_ignores(
-                        project.root, self.config.project_ignore_patterns
-                    )
-                )
-                desired.update(
-                    (lease.project_id, project.root, path, patterns) for path in lease.paths
-                )
-            for key, task in tuple(self._watchers.items()):
-                if key not in desired or task.done():
-                    if not task.done():
-                        task.cancel()
-                    self._watchers.pop(key, None)
-            for key in desired - self._watchers.keys():
-                self._watchers[key] = asyncio.create_task(
-                    self._watch_directory(*key), name=f"project-watch:{key[0]}:{key[2]}"
-                )
+            with background.iteration(PROJECT_WATCH_LOOP):
+                self._reconcile_watchers()
             await asyncio.sleep(1)
+
+    def _reconcile_watchers(self) -> None:
+        now = time.monotonic()
+        self.leases = {
+            key: lease for key, lease in self.leases.items() if lease.expires_at > now
+        }
+        desired: set[tuple[str, str, str, tuple[str, ...]]] = set()
+        for lease in self.leases.values():
+            project = self.projects.projects.get(lease.project_id)
+            if project is None:
+                continue
+            patterns = tuple(
+                effective_project_ignores(
+                    project.root, self.config.project_ignore_patterns
+                )
+            )
+            desired.update(
+                (lease.project_id, project.root, path, patterns) for path in lease.paths
+            )
+        for key, task in tuple(self._watchers.items()):
+            if key not in desired or task.done():
+                if task.done() and key in desired:
+                    # It ended on its own — the directory is gone or unwatchable.
+                    # Respawning it every tick is a steady churn of failed Rust
+                    # watcher startups that nothing ever reports.
+                    self._failed_until[key] = now + WATCH_FAILURE_COOLDOWN_SECONDS
+                if not task.done():
+                    task.cancel()
+                self._watchers.pop(key, None)
+        self._failed_until = {
+            key: until for key, until in self._failed_until.items() if until > now
+        }
+        for key in sorted(desired - self._watchers.keys()):
+            if len(self._watchers) >= MAX_WATCHED_KEYS:
+                break
+            if key in self._failed_until:
+                continue
+            self._watchers[key] = asyncio.create_task(
+                self._watch_directory(*key), name=f"project-watch:{key[0]}:{key[2]}"
+            )
 
     async def _watch_directory(
         self,

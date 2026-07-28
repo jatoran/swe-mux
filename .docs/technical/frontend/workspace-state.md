@@ -4,7 +4,7 @@
 
 | State | Authority | Lifetime |
 |---|---|---|
-| split tree, pane tab order, pane active tab | Project layout v6 in daemon/SQLite | durable, multi-client |
+| split tree, pane tab order, pane active tab | Project layout v7 in daemon/SQLite | durable, multi-client |
 | latest optimistic layout | `layoutValues.current[project_id]` | browser session |
 | rendered layout | `layoutMap[project_id]` | component state |
 | layout revision/write chain | refs keyed by Project | browser session |
@@ -17,7 +17,7 @@
 | terminal touch selection | xterm buffer selection + component-local action state | one selection |
 | Project Action catalog/trust prompt | `ProjectRunMenu` fetched snapshot | one open menu |
 | Preview registration and actual listener owner | daemon `PreviewRegistry` | daemon lifetime |
-| open/active Preview tabs | Project layout v6 | durable, multi-client |
+| open/active Preview tabs | Project layout v7 | durable, multi-client |
 
 ## Optimistic layout writes
 

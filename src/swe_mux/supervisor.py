@@ -130,6 +130,10 @@ class SupervisedSession:
     alive: bool = True
     exit_code: int | None = None
     fanout_task: asyncio.Task[None] | None = None
+    # The reader stopped while the root process was still running. The session
+    # keeps its process tree (and its kill-on-close job) but produces no further
+    # output; an implicit remove must not reap it as if it had exited.
+    output_ended_while_alive: bool = False
 
 
 @dataclass(eq=False)
@@ -503,7 +507,18 @@ class SupervisorServer:
             if entry.fanout_task and not entry.fanout_task.done():
                 entry.fanout_task.cancel()
                 await asyncio.gather(entry.fanout_task, return_exceptions=True)
-            if entry.alive:
+            # The release branch assumes the process is already gone: it suppresses
+            # the "cannot release a live pseudoconsole" error and then closes a
+            # kill-on-close job, which reaps the tree abruptly. Re-check liveness so
+            # a stale `alive=False` cannot take that path on a running agent.
+            still_running = entry.alive or await asyncio.to_thread(entry.host.isalive)
+            if still_running:
+                if not entry.alive:
+                    log.warning(
+                        "session %s: removal requested for a session reported dead "
+                        "but still running; stopping it deterministically",
+                        sid,
+                    )
                 await asyncio.to_thread(entry.host.stop, graceful=False)
             else:
                 with contextlib.suppress(RuntimeError):
@@ -518,6 +533,20 @@ class SupervisorServer:
         while True:
             chunk = await entry.host.output_queue.get()
             if chunk == b"":
+                # The sentinel means "the reader stopped", which is not by itself
+                # proof the child died — a reader that aborts (loop teardown, an
+                # I/O fault) injects the same byte string. Declaring an exit here
+                # without checking is what let a backpressured-but-live session be
+                # reported as exited, and the removal path then closes its
+                # kill-on-close job. Verify liveness before believing the sentinel.
+                if await asyncio.to_thread(entry.host.isalive):
+                    log.warning(
+                        "session %s: output ended while the process is still alive; "
+                        "keeping the session and its job open",
+                        entry.sid,
+                    )
+                    entry.output_ended_while_alive = True
+                    return
                 entry.alive = False
                 entry.exit_code = entry.host.exit_status()
                 frame = encode_frame(

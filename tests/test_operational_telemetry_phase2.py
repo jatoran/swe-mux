@@ -25,6 +25,8 @@ from swe_mux.operational_telemetry import (
 from swe_mux.processes import OwnedProcess, ProcessInspector
 from swe_mux.provider_accounts import ProviderAccountManager
 from swe_mux.server import create_app
+from swe_mux.sqlite_store import read_schema_version
+from swe_mux.tier0_store import TIER0_SCHEMA_VERSION, Tier0Store
 
 TELEMETRY_FIXTURES = Path(__file__).parent / "fixtures" / "telemetry" / "v1"
 
@@ -399,7 +401,32 @@ def test_legacy_quota_reset_schema_adds_review_columns(phase2_path: Path) -> Non
     store = OperationalTelemetryStore(phase2_path)
     columns = {row["name"] for row in store._db.execute("PRAGMA table_info(quota_reset_events)")}
     assert {"review_status", "reviewed_at"} <= columns
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 3
+    # Per-store row, not the per-file PRAGMA: several stores share mux.db and
+    # each one stamping user_version made the last connect overwrite the rest.
+    assert read_schema_version(store._db, "telemetry") == 3
+    store.close()
+
+
+def test_schema_versions_are_per_store_not_per_file(phase2_path: Path) -> None:
+    telemetry = OperationalTelemetryStore(phase2_path)
+    tier0 = Tier0Store(phase2_path)
+    assert read_schema_version(telemetry._db, "telemetry") == 3
+    assert read_schema_version(telemetry._db, "tier0") == TIER0_SCHEMA_VERSION
+    assert read_schema_version(telemetry._db, "telemetry") != read_schema_version(
+        telemetry._db, "tier0"
+    )
+    tier0.close()
+    telemetry.close()
+
+
+def test_corrupt_database_is_quarantined_instead_of_crashing_startup(tmp_path: Path) -> None:
+    path = tmp_path / "mux.db"
+    path.write_bytes(b"SQLite format 3\x00" + b"\x00" * 512)
+    store = OperationalTelemetryStore(path)
+    # The daemon comes up on a rebuilt schema; the unusable file is kept beside it
+    # rather than deleted, because it is evidence.
+    assert store._db.execute("SELECT COUNT(*) FROM quota_samples").fetchone()[0] == 0
+    assert list(tmp_path.glob("mux.db.corrupt-*"))
     store.close()
 
 

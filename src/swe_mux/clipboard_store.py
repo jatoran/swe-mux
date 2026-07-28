@@ -258,8 +258,25 @@ class ClipboardStore:
             ).fetchall()
         )
         self._entries = [_entry_from_row(row) for row in rows]
+        # Rows outside the adopted window are unreachable by every later path —
+        # not shown in the picker, not expired by retention, not removed by
+        # "clear history" — so they would keep verbatim copied text on disk
+        # forever, against the count/time bound this store promises. Lowering the
+        # limit is the ordinary way to create them.
+        adopted = [entry.id for entry in self._entries]
+        await self._run(lambda: self._delete_rows_outside(adopted))
         await self.prune()
         return len(self._entries)
+
+    def _delete_rows_outside(self, keep: list[str]) -> None:
+        if keep:
+            placeholders = ",".join("?" for _ in keep)
+            self._db.execute(
+                f"DELETE FROM clipboard_entries WHERE id NOT IN ({placeholders})", keep
+            )
+        else:
+            self._db.execute("DELETE FROM clipboard_entries")
+        self._db.commit()
 
     def apply_config(self, config: Any) -> None:
         """Adopt changed ``clipboard_history_*`` settings without a restart."""
