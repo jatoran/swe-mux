@@ -224,7 +224,7 @@ def test_files_is_a_drawer_navigator_rather_than_a_workspace_tab() -> None:
 
 
 def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
-    """Six labelled tabs overflowed a phone drawer; six icons do not.
+    """Six labelled tabs overflowed a phone drawer; icons do not.
 
     `drawerTabs.ts` stays JSX-free so it can be unit-tested under plain type-stripping, which
     is why the icon map lives in `railIcons.tsx` and why this cross-file invariant — every tab
@@ -236,8 +236,13 @@ def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
     app = source("App.tsx")
     css = source("style.css")
 
+    # Bumped deliberately, not incidentally. Six *labelled* tabs measured ~444px, which
+    # overflowed a phone drawer (`min(430px, 92vw)`) into a scrollbar-less scroller that
+    # silently parked the last two off-screen; icon-only tabs are ~39px each, so seven fit
+    # with room to spare. Adding a tab means re-checking that on a phone, which is what this
+    # assertion is for — it is a prompt, not a cap.
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
-    assert len(ids) == 6, ids
+    assert len(ids) == 7, ids
     icon_map = icons[icons.index("DRAWER_TAB_ICONS") :]
     for tab_id in ids:
         assert re.search(rf"^  {tab_id}: \w+Icon,$", icon_map, re.MULTILINE), tab_id
