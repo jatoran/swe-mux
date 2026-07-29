@@ -4,7 +4,7 @@
 // paste, and branch. Copy resume deliberately keeps its text label — "copy" alone cannot
 // distinguish it from Copy reply, and the two sit next to each other on the rail.
 //
-// The drawer's six tabs are all icons, and one set serves both places they appear (the strip
+// The drawer's tabs are all icons, and one set serves both places they appear (the strip
 // inside the drawer and the always-visible desktop rail), so the two agree by construction
 // rather than by two lists being kept in sync.
 //
@@ -85,6 +85,21 @@ export const NotesIcon = () => <svg {...stroke}>
   <line x1="9" y1="17" x2="13" y2="17" />
 </svg>
 
+/** A commit line with a working tree hanging off it: a branch you are sitting in.
+ *
+ * Deliberately close kin to `BranchIcon` above — this tab is about branches, and the fork is
+ * the one mark that says so. They never appear together: that one is a terminal action rail
+ * button, this one a drawer tab. The extra node on the fork is what distinguishes them at
+ * 16px, and it is the right difference to draw: the rail forks a conversation, this tab
+ * shows the trees a fork already produced. */
+export const GitIcon = () => <svg {...stroke}>
+  <circle cx="6" cy="4" r="2" />
+  <circle cx="6" cy="20" r="2" />
+  <circle cx="18" cy="12" r="2" />
+  <line x1="6" y1="6" x2="6" y2="18" />
+  <path d="M16 12H12a6 6 0 0 1-6-6" />
+</svg>
+
 /** A bell. The one concept here with a mark everyone already knows. */
 export const AlertsIcon = () => <svg {...stroke}>
   <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
@@ -98,5 +113,6 @@ export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   prompts: PromptsIcon,
   files: FilesIcon,
   notes: NotesIcon,
+  git: GitIcon,
   notifications: AlertsIcon,
 }

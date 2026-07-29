@@ -3,6 +3,7 @@ import { ClipboardTab } from './ClipboardPanel'
 import { CommandsTab } from './CommandsTab'
 import { PromptsTab } from './PromptsTab'
 import { NotesTab } from './NotesTab'
+import { GitTab } from './GitTab'
 import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
 import { drawerTab, nextDrawerTab, type DrawerTab, type DrawerTabId } from './drawerTabs'
@@ -108,7 +109,9 @@ export function UtilityDrawer(props: Props) {
               onOpenSessionNote={props.onOpenSessionNote}
               onDone={onDone}
             />
-            : <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} />
+            : tab === 'git'
+              ? <GitTab project={project} sessions={props.sessions} />
+              : <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} />
 
   return <>
     {mobile && <button class="utility-drawer-scrim" aria-label="Close panel" onClick={onClose} />}
