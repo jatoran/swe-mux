@@ -499,7 +499,15 @@ class HistoryIndex:
         await self._run(op)
 
     async def update_session_metadata(self, session: SessionRecord) -> None:
-        """Persist mutable metadata from a live session as one atomic update."""
+        """Persist mutable metadata from a live session as one atomic update.
+
+        Keyed to the *current* agent run's row, not the pane's first one: history
+        is one row per conversation, and after a rollover the row keyed by the
+        mux session id is a retired conversation. A rename made while looking at
+        the current conversation must land on the current conversation — renaming
+        the first one instead is how a custom title ended up resuming a
+        conversation the user never named.
+        """
 
         def op() -> None:
             self._db.execute(
@@ -514,7 +522,7 @@ class HistoryIndex:
                     int(session.pinned_attention),
                     session.shell_profile_id,
                     int(session.auto_named),
-                    session.id,
+                    session.agent_run_id or session.id,
                 ),
             )
             self._db.commit()
@@ -522,12 +530,17 @@ class HistoryIndex:
         await self._run(op)
 
     async def session_ended(self, session: SessionRecord, reason: str) -> None:
+        # Same keying as update_session_metadata: the exit closes the pane's
+        # *current* conversation row. Earlier rows were already closed by
+        # agent_run_ended when their conversations rolled.
+        row_id = session.agent_run_id or session.id
+
         def op() -> None:
             row = self._db.execute(
-                "SELECT agent_visible FROM history WHERE id=?", (session.id,)
+                "SELECT agent_visible FROM history WHERE id=?", (row_id,)
             ).fetchone()
             if row and not row["agent_visible"]:
-                self._db.execute("DELETE FROM history WHERE id=?", (session.id,))
+                self._db.execute("DELETE FROM history WHERE id=?", (row_id,))
                 self._db.commit()
                 return
             self._db.execute(
@@ -556,7 +569,7 @@ class HistoryIndex:
                     session.model,
                     session.measurement_source,
                     int(session.auto_named),
-                    session.id,
+                    row_id,
                 ),
             )
             self._db.commit()
