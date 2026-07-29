@@ -368,7 +368,7 @@ def test_an_unpromoted_shell_launching_an_agent_still_blocks_everything(
 # ------------------------------------------------------------- failing closed
 
 
-def stale_manager(tmp_path: Path, *, last_hook_ts: float) -> tuple[Any, Any, Path]:
+def stale_manager(tmp_path: Path, *, last_turn_hook_ts: float) -> tuple[Any, Any, Path]:
     transcript = tmp_path / "dead.jsonl"
     transcript.write_text("{}\n", encoding="utf-8")
     dead = time.time() - 600
@@ -381,20 +381,23 @@ def stale_manager(tmp_path: Path, *, last_hook_ts: float) -> tuple[Any, Any, Pat
         Any,
         SimpleNamespace(
             record=record,
-            last_hook_ts=last_hook_ts,
+            # Always recent: an idle session gets `Notification:idle_prompt` a minute
+            # after every turn, so this being fresh must not by itself mean anything.
+            last_hook_ts=time.time(),
+            last_turn_hook_ts=last_turn_hook_ts,
             publish_update=lambda: None,
         ),
     )
     return manager, session, transcript
 
 
-async def test_a_hook_after_a_dead_transcript_marks_observation_stale(
+async def test_a_turn_hook_after_a_dead_transcript_marks_observation_stale(
     tmp_path: Path,
 ) -> None:
     # Codex has no session-start hook, so a `/new` behind an unresolvable sibling
-    # has no positive signal at all. A turn that produced hook activity but no
-    # record in the followed file is the proof that we are watching the wrong one.
-    manager, session, transcript = stale_manager(tmp_path, last_hook_ts=time.time())
+    # has no positive signal at all. A turn that must have written records, followed
+    # by a file that never changed, is the proof we are watching the wrong one.
+    manager, session, transcript = stale_manager(tmp_path, last_turn_hook_ts=time.time())
 
     await SessionManager._note_transcript_staleness(manager, session, transcript)
 
@@ -402,9 +405,37 @@ async def test_a_hook_after_a_dead_transcript_marks_observation_stale(
     assert manager.events.emit.await_args.args[0] == "observation_stale"
 
 
+async def test_an_idle_prompt_notification_never_marks_a_session_stale(
+    tmp_path: Path,
+) -> None:
+    # Regression, live 2026-07-29: keying staleness off *any* hook flagged 8 healthy
+    # idle agents across 4 sessions and zero real ones. `Notification:idle_prompt`
+    # fires ~60 s after a turn ends to say the agent is waiting — it is guaranteed to
+    # arrive with no transcript activity, which is exactly the shape being tested for.
+    manager, session, transcript = stale_manager(tmp_path, last_turn_hook_ts=0.0)
+    session.last_hook_ts = time.time()
+
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    assert session.record.observation_stale_since is None
+    manager.events.emit.assert_not_awaited()
+
+
+def test_only_transcript_backed_hooks_date_the_staleness_evidence() -> None:
+    from swe_mux.server import _TRANSCRIPT_BACKED_HOOK_EVENTS
+
+    for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"):
+        assert event in _TRANSCRIPT_BACKED_HOOK_EVENTS
+    # Lifecycle and waiting hooks carry no transcript records; subagent records go to
+    # sidechain files rather than the root transcript being followed.
+    for event in ("Notification", "SessionStart", "SessionEnd", "SubagentStop"):
+        assert event not in _TRANSCRIPT_BACKED_HOOK_EVENTS
+
+
 async def test_a_merely_idle_session_is_not_stale(tmp_path: Path) -> None:
     # Silence on both sides is an idle agent, not a replaced conversation.
-    manager, session, transcript = stale_manager(tmp_path, last_hook_ts=0.0)
+    manager, session, transcript = stale_manager(tmp_path, last_turn_hook_ts=0.0)
+    session.last_hook_ts = 0.0
 
     await SessionManager._note_transcript_staleness(manager, session, transcript)
 
@@ -413,7 +444,7 @@ async def test_a_merely_idle_session_is_not_stale(tmp_path: Path) -> None:
 
 
 async def test_staleness_is_announced_once(tmp_path: Path) -> None:
-    manager, session, transcript = stale_manager(tmp_path, last_hook_ts=time.time())
+    manager, session, transcript = stale_manager(tmp_path, last_turn_hook_ts=time.time())
 
     await SessionManager._note_transcript_staleness(manager, session, transcript)
     first = session.record.observation_stale_since

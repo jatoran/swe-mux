@@ -102,13 +102,23 @@
   actively written and is not owned by another live session, observation retargets to it and
   re-enters historical catch-up as part of that rollover.
 - When the conversation cannot be followed, observation **fails closed** rather than reporting a
-  retired conversation as live. A native hook that arrives after the followed transcript has
-  been dead for `TRANSCRIPT_STALE_SECONDS` proves the CLI ran a turn that landed nowhere we can
-  see, so `observation_stale_since` is set: the transcript loses its authority over hooks (state
-  keeps moving), delivery hard-blocks on `transcript_stale`, and the session is marked in the
-  UI and the state log. It is cleared by the next record read on any followed transcript, or by
-  a rollover. Silence alone is never the trigger — an idle agent is also quiet — and PTY bytes
-  are never the evidence, because a cleared screen is presentation, not identity.
+  retired conversation as live. The evidence is a hook whose event *necessarily wrote root
+  transcript records* — a prompt submitted, a tool run, a turn stopped
+  (`_TRANSCRIPT_BACKED_HOOK_EVENTS`) — arriving after the followed transcript has been dead for
+  `TRANSCRIPT_STALE_SECONDS`: the CLI ran a turn that landed nowhere we can see. Then
+  `observation_stale_since` is set, the transcript loses its authority over hooks (state keeps
+  moving), delivery hard-blocks on `transcript_stale`, observers refuse to read it, and the
+  session is marked in the UI and the state log. Cleared by the next record read on any followed
+  transcript, or by a rollover.
+- Which hooks count is the whole correctness of that rule, and "any hook" is wrong.
+  `Notification:idle_prompt` fires roughly a minute *after* a turn ends to report that the agent
+  is waiting, so it is guaranteed to arrive with no accompanying transcript activity — the exact
+  shape being tested for. Keying on it marked every healthy idle agent in the fleet stale 90 s
+  after its last turn (8 false positives across 4 sessions on the first live pass, zero true
+  ones). Lifecycle hooks and the subagent hooks are excluded for the same reason: `SessionStart`
+  carries no turn content, and sidechain records go to their own files, not the root transcript.
+  Silence alone is never the trigger — an idle agent is also quiet — and PTY bytes are never the
+  evidence, because a cleared screen is presentation, not identity.
 - Initial observation and fallback detection apply the same live ownership rule: provider/native
   pairs and normalized transcript paths claimed by another live session are ineligible. Multiple
   unclaimed candidates remain ambiguous and do not promote; newest-file mtime is not ownership
