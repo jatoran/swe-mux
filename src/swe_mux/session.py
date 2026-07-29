@@ -1599,21 +1599,30 @@ class SessionManager:
                 continue
             # A direct root agent has priority over mutable metadata. For a
             # promoted shell, the active backend/native pair remains authoritative.
+            claim_ids: set[str] = set()
             if root_backend in AGENT_BACKENDS:
                 if other.agent_run_seq > 0 and other.backend == backend:
                     # A rolled conversation is no longer the one it spawned with,
-                    # so the spawn id claims nothing and the live id claims the file.
-                    native_id = other.native_session_id
+                    # so a borrowed (--resume) spawn id claims nothing and the
+                    # live id claims the file.
+                    claim_ids.add(other.native_session_id)
+                    if backend == "claude":
+                        # But the conversation named by this pane's own mux id was
+                        # minted for this pane (`--session-id`) and can never be
+                        # another live pane's: a sibling holding it after this
+                        # pane rolled can only have been cross-attributed onto
+                        # it. Without this standing claim, the rightful owner's
+                        # own corruption hid the conflict from every sibling.
+                        claim_ids.add(other.id)
                 elif backend == "claude":
-                    native_id = other.spawn_native_session_id or other.id
+                    claim_ids.add(other.spawn_native_session_id or other.id)
                 elif other.backend == backend:
-                    native_id = other.native_session_id
-                else:
-                    native_id = ""
+                    claim_ids.add(other.native_session_id)
             else:
-                native_id = other.native_session_id
-            if native_id:
-                native_ids.add((backend, native_id))
+                claim_ids.add(other.native_session_id)
+            for native_id in claim_ids:
+                if native_id:
+                    native_ids.add((backend, native_id))
             raw_path = metas.get(other_sid, {}).get("transcript_path")
             if other.backend == backend and isinstance(raw_path, str) and raw_path:
                 paths.add(self._path_key(raw_path))
@@ -1757,6 +1766,14 @@ class SessionManager:
         # this the first daemon restart after a `/clear` would "repair" the live run
         # away and quarantine its history row as misattributed.
         rolled = record.agent_run_seq > 0 and bool(record.agent_run_id)
+        # The exception does not extend to a rolled conversation that a sibling's
+        # root identity claims: two panes cannot write one transcript, and the
+        # sibling's claim is immutable spawn evidence while this record's rolled id
+        # is mutable observer output. Blanket-trusting it is how a cross-attributed
+        # identity survived every daemon restart. Treat the roll as corrupt and let
+        # the repair below fall back to this pane's own spawn anchor.
+        if rolled and (backend, record.native_session_id) in claimed_ids:
+            rolled = False
         expected_run_id = record.agent_run_id if rolled else record.id
         changed = (
             record.backend != backend
@@ -1788,6 +1805,10 @@ class SessionManager:
         record.agent_run_id = expected_run_id
         if not rolled:
             record.agent_run_started_at = record.created_at
+            # A repaired root is back on its spawn conversation. Clearing the roll
+            # counter also drops the (equally corrupt) persisted lifecycle anchor
+            # in the adoption path below, which only honours it for rolled roots.
+            record.agent_run_seq = 0
         record.run_cwd = record.spawn_cwd or record.cwd
         record.run_project_scope_id = record.spawn_project_scope_id or record.project_scope_id
         record.run_repo_group_id = record.spawn_repo_group_id or record.repo_group_id
