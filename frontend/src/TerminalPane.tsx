@@ -642,6 +642,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // window is the user asking for the keyboard; anything later is the pane restoring
     // its own focus, which must not take input from another device.
     let lastInteractionAt: number | null = null
+    // When this pane last asked for input back on its own. Bounds the re-claim so no
+    // frame the daemon sends can put a pane into a claim loop.
+    let lastReclaimAt: number | null = null
     const noteOwnership = (next: OwnershipView) => {
       ownership = next
       ownsInput = next.owns
@@ -761,10 +764,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           // background desktop pane take the keyboard back from the phone forever.
           noteOwnership(applyOwnerFrame(ownership, frame))
           if (!ownsInput && shouldReclaimAfterDisplacement({
+            reason: typeof frame.reason === 'string' ? frame.reason : null,
             focusInHost: !!document.activeElement && host.current?.contains(document.activeElement) === true,
             documentHidden: document.hidden,
             windowFocused: paneIsFocused(),
+            lastReclaimAt,
+            now: Date.now(),
           })) {
+            lastReclaimAt = Date.now()
             claimInput('passive')
           }
         }

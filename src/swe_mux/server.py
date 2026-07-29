@@ -176,6 +176,10 @@ SESSION_MEDIA_TTL_SECONDS = 24 * 60 * 60
 # window than pasted media (an agent may read one days later) but still expire.
 PREVIEW_SHOT_TTL_SECONDS = 7 * 24 * 60 * 60
 PTY_ATTACH_READY_TIMEOUT_SECONDS = 0.25
+# How long a connection's repeated passive claims go unanswered after a refusal. The
+# reply is what an older client re-claims on, so answering every one is what turns a
+# refusal into a loop.
+REFUSED_CLAIM_COOLDOWN_SECONDS = 1.0
 HOOK_RATE_WINDOW_SECONDS = 10.0
 HOOK_RATE_LIMIT = 500
 # Sweep rate-limit windows for sessions that no longer exist once the map grows
@@ -6396,6 +6400,7 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         # owned by a socket that no longer exists.
         released = session.release_input_owner(connection_id)
         session.drop_viewport(connection_id)
+        session.claim_refusals.pop(connection_id, None)
         session.unsubscribe(subscriber)
         # A detach can hand geometry back to whoever is left: the phone closing its tab
         # returns the PTY to the desktop's width.
@@ -6544,6 +6549,15 @@ async def _claim_terminal_input(
     )
     if not decision.granted:
         session.input_claim_denials += 1
+        now = time.monotonic()
+        refused_at = session.claim_refusals.get(connection_id, 0.0)
+        session.claim_refusals[connection_id] = now
+        if reason == "passive" and now - refused_at < REFUSED_CLAIM_COOLDOWN_SECONDS:
+            # A client that re-claims on its own refusal loops as fast as the round
+            # trip; one live session logged 7566 refused claims that way. Newer
+            # clients no longer do it, but a cached build still can, and the answer
+            # it would act on is the one already sent. Stay silent instead.
+            return
         await ws.send_json(_owner_frame(session, active=False, reason=decision.reason))
         return
     displaced = session.input_owner_socket if decision.changed else None

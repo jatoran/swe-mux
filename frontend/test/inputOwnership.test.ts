@@ -47,11 +47,37 @@ test('only a visible, focused pane takes input back on its own', () => {
   // The bug: `document.activeElement` stays inside the terminal of a minimized
   // window, so focus alone had a background desktop pane stealing the keyboard back
   // from the phone on every claim, forever.
-  const base = { focusInHost: true, documentHidden: false, windowFocused: true }
+  const base = {
+    reason: 'claimed_elsewhere', focusInHost: true, documentHidden: false,
+    windowFocused: true, lastReclaimAt: null, now: 10_000,
+  }
   assert.equal(shouldReclaimAfterDisplacement(base), true)
   assert.equal(shouldReclaimAfterDisplacement({ ...base, windowFocused: false }), false)
   assert.equal(shouldReclaimAfterDisplacement({ ...base, documentHidden: true }), false)
   assert.equal(shouldReclaimAfterDisplacement({ ...base, focusInHost: false }), false)
+})
+
+test('a refusal is never grounds to claim again', () => {
+  // A refusal and a displacement are both `input_owner` with `active:false`. Acting
+  // on the refusal is a claim/deny loop that runs at the speed of the round trip —
+  // one live session had logged 7566 refused claims that way.
+  const base = {
+    focusInHost: true, documentHidden: false, windowFocused: true,
+    lastReclaimAt: null, now: 10_000,
+  }
+  assert.equal(shouldReclaimAfterDisplacement({ ...base, reason: 'denied_device_in_use' }), false)
+  assert.equal(shouldReclaimAfterDisplacement({ ...base, reason: 'denied_active_owner' }), false)
+  assert.equal(shouldReclaimAfterDisplacement({ ...base, reason: 'denied_unfocused' }), false)
+  assert.equal(shouldReclaimAfterDisplacement({ ...base, reason: null }), false)
+})
+
+test('a pane cannot re-claim twice inside the cooldown', () => {
+  const base = {
+    reason: 'claimed_elsewhere', focusInHost: true, documentHidden: false,
+    windowFocused: true, now: 10_000,
+  }
+  assert.equal(shouldReclaimAfterDisplacement({ ...base, lastReclaimAt: 9_000 }), false)
+  assert.equal(shouldReclaimAfterDisplacement({ ...base, lastReclaimAt: 4_999 }), true)
 })
 
 test('focus counts as a gesture only just after a real interaction', () => {

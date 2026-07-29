@@ -783,6 +783,9 @@ class Session:
         # Passive claims refused because another device is actively being typed into:
         # the direct measure of how often a background pane tried to steal the keyboard.
         self.input_claim_denials = 0
+        # Last refusal per connection, so a client that re-claims on its own refusal
+        # stops being answered instead of looping. Cleared when the connection ends.
+        self.claim_refusals: dict[str, float] = {}
         # Per-connection fitted terminal size for every attached client that reports
         # itself visible. Hidden panes deregister, so a minimized window can no longer
         # reshape ConPTY for the device a human is actually using.

@@ -22,6 +22,11 @@ export type ClaimReason = 'gesture' | 'passive'
  *  rather than as the pane restoring its own focus (attach, tab switch, overlay close). */
 export const GESTURE_WINDOW_MS = 1500
 
+/** Floor between one pane's unprompted re-claims. Nothing legitimate needs to ask for
+ *  input back twice in a second, and the cap is what makes a claim loop impossible
+ *  rather than merely unlikely. */
+export const RECLAIM_COOLDOWN_MS = 5000
+
 export type OwnershipView = {
   owns: boolean
   /** Daemon transfer counter; -1 before the first ownership frame arrives. */
@@ -93,11 +98,23 @@ export function applyOwnerReleased(current: OwnershipView, epoch: unknown): Owne
  * Only a pane the user can actually see and has actually focused. A minimized window
  * keeps DOM focus inside its terminal and would otherwise re-claim forever. */
 export function shouldReclaimAfterDisplacement(input: {
+  /** Why the daemon says this pane does not own input. */
+  reason: string | null
   focusInHost: boolean
   documentHidden: boolean
   windowFocused: boolean
+  /** When this pane last re-claimed on its own, for the cooldown below. */
+  lastReclaimAt: number | null
+  now: number
 }): boolean {
-  return input.focusInHost && !input.documentHidden && input.windowFocused
+  // A refusal is not a displacement. Both arrive as `input_owner` with `active:false`,
+  // and re-claiming on the refusal is a claim/deny loop that runs as fast as the round
+  // trip: one live session had logged 7566 refused claims. Only being *displaced* —
+  // someone else took input this pane held — is grounds to ask for it back.
+  if (input.reason !== 'claimed_elsewhere') return false
+  if (!input.focusInHost || input.documentHidden || !input.windowFocused) return false
+  // Belt and braces: whatever else goes wrong, one pane cannot claim in a loop.
+  return input.lastReclaimAt === null || input.now - input.lastReclaimAt >= RECLAIM_COOLDOWN_MS
 }
 
 /** Classify a focus event. Programmatic focus (attach, tab switch, closing an overlay)

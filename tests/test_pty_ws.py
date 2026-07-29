@@ -769,10 +769,19 @@ async def test_a_desktop_pane_left_open_does_not_take_sessions_back_from_the_pho
 
         # The desktop pane the shared tab switch just mounted claims on attach, and
         # keeps claiming as it regains DOM focus. None of it takes the session back.
+        denied = await _claim(desktop, "passive", "desktop")
+        assert denied["active"] is False
+        assert denied["reason"] == "denied_device_in_use"
+
+        # An immediate repeat goes unanswered rather than refused again: the refusal
+        # is what an older client re-claims on, which is how one live session logged
+        # 7566 refused claims in a loop.
         for _ in range(3):
-            denied = await _claim(desktop, "passive", "desktop")
-            assert denied["active"] is False
-            assert denied["reason"] == "denied_device_in_use"
+            await desktop.send_json(
+                {"type": "claim_input", "reason": "passive", "device": "desktop", "focused": True}
+            )
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(desktop.receive_json(), timeout=0.1)
         assert session.input_owner_device == "mobile"
         await phone.close()
         await desktop.close()
