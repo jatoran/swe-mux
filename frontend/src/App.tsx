@@ -69,6 +69,7 @@ import { MOBILE_TAB_ORDER_KEY, moveMobileTab, parseMobileTabOrder, pruneMobileTa
 import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import { reorderForHover, reorderTargetFromContainer, type DropSide, type ReorderAxis } from './dragReorder'
+import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from './pointerDragClaim'
 import {
   COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
   projectInitials, projectOpenWork, serializeCollapsedProjects, toggleCollapsed,
@@ -488,7 +489,13 @@ export function App() {
     const source=event.currentTarget
     const pointerId=event.pointerId,startX=event.clientX,startY=event.clientY
     let active=false,done=false,ghost:HTMLDivElement|null=null
+    // Held from the moment the drag becomes real until it unwinds, so the mobile gesture
+    // recognizer stops reading this finger: a tab dragged along a strip is the same motion
+    // as a swipe, and only the drag knows which it is. Claimed at activation rather than at
+    // pointer-down so a swipe that merely *starts* on a draggable tab still works.
+    let releaseDragClaim:(()=>void)|null=null
     const cleanup=()=>{
+      releaseDragClaim?.();releaseDragClaim=null
       window.removeEventListener('pointermove',move)
       window.removeEventListener('pointerup',up)
       window.removeEventListener('pointercancel',cancelPointer)
@@ -511,7 +518,7 @@ export function App() {
       if(pointer.pointerId!==pointerId)return
       if(!active&&Math.hypot(pointer.clientX-startX,pointer.clientY-startY)<5)return
       if(!active){
-        active=true;suppressDragClickRef.current=identity;document.body.classList.add('workspace-pointer-dragging')
+        active=true;releaseDragClaim=claimPointerDrag();suppressDragClickRef.current=identity;document.body.classList.add('workspace-pointer-dragging')
         source.setPointerCapture(pointerId)
         ghost=document.createElement('div');ghost.className='mux-pointer-drag-ghost';ghost.textContent=label;document.body.appendChild(ghost)
         onStart()
@@ -2301,7 +2308,7 @@ export function App() {
   overlayPanels.current = { sidebarOpen, drawerOpen: clipboardOpen }
   useEffect(() => {
     if (!mobileWorkspace) return
-    let state: { startX:number; startY:number; lastX:number; lastY:number; maxPointers:number; start:number; axis:'?'|'h'|'v' } | null = null
+    let state: { startX:number; startY:number; lastX:number; lastY:number; maxPointers:number; start:number; axis:'?'|'h'|'v'; claims:ReturnType<typeof markPointerDragClaims> } | null = null
     const centroid = (touches: TouchList) => {
       let x = 0, y = 0
       for (let i = 0; i < touches.length; i++) { x += touches[i].clientX; y += touches[i].clientY }
@@ -2326,13 +2333,20 @@ export function App() {
       // The utility drawer and its scrim are included so the leftward two-finger
       // swipe that pulls the drawer in can also push it back out from over it.
       if (!(target instanceof Element) || !target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim, .utility-drawer, .utility-drawer-scrim') || startsInHorizontalScroller(target)) { state = null; detachMove(); return }
+      // A drag that has claimed the pointer owns it outright (`pointerDragClaim.ts`); a
+      // second finger landing mid-drag does not get to start a gesture behind it.
+      if (pointerDragOwnsPointer()) { state = null; detachMove(); return }
       const point = centroid(event.touches)
-      if (!state) state = { startX: point.x, startY: point.y, lastX: point.x, lastY: point.y, maxPointers: event.touches.length, start: Date.now(), axis: '?' }
+      if (!state) state = { startX: point.x, startY: point.y, lastX: point.x, lastY: point.y, maxPointers: event.touches.length, start: Date.now(), axis: '?', claims: markPointerDragClaims() }
       else state.maxPointers = Math.max(state.maxPointers, event.touches.length)
       attachMove()
     }
     const onMove = (event: TouchEvent) => {
       if (!state) return
+      // A drag activates after 5 px, i.e. part-way through a sequence this handler is
+      // already tracking. Forfeit that sequence the moment it does: the travel measured
+      // so far belongs to the drag, and letting it accumulate would classify at touch-end.
+      if (pointerDragOwnsPointer(state.claims)) { state = null; detachMove(); return }
       const point = centroid(event.touches)
       state.lastX = point.x; state.lastY = point.y
       state.maxPointers = Math.max(state.maxPointers, event.touches.length)
@@ -2356,6 +2370,10 @@ export function App() {
       if (event.touches.length === 0) detachMove()
       if (!state) return
       if (event.touches.length > 0) return // wait until every finger lifts
+      // Belt to the move handler's braces, and the one check that cannot be skipped:
+      // `pointerup` precedes `touchend`, so a drag that just released its claim is still
+      // the owner of everything this sequence measured.
+      if (pointerDragOwnsPointer(state.claims)) { state = null; return }
       const slot = classifyGesture({ pointerCount: state.maxPointers, dx: state.lastX - state.startX, dy: state.lastY - state.startY, durationMs: Date.now() - state.start })
       state = null
       if (!slot) return
