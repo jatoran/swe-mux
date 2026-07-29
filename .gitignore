@@ -39,6 +39,18 @@ out/
 packaging/swe-mux.ico
 .runtime/
 
+# Vite build output. Every file here is generated: `assets/*` is the bundle, and
+# `icons/`, `manifest.webmanifest`, `notification-sounds/`, `sw.js` are copied verbatim
+# from `frontend/public/`. vite.config sets `emptyOutDir: true`, so nothing hand-authored
+# could survive here anyway. Tracking it meant every `npm run build` produced a
+# hash-churn diff that dirtied the tree, blocked the automatic fast-forward of the base
+# branch, and gave parallel agents meaningless conflicts over generated bundles.
+# Packaging does NOT read this: build_desktop.py builds its own copy into
+# .runtime/desktop-frontend-build and publishes from there.
+# Consequence: a fresh clone or worktree has no UI until you run one `npm run build`
+# in `frontend/`. Worktrees never serve the app, so only a fresh clone cares.
+src/swe_mux/static/
+
 # === JetBrains IDEs ===
 .idea/
 *.iml

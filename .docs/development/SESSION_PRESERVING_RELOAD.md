@@ -302,7 +302,8 @@ user/agent-facing triggers:
   `daemon.reload`) with a blocking overlay + auto page reload; `mux reload-daemon [--force]`;
   plain HTTP for agents (`curl -X POST http://127.0.0.1:<port>/api/daemon/restart`). "Reload
   UI" (`ui.reload`) is the frontend half: rebuild assets (`npm run build`), reload the page.
-  **Caveat:** `npm run build` writes to `src/swe_mux/static`, which is served directly *only*
+  **Caveat:** `npm run build` writes to `src/swe_mux/static`, which is **gitignored build
+  output** (`.gitignore` explains why) and is served directly *only*
   when the daemon runs from source. The frozen desktop app serves its bundled copy under
   `dist/swe-mux/_internal/swe_mux/static`, so a source rebuild + "Reload UI" does nothing for
   a frozen/remote/phone client — push frontend-only changes to the frozen app via the redeploy
