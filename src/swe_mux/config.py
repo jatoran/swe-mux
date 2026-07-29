@@ -418,6 +418,10 @@ class Config:
         default_factory=lambda: list(DEFAULT_VOICE_WAKE_WORDS)
     )
     voice_commands: list[dict[str, Any]] = field(default_factory=default_voice_commands)
+    # Resolved from the real home directory with no environment override, so every
+    # process on this machine shares one data dir. Tests must inject an explicit path
+    # (see load_config) rather than relying on isolation; two suites running at once
+    # from different git worktrees will otherwise contend over the same mux.db.
     data_dir: Path = Path.home() / ".mux"
     config_path: Path | None = field(default=None, repr=False)
 
