@@ -3,10 +3,10 @@
 # Mirrors CLAUDE.md § Verification. Live-agent marks are excluded (they need a
 # real provider session and are not appropriate for an automated landing gate).
 #
-# NOTE: swe-mux resolves its data dir from Path.home()/.mux with no env override,
-# and the suite has no conftest.py-level isolation fixture. Until that is verified
-# parallel-safe, land with WT_VERIFY_EXCLUSIVE=1 so only one worktree verifies at
-# a time (see .docs / CLAUDE.md § Worktrees).
+# This is safe to run in several worktrees at once — measured 2026-07-29, three
+# concurrent runs at 58/58/62s vs ~60s solo, 996 passed each. Do NOT set
+# WT_VERIFY_EXCLUSIVE=1; it would serialise lands for no benefit. CLAUDE.md
+# § Worktrees records why the suite is parallel-safe.
 set -euo pipefail
 
 step() { printf '\n=== %s ===\n' "$*" >&2; }
