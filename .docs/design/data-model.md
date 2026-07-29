@@ -53,6 +53,11 @@
   pass/fail counts and failing-test ids inside the bounded detail. Command text is never
   stored beyond bounded detail, and that detail is bounded per value so the row always
   re-parses. Per-project opt-in and gated; see `features/tier0-facts.md`.
+- `project_cards`: one distilled architecture card per Project — `project_id` (primary key),
+  `project_root`, `fingerprint`, `card_json`, `schema_version`, the requested/resolved model,
+  token counts, `cost_usd`, `created_at`. A cache, not a record: the row is served only while
+  its `fingerprint` still matches the Project's current `.docs`, so it is replaced in place
+  and never pruned by age. Per-project opt-in and gated; see `features/project-card.md`.
 - `clipboard_entries`: the clipboard-history ring — copied text with a unique `content_hash`
   (re-copying promotes rather than duplicates), character/line counts, provenance
   (`source`, `session_id`, `project_id`, `device`), and `pinned`. **Unlike every other table here

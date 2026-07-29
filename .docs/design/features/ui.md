@@ -61,7 +61,7 @@ responsive controls.
 - Popover direction is independent of the condensed trigger, so a rail anchored at the bottom of
   the window still opens upward.
 - Git state is Project/session metadata. Worktrees have no first-class sidebar row, creation
-  modal, or workspace ownership.
+  modal, or workspace ownership; the drawer's Git tab is their only surface (`git.md`).
 
 ## Menus and overlays
 
@@ -290,6 +290,14 @@ responsive controls.
   touchstart has claimed the gesture, then dropped when the sequence ends. Registering it during
   touchstart dispatch still yields cancelable moves, so owned gestures keep working while drags
   inside a scroller meet no handler at all.
+- It also yields to a **pointer drag**, and that yield is stated rather than measured. Dragging a
+  drawer tab along the strip is, in coordinates, exactly the single-finger horizontal swipe that
+  toggles a panel — so rearranging tabs on a phone fired the swipe bindings until the drag began
+  claiming the pointer (`pointerDragClaim.ts`, `workspace-layout.md` § Pointer drag contract).
+  The claim is taken at the drag's 5 px threshold, so a swipe that merely starts on a tab is
+  unaffected, and a sequence is dropped if a drag ran at *any* point inside it — a live "is a drag
+  running" flag read at `touchend` would always say no, since `pointerup` releases the claim first.
+  Applies to every drag on the contract, not the drawer strip alone.
 - A recognized gesture gives a short haptic tick, and tab navigation shows a transient label
   pill naming the tab it landed on. Both exist because a swipe that lands on an unbound slot,
   or a tab change the eye misses, is otherwise indistinguishable from "nothing happened".
@@ -452,12 +460,15 @@ responsive controls.
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they
   are one gesture (mobile) or one visible click (desktop) away instead of two menu levels deep.
   Tabs, in order: **Clipboard**, **Commands** (the rail's long tail), **Prompts**, **Files**,
-  **Notes**, **Alerts** (notifications). Order groups by what a tab acts on, and the groups must
-  stay contiguous so the rail reads as blocks rather than a list. The first three are the same
-  verb — text into the focused session. Files and Notes are the **navigators**: project-scoped
-  indexes that open a document into a pane instead of typing into one. Notifications is neither,
-  and sits last. Session history, the process fleet, usage, and automation stay modal: they are
-  wide, table-shaped surfaces that a ~380 px column serves badly.
+  **Notes**, **Git**, **Alerts** (notifications). Order groups by what a tab acts on, and the
+  groups must stay contiguous so the rail reads as blocks rather than a list. The first three are
+  the same verb — text into the focused session. Files and Notes are the **navigators**:
+  project-scoped indexes that open a document into a pane instead of typing into one. Git closes
+  the Project-scoped block without joining them: it reads the repository behind the Project
+  (branches, worktrees, dirty/upstream state) and opens nothing into a pane — see `git.md` for
+  what it shows and the mutations it is allowed. Notifications is neither, and sits last. Session
+  history, the process fleet, usage, and automation stay modal: they are wide, table-shaped
+  surfaces that a ~380 px column serves badly.
 - The first three tabs share the verb but not the routing. Clipboard inserts land in the
   last-focused surface, editor or terminal. **Prompts** inserts are terminals-only and its rows
   additionally answer right-click / long-press with a target menu (a live agent session in this
@@ -511,15 +522,19 @@ responsive controls.
   so the strip and the rail agree by construction instead of by two lists kept in sync. The tabs
   used to carry glyph *and* label: six of them measured ~444 px, which overflowed a phone
   drawer (`min(430px, 92vw)`) into a scrollbar-less scroller and silently parked the last two
-  tabs off-screen. Six icons are ~234 px. Adding Files and Notes is what pushed it over.
+  tabs off-screen. Six icons were ~234 px. Adding Files and Notes is what pushed it over, and
+  the icon-only strip is what leaves room for a seventh (Git) without repeating that.
 - The marks are stroke SVG on a 24 viewBox, sized in CSS (17 px in the strip, 19 px on touch,
   16 px on the rail), never in `em`: these surfaces run a 9–12 px font. They replaced text
   glyphs for the same reason the command rail's did — a monospace font gives every glyph one
   advance width but wildly different ink, so `!` came out a hairline beside a heavy `⧉` with no
   way to normalize it. Two of the old glyphs were also simply wrong: `⌘` is the macOS Command
   key on a Windows-first app, and `❯` read as a shell prompt right next to the tab named
-  Commands. The set is now clipboard-with-clock, terminal, speech bubble, folder, page, bell —
-  the two injection tabs and the two navigators each form a legible pair.
+  Commands. The set is now clipboard-with-clock, terminal, speech bubble, folder, page, commit
+  fork, bell — the two injection tabs and the two navigators each form a legible pair. Git's
+  fork is deliberately close kin to the command rail's Branch mark: they never appear together
+  (one is a terminal action, one a drawer tab), and the fork is the one mark that says
+  "branches".
 - Nothing is drawn with a word any more, so the `title` is the only place a tab is named and
   every title leads with its label; the label itself becomes the button's `aria-label`, since
   an icon button has no text to take an accessible name from and `title` is not a name on touch.
@@ -529,7 +544,8 @@ responsive controls.
   It uses the app's pointer-drag contract like every other reorderable surface — no native DnD,
   refs and a single DOM drop-indicator attribute during the move, commit on pointer-up
   (`workspace-layout.md`) — so the pointer-up that ends a drag has its click suppressed on both
-  surfaces, or moving a tab would also switch to it.
+  surfaces, or moving a tab would also switch to it. On touch the drag also owns the pointer for
+  its duration, which is what keeps rearranging the strip from doubling as a swipe gesture.
 - The order is **server-persisted** in the `drawerTabs` settings domain, in one canonical bucket
   like the command rail and the file tree, rather than in localStorage beside drawer width and
   last-used tab. Those two are genuinely per-device; an arrangement says which surfaces *you*

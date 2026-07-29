@@ -508,7 +508,9 @@ GET /api/diagnostics/background
 seconds since progress), `degraded[]`, and per-subscriber `event_bus` drop counts and queue
 depths plus `tier0_capture` (captured/dropped, last error) and `deterministic_consumers`
 (findings, last error, loop liveness — a detector that stopped producing findings is
-otherwise indistinguishable from a quiet fleet). Both are in-memory per daemon
+otherwise indistinguishable from a quiet fleet) plus `project_cards` (cached/builds/skipped
+and the last reason a project got no card — "no card" is a legitimate outcome, so the reason
+has to be readable somewhere). Both are in-memory per daemon
 boot and do not survive a restart. This is the surface that makes a poller which died — the
 audited failure mode where a feature silently stops for the rest of the process lifetime —
 visible instead of merely absent.

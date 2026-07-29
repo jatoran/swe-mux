@@ -1527,8 +1527,45 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .utility-drawer .notification-list span,.utility-drawer .notification-list small{color:var(--muted);font-size:8px}
 .utility-drawer .notification-list button{grid-column:2;justify-self:start;min-height:27px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .utility-drawer .notification-empty{margin:0;padding:22px 12px;color:var(--muted);text-align:center;line-height:1.45}
+/* Git tab: two lists over one repository — the branches checked out in it (with live
+   dirty/upstream state wherever a session is attached) and the worktrees themselves.
+   Rows are three stacked lines rather than a grid: a worktree path is the longest string
+   in the drawer and a column layout would ellipsis away the part that identifies it. */
+.git-tab-body{flex:1 1 auto;min-height:0;overflow:auto}
+.git-state{margin:0;padding:14px 10px;color:var(--muted);font-size:9px;line-height:1.45;text-align:center}
+.git-state.error{color:var(--red);text-align:left;overflow-wrap:anywhere}
+.git-section>h3{display:flex;justify-content:space-between;align-items:center;gap:8px;position:sticky;top:0;z-index:1;margin:0;padding:6px 9px;background:var(--panel2);color:var(--muted);font-size:8px;font-weight:600;letter-spacing:.04em}
+.git-row{display:grid;gap:3px;padding:7px 9px;border-bottom:1px solid var(--line)}
+.git-row-main{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
+.git-row-main strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:400}
+.git-row-main strong.detached{color:var(--amber)}
+.git-row small{color:var(--muted);font-size:8px;line-height:1.4;overflow-wrap:anywhere}
+.git-quiet{color:var(--muted);opacity:.8}
+.git-flag{flex:none;padding:0 4px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-style:normal;font-size:8px}
+.git-flag.main{border-color:var(--accent);color:var(--accent)}
+.git-flag.live{border-color:color-mix(in srgb,var(--green) 55%,var(--line));color:var(--green)}
+.git-flag.warn{border-color:color-mix(in srgb,var(--amber) 55%,var(--line));color:var(--amber)}
+.git-metrics{margin-left:auto;display:flex;flex:none;align-items:center;gap:6px}
+.git-metrics em{color:var(--muted);font-style:normal;font-size:8px}
+.git-metrics em.dirty{color:var(--amber)}
+.git-metrics em.diverged{color:var(--accent)}
+.git-row-actions{display:flex;flex-wrap:wrap;align-items:center;gap:5px}
+.git-row-actions button{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.git-row-actions button:hover:not(:disabled){border-color:var(--accent)}
+.git-row-actions button.danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red)}
+.git-row-actions button:disabled{opacity:.45;cursor:not-allowed}
+.git-row-actions .git-quiet{font-size:8px;line-height:1.35}
+.git-row-error{margin:0;color:var(--red);font-size:8px;line-height:1.4;overflow-wrap:anywhere}
+/* The create form stays folded away: adding a worktree is deliberate, and three text
+   fields permanently occupying the drawer's foot would crowd the lists it serves. */
+.git-add{flex:none}
+.git-add form{display:grid;gap:6px;margin-top:6px}
+.drawer-fields button.git-add-toggle{min-height:28px;border-color:var(--line);color:var(--muted)}
+.drawer-fields button.git-add-toggle[aria-expanded=true]{border-color:var(--accent);color:var(--text)}
 @media(max-width:760px){
   .utility-rail{display:none}
+  .git-row-actions button{min-height:36px;padding:0 12px}
+  .drawer-fields button.git-add-toggle{min-height:36px}
   /* No rail on touch, so the strip is the only tab control: taller, wider, bigger marks. */
   .drawer-tabs button{min-height:44px;min-width:44px;max-width:none}
   .drawer-tabs button svg{width:19px;height:19px}

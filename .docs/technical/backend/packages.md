@@ -42,6 +42,7 @@ It should call domain packages rather than acquire their storage or process resp
 | `automation_registry.py` | control-plane enablement DAG: substrate/consumer deps, cycle-checked resolution | storage, execution |
 | `tier0_store.py` | deterministic no-model fact capture (Tier 0 substrate), gated per-project, source pointers, run/project fact queries | model calls, actuation |
 | `deterministic_consumers.py` | model-free detectors over Tier 0 (loop/stall, declared-vs-verified, doc debt, provenance edges) and the turn-boundary runner | model calls, spend, anything that writes toward a session |
+| `project_card.py` | per-Project distilled architecture card (CP substrate step 4): bounded `.docs` source gather, deterministic Key-files → area inversion, content fingerprint + cache validity, one budgeted cheap-model distillation, rendered prompt prefix | consumers of the card, any fallback when a provider is unavailable (there is none — no card), HTTP, UI |
 | `mcp.py` | agent-facing MCP protocol + tools: four read tools (session list/status, bounded transcript read, history search) and two thin write callers (`notify`, `request_spawn`), token-derived caller identity, Project scoping, output redaction | relay policy and bounds (those live in `agent_messaging.py`), delivery, PTY writes, spawn, aiohttp handlers (`server.py`) |
 | `prompt_queue.py` | persistent prompt queue: durable message store (states, strict head-of-line, revisions, sender provenance, correlation, relay depth), typed operations (enqueue/edit/arm/move/cancel/retarget/schedule/send-next), delivery constraints, auto-policy + proving-counter tables, event-driven stranding + startup reconcile, delivery audit, seed-prompt staging (`stage_seed_argv`) | *when* an automatic send happens (`auto_delivery.py`), who may address whom (`agent_messaging.py`), PTY ownership (delivery writes go through the injected operator-input helper), aiohttp handlers |
 | `auto_delivery.py` | the gate on automatic sends: master/per-session opt-ins, run binding, expiry, consecutive cap, stability window over `delivery_state`, quiet hours, persisted emergency pause, expiry sweep, proving-period counters and `promotion_status` | delivery itself (calls `send_next`, cannot pass `confirm`), readiness evaluation, HTTP |
@@ -214,6 +215,13 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   transcript interpretation beyond a literal claim pattern, and no output but annotations.
   A finding carries the *set* of facts it rests on, because a single event pointer cannot
   express "this repeated three times and nothing moved".
+- `project_card.py` is the first substrate that spends, and it is the only one. Two rules keep
+  that honest: it is lazy (nothing is built until a consumer asks, so an enabled project no
+  one reads costs nothing), and it never degrades to a heuristic. Missing provider, missing
+  key, provider error, empty answer, exhausted budget, undocumented project — every one of
+  them yields *no card*, because a consumer prepending a wrong card is worse off than one
+  prepending nothing. Its file → area map is copied verbatim from the docs, never routed
+  through the model.
 
 ## Related design
 

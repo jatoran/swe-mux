@@ -65,6 +65,10 @@
 - Changing Tier 0 deterministic fact capture or its source pointers/fingerprints:
   `design/features/tier0-facts.md`, `design/data-model.md`,
   `technical/backend/packages.md`, `technical/backend/sqlite.md`
+- Changing the control-plane project card (its sources, fingerprint/invalidation, budget,
+  or what consumers read from it): `design/features/project-card.md`,
+  `design/features/automation-enablement.md`, `design/data-model.md`,
+  `technical/backend/packages.md`, `technical/backend/sqlite.md`
 - Changing the agent MCP surface (endpoint, tools, per-session tokens, CLI registration):
   `design/features/mux-mcp.md`, `design/interfaces.md`, `technical/backend/packages.md`
 - Changing the observation inbox: `design/features/observations.md`, `design/interfaces.md`,

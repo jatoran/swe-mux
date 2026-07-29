@@ -333,6 +333,20 @@ call. Without it, a scan model sees "edited `processes.py`" and is working blind
 with it, the model judges against real architecture. The same card feeds
 screenshot-to-agent and any Tier 2 analysis — build once, several consumers use it.
 
+Shipped (§9 step 4); three properties are load-bearing enough to restate here:
+
+- **The map is deterministic, the prose is not.** File → area comes from each doc's
+  literal "Key files" section, copied verbatim; the model writes only `summary` and
+  `subsystems`. Artifact/file tracking is the weakest dimension of every compactor
+  measured (§2), so a paraphrased path list would be worse than no list.
+- **Invalidation is content, not clock.** The card is valid only for a `sha256` over
+  its source bytes + model + prompt version + schema version, and a mismatched card is
+  never served. No TTL: "old" and "wrong" are not the same question, and a stale
+  architecture summary served as current is the silent-omission failure mode.
+- **No provider, no card.** Every failure yields nothing rather than a heuristic. A
+  usually-wrong card poisons every consumer that prepends it — the same trust-gate
+  argument as §7's retrieval precision, applied one layer down.
+
 ### 5.5 Scan timeline (Tier 1)
 
 The one substrate layer that costs model tokens: a cheap model samples each
@@ -1023,7 +1037,36 @@ another agent can pick up mid-plan. Section links point to the design detail.
   becomes a new `agent_run_id` (`agent_conversation_rolled` on the event log) instead of a
   silent conversation swap under a live run. Steps 4–8 inherit their boundary from it and
   must not implement conversation-change detection themselves.
-- [ ] **4 · Project card** (§5.4). Distilled architecture, cached; feeds scan timeline + Tier 2.
+- [x] **4 · Project card** (§5.4). Distilled architecture, cached; feeds scan timeline + Tier 2.
+  Shipped as `ROADMAP.md` Phase 5.5 (first slice). Design:
+  `design/features/project-card.md`.
+  - [x] Sources are the project's own docs: the first available of `.docs/00_OVERVIEW.md` /
+    `OVERVIEW.md` / `design/architecture.md` / `README.md`, plus `.docs/CLAUDE.md`, plus every
+    doc's **"Key files"** section — the same inversion (and hub limit) the doc-debt ledger
+    uses, because the routing table is keyed by change *type* and no machine can match that
+    to a path.
+  - [x] **The file → area map is deterministic and never model-written.** Compaction evals
+    rank artifact/file tracking last among every summarizer's abilities (§2), so the paths
+    are copied verbatim and the model is told not to restate them. It writes only the prose
+    half (`summary`, `subsystems`).
+  - [x] **Invalidation is by source content, not by clock.** The card carries a `sha256`
+    over its source bytes plus the model id, prompt version, and card schema version; a card
+    whose fingerprint no longer matches is never served. There is no TTL — a clock cannot
+    tell "old" from "wrong", and serving a stale architecture summary as current is the
+    silent-omission failure this design exists to avoid. A cheap mtime/size stamp gates the
+    re-read so the unchanged case costs a stat walk.
+  - [x] Per-project opt-in (`project_card`, no dependencies — it reads the repository, not
+    Tier 0) and budget-bounded: one cheap-model call per fingerprint, metered on the shared
+    ledger under `builtin:project-card` with its own daily dollar budget, the same pattern
+    the read-aloud summarizer uses.
+  - [x] **Degrades to no card, never to a guess.** No model configured, no key, provider
+    error, empty answer, exhausted budget, undocumented project, project not opted in — all
+    yield nothing, with a 5-minute backoff so a keyless project does not re-ask on every
+    call. Consumers that always prepend call `prompt_prefix`, which returns "".
+  - [x] Internal API for the consumers that follow (scan timeline, screenshot-to-agent):
+    `card_for_session` / `card_for_project` / `prompt_prefix`, each resolving the gate
+    itself. No route and no UI; build health is under `project_cards` in
+    `GET /api/diagnostics/background`.
 - [ ] **5 · Scan timeline (Tier 1)** (§5.5). First model-cost layer. Capture-first: readable
   timeline + dead-end memory (§6.2) + continuous title (§6.11). Instrument the rehydration
   rate from commit one. Records carry `agent_run_id`; delta window, continuity context, and

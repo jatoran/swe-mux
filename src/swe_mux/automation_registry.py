@@ -32,7 +32,12 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # Substrate.
     Automation("raw_store", SUBSTRATE, "Raw transcript store"),
     Automation("tier0", SUBSTRATE, "Deterministic fact capture", ("raw_store",)),
-    Automation("project_card", SUBSTRATE, "Project card", implemented=False),
+    # The project card reads the project's own `.docs`, not the raw store or
+    # Tier 0, so it depends on nothing. It is substrate all the same: it is
+    # built once and several consumers read it (CP §5.4). Unlike the rest of
+    # the substrate it does spend — one cheap model call per documentation
+    # fingerprint — which is exactly why it is opt-in rather than ambient.
+    Automation("project_card", SUBSTRATE, "Project card"),
     Automation(
         "scan_timeline", SUBSTRATE, "Scan timeline", ("tier0", "raw_store"), implemented=False
     ),

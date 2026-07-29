@@ -93,6 +93,13 @@ PaneLeaf = terminal | note | preview | history | queue
 - Pointer capture makes pointer-up deterministic. Escape, pointer cancel, lost capture, and
   window blur cancel, clear the indicator/ghost, restore embedded-preview pointer behavior, and
   persist nothing.
+- A running drag **owns the pointer**, and says so rather than leaving it to be inferred. It
+  claims ownership when it crosses the 5 px threshold and releases when it unwinds
+  (`pointerDragClaim.ts`); the mobile touch-gesture recognizer refuses to classify any touch
+  sequence a drag ran inside. Coordinates cannot arbitrate this: dragging a tab along a strip
+  and the swipe that toggles a panel are the same motion over the same pixels, so only the drag
+  knows which one is happening. Claiming at the threshold rather than at pointer-down keeps a
+  swipe that merely *starts* on a draggable tab working. See `ui.md` § touch gestures.
 - Do not reintroduce `draggable`/native Chromium drag handlers for these surfaces. Responsive
   layout changes can strand that native loop with a permanent grabbing cursor and frozen UI.
 
@@ -132,6 +139,7 @@ PaneLeaf = terminal | note | preview | history | queue
 - `frontend/src/mobileWorkspace.ts`
 - `frontend/src/App.tsx`
 - `frontend/src/dragReorder.ts`
+- `frontend/src/pointerDragClaim.ts`
 - `src/swe_mux/layouts.py`
 - `src/swe_mux/history.py`
 - `frontend/test/layout.test.ts`

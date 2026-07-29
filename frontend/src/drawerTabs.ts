@@ -10,9 +10,11 @@
 // focused session* (clipboard, session commands, prompt templates). Then the
 // *navigators* (files, notes): project-scoped indexes that open a document into a
 // pane rather than injecting text — narrow-column surfaces that used to cost a
-// permanent workspace tab each. Notifications is neither, and stays last.
+// permanent workspace tab each. Git closes the Project-scoped block: it reads the
+// repository behind the Project rather than opening anything, so it is not a navigator,
+// but it acts on the same thing they do. Notifications is neither, and stays last.
 
-export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'files' | 'notes' | 'notifications'
+export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'files' | 'notes' | 'git' | 'notifications'
 
 /** What a tab acts on: the focused terminal, the active Project, or the app itself. */
 export type DrawerTabScope = 'session' | 'project' | 'app'
@@ -35,10 +37,14 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'prompts', label: 'Prompts', title: 'Prompts — insert a saved template into the focused terminal', scope: 'session' },
   { id: 'files', label: 'Files', title: 'Files — browse or search this Project, then open into a pane', scope: 'project' },
   { id: 'notes', label: 'Notes', title: 'Notes — Project and session notes, opened into a pane', scope: 'project' },
+  { id: 'git', label: 'Git', title: 'Git — branches and worktrees of this Project’s repository', scope: 'project' },
   { id: 'notifications', label: 'Alerts', title: 'Alerts — notifications and attention records', scope: 'app' },
 ]
 
-/** Tabs that open a document into the workspace instead of typing into it. */
+/** Tabs that open a document into the workspace instead of typing into it.
+ *
+ * Git is Project-scoped like the navigators and sits beside them, but it is not one: it
+ * reports on the repository rather than opening anything into a pane. */
 export const isNavigatorTab = (id: DrawerTabId): boolean => id === 'files' || id === 'notes'
 
 export const DRAWER_TAB_KEY = 'mux.drawer.tab.v1'
