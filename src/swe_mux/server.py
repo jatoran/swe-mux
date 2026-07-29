@@ -1,8 +1,9 @@
 """HTTP/WebSocket control plane for the swe-mux daemon.
 
-The daemon binds a single port and owns one data dir, so exactly one instance may
-run per machine. Never start a second daemon from a worktree: worktrees isolate the
-working tree, not the runtime, and the two instances will fight over the same mux.db.
+The daemon binds a single port (default 8765) and owns one data dir (~/.mux), so
+exactly one instance may run per machine. Never start a second daemon from a
+worktree: worktrees isolate the working tree, not the runtime, and the two
+instances will fight over the same mux.db.
 """
 
 from __future__ import annotations
