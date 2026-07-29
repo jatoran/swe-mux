@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { currentProfile, type SettingsProfile } from './deviceSettings.ts'
-import { notificationEvents, notificationPreferencesFor, setNotificationPreferencesFor, type NotificationEvent } from './notificationPrefs.ts'
+import { notificationEvents, notificationPreferencesFor, notificationSuppressModes, setNotificationPreferencesFor, type NotificationEvent, type NotificationSuppress } from './notificationPrefs.ts'
 import { currentSubscription, disablePush, enablePush, notificationPermission, pushSupported } from './push.ts'
 
 const labels: Record<NotificationEvent, string> = {
@@ -11,6 +11,16 @@ const labels: Record<NotificationEvent, string> = {
   reset: 'Unexpected quota reset',
 }
 const profileLabels: Record<SettingsProfile, string> = { desktop: 'Desktop', mobile: 'Mobile' }
+const suppressLabels: Record<NotificationSuppress, string> = {
+  never: 'never — always notify',
+  focused: 'this device has the app open',
+  anyDevice: 'any device is in use',
+}
+const suppressHints: Record<NotificationSuppress, string> = {
+  never: 'Every enabled event notifies this device, even while you are looking at it.',
+  focused: 'Skipped while this device is on screen and focused; its notification sound covers that.',
+  anyDevice: 'Also skipped while you are actively working on another device. Approvals and “waiting for input” are held rather than dropped: if you stop touching the other device, they arrive about 45 seconds later.',
+}
 
 export function NotificationPushSettings() {
   const [profile, setProfile] = useState<SettingsProfile>(currentProfile)
@@ -54,7 +64,8 @@ export function NotificationPushSettings() {
 
     <div class="settings-profile-switch" role="group" aria-label="Editing profile">{(Object.keys(profileLabels) as SettingsProfile[]).map(id => <button type="button" key={id} aria-pressed={profile === id} class={profile === id ? 'is-active' : ''} onClick={() => setProfile(id)}>{profileLabels[id]}{id === currentProfile() ? ' (this device)' : ''}</button>)}</div>
     <label class="check"><span>Enable notifications for {profileLabels[profile]}</span><input type="checkbox" checked={prefs.enabled} onChange={event => change({ ...prefs, enabled: event.currentTarget.checked })} /></label>
-    <label class="check"><span>Don’t notify while the app is open (sound only)</span><input type="checkbox" checked={prefs.suppressWhenFocused} onChange={event => change({ ...prefs, suppressWhenFocused: event.currentTarget.checked })} /></label>
+    <label class="check"><span>Stay quiet while</span><select aria-label={`When ${profileLabels[profile]} stays quiet`} value={prefs.suppress} onChange={event => change({ ...prefs, suppress: event.currentTarget.value as NotificationSuppress })}>{notificationSuppressModes.map(mode => <option key={mode} value={mode}>{suppressLabels[mode]}</option>)}</select></label>
+    <p class="settings-hint">{suppressHints[prefs.suppress]}</p>
     <div class="quiet-hours"><label>Quiet from<input type="time" value={prefs.quietStart} onInput={event => change({ ...prefs, quietStart: event.currentTarget.value })} /></label><label>Until<input type="time" value={prefs.quietEnd} onInput={event => change({ ...prefs, quietEnd: event.currentTarget.value })} /></label></div>
     <div class="notification-event-sounds">
       <strong>Notify on</strong>

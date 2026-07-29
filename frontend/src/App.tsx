@@ -52,6 +52,7 @@ import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, unlockP
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { currentProfile, loadDrawerTabOrder, loadSettings, refreshSettings, saveDrawerTabOrder } from './deviceSettings'
 import { initPush } from './push'
+import { watchDevicePresence } from './devicePresence'
 import type { Project, ProjectGroup, Session, ShellProfile, VoiceClip, VoiceMode, VoiceStatus } from './types'
 import { keyChord } from './keys'
 import { Settings } from './Settings'
@@ -854,6 +855,11 @@ export function App() {
     let nextAttemptAt: number | null = null
     let handshakeTimer: number | undefined
     let attempt = 0
+    // Presence rides this socket: the daemon uses it to decide whether a lock-screen
+    // push is worth sending, and a dead socket is a device nobody is looking at.
+    const presence = watchDevicePresence(frame => {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(frame))
+    })
     const queueRefresh = () => {
       if (refreshTimer !== undefined) return
       refreshTimer = window.setTimeout(() => {
@@ -899,6 +905,10 @@ export function App() {
         if (socket !== next) return
         clearHandshakeWatchdog()
         attempt = 0
+        // A new socket is a new connection id on the daemon, with no presence of its
+        // own. Until it has one this device looks absent, which is the safe direction
+        // (a redundant push, never a missing one) but only briefly.
+        presence.report()
         window.dispatchEvent(new CustomEvent('mux:events-connected'))
       }
       next.onerror = () => { if (socket === next) next.close() }
@@ -968,7 +978,7 @@ export function App() {
       nextAttemptAt: () => nextAttemptAt,
       reconnect,
     })
-    return () => { stopLivenessWatch(); clearHandshakeWatchdog(); if (retry) clearTimeout(retry); if(refreshTimer)clearTimeout(refreshTimer);if(socket){socket.onclose=null;socket.close()} }
+    return () => { stopLivenessWatch(); presence.stop(); clearHandshakeWatchdog(); if (retry) clearTimeout(retry); if(refreshTimer)clearTimeout(refreshTimer);if(socket){socket.onclose=null;socket.close()} }
   }, [])
 
   useEffect(()=>{if(!notificationToast)return;const timer=window.setTimeout(()=>setNotificationToast(null),5000);return()=>clearTimeout(timer)},[notificationToast])
