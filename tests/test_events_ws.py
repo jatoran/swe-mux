@@ -149,3 +149,45 @@ async def test_malformed_cursor_is_rejected_without_leaking_a_subscriber(
         assert bus.drop_stats()["subscribers"] == 0
     finally:
         history.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_the_socket_carries_device_presence_and_forgets_it_on_close(
+    tmp_path: Path,
+) -> None:
+    """Presence rides this socket because every client holds one — including the
+    desktop WebView, which cannot subscribe to Web Push and so reported nothing at
+    all through the push-presence path."""
+    history = HistoryIndex(tmp_path / "mux.db")
+    presence = DevicePresenceStore()
+    try:
+        async with TestClient(TestServer(_app(history, EventBus(), presence))) as client:
+            ws = await client.ws_connect("/events")
+            await ws.send_json(
+                {
+                    "type": "presence",
+                    "profile": "desktop",
+                    "visible": True,
+                    "focused": True,
+                    "interaction_age": 2,
+                }
+            )
+            for _ in range(100):
+                await asyncio.sleep(0.01)
+                if presence.active_profiles():
+                    break
+            assert presence.active_profiles() == {"desktop"}
+            # Junk on the socket is ignored rather than dropping the connection.
+            await ws.send_str("not json")
+            await ws.send_json({"type": "presence", "profile": "tablet"})
+            await asyncio.sleep(0.02)
+            assert presence.active_profiles() == {"desktop"}
+            await ws.close()
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            if not presence.snapshot()["devices"]:
+                break
+        # A closed socket is a device nobody is looking at.
+        assert presence.snapshot()["devices"] == []
+    finally:
+        history.close()
