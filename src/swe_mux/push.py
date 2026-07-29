@@ -11,9 +11,19 @@ before any tab exists to filter it. Each subscription records which device-class
 profile it belongs to, and we consult that profile's notification settings. The
 one thing the server cannot know is whether a device is currently looking at the
 app; the client reports that via short-TTL presence heartbeats (see PushStore),
-and a focused device with suppress-when-focused set is skipped — the foreground
-sound covers it, and skipping keeps us honest with Chrome's userVisibleOnly rule
-(a received-but-unshown push is penalized).
+and a focused device with `suppress: focused` is skipped — the foreground sound
+covers it, and skipping keeps us honest with Chrome's userVisibleOnly rule (a
+received-but-unshown push is penalized).
+
+`suppress: anyDevice` extends that across devices, using the per-connection
+presence in `device_presence.py`: a phone should not buzz about an approval the
+user is watching happen on the desktop in front of them. That decision is a
+*deferral*, not a drop, for the alerts worth chasing (`attention`, `waiting`).
+Dropping them assumes the user stays put; they don't — they get up mid-turn, and
+the notification they most needed is exactly the one plain suppression eats. So
+the push is held briefly and then delivered anyway, unless the user interacted
+with the other device *after* the alert was raised, which is direct evidence they
+were there and chose not to act on it.
 """
 
 from __future__ import annotations
@@ -24,7 +34,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +43,7 @@ from py_vapid import Vapid01
 from pywebpush import WebPushException, webpush
 
 from .background_tasks import background
+from .device_presence import DevicePresenceStore
 from .event_bus import EventBus
 from .models import MuxEvent
 from .settings_store import SettingsStore, in_quiet_time
@@ -47,6 +58,14 @@ _DEDUP_WINDOW = 8.0  # seconds: collapse duplicate (session, category) notificat
 # this many consecutive non-410 failures so it stops costing every notification.
 _MAX_CONSECUTIVE_FAILURES = 5
 _PRESENCE_MAX_TTL = 120.0
+#: Categories worth chasing the user for, and therefore worth deferring rather than
+#: dropping when another device is in use. A completion or a quota reset that the
+#: user was sitting in front of is stale by the time a deferral would fire.
+DEFERRABLE_CATEGORIES = frozenset({"attention", "waiting"})
+#: How long a deferred notification waits for the user to deal with it elsewhere.
+#: Long enough to cover answering a prompt at the desk, short enough that walking
+#: away mid-turn still reaches the phone while it matters.
+DEFERRAL_SECONDS = 45.0
 
 
 def _b64url(data: bytes) -> str:
@@ -108,6 +127,49 @@ def classify_notification(event: MuxEvent) -> dict[str, str] | None:
             "body": "The agent is waiting for your input.",
         }
     return None
+
+
+def _resolves_attention(event: MuxEvent) -> bool:
+    """Whether this event means a held notification has been answered.
+
+    Human input into the session, or the agent resuming, both mean the thing the
+    alert was about is being dealt with. A deferral that fired anyway would be a
+    lock-screen buzz for a question the user had already answered.
+    """
+    if event.type in {"terminal_input", "turn_started"}:
+        return True
+    return event.type == "state_changed" and (event.payload or {}).get("state") == "working"
+
+
+def notification_plan(
+    settings: dict[str, Any],
+    category: str,
+    *,
+    device_present: bool,
+    other_device_active: bool,
+) -> str:
+    """Decide one subscription's fate: ``send``, ``skip``, or ``defer``.
+
+    Pure so the routing rules can be tested without a push service, a socket, or a
+    clock. Everything that is not an explicit reason to stay quiet ends in ``send``:
+    an unreported or stale device looks absent, so the failure mode of the presence
+    machinery is a redundant buzz rather than silence.
+    """
+    if not settings.get("enabled"):
+        return "skip"
+    if not settings.get("events", {}).get(category):
+        return "skip"
+    if in_quiet_time(settings):
+        return "skip"
+    suppress = str(settings.get("suppress") or "focused")
+    if suppress == "never":
+        return "send"
+    if device_present:
+        # This very device is looking at the app; its foreground sound covers it.
+        return "skip"
+    if suppress == "anyDevice" and other_device_active:
+        return "defer" if category in DEFERRABLE_CATEGORIES else "skip"
+    return "send"
 
 
 class PushStore:
@@ -216,13 +278,18 @@ class PushSender:
         events: EventBus,
         *,
         clock: Callable[[], float] = time.time,
+        presence: DevicePresenceStore | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._store = store
         self._settings = settings
         self._events = events
         self._clock = clock
+        self._presence = presence or DevicePresenceStore(clock=clock)
+        self._sleep = sleep
         self._recent: dict[tuple[str, str], float] = {}
         self._failures: dict[str, int] = {}
+        self._deferred: dict[tuple[str, str, str], asyncio.Task[None]] = {}
 
     async def run(self) -> None:
         queue = self._events.subscribe(name="push")
@@ -233,8 +300,27 @@ class PushSender:
                     await self._handle(event)
         finally:
             self._events.unsubscribe(queue)
+            self.cancel_deferred()
+
+    def cancel_deferred(self, session_id: str | None = None) -> int:
+        """Drop pending deferrals, for one session or all of them."""
+        keys = [
+            key
+            for key in self._deferred
+            if session_id is None or key[0] == session_id
+        ]
+        for key in keys:
+            self._deferred.pop(key).cancel()
+        return len(keys)
+
+    def pending_deferrals(self) -> int:
+        return len(self._deferred)
 
     async def _handle(self, event: MuxEvent) -> None:
+        if _resolves_attention(event):
+            # The user dealt with this session (typed into it, or the agent resumed),
+            # so anything held for it is answered and must not arrive late.
+            self.cancel_deferred(event.session_id or "")
         note = classify_notification(event)
         if not note:
             return
@@ -248,18 +334,18 @@ class PushSender:
         self._recent = {key: at for key, at in self._recent.items() if at > now - 60}
         targets = []
         for sub in subs:
-            settings = self._settings.notifications(str(sub.get("profile", "mobile")))
-            if not settings.get("enabled"):
-                continue
-            if not settings.get("events", {}).get(note["category"]):
-                continue
-            if in_quiet_time(settings):
-                continue
-            if settings.get("suppressWhenFocused") and self._store.is_present(
-                str(sub["endpoint"]), now
-            ):
-                continue
-            targets.append(sub)
+            profile = str(sub.get("profile", "mobile"))
+            settings = self._settings.notifications(profile)
+            plan = notification_plan(
+                settings,
+                note["category"],
+                device_present=self._store.is_present(str(sub["endpoint"]), now),
+                other_device_active=self._presence.other_profile_active(profile, now),
+            )
+            if plan == "send":
+                targets.append(sub)
+            elif plan == "defer":
+                self._defer(sub, note, event.session_id or "", now)
         if not targets:
             return
         # Concurrently: one stale endpoint that times out rather than returning
@@ -272,6 +358,60 @@ class PushSender:
         # outage produced no notification at all.
         if any(results):
             self._recent[dedup_key] = now
+
+    def _defer(
+        self, sub: dict[str, Any], note: dict[str, str], session_id: str, raised_at: float
+    ) -> None:
+        key = (session_id, note["category"], str(sub["endpoint"]))
+        if key in self._deferred:
+            # Already waiting on this exact alert; a repeat is the same question.
+            return
+        task = asyncio.create_task(
+            self._deliver_later(key, sub, note, raised_at), name="push-deferred"
+        )
+        self._deferred[key] = task
+
+        def finished(done: asyncio.Task[None]) -> None:
+            if self._deferred.get(key) is done:
+                del self._deferred[key]
+            if done.cancelled():
+                return
+            try:
+                done.result()
+            except Exception:
+                log.exception("deferred push delivery failed")
+
+        task.add_done_callback(finished)
+
+    async def _deliver_later(
+        self,
+        key: tuple[str, str, str],
+        sub: dict[str, Any],
+        note: dict[str, str],
+        raised_at: float,
+    ) -> None:
+        await self._sleep(DEFERRAL_SECONDS)
+        profile = str(sub.get("profile", "mobile"))
+        settings = self._settings.notifications(profile)
+        now = self._clock()
+        if not settings.get("enabled") or not settings.get("events", {}).get(note["category"]):
+            return
+        # Quiet hours are re-checked here, not only when the alert was raised: a
+        # deferral can cross the boundary into them.
+        if in_quiet_time(settings):
+            return
+        if settings.get("suppress") != "never" and self._store.is_present(
+            str(sub["endpoint"]), now
+        ):
+            return
+        if self._presence.interaction_since(raised_at, exclude=profile):
+            # The user has touched another device since this was raised: they were
+            # there, they can see it, and they did not act. Chasing them is noise.
+            return
+        # Nothing since the alert — they are away from the device that held it back.
+        # This is the case plain suppression loses, so deliver, late but useful.
+        if await self._send(sub, note):
+            self._recent[(key[0], key[1])] = self._clock()
 
     async def _send(self, sub: dict[str, Any], note: dict[str, str]) -> bool:
         payload = json.dumps(

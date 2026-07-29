@@ -27,6 +27,8 @@ SETTINGS_SCHEMA_VERSION = 1
 PROFILES: tuple[str, ...] = ("desktop", "mobile")
 DOMAINS: tuple[str, ...] = ("sounds", "notifications", "commandRail", "fileTree", "drawerTabs")
 NOTIFICATION_EVENTS: tuple[str, ...] = ("complete", "waiting", "attention", "failure", "reset")
+#: Which presence silences a profile's push. See ``default_notifications``.
+SUPPRESS_MODES: tuple[str, ...] = ("never", "focused", "anyDevice")
 # Sound customization allows a base64 data URL up to 512 KiB, so a domain blob
 # can be large; bound it generously to reject only runaway or hostile payloads.
 _MAX_DOMAIN_BYTES = 1024 * 1024
@@ -39,14 +41,24 @@ def _atomic_write(path: Path, data: bytes) -> None:
     os.replace(temporary, path)
 
 
-def default_notifications() -> dict[str, Any]:
+def default_notifications(profile: str = "mobile") -> dict[str, Any]:
     """Fresh-profile notification defaults.
 
     Only "the agent stopped and is waiting for you" (``waiting``) and "the agent
     needs approval or asked a question" (``attention``) notify by default;
     per-turn completions and failures stay quiet until the user opts in.
-    ``suppressWhenFocused`` keeps a visible, attended device from buzzing — the
-    foreground sound already covers that case.
+
+    ``suppress`` decides which presence silences this profile:
+
+    * ``never`` — always deliver.
+    * ``focused`` — skip while *this* device is looking at the app; its foreground
+      sound already covers that case.
+    * ``anyDevice`` — also skip (or defer) while the user is demonstrably working on
+      another device. The default for the phone, which is otherwise notified about
+      approvals the user is watching happen on the desktop in front of them.
+
+    The desktop defaults to ``focused``: it is the device the user works at, so
+    "someone is active elsewhere" is not a reason to keep it quiet.
     """
 
     return {
@@ -58,7 +70,7 @@ def default_notifications() -> dict[str, Any]:
             "failure": False,
             "reset": False,
         },
-        "suppressWhenFocused": True,
+        "suppress": "anyDevice" if profile == "mobile" else "focused",
         "quietStart": "",
         "quietEnd": "",
     }
@@ -84,14 +96,20 @@ def in_quiet_time(notifications: dict[str, Any], now: time.struct_time | None = 
     return current >= start or current < end
 
 
-def normalize_notifications(value: Any) -> dict[str, Any]:
-    base = default_notifications()
+def normalize_notifications(value: Any, profile: str = "mobile") -> dict[str, Any]:
+    base = default_notifications(profile)
     if not isinstance(value, dict):
         return base
     if isinstance(value.get("enabled"), bool):
         base["enabled"] = value["enabled"]
-    if isinstance(value.get("suppressWhenFocused"), bool):
-        base["suppressWhenFocused"] = value["suppressWhenFocused"]
+    if value.get("suppress") in SUPPRESS_MODES:
+        base["suppress"] = str(value["suppress"])
+    elif isinstance(value.get("suppressWhenFocused"), bool):
+        # Migration from the boolean this replaced. False was a deliberate "notify me
+        # anyway" and is preserved exactly; True was the default, so it maps to the
+        # profile's new default rather than pinning every existing install to the old
+        # behaviour it never actually chose.
+        base["suppress"] = base["suppress"] if value["suppressWhenFocused"] else "never"
     for key in ("quietStart", "quietEnd"):
         if isinstance(value.get(key), str):
             base[key] = value[key]
@@ -160,4 +178,4 @@ class SettingsStore:
 
         if profile not in PROFILES:
             profile = "mobile"
-        return normalize_notifications(self._profiles()[profile].get("notifications"))
+        return normalize_notifications(self._profiles()[profile].get("notifications"), profile)

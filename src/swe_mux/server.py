@@ -56,6 +56,7 @@ from .background_tasks import background
 from .clipboard_store import ClipboardStore
 from .config import Config, load_config, update_config
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
+from .device_presence import DevicePresenceStore, parse_device_report
 from .event_bus import EventBus
 from .file_manager import open_in_file_manager
 from .fleet_intelligence import FleetIntelligence
@@ -556,6 +557,7 @@ def create_app(
             web.post("/api/push/subscribe", push_subscribe),
             web.post("/api/push/unsubscribe", push_unsubscribe),
             web.post("/api/push/presence", push_presence),
+            web.get("/api/push/presence", get_device_presence),
             web.get("/api/notifications", list_notifications),
             web.get("/api/voice", voice_status),
             web.post("/api/sessions/{sid}/voice/transcribe", voice_transcribe),
@@ -826,6 +828,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # behind by an earlier persisted run when it is off.
     await clipboard.load()
     push_store = PushStore(config.data_dir)
+    device_presence = DevicePresenceStore()
     project_actions = ProjectActionService(config.data_dir)
     project_watcher = ProjectFileWatcher(projects, events, config)
     telemetry.start(events, sessions=sessions, history=history)
@@ -954,7 +957,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         lambda: _retention_loop(automation_store, tier0, prompt_queue_store, config),
     )
     background.start(STATE_WATCHDOG_LOOP, sessions.state_watchdog_loop)
-    push_sender = PushSender(push_store, settings_store, events)
+    push_sender = PushSender(push_store, settings_store, events, presence=device_presence)
     background.start(PUSH_SENDER_LOOP, push_sender.run)
     reconcile_task: asyncio.Task[int] | None = None
     if config.reconcile_external_history:
@@ -997,6 +1000,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         settings_store=settings_store,
         clipboard=clipboard,
         push_store=push_store,
+        device_presence=device_presence,
         project_actions=project_actions,
         project_watcher=project_watcher,
         automation_tasks=set(),
@@ -5046,6 +5050,15 @@ async def push_presence(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
+async def get_device_presence(request: web.Request) -> web.Response:
+    """Which devices the daemon believes are in use, and why.
+
+    The suppression it feeds is invisible by construction — the symptom of getting
+    it wrong is a notification that never arrives — so the inputs are readable.
+    """
+    return json_response(request.app["device_presence"].snapshot())
+
+
 async def list_notifications(request: web.Request) -> web.Response:
     hooks: MetaHookEngine = request.app["hooks"]
     automation = await request.app["automation_store"].notifications(limit=200)
@@ -6572,6 +6585,8 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
     bus: EventBus = request.app["events"]
+    presence: DevicePresenceStore = request.app["device_presence"]
+    connection_id = secrets.token_urlsafe(12)
     session_filter = request.query.get("session")
     # Parsed before subscribing: an int() failure between subscribe and the try
     # leaked a dead 1024-slot subscriber that kept paying per-event fanout cost
@@ -6613,16 +6628,31 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
             last_sequence = max(last_sequence, int(event["seq"]))
 
         async def watch_client() -> None:
-            """Read the socket purely to observe the client going away.
+            """Read the socket to observe the client going away, and its presence.
 
-            `/events` is server-to-client only, but a handler that never reads
-            cannot see a close frame or process heartbeat pongs — so a suspended
-            tab's socket lingers, holding a 1024-slot queue and paying per-event
-            fanout, until some later send happens to fail.
+            `/events` is otherwise server-to-client only, but a handler that never
+            reads cannot see a close frame or process heartbeat pongs — so a
+            suspended tab's socket lingers, holding a 1024-slot queue and paying
+            per-event fanout, until some later send happens to fail.
+
+            Device presence rides this socket because every client holds one
+            whether or not it can receive Web Push (the Windows desktop shell
+            cannot), and because the connection's lifetime is exactly the
+            presence's lifetime — a closed socket is a device nobody is looking at.
             """
             # unsupervised-loop-ok: lives for one /events websocket, not the daemon.
-            async for _ in ws:
-                pass
+            async for message in ws:
+                if message.type != WSMsgType.TEXT:
+                    continue
+                try:
+                    frame = json.loads(message.data)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(frame, dict) or frame.get("type") != "presence":
+                    continue
+                report = parse_device_report(frame)
+                if report is not None:
+                    presence.report(connection_id, report)
 
         reader = asyncio.create_task(watch_client())
         try:
@@ -6645,5 +6675,8 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
     except (asyncio.CancelledError, ConnectionResetError):
         pass
     finally:
+        # Before the unsubscribe: a cancelled handler re-raises at its first await,
+        # and this device must not be left looking present forever.
+        presence.drop(connection_id)
         bus.unsubscribe(queue)
     return ws

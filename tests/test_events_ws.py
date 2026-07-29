@@ -16,15 +16,19 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import server
+from swe_mux.device_presence import DevicePresenceStore
 from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
 from swe_mux.server import events_ws
 
 
-def _app(history: HistoryIndex, events: EventBus) -> web.Application:
+def _app(
+    history: HistoryIndex, events: EventBus, presence: DevicePresenceStore | None = None
+) -> web.Application:
     app = web.Application()
     app["history"] = history
     app["events"] = events
+    app["device_presence"] = presence or DevicePresenceStore()
     app.router.add_get("/events", events_ws)
     return app
 
