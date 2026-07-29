@@ -8,6 +8,7 @@ from .base import SpawnOptions, SpawnSpec
 
 class ShellAdapter:
     name = "shell"
+    reports_conversation_rollover = False
 
     def __init__(self, default_exe: str = "powershell.exe") -> None:
         self.default_exe = default_exe

@@ -24,6 +24,9 @@ def codex_data_home() -> Path:
 
 class CodexAdapter:
     name = "codex"
+    # Codex has no session-start hook, so a `/new` under a live PTY is only
+    # discoverable from the filesystem; the transcript-switch heuristic stays on.
+    reports_conversation_rollover = False
 
     def __init__(
         self,

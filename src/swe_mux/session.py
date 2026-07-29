@@ -2261,6 +2261,7 @@ class SessionManager:
         transcript: Path | None,
         reason: str,
         source: str,
+        confirmed: bool = True,
     ) -> bool:
         """Retire the current agent run and open a new one on the same PTY.
 
@@ -2306,7 +2307,15 @@ class SessionManager:
         record.agent_run_started_at = time.time()
         record.agent_run_seq += 1
         record.native_session_id = native_id
-        session.agent_lifecycle_id = native_id
+        # The lifecycle anchor is what Branch forks from and what identity
+        # reconciliation heals back to, so only CLI-confirmed rollovers (hook
+        # ingress) may move it. A heuristic transcript switch is the daemon's
+        # guess; letting it rewrite the anchor is how a single wrong guess became
+        # permanent, unrepairable cross-attribution. Codex keeps the old
+        # behaviour — the anchor doubles as its demotion token and must track
+        # the observed conversation there.
+        if confirmed or backend != "claude":
+            session.agent_lifecycle_id = native_id
         session.transcript_path = transcript
         record.observation_stale_since = None
         record.tokens_in = 0
@@ -2406,8 +2415,24 @@ class SessionManager:
         while path and not stop_event.is_set():
             session.transcript_path = path
             native_id = adapter.transcript_native_id(path)
-            if native_id:
-                session.record.native_session_id = native_id
+            if native_id and native_id != session.record.native_session_id:
+                # Codex binds a placeholder mux id until the rollout file names
+                # the real conversation, so re-deriving from the file is correct
+                # there. For Claude the record identity is authoritative (spawn
+                # `--session-id` or a hook-reported rollover) and every path
+                # handed to the observer was derived from it — a mismatched stem
+                # means the path is wrong, and rekeying the record to match it is
+                # exactly the cross-attribution this design forbids.
+                if session.record.backend == "claude":
+                    log.warning(
+                        "observer for session %s handed transcript %s that does not "
+                        "match its conversation %s; keeping the record identity",
+                        session.record.id,
+                        path.name,
+                        session.record.native_session_id,
+                    )
+                else:
+                    session.record.native_session_id = native_id
             await self._await_registration(session)
             await self.history.session_promoted(session.record, str(path))
             observe_task = asyncio.create_task(
@@ -2435,6 +2460,7 @@ class SessionManager:
                         transcript=switch,
                         reason="conversation_rolled",
                         source="transcript_switch",
+                        confirmed=False,
                     )
                 path = switch
                 backoff = OBSERVER_RESTART_BACKOFF_MIN_SECONDS
@@ -2475,7 +2501,14 @@ class SessionManager:
         file without any daemon-visible lifecycle signal. When the observed file
         goes quiet and another transcript for the same run cwd is being actively
         written (and is not owned by another live session), observation moves.
+
+        Backends whose CLI reports conversation replacement itself (Claude's
+        SessionStart ingress) never take the heuristic path: their rollovers
+        arrive through `roll_agent_conversation`, and guessing from mtimes is the
+        one mechanism that can latch onto a sibling's conversation in a shared
+        cwd. For them this watcher only keeps staleness detection alive.
         """
+        heuristic = not getattr(session.adapter, "reports_conversation_rollover", False)
         while not stop_event.is_set() and not observe_task.done():
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=TRANSCRIPT_SWITCH_POLL_SECONDS)
@@ -2485,7 +2518,9 @@ class SessionManager:
                 break
             if session.record.backend not in {"claude", "codex"}:
                 break
-            candidate = self._transcript_switch_candidate(session, current)
+            candidate = (
+                self._transcript_switch_candidate(session, current) if heuristic else None
+            )
             if candidate is not None:
                 await self.events.emit(
                     "transcript_retargeted",

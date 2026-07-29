@@ -50,6 +50,11 @@ def _hook_command(event: str, executable: str | None = None) -> str:
 
 class ClaudeAdapter:
     name = "claude"
+    # Spawned with an injected `--session-id` and per-session hook settings, so
+    # every conversation replacement (`/clear`, in-CLI `/resume`) is reported by
+    # the CLI itself via the SessionStart ingress. Rollovers are hook-driven;
+    # the transcript-switch heuristic must never move a Claude session.
+    reports_conversation_rollover = True
 
     def __init__(
         self,

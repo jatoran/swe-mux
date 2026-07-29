@@ -30,6 +30,12 @@ class SpawnOptions:
 
 class BackendAdapter(Protocol):
     name: str
+    # True when the CLI itself reports conversation replacement over the daemon's
+    # hook ingress (Claude's SessionStart hook). For such backends the filesystem
+    # transcript-switch heuristic is never consulted: the CLI's own report is
+    # strictly stronger evidence, and the heuristic is the one mechanism that can
+    # latch a session onto a sibling's conversation in a shared cwd.
+    reports_conversation_rollover: bool
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec: ...
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec: ...
