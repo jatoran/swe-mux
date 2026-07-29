@@ -34,7 +34,7 @@ import { railPayload, resolveRail, type RailBackend, type RailItem } from './com
 import { activatePromptRailItem } from './promptRail'
 import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { currentProfile, loadRailItems } from './deviceSettings'
-import { redrawVisibleTerminal, refitVisibleTerminal, terminalHostIsVisible } from './terminalViewport'
+import { redrawVisibleTerminal, refitVisibleTerminal, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
 import { geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
 import {
   applyOwnerFrame,
@@ -1294,7 +1294,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // Rail key buttons inject raw bytes on the normal onData path (broadcast + replay aware).
   // In read/select mode we deliberately do not refocus, so sending a key never raises the
   // soft keyboard back up.
-  const sendKey=(sequence:string)=>{termRef.current?.input(sequence,true);if(!keyboardOffRef.current)focusTerminalInputRef.current()}
+  // xterm already means to put the viewport back on the tail here (`scrollOnUserInput`), but
+  // its own attempt is the single clamped call `scrollTerminalToTail` exists to finish.
+  const sendKey=(sequence:string)=>{
+    termRef.current?.input(sequence,true)
+    scrollTerminalToTail(termRef.current)
+    if(!keyboardOffRef.current)focusTerminalInputRef.current()
+  }
   const toggleKeyboard=()=>{
     const next=!keyboardOffRef.current
     keyboardOffRef.current=next;setKeyboardOff(next)
@@ -1400,7 +1406,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   }
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
-  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)} onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{railItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{offTail&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={()=>{termRef.current?.scrollToBottom();if(!keyboardOffRef.current)focusTerminalInputRef.current()}}>↓ latest</button>}{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)} onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{railItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{offTail&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={()=>{scrollTerminalToTail(termRef.current);if(!keyboardOffRef.current)focusTerminalInputRef.current()}}>↓ latest</button>}{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }
