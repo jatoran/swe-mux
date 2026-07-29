@@ -132,6 +132,27 @@ class DevicePresenceStore:
         """Is a device class *other than* `profile` in use right now."""
         return bool(self.active_profiles(now) - {profile})
 
+    def leading_profile(self, now: float | None = None) -> str | None:
+        """The active device class the human touched most recently, if any.
+
+        "Active" is deliberately generous — a desktop left open and focused keeps
+        counting for two minutes after the last keystroke — which means both classes
+        are routinely active at once, in exactly the moment someone picks up their
+        phone. Something has to break that tie, and the only honest answer is where
+        the hands went last. Anything else leaves the incumbent holding input while
+        the user works somewhere else.
+        """
+        moment = self._clock() if now is None else now
+        leader: DevicePresence | None = None
+        for device in self._live(moment):
+            if not self._is_active(device, moment):
+                continue
+            if device.last_interaction_at is None:
+                continue
+            if leader is None or device.last_interaction_at > (leader.last_interaction_at or 0.0):
+                leader = device
+        return None if leader is None else leader.profile
+
     def interaction_since(self, moment: float, *, exclude: str | None = None) -> bool:
         """Did any device other than `exclude` register a human interaction after `moment`.
 
@@ -153,6 +174,7 @@ class DevicePresenceStore:
         return {
             "now": now,
             "active_profiles": sorted(self.active_profiles(now)),
+            "leading_profile": self.leading_profile(now),
             "devices": [
                 {
                     "profile": device.profile,

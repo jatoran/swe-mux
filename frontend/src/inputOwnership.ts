@@ -115,10 +115,6 @@ export function shouldReplayRejectedInput(frame: RejectedFrame): boolean {
   return frame.retry !== true && typeof frame.data === 'string' && frame.data.length > 0
 }
 
-export function terminalDeviceLabel(isMobile: boolean): string {
-  return isMobile ? 'mobile' : 'desktop'
-}
-
 /** Text for the strip a non-owning pane shows instead of pretending to accept input. */
 export function inputOwnerNotice(view: OwnershipView): string | null {
   if (view.owns || !view.ownerDevice) return null

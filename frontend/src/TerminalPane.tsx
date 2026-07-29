@@ -44,7 +44,6 @@ import {
   inputOwnerNotice,
   shouldReclaimAfterDisplacement,
   shouldReplayRejectedInput,
-  terminalDeviceLabel,
   UNOWNED,
   type ClaimReason,
   type OwnershipView,
@@ -632,7 +631,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     })
     let ownsInput = false
     let ownership: OwnershipView = UNOWNED
-    const device = terminalDeviceLabel(isMobileTerminalInput())
+    // The same device class the presence heartbeat reports, deliberately: the daemon
+    // compares these two strings, and `isMobileTerminalInput()` is a *different*
+    // question (does this pane need the IME bridge — true for any coarse pointer,
+    // including one wider than the mobile breakpoint). A phone that answered "mobile"
+    // here and "desktop" there would report itself in use and then refuse its own
+    // claims for being the other device.
+    const device = currentProfile()
     // When the user last did something in this pane. A focus event within the gesture
     // window is the user asking for the keyboard; anything later is the pane restoring
     // its own focus, which must not take input from another device.

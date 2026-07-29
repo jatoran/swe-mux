@@ -9,7 +9,6 @@ import {
   inputOwnerNotice,
   shouldReclaimAfterDisplacement,
   shouldReplayRejectedInput,
-  terminalDeviceLabel,
   UNOWNED,
 } from '../src/inputOwnership.ts'
 
@@ -75,6 +74,4 @@ test('a non-owning pane says which device holds the keyboard', () => {
     inputOwnerNotice({ owns: false, epoch: 1, ownerDevice: 'mobile', denied: 'denied_active_owner' }),
     'Input active on mobile',
   )
-  assert.equal(terminalDeviceLabel(true), 'mobile')
-  assert.equal(terminalDeviceLabel(false), 'desktop')
 })

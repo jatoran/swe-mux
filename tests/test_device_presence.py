@@ -93,6 +93,45 @@ def test_interaction_since_answers_who_was_present_during_a_deferral() -> None:
     assert store.interaction_since(raised, exclude="desktop") is False
 
 
+def test_the_most_recently_touched_device_leads_when_both_are_active() -> None:
+    """Both classes are routinely active at once, because a desktop left open and
+    focused keeps counting for two minutes after the last keystroke — which is exactly
+    the window in which someone picks up their phone. Where the hands went last is the
+    only honest tiebreak; without it the incumbent kept input while the user worked
+    somewhere else, and every session opened on the phone had to be claimed by hand."""
+    now = [1000.0]
+    store = _store(now)
+    store.report("desk", parse_device_report({**DESKTOP, "interaction_age": 90}))
+    store.report(
+        "phone",
+        parse_device_report(
+            {"profile": "mobile", "visible": True, "focused": True, "interaction_age": 2}
+        ),
+    )
+    assert store.active_profiles() == {"desktop", "mobile"}
+    assert store.leading_profile() == "mobile"
+
+    # Touching the desktop again hands it straight back.
+    store.report("desk", parse_device_report({**DESKTOP, "interaction_age": 0}))
+    assert store.leading_profile() == "desktop"
+
+
+def test_only_an_active_device_can_lead() -> None:
+    now = [1000.0]
+    store = _store(now)
+    # Recently touched, but the window is hidden: the user put the phone away.
+    store.report(
+        "phone",
+        parse_device_report(
+            {"profile": "mobile", "visible": False, "focused": False, "interaction_age": 1}
+        ),
+    )
+    store.report("desk", parse_device_report({**DESKTOP, "interaction_age": 30}))
+    assert store.leading_profile() == "desktop"
+    store.drop("desk")
+    assert store.leading_profile() is None
+
+
 def test_reports_are_validated_and_ages_are_bounded() -> None:
     assert parse_device_report({"profile": "tablet", "visible": True}) is None
     assert parse_device_report({"visible": True}) is None

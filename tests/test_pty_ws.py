@@ -741,6 +741,44 @@ async def test_the_phone_keeps_input_across_sessions_while_it_is_the_device_in_u
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_a_desktop_pane_left_open_does_not_take_sessions_back_from_the_phone() -> None:
+    """The reported loop, end to end.
+
+    Switching sessions on the phone switches them in the desktop workspace too, so a
+    desktop pane mounts and claims for every session opened on the phone. Meanwhile
+    the desktop sits open and focused, which keeps it "active" for two minutes after
+    the last keystroke — so both device classes are active at once precisely when
+    someone picks up their phone. Deciding that as contention handed every session
+    back to the incumbent, which is what made the phone demand a takeover each time.
+    """
+    session, app, _writes, _resizes = _arbitration_app()
+    # The desk was in use a minute and a half ago and is still open and focused; the
+    # phone was touched a second ago. That is where the human is.
+    _in_use(app, "desktop", interaction_age=90)
+    _in_use(app, "mobile", interaction_age=1)
+
+    async with TestClient(TestServer(app)) as client:
+        desktop = await _attach(client, 200, 50)
+        assert (await _claim(desktop, "gesture", "desktop"))["active"] is True
+
+        phone = await _attach(client, 40, 20)
+        granted = await _claim(phone, "passive", "mobile")
+        assert granted["active"] is True
+        assert granted["reason"] == "granted_device_in_use"
+        assert (await next_json(desktop))["reason"] == "claimed_elsewhere"
+
+        # The desktop pane the shared tab switch just mounted claims on attach, and
+        # keeps claiming as it regains DOM focus. None of it takes the session back.
+        for _ in range(3):
+            denied = await _claim(desktop, "passive", "desktop")
+            assert denied["active"] is False
+            assert denied["reason"] == "denied_device_in_use"
+        assert session.input_owner_device == "mobile"
+        await phone.close()
+        await desktop.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
 async def test_sitting_down_at_the_other_device_still_takes_input_with_one_click() -> None:
     """The rule above must not strand a device: a real click is still a real click."""
     session, app, _writes, _resizes = _arbitration_app()

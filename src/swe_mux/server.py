@@ -3482,6 +3482,7 @@ async def get_session_state_log(request: web.Request) -> web.Response:
                 # from any other one is refused, so this is the first thing to check
                 # when input ownership is not where it is expected to be.
                 "active_devices": sorted(request.app["device_presence"].active_profiles()),
+                "leading_device": request.app["device_presence"].leading_profile(),
                 "owner_device": session.input_owner_device,
                 "owner_epoch": session.input_owner_epoch,
                 "attached_viewports": len(session.viewports),
@@ -6523,7 +6524,11 @@ async def _claim_terminal_input(
     # claiming client. Absent (older client, or a test app that wires no store) means
     # "no signal", which leaves the per-session rules to decide exactly as before.
     presence: DevicePresenceStore | None = request.app.get("device_presence")
-    in_use = presence.active_profiles() if presence is not None else set()
+    # The device class whose human touched it most recently. Not "is any other device
+    # active": a desktop left open and focused stays active for two minutes after the
+    # last keystroke, so both classes are active exactly when someone picks up their
+    # phone — and treating that as contention left every session with the desktop.
+    leader = presence.leading_profile() if presence is not None else None
     decision = evaluate_claim(
         session.owner_state(),
         ClaimRequest(
@@ -6533,8 +6538,8 @@ async def _claim_terminal_input(
             device=device,
             # Absent on legacy clients, which only claimed on real interaction.
             focused=frame.get("focused") is not False,
-            other_device_in_use=bool(in_use - {device}),
-            this_device_in_use=device in in_use,
+            other_device_in_use=leader is not None and leader != device,
+            this_device_in_use=leader == device,
         ),
     )
     if not decision.granted:
