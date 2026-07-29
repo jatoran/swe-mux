@@ -254,6 +254,14 @@ class DeliveryReadinessTracker:
             hard_block_reasons.append("operator_recently_typed")
         if not terminal_observer_connected or not exclusive_input_owner:
             hard_block_reasons.append("terminal_observer_disconnected")
+        if getattr(record, "observation_stale_since", None):
+            # The followed transcript is no longer the conversation this PTY runs
+            # (an unfollowable in-CLI `/clear` or `/new`). Every positive readiness
+            # signal below is then being read off a retired conversation, so this
+            # blocks outright rather than degrading to unknown — writing into a
+            # session whose state we are provably misreading is the false-safe case
+            # the whole contract exists to prevent.
+            hard_block_reasons.append("transcript_stale")
 
         unknown_reasons: list[str] = []
         if memory.phase == "unknown":

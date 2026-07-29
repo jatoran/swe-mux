@@ -14,6 +14,10 @@
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
   `design/features/ui.md`, `technical/frontend/packages.md`
+- Changing terminal input ownership across devices, the PTY WebSocket frames, or how a
+  shared PTY is sized: `design/interfaces.md`, `design/features/sessions.md`,
+  `design/features/ui.md`, `technical/backend/packages.md`,
+  `technical/frontend/packages.md`
 - Changing the utility drawer (tabs, desktop dock/icon rail), command-rail placement, or where
   inserted text lands: `design/features/ui.md`, `technical/frontend/packages.md`
 - Changing clipboard capture, the clipboard-history ring/panel, or where inserted text lands:

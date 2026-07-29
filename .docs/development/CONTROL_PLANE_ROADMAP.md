@@ -196,6 +196,8 @@ after its most fragile input (it hooks *events*, not hooks — see §10).
 | **Enablement DAG** | The per-project opt-in dependency graph: a consumer cannot be enabled unless its substrate dependencies are enabled for that project (§8). |
 | **Automation layer** | Umbrella term for rules + observers when one word is needed. |
 | **Native hooks** | Reserved exclusively for the CLIs' own hook systems (Claude Code hooks, Codex `notify`). They are an event *source*, nothing more. |
+| **Agent run** (`agent_run_id`) | One continuous provider conversation on one PTY, and **the scope every control-plane record is keyed by** — Tier 0 facts, annotations, evidence sets, scan records, queue bindings. A session may have several runs in sequence; a run never spans two conversations. |
+| **Conversation rollover** | An in-CLI `/clear` (Claude) or `/new` (Codex): same PTY, same mux session, new provider conversation, therefore **a new agent run**. Signalled by `agent_conversation_rolled` on the event log. Consumers do not detect it themselves — they inherit the boundary from the run id (`ROADMAP.md` Phase 5.4). |
 | **Annotations** | Persisted observer/rule output attached to sessions (titles, summaries, verdicts, scan records). |
 | **Universal commands** | Input-side sibling of universal hooks: mux-level canned prompts injectable into any backend (see §17). |
 | **Rulepacks** | Shareable, parameterized bundles of rules + observers + scripts (see §15). |
@@ -315,6 +317,13 @@ Provenance, loop detection, and declared-vs-verified are *just queries over Tier
 the scan timeline stay cheap (it references Tier 0 rather than re-describing it)
 and what makes the file/artifact trail reliable where every summarizer is weakest.
 
+Every fact carries `agent_run_id` resolved at capture time, and the run is the
+window those queries operate over. The boundary includes an in-CLI conversation
+rollover, not just spawn/exit/promotion (`ROADMAP.md` Phase 5.4): a fingerprint
+window, claim, or no-progress gate that spans a `/clear` is comparing two
+conversations. Cross-run and cross-session queries stay possible and are the point
+of §6.1 and §6.6 — they are just never *implicit*.
+
 ### 5.4 Project card
 
 A distilled, cached description of the project — what it is, its main subsystems,
@@ -355,17 +364,30 @@ averaged into the noise.
 **When it fires.** Event-triggered with a max-time heartbeat, *not* clock-only
 (§2): tool completion/failure, test/build completion, git HEAD or meaningful diff
 transition, process start/exit/crash, user input or wait transition, context
-compaction, agent finish/error, detected no-progress episode; plus a Δmax of 3–5
-minutes as a backstop so silence is still represented. A fixed clock alone smears
-across causal boundaries (one record gets the tool call, the next its result) and
-under/over-samples bursts vs waits.
+compaction, agent finish/error, detected no-progress episode, **conversation
+rollover**; plus a Δmax of 3–5 minutes as a backstop so silence is still
+represented. A fixed clock alone smears across causal boundaries (one record gets
+the tool call, the next its result) and under/over-samples bursts vs waits.
+
+**The agent run is the timeline's outer boundary.** A rollover (`/clear`, `/new` —
+`ROADMAP.md` Phase 5.4) ends the current segment and starts a new one, and three
+things reset with it: the delta window (the new conversation's transcript starts at
+byte zero, so "the delta since the last scan" is meaningless across the seam), the
+2–3 records of continuity context (feeding a model the predecessor conversation's
+records is how it invents a continuity the agent does not have), and the `novelty`
+comparison set. That last one matters most and is the least obvious: a `/clear`
+that is *immediately followed by the same work restated* would score near-zero
+novelty against the pre-clear records and be summarised as an unremarkable
+continuation, when it is in fact the most significant transition in the session.
+Compare within the run only. Segments remain joinable for a whole-session view —
+they are just never silently concatenated.
 
 **The record.** Multi-axis, not a single `state` field — lifecycle, behavior, and
 work-phase are different variables and behavior is multi-label:
 
 ```text
 {
-  t0, t1, session_id, schema_version,
+  t0, t1, session_id, agent_run_id, schema_version,
   lifecycle_state,     # starting|running|waiting_user|waiting_tool|
                        #   rate_limited|errored|finished|stopped
   behavior[],          # grounding|retrieving|reasoning|planning|
@@ -455,6 +477,15 @@ and failed every time because *someone had to write it down* — passive capture
 removes the only thing that ever killed it. Rated #2 value-to-risk, and it is the
 capability that helps a solo hands-on-testing workflow today.
 
+**A conversation rollover is not an abandonment.** `/clear` says the human reset the
+context window; it says nothing about whether the approach failed. Treating the
+boundary as evidence would manufacture a dead end out of every routine context
+reset — and worse, retrieval would later warn a session away from an approach that
+was actually working. Only an approach tried and dropped *within* a run counts.
+The inverse case is real and worth capturing separately: work that was in flight
+when the run rolled is **unfinished**, not abandoned, and that is a handoff signal
+(§6.6 lineage), not a negative result.
+
 ### 6.3 Declared vs verified  ← Tier 0 (test facts) + scan (claim)
 
 Keep three facts that usually get mushed into one strictly apart: the agent
@@ -465,6 +496,13 @@ Status renders as "claims done · tests not run," never a single misleading ✓.
 Directly attacks the documented trap where developers treat passing tests as a
 correctness guarantee (AgentLens: 20% of passing runs are clean; field studies:
 green tests read as proof). Cheap, deterministic, high-signal.
+
+Claims do not survive a conversation rollover. An open "claims done · tests not
+run" from before a `/clear` belongs to a conversation that no longer exists, and
+leaving it open means the next test run in the fresh conversation resolves a claim
+the agent never made — the exact false-verification this consumer exists to
+prevent. Close open claims at the boundary as `superseded` (retained, inspectable,
+never silently satisfied) rather than carrying or deleting them.
 
 ### 6.4 Loop / stall detection  ← Tier 0 (fingerprints) + scan (recurrence)
 
@@ -480,6 +518,14 @@ the ranking layer with a confidence — it does not fire an interrupt itself at 
 precision. Remember stopping-behavior is ~half the failure mass: pair loop
 detection with **premature-termination detection** (turn ended + completion claim +
 no verification evidence + open todos).
+
+Fingerprint and oscillation windows are bounded by the agent run. Repeating the
+same action three times across a `/clear` is a human restarting from a clean
+context, not an agent stuck in a cycle, and the no-progress gate would agree with
+the false reading — nothing progressed, because the conversation was replaced. The
+genuinely interesting cross-run version of this (the *human* keeps re-clearing and
+re-attempting the same thing) is a different, slower signal and belongs to the
+cross-session layer (§6.6), where the boundary is explicit rather than accidental.
 
 ### 6.5 Doc-debt ledger  ← Tier 0 (files changed) + project card + routing table
 
@@ -548,6 +594,12 @@ CLI knows when the user was watching. The mobile/Telegram payoff, and the natura
 home for everything demoted out of the interrupt channel (completions are ignored
 50% of the time — they belong here).
 
+A conversation rollover inside the absence window is rendered as a boundary, not
+smoothed over. "You cleared this session here" is the single piece of context that
+makes the rest of a multi-run digest legible, and a digest that narrates two
+conversations as one continuous stretch of work is actively misleading about what
+the agent currently knows.
+
 ### 6.9 Sibling consumers (need substrate but not the scan timeline)
 
 - **Screenshot-to-agent** ← project card + browser surface. Right-click a pane →
@@ -606,9 +658,18 @@ How it stays efficient and safe:
   `novelty` spike, `work_phase`/`target` transition, or a new `user_ask` — with
   debounce and hysteresis so the title doesn't flicker and doesn't cost a call
   every turn. Interim tool chatter never moves it.
+- **A conversation rollover always retitles.** It is the strongest material shift
+  there is: the tab is describing work the conversation no longer contains. This
+  is also the case today's one-shot titler gets visibly wrong — its reserve is per
+  `agent_run_id`, so before `ROADMAP.md` Phase 5.4 a `/clear`ed session kept its
+  pre-clear title for the rest of its life. With the run boundary in place the
+  existing reserve becomes correct rather than sticky, and the continuous titler
+  inherits the fix instead of re-solving it.
 - **Explicit rename wins, permanently.** If the user renames the shell/session, the
   title is pinned and auto-update disables for that session. User intent is
-  authoritative; the automation never overwrites a human-chosen name.
+  authoritative; the automation never overwrites a human-chosen name — and the pin
+  is a property of the *session*, so it survives a rollover too. A human who named
+  a tab did not un-name it by clearing the conversation.
 - **Compact task labels**, no backend or "terminal session" prefixes — the existing
   titling convention carries over.
 
@@ -672,6 +733,15 @@ on the bad match. The pull tools must return high-precision, tightly scoped resu
 (same project, exact normalized error signature, verified provenance) and return
 **nothing** rather than a weak guess. Empty is fine; wrong is corrosive. Same
 principle as the interrupt budget: a usually-wrong signal is worse than none.
+
+**Attribute the run, always.** A result may come from a sibling session, from this
+session's own superseded run, or from months ago; all three are legitimate, and the
+agent must be able to tell them apart. The dangerous case is the middle one: after a
+conversation rollover the agent has no memory of what its predecessor run did, so an
+unlabelled result from that run reads as its own recollection and is trusted at
+exactly the wrong strength. Carrying `agent_run_id` on every returned record costs
+nothing and is what keeps "the control plane remembers" from becoming "the agent
+misremembers".
 
 **Implications for the substrate.** Every artifact must be **addressable and
 retrievable** — the source pointers, provenance edges, and scan records are not
@@ -875,6 +945,8 @@ another agent can pick up mid-plan. Section links point to the design detail.
     failures are counted and surfaced at `GET /api/diagnostics/background`
   - [x] Ownership on every fact: `agent_run_id` + `project_id` resolved at capture time.
     Per-run queries cannot be recovered from `session_id` across resume/promotion/branch
+    — and, from `ROADMAP.md` Phase 5.4, across an in-CLI `/clear` or `/new` as well, which
+    is the one run boundary the daemon used not to draw
   - [x] `tool_result` facts classified per action (`command_result`, `file_read_result`, …)
     with the tool's target correlated forward from its `tool_use`; the exit class no longer
     collapses success and failure onto one fingerprint
@@ -946,17 +1018,26 @@ another agent can pick up mid-plan. Section links point to the design detail.
     Calibrated live 2026-07-28: one annotation per edge with a per-edge dedupe key
     (writer_fact > reader_fact) — the original set-hash key restated the whole growing
     graph every evaluation (quadratic storage, edges double-counted by ranking).
+- [ ] **3.5 · Run boundary contract** — `ROADMAP.md` Phase 5.4, not a control-plane step of
+  its own but a hard prerequisite for everything below it. An in-CLI `/clear` or `/new`
+  becomes a new `agent_run_id` (`agent_conversation_rolled` on the event log) instead of a
+  silent conversation swap under a live run. Steps 4–8 inherit their boundary from it and
+  must not implement conversation-change detection themselves.
 - [ ] **4 · Project card** (§5.4). Distilled architecture, cached; feeds scan timeline + Tier 2.
 - [ ] **5 · Scan timeline (Tier 1)** (§5.5). First model-cost layer. Capture-first: readable
   timeline + dead-end memory (§6.2) + continuous title (§6.11). Instrument the rehydration
-  rate from commit one.
+  rate from commit one. Records carry `agent_run_id`; delta window, continuity context, and
+  `novelty` all reset at a rollover.
 - [ ] **6 · Model narration** (§14). Cheap-model "why" on top of the deterministic detectors.
+  A narration slice never spans two agent runs.
 - [ ] **7 · Attention ranking / inbox** (§6.7). Last — needs every other signal. Fan-out,
-  daily interrupt budget, four channels, breakpoint delivery.
+  daily interrupt budget, four channels, breakpoint delivery. Findings anchored to a
+  superseded run stay inspectable and are excluded from ranking.
 - [ ] **8 · Cross-session + novel + mux MCP v1** (§6.6, 6.8, 6.10, 7). Interlocks, digests,
   second opinions, experience DB, and the memory half of the return path
   (`provenance`, `priorResolutions`, `deadEnds`, `verifiedStatus`) layered onto the v0
-  transport from step 2.5. Delivered as `ROADMAP.md` Phase 7.5.
+  transport from step 2.5. Every returned record names its `agent_run_id`. Delivered as
+  `ROADMAP.md` Phase 7.5.
 
 ### UI work (design before it ships — the enablement surface is the big risk)
 
@@ -978,7 +1059,9 @@ another agent can pick up mid-plan. Section links point to the design detail.
 - [ ] **Continuous title is documented but not coded.** `features/automation.md` describes
   the adaptive, scan-derived, rename-suppressed titler; `automation.py` still reserves one
   title call per run and `test_automation_phase6.py` asserts the old one-shot behavior. Both
-  must change for the doc to be true (§6.11).
+  must change for the doc to be true (§6.11). The per-run reserve is no longer *wrong* once
+  `ROADMAP.md` Phase 5.4 lands (a `/clear` now yields a new run and therefore a new title);
+  it is merely still one-shot within a run.
 - [x] **Opt-in UI.** Shipped with the deterministic consumers (see the toggle surface above);
   hand-editing `.swe-mux/config.toml` still works and remains the source of truth.
 - [x] **Preview-shot retention.** Swept at 7 days by the media-cleanup loop across registered

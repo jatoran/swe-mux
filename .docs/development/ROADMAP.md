@@ -76,6 +76,15 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
   liveness distinguished from supervisor death, watchdog re-derivation after the threaded tail
   read, `resume_working` confined to answered approvals, durable blocking-hook spooling, and
   the `idle(waiting_on_background)` sub-state.
+- Agent conversation rollover (Phase 5.4): an in-CLI `/clear` or `/new` is a new `agent_run_id`
+  rather than a silent conversation swap under a live run. Claude's own `SessionStart` hook is
+  the trigger (immune to the sibling gate); the transcript-switch watcher, with a per-candidate
+  sibling gate instead of a blanket one, is the Codex/hookless fallback; and an unfollowable
+  replacement fails closed as `observation_stale_since` — hooks reclaim state authority and
+  delivery hard-blocks — instead of reporting a retired conversation as live. Queue items
+  strand, the auto-delivery grant lapses, the retired conversation keeps its own history row
+  and messages, Branch follows the live conversation, and `agent_run_seq` keeps a rolled run
+  from being repaired away by adoption. `design/features/backends.md`.
 - Session-preserving daemon reload (`pty_supervisor_enabled`, default off): an out-of-process
   PTY supervisor owns ConPTYs/scrollback/reaper Job so a daemon restart leaves agents running
   and the next daemon reattaches; intent-signaled shutdown (desktop Quit/Restart, terminal
@@ -97,23 +106,27 @@ Phase 1  Evidence replay + delivery-readiness contract
             -> Phase 4.5  mux MCP v0: read + discovery surface        [CP step 2.5, §7.5]
               -> Phase 5  Gated auto-delivery + mailbox + bounded agent communication
                  (incl. mux.notify / mux.requestSpawn over the queue) [CP §7.2]  [done]
-                -> Phase 5.5  Control-plane project card + scan timeline  [CP steps 4-5]
-                  -> Phase 6  Portable instructions and skills
-                     (instruction sync = return-path channel 2)       [CP §7]
-                    -> Phase 6.5  Model narration + attention ranking [CP steps 6-7]
-                      -> Phase 7  Windows maturity, CLI, doctor, and soak
-                        -> Phase 7.5  mux MCP v1 + cross-session memory  [CP step 8]
-                          -> Phase 8  Telegram control
-                            -> Phase 9  SSH/native attach
-                              -> Phase 10  WSL bridge + Linux/macOS
-                                -> Phase 11  Public packaging and release
+                -> Phase 5.4  Agent conversation rollover (the run boundary contract)
+                  -> Phase 5.5  Control-plane project card + scan timeline  [CP steps 4-5]
+                    -> Phase 6  Portable instructions and skills
+                       (instruction sync = return-path channel 2)     [CP §7]
+                      -> Phase 6.5  Model narration + attention ranking [CP steps 6-7]
+                        -> Phase 7  Windows maturity, CLI, doctor, and soak
+                          -> Phase 7.5  mux MCP v1 + cross-session memory  [CP step 8]
+                            -> Phase 8  Telegram control
+                              -> Phase 9  SSH/native attach
+                                -> Phase 10  WSL bridge + Linux/macOS
+                                  -> Phase 11  Public packaging and release
 ```
 
 Phase 3 interface work may proceed alongside Phase 2 when it does not depend on unfinished
 telemetry. No Phase 4 or 5 delivery automation bypasses Phase 1 acceptance gates. Phase 3.5
 hardens the lifecycle-state and readiness evidence those gates read from; it precedes any
 delivery automation because an inaccurate `working`/`idle`/`awaiting` status silently
-corrupts every downstream head-of-line, arming, and auto-delivery decision.
+corrupts every downstream head-of-line, arming, and auto-delivery decision. Phase 5.4 does
+the same job one level down, for *identity* rather than state: `agent_run_id` is the key
+every queue binding, Tier 0 fact, annotation, detector, and MCP read is scoped by, and until
+5.4 that key survived an in-CLI conversation replacement it should not have survived.
 Cross-cutting tests ship with each phase.
 
 ### Control-plane track interlock
@@ -132,9 +145,9 @@ document and are not duplicated here.
 | 2 · Helps-today siblings | shipped (Implemented baseline) | observation inbox is where `requestSpawn` drafts land |
 | 2.5 · mux MCP v0 | **Phase 4.5** | needs Phase 3.5 status contract; independent of Phase 4 |
 | 3 · Deterministic consumers | shipped (Phase 3.7) | writes drafts through the Phase 4 queue once it exists |
-| 4–5 · Project card + scan timeline | **Phase 5.5** | first model-cost layer; no Phase 5 dependency |
-| 6–7 · Narration + attention ranking | **Phase 6.5** | needs Phase 2 telemetry and Phase 3 notification channels |
-| 8 · Cross-session + mux MCP v1 | **Phase 7.5** | needs CP 4–5 substrate and the Phase 7 typed daemon operations |
+| 4–5 · Project card + scan timeline | **Phase 5.5** | first model-cost layer; no Phase 5 dependency, but **needs Phase 5.4's run boundary** — a timeline that spans a conversation replacement is describing two sessions as one |
+| 6–7 · Narration + attention ranking | **Phase 6.5** | needs Phase 2 telemetry, Phase 3 notification channels, and Phase 5.4 (never rank a finding from a replaced conversation against the live one) |
+| 8 · Cross-session + mux MCP v1 | **Phase 7.5** | needs CP 4–5 substrate, the Phase 7 typed daemon operations, and Phase 5.4 run-scoped retrieval |
 | §7.2 return-path write tools | shipped (Phase 5) | callers over the Phase 5 A→B queue, not a separate path |
 | §13 queue-draft channel | inside **Phase 4** | `sender_kind` + typed payload land with the queue model |
 
@@ -149,6 +162,12 @@ Ordering rules across the two tracks:
   deliberately pulled out of control-plane step 8 so the MCP transport, caller-identity, and
   daemon-restart decisions (`CONTROL_PLANE_ROADMAP.md` §7.3–7.4) are proven cheaply, before
   the memory tools in Phase 7.5 depend on them.
+- **Every control-plane record is scoped by `agent_run_id`, and Phase 5.4 is what makes that
+  scope mean "one conversation".** Tier 0 facts, annotations, detector evidence sets, scan
+  records, and MCP reads all inherit their boundary from the run, so no later phase needs its
+  own conversation-change detection — but no later phase may key on `session_id` alone
+  either. A consumer that spans a rollover silently merges two conversations, which is the
+  one failure mode the substrate is supposed to make impossible.
 
 ## Phase 1 — Evidence replay and delivery readiness
 
@@ -937,22 +956,185 @@ Also observed live and worth keeping: the agent CLI's own permission prompt gate
 use of each mux write tool, so a notify or spawn draft costs the operator one deliberate
 approval inside the session before it ever reaches the daemon.
 
+## Phase 5.4 — Agent conversation rollover (the run boundary contract)
+
+An in-CLI `/clear` (Claude) or `/new` (Codex) replaces the conversation underneath a live
+PTY: the CLI mints a new native session id and starts a new transcript file, while the mux
+session id, `agent_run_id`, PTY, hook secret, and MCP token all stay the same. Verified
+against the local transcript store — every `/clear` command record sits at the head of a
+*new* `.jsonl`, never inside the file it was typed in.
+
+swe-mux currently treats this as a file-following problem rather than an identity problem,
+and gets it wrong in two different ways depending on the situation:
+
+- **With a sibling agent in the same cwd** (the normal case in a real project) the
+  transcript-switch watcher's sibling gate refuses to move, so the observer tails a file
+  that will never change again. `parser_status` stays `ready`, which makes
+  `_transcript_authoritative()` true, which makes the hook fallback drop
+  `UserPromptSubmit`/`PreToolUse`/`PostToolUse` as redundant. Status, tokens, context, and
+  model then stop updating from *both* sources.
+- **Without a sibling** the watcher does move, and rekeys `native_session_id` in place under
+  the *same* `agent_run_id`. The history row's `native_id` and `transcript_path` are
+  overwritten, `replace_history_messages` deletes the pre-clear messages under that
+  `history_id` and reindexes the new file, and every run-scoped consumer keeps accumulating
+  across a boundary it cannot see. `agent_lifecycle_id` is never updated at all, so Branch
+  forks from the pre-clear conversation.
+
+This phase makes the conversation replacement a first-class lifecycle transition —
+a **conversation rollover** — and derives every downstream correction from it. It adds no new
+delivery path, no model cost, and no new user surface beyond diagnostics.
+
+### The rollover primitive
+
+- [x] Define a rollover as: the same PTY, the same mux session, a **new agent run**. Mint a
+  fresh `agent_run_id` and `agent_run_started_at`, bump a new `SessionRecord.agent_run_seq`
+  (0 = the run the session spawned with), and set both `native_session_id` and
+  `agent_lifecycle_id` to the new conversation id. `run_cwd` and the run's Project scope are
+  unchanged — the conversation moved, the working directory did not.
+- [x] Close the outgoing run exactly as an agent exit does: `update_agent_summary`,
+  `agent_run_ended(reason="conversation_rolled")`, discard the hook spool, cancel and restart
+  the observer, and reset observation state (`root_turn_active`, parser counters/status/
+  diagnostic, `state_source_priority`, tokens, context window/pct/peak, model,
+  `measurement_source`, compaction count/last/capability/confidence). Nothing that measured
+  the old conversation may carry into the new one.
+- [x] Open a **new** history row for the new run instead of rewriting the old one. The
+  pre-rollover row keeps its `native_id`, `transcript_path`, indexed messages, and final
+  token/context figures, and is reachable in history and search exactly like any other ended
+  run. This replaces today's behaviour where the pre-clear conversation is deleted from the
+  index and only reappears later as a detached `external=1` backfill row.
+- [x] Emit `agent_conversation_rolled` (session, previous/next `agent_run_id`, previous/next
+  `native_session_id`, backend, `reason`, `source`, `agent_run_seq`) onto the persisted
+  EventBus, so the boundary is queryable by every later consumer rather than inferred.
+- [x] Keep the rollover idempotent and re-entrant: a repeated signal for a conversation id
+  the session is already bound to is a no-op, and a rollover racing the agent-exit check or a
+  demotion resolves to one transition, not two. Claude blocks on the hook POST (2 s first
+  timeout, 3 attempts), so a retry after a slow daemon must be free — and a rollover that
+  *fails* must fail closed to `observation_stale_since` rather than degrading back to the
+  silent swap, because "the CLI told us it moved and we did not follow" is precisely the
+  state that field exists to name.
+
+### Triggers, strongest evidence first
+
+- [x] **Claude: the CLI's own `SessionStart` hook.** It already arrives over this session's
+  loopback ingress authenticated with this session's own secret — the strongest identity
+  evidence available, and immune to the sibling gate. Roll over when the reported
+  `session_id` is a valid conversation id that differs from the bound `native_session_id`.
+  Record the hook's `source` (`clear` / `resume` / `compact` / `startup`) as the reason but
+  do not enumerate on it: "the CLI says it is now writing a different conversation" is the
+  fact, and the id comparison is what establishes it. `compact` and `startup` report the
+  unchanged id and therefore never roll.
+- [x] Preserve the existing one-way bind (`_bind_native_id_from_hook`) for the *unbound* case
+  unchanged. Rollover is a separate, explicit transition — not a relaxation of the rule that
+  a hook cannot silently rekey a bound session.
+- [x] Stop discarding the evidence: `hook_event_payload` strips `source` because it collides
+  with the EventBus envelope. Re-emit it as `start_source` for `SessionStart` so the reason a
+  run rolled is in the event log.
+- [x] **Codex and hookless launches: the transcript-switch watcher**, routed through the same
+  rollover primitive instead of rekeying in place. Codex has no session-start hook (its
+  `notify` surface is turn-completion only), so the filesystem remains its only signal.
+- [x] Tighten the sibling gate instead of accepting it: it currently blocks on the mere
+  *existence* of a live same-backend session in the cwd. Narrow it to siblings that are
+  genuinely unaccounted for — a sibling whose own transcript was written after the candidate
+  appeared is demonstrably still on its own file, and a sibling whose PTY was silent across
+  the candidate's creation window cannot have produced it. An unpromoted shell with a pending
+  agent launch keeps blocking unconditionally; that race (`_has_transcript_sibling`) is
+  unchanged.
+
+### Fail closed when the conversation cannot be followed
+
+- [x] Add `SessionRecord.observation_stale_since`: set when the observed transcript has been
+  quiet past a threshold while this session's PTY is demonstrably active and no switch is
+  permitted. This is the honest state for a Codex `/new` behind a sibling that cannot be
+  ruled out — the alternative is a session that silently reports a dead conversation's
+  status forever.
+- [x] While stale: `_transcript_authoritative()` returns false so the hook/PTY fallback
+  resumes driving state; delivery readiness hard-blocks on `transcript_stale`; the session
+  inspector and `GET /api/diagnostics/*` show it with the last-observed mtime. Cleared by the
+  first record read on any followed transcript, and by a rollover.
+- [x] Never guess from PTY bytes. A cleared screen or a redrawn banner is presentation, not
+  identity (`CONTROL_PLANE_ROADMAP.md` §5.2); staleness plus fallback is the correct answer
+  when structured evidence is absent.
+
+### Downstream corrections
+
+- [x] **Prompt queue**: items bound to the outgoing run strand on `agent_conversation_rolled`
+  through the existing `target_run_replaced` path, with the reason "target agent conversation
+  was replaced". This is the protection Phase 4 already designed and `/clear` was bypassing —
+  a message written for one conversation must never be delivered into its successor.
+- [x] **Auto-delivery**: the per-session grant is bound to `agent_run_id`, so a rollover
+  invalidates it; verify the controller disables with an explicit audit reason rather than
+  failing an opaque `stable_run_identity` check.
+- [x] **Branch**: `_branch_source_id` reads `agent_lifecycle_id`, which the rollover now
+  updates, so the "original" sibling pane resumes the conversation the user was actually in.
+  Fixed by construction; pinned by a regression test.
+- [x] **Root-identity reconcile after daemon restart**: `_reconcile_adopted_root_identity`
+  currently asserts `agent_run_id == record.id` for a root agent and quarantines anything
+  else as misattribution. Teach it about `agent_run_seq > 0` so a legitimately rolled run
+  survives adoption instead of being repaired away, and keep the quarantine for genuinely
+  unexplained ids. Same for the legacy `_infer_spawn_backend` fallback.
+- [x] **Operational telemetry**: per-run compaction/tool/coverage reconcile scopes to the
+  live run; the outgoing run's rows are retained, not rewritten by a scan of the new file.
+- [x] **mux MCP**: `get_session` exposes `agent_run_id` and `agent_run_seq` so a sibling agent
+  can tell that a conversation it was told about has been replaced; `read_transcript` follows
+  the live run and never silently splices two conversations.
+- [x] **Titler, detectors, Tier 0, annotations**: all already key on `agent_run_id` and need
+  no change — the point of this phase is that the key now means what they assume. Cover it
+  with tests rather than code so the assumption stops being accidental.
+
+### Phase 5.4 exit criteria
+
+Implementation, fixtures, and docs are complete (`tests/test_conversation_rollover.py`, 27
+cases). The criteria below are the **live** pass and are deliberately still open: every one of
+them is a claim about a real CLI replacing a real conversation under a real PTY, and this
+phase exists precisely because that path is where the fixtures had been agreeing with a wrong
+model of the world.
+
+- [ ] `/clear` in a live Claude session rolls the run within one hook round-trip, with and
+  without sibling agents in the same cwd, and the session keeps reporting accurate status,
+  tokens, context, and model afterwards.
+- [ ] The pre-rollover conversation remains a complete, searchable history row with its own
+  transcript path and messages; the post-rollover conversation is a separate row. Neither
+  contains the other's messages.
+- [ ] A queue item armed before a `/clear` is stranded, not delivered. An auto-delivery grant
+  does not survive the rollover.
+- [ ] Branch after a `/clear` reopens the conversation the user was in, not its predecessor.
+- [ ] Codex `/new` either rolls the run (when the candidate is corroborated) or marks
+  observation stale and blocks delivery. It never continues reporting the replaced
+  conversation as live.
+- [ ] Every rolled run survives `POST /api/daemon/restart` with its identity intact and no
+  misattribution quarantine.
+- [ ] Live-verified on the frozen desktop app, not only in fixtures.
+
 ## Phase 5.5 — Control-plane project card and scan timeline
 
 Control-plane build-order steps 4–5 (`CONTROL_PLANE_ROADMAP.md` §5.4–5.5). The first
 model-cost layer of the control plane and the substrate every semantic consumer reads from.
 Capture-first: a readable per-session behavioral timeline before anything ranks or narrates
-on top of it. No dependency on Phases 4–5; it may proceed in parallel when capacity allows.
+on top of it. No dependency on Phases 4–5, but it **does** depend on Phase 5.4: a timeline is
+a claim about one continuous piece of work, and without the run boundary it would describe
+two unrelated conversations as one session's history.
 
 - [ ] Project card (CP §5.4): distilled, cached architecture summary that feeds the scan
   timeline and later Tier 2 analysis.
 - [ ] Scan timeline (CP §5.5): periodic and event-triggered cheap-model records forming a
   per-session timeline, per-project opt-in, budgeted, and inert when disabled.
+- [ ] **Scan records carry `agent_run_id`, not `session_id` alone, and a run is the timeline's
+  outer boundary** (CP §5.5). A rollover ends the current segment: the delta window resets to
+  the new transcript, the "last 2–3 records for continuity" do not reach back across it, and
+  `novelty` is computed only against records from the same run — otherwise the first record
+  of a fresh conversation scores as unremarkable because it resembles the one it replaced.
+  `agent_conversation_rolled` is itself a scan trigger, so the boundary is represented rather
+  than inferred from a gap.
 - [ ] Instrument the rehydration rate from the first commit — it is the measurement that
   decides whether a Tier 2 source expansion is ever justified.
 - [ ] Dead-end / negative-result memory (CP §6.2) and the continuous session title
   (CP §6.11) as the first two consumers of the timeline. The continuous titler replaces the
-  current one-shot title call and its stale test assertions (CP §9 known gaps).
+  current one-shot title call and its stale test assertions (CP §9 known gaps). A rollover is
+  a first-class retitle trigger — the old title describes work the conversation no longer
+  contains — and an explicit user rename still wins permanently, across rollovers included.
+- [ ] Dead-end capture must not read a rollover as an abandonment. `/clear` says the human
+  reset the context, not that the approach failed; only an approach that was tried and
+  dropped *within* a run is evidence of a dead end (CP §6.2).
 - [ ] Ship the persistent spend/budget line (CP §9 UI work) with this phase; this is the
   first feature whose cost is continuous rather than per-run.
 
@@ -963,6 +1145,8 @@ on top of it. No dependency on Phases 4–5; it may proceed in parallel when cap
 - [ ] The rehydration rate is measured and visible, not assumed.
 - [ ] Model spend for the timeline is visible in an always-on surface before the feature is
   enabled by default anywhere.
+- [ ] No timeline segment, continuity window, novelty comparison, or derived title spans a
+  conversation rollover, and the boundary is visible in the timeline UI.
 
 ## Phase 6 — Portable instructions and skills
 
@@ -1025,7 +1209,15 @@ substrate, Phase 2 telemetry, and the Phase 3 notification channels.
   four delivery channels, and breakpoint delivery.
 - [ ] Honor the interrupt budget as a hard bound. A usually-wrong signal is worse than no
   signal; the same trust logic as the return-path precision gate.
-- [ ] Absence report / digest (CP §6.8) for the time the user was away.
+- [ ] **Rank against the live run only.** A finding anchored to a run the session has rolled
+  past describes a conversation the agent can no longer act on, and surfacing it spends
+  interrupt budget on something the user already resolved by clearing. Annotations from
+  superseded runs stay inspectable in the session's history and are excluded from ranking
+  (`agent_run_id != record.agent_run_id`) rather than deleted. Narration slices likewise stop
+  at the run boundary — a "why" assembled across two conversations is a fabricated cause.
+- [ ] Absence report / digest (CP §6.8) for the time the user was away. A rollover inside the
+  absence window is shown as a boundary in the digest, not smoothed over: "you cleared here"
+  is exactly the context that makes the rest of the digest readable.
 
 ### Phase 6.5 exit criteria
 
@@ -1033,6 +1225,8 @@ substrate, Phase 2 telemetry, and the Phase 3 notification channels.
   inspectable rather than discarded.
 - [ ] Every ranked item traces to the deterministic facts and annotations behind it; narration
   is presentation over evidence, not a substitute for it.
+- [ ] No ranked item, narration slice, or digest entry mixes evidence from two agent runs of
+  the same session.
 - [ ] Disabling narration leaves the deterministic detectors and their annotations intact.
 
 ## Phase 7 — Windows product maturity, CLI control, and diagnostics
@@ -1069,6 +1263,10 @@ its quality matrix with the Phase 1–6 contracts.
   process inspection/orphan evidence, previews/listeners, Tailscale/Serve, normalized
   observer/delivery capabilities, rule queue/last-known-good state, OpenRouter catalog,
   budgets, account quota sampling, queue/mailbox health, and instruction-sync conflicts.
+- [ ] Include an **observation-freshness check** (Phase 5.4): agent sessions whose followed
+  transcript is stale, whose bound conversation id no longer matches the CLI's, or whose
+  rollover was blocked by an unresolvable sibling. This is the one class of fault that
+  presents as a perfectly healthy session, so a silent daemon is not evidence of health.
 - [ ] Publish machine-readable capability/version information through health diagnostics;
   redact secrets, terminal bytes, prompt/message content, media, and credentials.
 - [ ] Give every failed check a concrete remedy and distinguish unavailable optional
@@ -1127,6 +1325,12 @@ because it inherits the transport, identity, and restart contract already proven
   rather than a weak match: same Project, exact normalized signature, verified provenance.
   Empty is acceptable; plausible-but-wrong is corrosive, because an agent that acts on one bad
   match either stops calling or propagates the error.
+- [ ] **A retrieved memory names the agent run it came from, and a result from the caller's
+  own earlier run is labelled as such rather than blended into the present.** After a `/clear`
+  the agent has no memory of the work Phase 5.4 attributed to its predecessor run; a tool that
+  returns that work unlabelled reads as the agent's own recollection and is exactly the
+  "plausible but wrong" failure this gate exists to prevent. Sibling-run results are legitimate
+  and useful — they just have to be attributed.
 - [ ] Tag every retrievable insight with confidence and scope so low-confidence items can be
   withheld from the agent while still being shown, with a suppressed count, to the human.
 - [ ] Measure retrieval outcomes. A tool whose results are not being used, or are being
@@ -1140,6 +1344,8 @@ because it inherits the transport, identity, and restart contract already proven
   Phase 5 queue callers.
 - [ ] Enabling v1 is per-project opt-in through the existing enablement DAG, and disabling it
   leaves the Phase 4.5 v0 surface working.
+- [ ] No tool result silently merges two agent runs, and a caller can always tell which run a
+  result came from.
 
 ## Phase 8 — Telegram multi-session control
 
@@ -1153,7 +1359,10 @@ conversation model.
   competing poller per Claude/Codex session or depend on backend-native channel plugins.
 - [ ] Persist opaque Telegram chat/message/thread/callback mappings to mux session/run and
   Project ids. Replies target their originating run; unthreaded messages require explicit
-  active-session selection or a picker.
+  active-session selection or a picker. A reply whose originating run has been superseded
+  (agent exit, demotion, or a Phase 5.4 conversation rollover) is refused with a re-pick, never
+  delivered into the successor conversation — the remote channel makes the gap between
+  notification and reply hours long, so this is where a stale run binding is most likely.
 - [ ] Label outbound prompts, approvals, completions, reset alerts, and responses with
   backend, session, and Project identity.
 - [ ] Support Select session, Open, Approve, Reject, Queue/Reply, and Clear selection only

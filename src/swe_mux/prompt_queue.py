@@ -1342,6 +1342,15 @@ class PromptQueueService:
                     await self._strand(
                         event.session_id, "target agent run ended (demoted to shell)"
                     )
+                elif event.type == "agent_conversation_rolled" and event.session_id:
+                    # An in-CLI `/clear` wipes the conversation the item was
+                    # written for while the session itself lives on. Delivering
+                    # into the successor is exactly the silent retarget the
+                    # bind-on-first-run rule forbids, and before the run boundary
+                    # existed this was the one way to get it.
+                    await self._strand(
+                        event.session_id, "target agent conversation was replaced"
+                    )
 
     async def _reconcile_startup(self) -> None:
         """After adoption, strand pending items whose target did not survive.

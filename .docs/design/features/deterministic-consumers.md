@@ -26,6 +26,14 @@ Four detectors ship together:
 - **Two anchors.** A loop or verification finding belongs to one `agent_run_id`; doc debt is
   a property of the project and has no run to attach to, so it is anchored to `project_id`.
   `automation_annotations.agent_run_id` is nullable for exactly this reason.
+- **The run anchor is a conversation boundary, and that includes an in-CLI `/clear`**
+  (`backends.md`). A `/clear` mints a new `agent_run_id`, so fingerprint windows, no-progress
+  gates, and open completion claims all stop at it without any detector knowing the concept
+  exists. This matters most for the two detectors whose logic would otherwise invert: the same
+  action repeated across a `/clear` is a human restarting from a clean context, not an agent
+  looping — and the no-progress gate would *agree* with the false reading, since nothing
+  progressed because the conversation was replaced. Likewise a completion claim from before
+  the boundary must not be resolved by a test run after it.
 - **Idempotent.** Every finding carries a `dedupe_key`; a detector re-running on the next
   turn boundary returns the existing row rather than a second copy of the same finding.
 - **No delivery path.** Output is annotations. Nothing here writes a PTY, approves anything,

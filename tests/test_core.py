@@ -491,6 +491,10 @@ def test_conpty_creation_retries_only_the_private_pyo3_panic(
 
 
 def test_official_claude_hook_envelope_cannot_shadow_mux_metadata() -> None:
+    # The CLI's `source` means "why the session started"; the EventBus's means
+    # "which channel observed this". The collision is resolved by renaming, not by
+    # discarding: `start_source` is what tells a reader that a run rolled because
+    # the user typed /clear, and it can never be mistaken for the event envelope.
     payload = hook_event_payload(
         {
             "session_id": "claude-native",
@@ -502,7 +506,9 @@ def test_official_claude_hook_envelope_cannot_shadow_mux_metadata() -> None:
     assert payload == {
         "hook_event_name": "UserPromptSubmit",
         "cwd": r"D:\project",
+        "start_source": "untrusted",
     }
+    assert "source" not in payload
 
 
 def test_clipboard_media_validation_is_typed_and_signature_checked() -> None:

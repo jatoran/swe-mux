@@ -37,6 +37,17 @@ Source arbitration is unchanged from before this phase: priority `{pty:0, transc
 hook:2}` within a turn, released at new-turn boundaries, with `force` (interrupt/abort,
 process exit, lifecycle changes, transcript-authoritative closes) reclaiming authority.
 
+**Transcript authority is revoked when the transcript is stale.** Hooks are suppressed as
+redundant only while the transcript is authoritative (`parser_status == "ready"`), which is
+correct exactly as long as the file being tailed is this PTY's conversation. When it provably
+is not — an in-CLI `/clear` or `/new` the daemon could not follow, marked by
+`observation_stale_since` (`backends.md`) — the suppression is what freezes the session:
+the transcript can no longer report a turn boundary and the only source that can is being
+dropped. Staleness therefore returns state to the hook/PTY fallback tiers and hard-blocks
+delivery, rather than leaving a healthy-looking session reporting a retired conversation.
+A conversation rollover itself is a `daemon`-sourced forced transition to `starting`, the same
+lifecycle class as promotion.
+
 **Terminal latch.** `exited`/`crashed` is process ground truth, so once a record is in one of
 them only `source="daemon"` may move it out; every other source is refused and ledgered
 (`kind: transition_refused`, `reason: terminal_latch`). `force` does not override it — force

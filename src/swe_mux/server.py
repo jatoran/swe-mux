@@ -68,7 +68,11 @@ from .logsetup import current_log_level, set_log_level
 from .mcp import McpAuthError, McpService
 from .meta_hooks import MetaHookEngine, parse_hook_rules
 from .models import MuxEvent
-from .observation import apply_hook_observation, hook_event_scope
+from .observation import (
+    apply_hook_observation,
+    conversation_rollover_native_id,
+    hook_event_scope,
+)
 from .openrouter import OpenRouterClient, OpenRouterError
 from .operational_telemetry import OperationalTelemetryStore
 from .preview_capture import (
@@ -136,6 +140,7 @@ from .tailscale import (
     is_tailscale_ip,
     tailscale_status,
 )
+from .terminal_arbitration import ClaimReason, ClaimRequest, evaluate_claim
 from .tier0_store import Tier0Context, Tier0Store
 from .transcript_view import parse_transcript_with_watermark
 from .usage import UsageManager
@@ -184,12 +189,23 @@ _OSC_DEFAULT_COLOR_RESPONSE = re.compile(
 
 
 def hook_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Remove hook-owned envelope keys that collide with EventBus metadata."""
-    return {
+    """Remove hook-owned envelope keys that collide with EventBus metadata.
+
+    ``source`` is the collision that mattered: the CLI uses it for *why the
+    session started* (`startup` / `resume` / `clear` / `compact`) while the
+    EventBus uses it for *which channel observed this*. Dropping it lost the one
+    field that explains a conversation rollover, so it is preserved under
+    ``start_source`` instead.
+    """
+    kept = {
         key: value
         for key, value in payload.items()
         if key not in {"session_id", "source", "event_type", "scope"}
     }
+    start_source = payload.get("source")
+    if isinstance(start_source, str) and start_source:
+        kept["start_source"] = start_source
+    return kept
 
 
 def _is_codex_default_color_response(backend: str, data: str) -> bool:
@@ -3394,8 +3410,28 @@ async def get_session_state_log(request: web.Request) -> web.Response:
             "observer_last_fault": session.observer_last_fault,
             "watchdog_recoveries": session.watchdog_recoveries,
             "observation_replay": session.observation_replay,
+            # The one fault class that presents as a perfectly healthy session:
+            # the transcript parses fine, it is just not this PTY's conversation
+            # any more. Paired with the run counter, because "which conversation
+            # am I looking at" is the question this endpoint exists to answer.
+            "observation_stale_since": session.record.observation_stale_since,
+            "agent_run_id": session.record.agent_run_id,
+            "agent_run_seq": session.record.agent_run_seq,
+            "native_session_id": session.record.native_session_id,
+            "agent_lifecycle_id": session.agent_lifecycle_id,
             "awaiting_reason": session.record.awaiting_reason,
             "status_health": session.status_health(now),
+            # Multi-device terminal arbitration. Non-zero rejections mean keystrokes
+            # arrived from a client that had lost input ownership; non-zero denials
+            # mean a background pane tried to take it back.
+            "input_arbitration": {
+                "owner_device": session.input_owner_device,
+                "owner_epoch": session.input_owner_epoch,
+                "attached_viewports": len(session.viewports),
+                "geometry": list(session.geometry) if session.geometry else None,
+                "input_rejections": session.input_rejections,
+                "claim_denials": session.input_claim_denials,
+            },
             # Real state changes are kept separately: a busy turn emits dozens
             # of same-state tool detail updates that would otherwise evict the
             # history explaining how the session reached its current state.
@@ -5923,6 +5959,32 @@ async def hook_ingress(request: web.Request) -> web.Response:
             scope=scope,
             **event_payload,
         )
+    # An in-CLI `/clear` replaces the conversation under a live PTY: the CLI
+    # reports its new id here, and that ends the current agent run. Rolled before
+    # the observation below so the SessionStart transition lands on the new run.
+    # Claude blocks on this POST, so a failure must not break the user's `/clear`
+    # — but it must not degrade to the old silent-swap behaviour either. Failing
+    # closed marks observation stale, which is exactly true: we know the
+    # conversation moved and we did not manage to follow it.
+    rollover_native_id = conversation_rollover_native_id(session, event_type, payload)
+    if rollover_native_id is not None:
+        try:
+            await request.app["sessions"].roll_agent_conversation(
+                session.record.id,
+                native_id=rollover_native_id,
+                reason="conversation_rolled",
+                source=str(payload.get("source") or "hook"),
+            )
+        except Exception:
+            log.exception(
+                "conversation rollover failed for session %s; marking observation stale",
+                session.record.id,
+            )
+            session.record.observation_stale_since = time.time()
+            session.record.parser_diagnostic = (
+                "the CLI reported a new conversation that could not be adopted"
+            )
+            session.publish_update()
     await apply_hook_observation(session, event_type, payload, request.app["events"])
     return json_response({"ok": True})
 
@@ -6071,6 +6133,7 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         pending_messages: list[Any] = []
         attach_deadline = asyncio.get_running_loop().time() + PTY_ATTACH_READY_TIMEOUT_SECONDS
         attach_closed = False
+        geometry_queued = False
         # unsupervised-loop-ok: bounded attach handshake for one websocket.
         while True:
             remaining = attach_deadline - asyncio.get_running_loop().time()
@@ -6083,7 +6146,7 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
             if initial_message.type == WSMsgType.TEXT:
                 initial_frame = json.loads(initial_message.data)
                 if initial_frame.get("type") in {"attach_ready", "resize"}:
-                    session.pty.resize(int(initial_frame["cols"]), int(initial_frame["rows"]))
+                    geometry_queued = _apply_client_viewport(session, connection_id, initial_frame)
                     break
                 pending_messages.append(initial_message)
             elif initial_message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
@@ -6105,6 +6168,12 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         if replay:
             await ws.send_bytes(replay)
         await ws.send_json({"type": "replay_end", "reason": "attach"})
+        # The arbitrated size can differ from this client's own fit (another device owns
+        # input), so tell it up front rather than letting it render at the wrong width
+        # until something happens to change the geometry. Skipped when this attach
+        # already changed the size, since that queued a frame for every client.
+        if not geometry_queued:
+            await ws.send_json(session.geometry_frame())
         if snapshot["state"] in {"exited", "crashed"}:
             await ws.send_json(
                 {
@@ -6121,19 +6190,33 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         async for message in ws:
             await _handle_pty_client_message(request, ws, session, connection_id, message)
     finally:
-        if sender_task is not None:
-            sender_task.cancel()
-            await asyncio.gather(sender_task, return_exceptions=True)
-        if session.input_owner == connection_id:
-            session.input_owner = None
-            session.input_owner_socket = None
+        # Every synchronous cleanup runs before the sender task is awaited. A handler
+        # cancelled on peer disconnect re-raises at the first await inside its own
+        # finally, which used to skip the unsubscribe and the ownership release
+        # entirely — leaving the session reported as attended forever and its input
+        # owned by a socket that no longer exists.
+        released = session.release_input_owner(connection_id)
+        session.drop_viewport(connection_id)
         session.unsubscribe(subscriber)
+        # A detach can hand geometry back to whoever is left: the phone closing its tab
+        # returns the PTY to the desktop's width.
+        session.apply_geometry()
+        if released:
+            session.publish_control(
+                {
+                    "type": "input_owner_released",
+                    "epoch": session.input_owner_epoch,
+                }
+            )
         request.app["events"].emit_background(
             "terminal_detached",
             session_id=session.record.id,
             source="daemon",
             connections=len(session.subscribers),
         )
+        if sender_task is not None:
+            sender_task.cancel()
+            await asyncio.gather(sender_task, return_exceptions=True)
     return ws
 
 
@@ -6168,6 +6251,10 @@ async def _pty_sender(
             await ws.send_json(
                 {"type": "update", "snapshot": current, "revision": current_revision}
             )
+            # Control frames are skipped while a subscriber is resyncing, so restate the
+            # arbitrated geometry here rather than leaving this client sized by whatever
+            # it last heard before the gap.
+            await ws.send_json(session.geometry_frame())
             if exit_frame:
                 await ws.send_json(exit_frame)
                 return
@@ -6175,6 +6262,157 @@ async def _pty_sender(
             await ws.send_json(message)
             if message.get("type") == "exit":
                 return
+
+
+def _apply_client_viewport(session: Session, connection_id: str, frame: dict[str, Any]) -> bool:
+    """Register one client's fitted size and re-arbitrate the shared PTY geometry.
+
+    A client that reports itself hidden is deregistered instead: a minimized desktop
+    pane still has layout, and its `resize` frames used to rewrap the agent TUI to
+    desktop width on whatever device the user was actually holding.
+
+    Returns whether the arbitrated size changed, which also means every attached
+    client (including this one) has a `geometry` frame queued.
+    """
+    session.set_viewport(
+        connection_id,
+        int(frame["cols"]),
+        int(frame["rows"]),
+        hidden=bool(frame.get("hidden")),
+    )
+    return session.apply_geometry()
+
+
+def _owner_frame(session: Session, *, active: bool, reason: str) -> dict[str, Any]:
+    return {
+        "type": "input_owner",
+        "active": active,
+        "epoch": session.input_owner_epoch,
+        "reason": reason,
+        "owner_device": session.input_owner_device,
+    }
+
+
+def _note_input_rejected(request: web.Request, session: Session, byte_count: int) -> None:
+    """Count input refused from a non-owner. Silent drops left this failure invisible:
+    the user saw missing characters and there was nothing in telemetry to correlate."""
+    session.input_rejections += 1
+    now = time.monotonic()
+    if now - session.last_input_reject_report_ts < 2:
+        return
+    session.last_input_reject_report_ts = now
+    request.app["events"].emit_background(
+        "terminal_input_rejected",
+        session_id=session.record.id,
+        source="daemon",
+        owner_device=session.input_owner_device,
+        bytes=byte_count,
+        rejections=session.input_rejections,
+    )
+
+
+async def _claim_terminal_input(
+    request: web.Request,
+    ws: web.WebSocketResponse,
+    session: Session,
+    connection_id: str,
+    frame: dict[str, Any],
+) -> None:
+    reason: ClaimReason = "passive" if frame.get("reason") == "passive" else "gesture"
+    decision = evaluate_claim(
+        session.owner_state(),
+        ClaimRequest(
+            connection_id=connection_id,
+            now=time.monotonic(),
+            reason=reason,
+            device=str(frame.get("device") or "unknown")[:32],
+            # Absent on legacy clients, which only claimed on real interaction.
+            focused=frame.get("focused") is not False,
+        ),
+    )
+    if not decision.granted:
+        session.input_claim_denials += 1
+        await ws.send_json(_owner_frame(session, active=False, reason=decision.reason))
+        return
+    displaced = session.input_owner_socket if decision.changed else None
+    session.apply_owner_state(decision.state)
+    session.input_owner_socket = ws
+    await ws.send_json(_owner_frame(session, active=True, reason=decision.reason))
+    if displaced is not None:
+        # Losing ownership used to be silent, so a desktop pane that still had DOM
+        # focus kept typing into a session the phone had claimed and every keystroke
+        # was dropped with no feedback — the terminal just looked hung.
+        with suppress(ConnectionResetError, RuntimeError, ValueError):
+            await displaced.send_json(
+                _owner_frame(session, active=False, reason="claimed_elsewhere")
+            )
+    if decision.changed:
+        # The device a human is typing into dictates the size everyone else renders.
+        session.apply_geometry()
+        request.app["events"].emit_background(
+            "terminal_input_owner",
+            session_id=session.record.id,
+            source="daemon",
+            device=session.input_owner_device,
+            epoch=session.input_owner_epoch,
+            grant=decision.reason,
+            denials=session.input_claim_denials,
+        )
+
+
+async def _handle_terminal_input(
+    request: web.Request,
+    ws: web.WebSocketResponse,
+    session: Session,
+    connection_id: str,
+    frame: dict[str, Any],
+) -> None:
+    data = str(frame.get("data", ""))
+    if _is_codex_default_color_response(session.record.backend, data):
+        return
+    is_terminal_response = frame.get("kind") == "terminal_response"
+    if session.input_owner != connection_id:
+        # xterm device replies belong to the probe that asked for them, so a rejected
+        # one is discarded rather than echoed back for replay: re-sending it late is
+        # worse than losing it. Human input is echoed back so the client can re-claim
+        # and resend the exact keystrokes instead of losing them to a lost race.
+        if not is_terminal_response:
+            _note_input_rejected(request, session, len(data.encode("utf-8")))
+            await ws.send_json(
+                {
+                    "type": "input_rejected",
+                    "epoch": session.input_owner_epoch,
+                    "owner_device": session.input_owner_device,
+                    "data": data,
+                    "broadcast": bool(frame.get("broadcast")),
+                    "retry": bool(frame.get("retry")),
+                }
+            )
+        return
+    session.pty.write(data)
+    now = time.monotonic()
+    if not is_terminal_response:
+        session.input_revision += 1
+        session.last_input_event_ts = now
+        # Typing is the strongest evidence of where the human is; it renews this
+        # connection's protection from a background pane's passive re-claim.
+        session.note_owner_input(now)
+    if not is_terminal_response and now - session.last_input_report_ts >= 2:
+        session.last_input_report_ts = now
+        request.app["events"].emit_background(
+            "terminal_input",
+            session_id=session.record.id,
+            source="daemon",
+            input_owner=True,
+            bytes=len(data.encode("utf-8")),
+        )
+    if frame.get("broadcast") and not is_terminal_response:
+        await deliver_broadcast(
+            request.app["sessions"],
+            data,
+            request.app["events"],
+            source_id=session.record.id,
+        )
 
 
 async def _handle_pty_client_message(
@@ -6185,63 +6423,31 @@ async def _handle_pty_client_message(
     message: Any,
 ) -> None:
     if message.type == WSMsgType.BINARY:
-        if session.input_owner == connection_id:
-            session.pty.write(message.data)
-            now = time.monotonic()
-            session.input_revision += 1
-            session.last_input_event_ts = now
-            if now - session.last_input_report_ts >= 2:
-                session.last_input_report_ts = now
-                request.app["events"].emit_background(
-                    "terminal_input",
-                    session_id=session.record.id,
-                    source="daemon",
-                    input_owner=True,
-                    bytes=len(message.data),
-                )
+        # No current client sends binary input; a non-owner's bytes are counted and
+        # dropped rather than echoed back, since there is no frame shape to replay.
+        if session.input_owner != connection_id:
+            _note_input_rejected(request, session, len(message.data))
+            return
+        session.pty.write(message.data)
+        now = time.monotonic()
+        session.input_revision += 1
+        session.last_input_event_ts = now
+        session.note_owner_input(now)
+        if now - session.last_input_report_ts >= 2:
+            session.last_input_report_ts = now
+            request.app["events"].emit_background(
+                "terminal_input",
+                session_id=session.record.id,
+                source="daemon",
+                input_owner=True,
+                bytes=len(message.data),
+            )
     elif message.type == WSMsgType.TEXT:
         frame = json.loads(message.data)
         if frame.get("type") == "claim_input":
-            displaced = session.input_owner_socket
-            previous = session.input_owner
-            session.input_owner = connection_id
-            session.input_owner_socket = ws
-            await ws.send_json({"type": "input_owner", "active": True})
-            if displaced is not None and previous != connection_id:
-                # Losing ownership used to be silent, so a desktop pane that still
-                # had DOM focus kept typing into a session the phone had claimed
-                # and every keystroke was dropped with no feedback — the terminal
-                # just looked hung.
-                with suppress(ConnectionResetError, RuntimeError, ValueError):
-                    await displaced.send_json(
-                        {"type": "input_owner", "active": False, "reason": "claimed_elsewhere"}
-                    )
-        elif frame.get("type") == "input" and session.input_owner == connection_id:
-            data = str(frame.get("data", ""))
-            if _is_codex_default_color_response(session.record.backend, data):
-                return
-            session.pty.write(data)
-            is_terminal_response = frame.get("kind") == "terminal_response"
-            now = time.monotonic()
-            if not is_terminal_response:
-                session.input_revision += 1
-                session.last_input_event_ts = now
-            if not is_terminal_response and now - session.last_input_report_ts >= 2:
-                session.last_input_report_ts = now
-                request.app["events"].emit_background(
-                    "terminal_input",
-                    session_id=session.record.id,
-                    source="daemon",
-                    input_owner=True,
-                    bytes=len(data.encode("utf-8")),
-                )
-            if frame.get("broadcast") and not is_terminal_response:
-                await deliver_broadcast(
-                    request.app["sessions"],
-                    data,
-                    request.app["events"],
-                    source_id=session.record.id,
-                )
+            await _claim_terminal_input(request, ws, session, connection_id, frame)
+        elif frame.get("type") == "input":
+            await _handle_terminal_input(request, ws, session, connection_id, frame)
         elif frame.get("type") == "terminal_state" and session.input_owner == connection_id:
             mode = str(frame.get("mode") or "")
             if mode not in {"normal", "alternate"}:
@@ -6257,7 +6463,7 @@ async def _handle_pty_client_message(
                     mode=mode,
                 )
         elif frame.get("type") in {"attach_ready", "resize"}:
-            session.pty.resize(int(frame["cols"]), int(frame["rows"]))
+            _apply_client_viewport(session, connection_id, frame)
 
 
 async def events_ws(request: web.Request) -> web.WebSocketResponse:

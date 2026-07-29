@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Push is the only irreversible operation that leaves this machine. Human-only.
+# This is the last line of defence: the Claude validator cannot see git commands
+# that run inside a script, but every push still passes through here.
+set -euo pipefail
+
+if [ "${HUMAN_PUSH:-}" != "1" ]; then
+    echo "pre-push: blocked. Pushing is human-only." >&2
+    echo "  If this is you: HUMAN_PUSH=1 git push ..." >&2
+    exit 1
+fi
+
+exit 0

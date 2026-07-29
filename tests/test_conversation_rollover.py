@@ -1,0 +1,632 @@
+"""Phase 5.4: an in-CLI `/clear` or `/new` is a new agent run, not a file swap.
+
+The conversation under a live PTY can be replaced without the session, the run,
+the hook secret, or the MCP token changing. Before this phase the daemon either
+kept tailing the retired transcript (sibling present) or rekeyed `native_session_id`
+in place under the same `agent_run_id` (no sibling) — and every run-scoped consumer
+kept accumulating across a boundary it could not see.
+
+These tests pin the boundary itself: the rollover transaction, both triggers, the
+fail-closed path when the successor cannot be corroborated, and the downstream
+consumers whose correctness depends on the run id meaning "one conversation".
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import AsyncMock
+
+import pytest
+
+from swe_mux.delivery_readiness import DeliveryReadinessTracker
+from swe_mux.models import MuxEvent, SessionRecord
+from swe_mux.observation import (
+    _record_parser_observation,
+    _transcript_authoritative,
+    conversation_rollover_native_id,
+)
+from swe_mux.server import _branch_source_id, hook_event_payload
+from swe_mux.session import Session, SessionManager
+from tests.support.detection_replay import ReplaySession, VirtualClock
+
+CLEARED = "9d1f0c2a-4b6e-4f2a-9c31-0e7a5b6d8f11"
+ORIGINAL = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+
+
+def agent_record(
+    *, backend: str = "claude", cwd: str = ".", native_id: str = ORIGINAL
+) -> SessionRecord:
+    record = SessionRecord(
+        "mux-id", "agent", "default", backend, native_id, cwd, f"{backend}.exe", []
+    )
+    record.spawn_backend = backend
+    record.spawn_native_session_id = record.id
+    record.agent_run_id = record.id
+    record.agent_run_started_at = record.created_at
+    record.run_cwd = cwd
+    return record
+
+
+def rollover_manager(record: SessionRecord) -> tuple[Any, Session]:
+    pty = SimpleNamespace(graceful_exit="", isalive=lambda: True)
+    adapter = SimpleNamespace(
+        name=record.backend,
+        graceful_exit_keys=lambda: "exit\r",
+        transcript_path=lambda native_id, cwd: Path(cwd) / f"{native_id}.jsonl",
+    )
+    session = Session(record, cast(Any, pty), cast(Any, adapter), 32, "secret")
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    manager.sessions = {record.id: session}
+    manager.adapters = {record.backend: adapter}
+    manager.events = SimpleNamespace(emit=AsyncMock())
+    manager.history = SimpleNamespace(
+        update_agent_summary=AsyncMock(),
+        agent_run_ended=AsyncMock(),
+        session_promoted=AsyncMock(),
+    )
+    manager._await_registration = AsyncMock()
+    manager.discard_hook_spool = lambda sid: None
+    return manager, session
+
+
+# ------------------------------------------------------------- the hook trigger
+
+
+def hook_session(native_id: str = ORIGINAL, *, backend: str = "claude") -> Any:
+    return cast(
+        Any,
+        SimpleNamespace(
+            record=agent_record(backend=backend, native_id=native_id),
+            agent_lifecycle_id=None,
+        ),
+    )
+
+
+def test_a_session_start_reporting_a_different_conversation_is_a_rollover() -> None:
+    session = hook_session()
+    payload = {"session_id": CLEARED, "source": "clear"}
+    assert conversation_rollover_native_id(session, "SessionStart", payload) == CLEARED
+
+
+def test_compact_and_startup_report_the_same_id_and_never_roll() -> None:
+    # /compact keeps the conversation; the CLI reports the id it already has. The
+    # id comparison is the whole gate, which is why `source` is recorded but never
+    # enumerated — a future source value cannot accidentally become a rollover.
+    session = hook_session()
+    for source in ("compact", "startup", "resume"):
+        payload = {"session_id": ORIGINAL, "source": source}
+        assert conversation_rollover_native_id(session, "SessionStart", payload) is None
+
+
+def test_an_unbound_session_binds_instead_of_rolling() -> None:
+    # Nothing to retire yet: `claude --continue` promotes with an empty native id
+    # and the one-way bind path owns that case.
+    session = hook_session(native_id="mux-id")
+    payload = {"session_id": CLEARED, "source": "startup"}
+    assert conversation_rollover_native_id(session, "SessionStart", payload) is None
+
+
+def test_a_subagent_session_start_never_rolls_the_root_run() -> None:
+    session = hook_session()
+    payload = {"session_id": CLEARED, "source": "clear", "isSidechain": True}
+    assert conversation_rollover_native_id(session, "SessionStart", payload) is None
+
+
+def test_a_shell_and_a_non_session_start_hook_never_roll() -> None:
+    shell = hook_session(backend="shell")
+    assert (
+        conversation_rollover_native_id(
+            shell, "SessionStart", {"session_id": CLEARED, "source": "clear"}
+        )
+        is None
+    )
+    agent = hook_session()
+    assert (
+        conversation_rollover_native_id(
+            agent, "UserPromptSubmit", {"session_id": CLEARED}
+        )
+        is None
+    )
+
+
+def test_a_redelivered_hook_for_the_current_conversation_is_a_no_op() -> None:
+    # Hooks are a retried side channel; a duplicate must not roll a second time.
+    session = hook_session()
+    session.agent_lifecycle_id = CLEARED
+    session.record.native_session_id = CLEARED
+    payload = {"session_id": CLEARED, "source": "clear"}
+    assert conversation_rollover_native_id(session, "SessionStart", payload) is None
+
+
+def test_the_start_source_survives_the_event_envelope_collision() -> None:
+    payload = hook_event_payload({"session_id": "x", "source": "clear", "cwd": "D:/p"})
+    assert payload["start_source"] == "clear"
+    assert "source" not in payload
+
+
+# ----------------------------------------------------------- the rollover itself
+
+
+async def test_a_rollover_retires_the_run_and_opens_a_successor(tmp_path: Path) -> None:
+    record = agent_record(cwd=str(tmp_path))
+    record.tokens_in = 5_000
+    record.tokens_out = 900
+    record.context_window = 200_000
+    record.context_pct = 74.0
+    record.context_peak_pct = 91.0
+    record.compaction_count = 2
+    record.model = "claude-opus-5"
+    record.parser_status = "ready"
+    record.parser_events_seen = 400
+    manager, session = rollover_manager(record)
+    original_run_id = record.agent_run_id
+    transcript = tmp_path / f"{CLEARED}.jsonl"
+
+    rolled = await manager._apply_conversation_rollover(
+        session,
+        native_id=CLEARED,
+        transcript=transcript,
+        reason="conversation_rolled",
+        source="clear",
+    )
+
+    assert rolled is True
+    assert record.agent_run_id != original_run_id
+    assert record.agent_run_seq == 1
+    assert record.native_session_id == CLEARED
+    assert session.agent_lifecycle_id == CLEARED
+    assert session.transcript_path == transcript
+    # Nothing that measured the retired conversation may carry over.
+    assert (record.tokens_in, record.tokens_out) == (0, 0)
+    assert (record.context_window, record.context_pct, record.context_peak_pct) == (0, 0.0, 0.0)
+    assert record.compaction_count == 0
+    assert record.model is None
+    assert record.parser_status == "waiting"
+    assert record.parser_events_seen == 0
+    # The retired conversation is closed against its own final numbers, and the
+    # successor gets its own history row rather than overwriting the old one.
+    manager.history.update_agent_summary.assert_awaited_once()
+    assert manager.history.agent_run_ended.await_args.args[1] == "conversation_rolled"
+    assert manager.history.session_promoted.await_args.args[1] == str(transcript)
+    event = manager.events.emit.await_args
+    assert event.args[0] == "agent_conversation_rolled"
+    assert event.kwargs["previous_agent_run_id"] == original_run_id
+    assert event.kwargs["agent_run_id"] == record.agent_run_id
+    assert event.kwargs["previous_native_session_id"] == ORIGINAL
+    assert event.kwargs["native_session_id"] == CLEARED
+
+
+async def test_the_retired_conversation_is_never_re_adopted(tmp_path: Path) -> None:
+    record = agent_record(cwd=str(tmp_path))
+    manager, session = rollover_manager(record)
+
+    await manager._apply_conversation_rollover(
+        session,
+        native_id=CLEARED,
+        transcript=tmp_path / f"{CLEARED}.jsonl",
+        reason="conversation_rolled",
+        source="clear",
+    )
+
+    assert ("claude", ORIGINAL) in session.ignored_detection_runs
+
+
+async def test_rolling_to_the_current_conversation_is_a_no_op(tmp_path: Path) -> None:
+    record = agent_record(cwd=str(tmp_path))
+    manager, session = rollover_manager(record)
+
+    for native_id in (ORIGINAL, "", record.native_session_id):
+        assert (
+            await manager._apply_conversation_rollover(
+                session,
+                native_id=native_id,
+                transcript=None,
+                reason="conversation_rolled",
+                source="clear",
+            )
+            is False
+        )
+    assert record.agent_run_seq == 0
+    manager.history.agent_run_ended.assert_not_awaited()
+
+
+async def test_an_ended_session_never_rolls(tmp_path: Path) -> None:
+    record = agent_record(cwd=str(tmp_path))
+    record.state = "exited"
+    manager, session = rollover_manager(record)
+
+    rolled = await manager._apply_conversation_rollover(
+        session,
+        native_id=CLEARED,
+        transcript=None,
+        reason="conversation_rolled",
+        source="clear",
+    )
+
+    assert rolled is False
+    assert record.agent_run_seq == 0
+
+
+async def test_the_public_entry_point_restarts_observation_on_the_new_file(
+    tmp_path: Path,
+) -> None:
+    record = agent_record(cwd=str(tmp_path))
+    manager, session = rollover_manager(record)
+    started: list[Path | None] = []
+    manager._stop_observer = AsyncMock()
+    manager._start_observer = lambda _session, path: started.append(path)
+
+    rolled = await manager.roll_agent_conversation(
+        record.id, native_id=CLEARED, reason="conversation_rolled", source="clear"
+    )
+
+    assert rolled is True
+    # Stopped before the identity was rewritten: a live observer re-derives the
+    # native id from the file it is tailing and would put the retired id back.
+    manager._stop_observer.assert_awaited_once()
+    assert started == [tmp_path / f"{CLEARED}.jsonl"]
+
+
+# ------------------------------------------------------- the sibling-gate tightening
+
+
+def sibling(
+    cwd: Path, *, transcript: Path | None, last_activity_ts: float, backend: str = "claude"
+) -> Any:
+    record = agent_record(backend=backend, cwd=str(cwd), native_id="sibling-native")
+    record.id = "sibling"
+    record.last_activity_ts = last_activity_ts
+    return SimpleNamespace(
+        record=record, transcript_path=transcript, pending_agent_backends=set()
+    )
+
+
+def switch_fixture(tmp_path: Path) -> tuple[Any, Any, Path, Path]:
+    current = tmp_path / "old.jsonl"
+    current.write_text("{}\n", encoding="utf-8")
+    stale = time.time() - 30
+    os.utime(current, (stale, stale))
+    fresh = tmp_path / "new.jsonl"
+    fresh.write_text("{}\n", encoding="utf-8")
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    record = agent_record(cwd=str(tmp_path))
+    record.last_activity_ts = time.time()
+    session = cast(
+        Any,
+        SimpleNamespace(
+            record=record,
+            transcript_path=current,
+            ignored_detection_runs=set(),
+            pending_agent_backends=set(),
+            adapter=SimpleNamespace(
+                name="claude",
+                recent_transcripts=lambda cwd, created_at: [
+                    (fresh.stat().st_mtime, fresh, "native-new")
+                ],
+            ),
+        ),
+    )
+    manager.sessions = {"mux-id": session}
+    return manager, session, current, fresh
+
+
+def test_a_sibling_still_writing_its_own_transcript_no_longer_blocks(
+    tmp_path: Path,
+) -> None:
+    # The old blanket rule made a `/clear` unfollowable in any project with two
+    # agents open. A sibling whose own file kept being written after the candidate
+    # appeared is demonstrably still on its own conversation.
+    manager, session, current, fresh = switch_fixture(tmp_path)
+    sibling_path = tmp_path / "sibling.jsonl"
+    sibling_path.write_text("{}\n", encoding="utf-8")
+    still_writing = time.time() + 2
+    os.utime(sibling_path, (still_writing, still_writing))
+    manager.sessions["sibling"] = sibling(
+        tmp_path, transcript=sibling_path, last_activity_ts=time.time()
+    )
+    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+
+
+def test_a_sibling_whose_pty_was_silent_no_longer_blocks(tmp_path: Path) -> None:
+    manager, session, current, fresh = switch_fixture(tmp_path)
+    manager.sessions["sibling"] = sibling(
+        tmp_path, transcript=None, last_activity_ts=time.time() - 600
+    )
+    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+
+
+def test_a_quiet_sibling_that_was_also_talking_still_blocks(tmp_path: Path) -> None:
+    # Its transcript went quiet and its PTY did not: indistinguishable from a
+    # sibling that just cleared. Uncertainty keeps the conservative answer.
+    manager, session, current, _fresh = switch_fixture(tmp_path)
+    quiet = tmp_path / "sibling.jsonl"
+    quiet.write_text("{}\n", encoding="utf-8")
+    stale = time.time() - 300
+    os.utime(quiet, (stale, stale))
+    manager.sessions["sibling"] = sibling(
+        tmp_path, transcript=quiet, last_activity_ts=time.time()
+    )
+    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+
+
+def test_an_unpromoted_shell_launching_an_agent_still_blocks_everything(
+    tmp_path: Path,
+) -> None:
+    manager, session, current, _fresh = switch_fixture(tmp_path)
+    shell = sibling(tmp_path, transcript=None, last_activity_ts=0.0, backend="shell")
+    shell.record.backend = "shell"
+    shell.pending_agent_backends = {"claude"}
+    manager.sessions["shell"] = shell
+    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+
+
+# ------------------------------------------------------------- failing closed
+
+
+def stale_manager(tmp_path: Path, *, last_hook_ts: float) -> tuple[Any, Any, Path]:
+    transcript = tmp_path / "dead.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    dead = time.time() - 600
+    os.utime(transcript, (dead, dead))
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    manager.events = SimpleNamespace(emit=AsyncMock())
+    record = agent_record(cwd=str(tmp_path))
+    record.parser_status = "ready"
+    session = cast(
+        Any,
+        SimpleNamespace(
+            record=record,
+            last_hook_ts=last_hook_ts,
+            publish_update=lambda: None,
+        ),
+    )
+    return manager, session, transcript
+
+
+async def test_a_hook_after_a_dead_transcript_marks_observation_stale(
+    tmp_path: Path,
+) -> None:
+    # Codex has no session-start hook, so a `/new` behind an unresolvable sibling
+    # has no positive signal at all. A turn that produced hook activity but no
+    # record in the followed file is the proof that we are watching the wrong one.
+    manager, session, transcript = stale_manager(tmp_path, last_hook_ts=time.time())
+
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    assert session.record.observation_stale_since is not None
+    assert manager.events.emit.await_args.args[0] == "observation_stale"
+
+
+async def test_a_merely_idle_session_is_not_stale(tmp_path: Path) -> None:
+    # Silence on both sides is an idle agent, not a replaced conversation.
+    manager, session, transcript = stale_manager(tmp_path, last_hook_ts=0.0)
+
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    assert session.record.observation_stale_since is None
+    manager.events.emit.assert_not_awaited()
+
+
+async def test_staleness_is_announced_once(tmp_path: Path) -> None:
+    manager, session, transcript = stale_manager(tmp_path, last_hook_ts=time.time())
+
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+    first = session.record.observation_stale_since
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    assert session.record.observation_stale_since == first
+    assert manager.events.emit.await_count == 1
+
+
+def test_a_stale_transcript_loses_its_authority_over_hooks() -> None:
+    # This is the half that froze sessions: the parser stayed `ready`, so the hook
+    # fallback was dropped as redundant to a transcript that could no longer report
+    # anything at all.
+    session = cast(Any, SimpleNamespace(record=agent_record()))
+    session.record.parser_status = "ready"
+    assert _transcript_authoritative(session) is True
+    session.record.observation_stale_since = time.time()
+    assert _transcript_authoritative(session) is False
+
+
+async def test_a_record_on_the_followed_transcript_clears_staleness() -> None:
+    session = cast(
+        Any,
+        SimpleNamespace(
+            record=agent_record(),
+            subscribers=(),
+            meta_sink=None,
+        ),
+    )
+    session.record.parser_status = "ready"
+    session.record.observation_stale_since = time.time()
+    events = SimpleNamespace(emit=AsyncMock())
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("swe_mux.observation._publish_update", lambda _session: None)
+        await _record_parser_observation(session, cast(Any, events), True, "sig")
+    assert session.record.observation_stale_since is None
+
+
+def test_delivery_hard_blocks_on_a_stale_transcript() -> None:
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+    session.record.parser_status = "ready"
+    session.terminal_mode = "normal"
+    session.terminal_mode_updated_at = clock.monotonic()
+    tracker.observe(
+        MuxEvent(time.time(), "replay-session", "transcript", "turn_started", {}), session
+    )
+    tracker.observe(
+        MuxEvent(
+            time.time(),
+            "replay-session",
+            "transcript",
+            "turn_ended",
+            {"outcome": "completed"},
+        ),
+        session,
+    )
+    clock.advance(5.0)
+    session.terminal_mode_updated_at = clock.monotonic()
+    assert tracker.evaluate(session)["delivery_state"] == "safe"
+
+    session.record.observation_stale_since = time.time()
+    evaluation = tracker.evaluate(session)
+    assert evaluation["delivery_state"] == "blocked"
+    assert "transcript_stale" in evaluation["reasons"]
+
+
+# ------------------------------------------------------------ downstream consumers
+
+
+def test_branch_forks_the_conversation_the_user_is_actually_in() -> None:
+    # `/clear` used to leave `agent_lifecycle_id` on the retired conversation, so
+    # Branch reopened the *predecessor* as the "original" pane.
+    record = agent_record()
+    session = cast(Any, SimpleNamespace(record=record, agent_lifecycle_id=None))
+    assert _branch_source_id(session) == ORIGINAL
+
+    record.native_session_id = CLEARED
+    record.agent_run_seq = 1
+    session.agent_lifecycle_id = CLEARED
+    assert _branch_source_id(session) == CLEARED
+
+
+async def test_an_observer_refuses_to_read_a_stale_transcript() -> None:
+    # The transcript parses fine; it is simply not this session's conversation any
+    # more. An observer that read it would title and summarize work the user left.
+    from swe_mux.automation import AutomationEngine
+
+    engine = cast(Any, AutomationEngine.__new__(AutomationEngine))
+    record = agent_record()
+    record.observation_stale_since = time.time()
+    session = SimpleNamespace(record=record, transcript_path=Path("live.jsonl"))
+    engine.config = SimpleNamespace(automation_enabled=True)
+    engine.sessions = SimpleNamespace(sessions={record.id: session})
+    event = SimpleNamespace(
+        agent_run_id=record.agent_run_id,
+        session_id=record.id,
+        capability="semantic",
+        source="transcript",
+    )
+
+    with pytest.raises(ValueError, match="stale"):
+        await engine._llm("firing", cast(Any, None), cast(Any, event), {})
+
+
+async def test_a_rollover_strands_queue_items_bound_to_the_retired_run() -> None:
+    from swe_mux.prompt_queue import PromptQueueService
+
+    service = cast(Any, PromptQueueService.__new__(PromptQueueService))
+    stranded: list[tuple[str, str]] = []
+    seen = asyncio.Event()
+
+    async def strand(session_id: str, reason: str) -> None:
+        stranded.append((session_id, reason))
+        seen.set()
+
+    service._strand = strand
+    queue: asyncio.Queue[MuxEvent] = asyncio.Queue()
+    service._queue = queue
+    await queue.put(
+        MuxEvent(time.time(), "mux-id", "daemon", "agent_conversation_rolled", {})
+    )
+
+    consume = asyncio.create_task(service._consume())
+    try:
+        await asyncio.wait_for(seen.wait(), timeout=2)
+    finally:
+        consume.cancel()
+        await asyncio.gather(consume, return_exceptions=True)
+
+    assert stranded == [("mux-id", "target agent conversation was replaced")]
+
+
+# ------------------------------------------------------------ surviving a restart
+
+
+def rolled_root_record(tmp_path: Path, transcript: Path) -> SessionRecord:
+    record = SessionRecord(
+        "root",
+        "agent",
+        "default",
+        "claude",
+        CLEARED,
+        str(tmp_path),
+        "claude.exe",
+        [],
+    )
+    record.spawn_backend = "claude"
+    record.spawn_native_session_id = ORIGINAL
+    record.spawn_cwd = str(tmp_path)
+    record.agent_run_id = "rolled-run-id"
+    record.agent_run_seq = 1
+    record.agent_run_started_at = time.time()
+    record.run_cwd = str(tmp_path)
+    del transcript
+    return record
+
+
+def adoption_manager(tmp_path: Path) -> Any:
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    manager.sessions = {}
+    manager.adapters = {
+        "claude": SimpleNamespace(
+            name="claude",
+            transcript_native_id=lambda path: path.stem,
+            recent_transcripts=lambda cwd, created_at: [
+                (item.stat().st_mtime, item, item.stem)
+                for item in sorted(Path(cwd).glob("*.jsonl"))
+            ],
+        )
+    }
+    return manager
+
+
+def test_a_rolled_root_run_survives_adoption_without_being_quarantined(
+    tmp_path: Path,
+) -> None:
+    # A root agent's run id is normally its session id and anything else is
+    # corruption. `agent_run_seq` is what distinguishes the daemon's own successor
+    # run from that corruption — without it the first daemon restart after a
+    # `/clear` repaired the live run away and quarantined its history row.
+    live = tmp_path / f"{CLEARED}.jsonl"
+    live.write_text("{}\n", encoding="utf-8")
+    record = rolled_root_record(tmp_path, live)
+    manager = adoption_manager(tmp_path)
+    meta = {"transcript_path": str(live)}
+
+    transcript, bad_run_id, previous = manager._reconcile_adopted_root_identity(
+        record, meta, {record.id: record}, {record.id: meta}
+    )
+
+    assert transcript == live
+    assert bad_run_id is None
+    assert previous is None
+    assert record.agent_run_id == "rolled-run-id"
+    assert record.agent_run_seq == 1
+    assert record.native_session_id == CLEARED
+
+
+def test_an_unexplained_root_run_id_is_still_repaired(tmp_path: Path) -> None:
+    live = tmp_path / f"{ORIGINAL}.jsonl"
+    live.write_text("{}\n", encoding="utf-8")
+    record = rolled_root_record(tmp_path, live)
+    record.agent_run_seq = 0
+    record.native_session_id = ORIGINAL
+    manager = adoption_manager(tmp_path)
+    meta = {"transcript_path": str(live)}
+
+    _transcript, bad_run_id, previous = manager._reconcile_adopted_root_identity(
+        record, meta, {record.id: record}, {record.id: meta}
+    )
+
+    assert bad_run_id == "rolled-run-id"
+    assert previous is not None
+    assert record.agent_run_id == record.id

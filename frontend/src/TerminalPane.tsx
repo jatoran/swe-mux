@@ -34,7 +34,21 @@ import { railPayload, resolveRail, type RailBackend, type RailItem } from './com
 import { activatePromptRailItem } from './promptRail'
 import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { currentProfile, loadRailItems } from './deviceSettings'
-import { redrawVisibleTerminal, refitVisibleTerminal } from './terminalViewport'
+import { redrawVisibleTerminal, refitVisibleTerminal, terminalHostIsVisible } from './terminalViewport'
+import { geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
+import {
+  applyOwnerFrame,
+  applyOwnerReleased,
+  applyRejectedFrame,
+  claimReasonForFocus,
+  inputOwnerNotice,
+  shouldReclaimAfterDisplacement,
+  shouldReplayRejectedInput,
+  terminalDeviceLabel,
+  UNOWNED,
+  type ClaimReason,
+  type OwnershipView,
+} from './inputOwnership'
 import { localPreviewUrl } from './previewLinks'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness, type ConnectionPhase } from './liveness'
 import {
@@ -58,6 +72,9 @@ type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
  * keeps that from accumulating input forever.
  */
 const MAX_PENDING_INPUT = 4096
+
+/** The pane's normal font size. A letterboxed pane renders below it and never above. */
+const BASE_FONT_SIZE = 11
 
 interface Props {
   session: Session
@@ -147,6 +164,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // per-render tail check can bail without touching component state.
   const [offTail,setOffTail]=useState(false)
   const offTailRef=useRef(false)
+  // Which device may type into this session. Mirrored out of the mount effect so the
+  // pane can say "input is on your phone" instead of silently swallowing keystrokes.
+  const [inputOwnership,setInputOwnership]=useState<OwnershipView>(UNOWNED)
+  const claimInputRef=useRef<(reason:ClaimReason)=>void>(()=>{})
+  // True while this pane renders a size another device chose (see terminalLetterbox).
+  const [letterboxActive,setLetterboxed]=useState(false)
   // Bumped when another surface edits the shared rail config so this pane re-reads it.
   const [,bumpRailRev]=useState(0)
   useEffect(()=>{const on=()=>bumpRailRev(value=>value+1);window.addEventListener('mux:settings-changed',on);return()=>window.removeEventListener('mux:settings-changed',on)},[])
@@ -172,6 +195,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setFindQuery('')
     setFindResult('')
     setKillArmed(false)
+    setInputOwnership(UNOWNED)
+    setLetterboxed(false)
   },[session.id])
   useEffect(()=>{
     const on=(event:Event)=>setKillArmed((event as CustomEvent<string|null>).detail===session.id)
@@ -271,7 +296,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     reportStartup('pane_mounted')
     const term = new Terminal({
       cursorBlink: true, cursorStyle: 'bar', fontFamily: '"Cascadia Mono", Consolas, monospace',
-      fontSize: 11, fontWeight: '600', fontWeightBold: '600', lineHeight: 1.2, scrollback, allowProposedApi: true,
+      fontSize: BASE_FONT_SIZE, fontWeight: '600', fontWeightBold: '600', lineHeight: 1.2, scrollback, allowProposedApi: true,
       screenReaderMode: false,
       // Passed at construction, not assigned later: below ConPTY build 21376 this
       // both disables reflow and installs the wrapped-line heuristic in the parser,
@@ -444,16 +469,108 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const tailScroll = term.onScroll(syncTail)
     const tailRender = term.onRender(syncTail)
     const terminalStateTimer = window.setInterval(reportTerminalState, 5000)
+    // Shared-PTY geometry. `localFit` is what this pane would show at its own font size;
+    // `serverGeometry` is what the daemon arbitrated across every attached device. They
+    // differ exactly when another device owns input, and then this pane letterboxes
+    // rather than pushing its own dimensions back at the PTY.
+    let localFit: { cols: number; rows: number } | null = null
+    let localFitBox: { width: number; height: number } | null = null
+    let serverGeometry: { cols: number; rows: number } | null = null
+    let sentViewport: { cols: number; rows: number; hidden: boolean } | null = null
+    let letterboxed = false
+    const sendViewport = (cols: number, rows: number) => {
+      if (socket?.readyState !== WebSocket.OPEN) return
+      const hidden = document.hidden
+      if (sentViewport?.cols === cols && sentViewport.rows === rows && sentViewport.hidden === hidden) return
+      sentViewport = { cols, rows, hidden }
+      // `hidden` deregisters this viewport instead of registering it: a minimized
+      // window still reports layout, and it must not reshape the PTY for the device
+      // the user is actually holding.
+      socket.send(JSON.stringify({ type: 'resize', cols, rows, hidden }))
+    }
+    const measureFit = () => {
+      const box = host.current
+      if (!box) return
+      const size = { width: box.clientWidth, height: box.clientHeight }
+      // While letterboxed, measuring means briefly restoring the pane's own font, so it
+      // is done only when the box it has to fit actually changed.
+      if (letterboxed && localFit && localFitBox?.width === size.width && localFitBox.height === size.height) {
+        sendViewport(localFit.cols, localFit.rows)
+        return
+      }
+      // A letterboxed pane renders at a smaller font, and a proposal measured there
+      // would tell the daemon this pane wants columns nobody on this device could read
+      // — and that is the number the shared PTY would then be sized to.
+      const fontSize = term.options.fontSize ?? BASE_FONT_SIZE
+      if (fontSize !== BASE_FONT_SIZE) term.options.fontSize = BASE_FONT_SIZE
+      const proposed = fit.proposeDimensions()
+      if (fontSize !== BASE_FONT_SIZE) term.options.fontSize = fontSize
+      if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return
+      localFit = { cols: proposed.cols, rows: proposed.rows }
+      localFitBox = size
+      sendViewport(localFit.cols, localFit.rows)
+    }
+    const applyLetterbox = (target: { cols: number; rows: number }) => {
+      const box = host.current
+      const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
+      if (!box || !screen) return
+      if (term.cols !== target.cols || term.rows !== target.rows) term.resize(target.cols, target.rows)
+      const fitFont = (fontSize: number) => letterboxFontSize({
+        fontSize,
+        cellWidth: screen.getBoundingClientRect().width / Math.max(term.cols, 1),
+        cellHeight: screen.getBoundingClientRect().height / Math.max(term.rows, 1),
+        cols: target.cols,
+        rows: target.rows,
+        hostWidth: box.clientWidth,
+        hostHeight: box.clientHeight,
+        baseFontSize: BASE_FONT_SIZE,
+      })
+      const fontSize = term.options.fontSize ?? BASE_FONT_SIZE
+      const next = fitFont(fontSize)
+      if (next === fontSize) return
+      term.options.fontSize = next
+      // Cell metrics are not exactly proportional to font size, so the first estimate
+      // can still overflow by a pixel or two. One correction pass, and only ever
+      // downwards, so this cannot oscillate.
+      const corrected = fitFont(next)
+      if (corrected < next) term.options.fontSize = corrected
+    }
+    // A new socket knows nothing about the shared geometry, so the pane goes back to
+    // its own font before it measures: fitting while still shrunk to another device's
+    // grid would report columns this pane cannot actually show.
+    const resetLetterbox = () => {
+      localFit = null
+      localFitBox = null
+      if (!letterboxed) return
+      letterboxed = false
+      setLetterboxed(false)
+      term.options.fontSize = BASE_FONT_SIZE
+    }
+    const applyGeometry = () => {
+      if (serverGeometry && !geometryMatchesFit(serverGeometry, localFit)) {
+        if (!letterboxed) { letterboxed = true; setLetterboxed(true) }
+        applyLetterbox(serverGeometry)
+        return
+      }
+      if (letterboxed) {
+        letterboxed = false
+        setLetterboxed(false)
+        term.options.fontSize = BASE_FONT_SIZE
+      }
+      refitVisibleTerminal(fit, host.current)
+    }
     const scheduleViewport = (invalidateAtlas: boolean) => {
       invalidateAtlasOnRedraw ||= invalidateAtlas
       if (invalidateAtlas) diagnoseRender?.('full_redraw_requested', { pendingReplayWrites })
       window.cancelAnimationFrame(fitFrame)
       window.cancelAnimationFrame(redrawFrame)
       fitFrame = window.requestAnimationFrame(() => {
-        if (!refitVisibleTerminal(fit, host.current)) return
-        if (socket?.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
-        }
+        // Deregistering has to happen even when the pane has no layout to measure,
+        // otherwise a hidden client's last size would hold the PTY hostage.
+        if (document.hidden && localFit) sendViewport(localFit.cols, localFit.rows)
+        if (!terminalHostIsVisible(host.current)) return
+        measureFit()
+        applyGeometry()
         // DOM/WebGL pixels can be discarded while a pane or browser tab is hidden.
         // Repaint one frame after layout settles so every terminal row is invalidated.
         redrawFrame = window.requestAnimationFrame(() => {
@@ -513,12 +630,34 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       renderer: activeRenderer,
     })
     let ownsInput = false
-    const claimInput = () => {
-      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'claim_input' }))
+    let ownership: OwnershipView = UNOWNED
+    const device = terminalDeviceLabel(isMobileTerminalInput())
+    // When the user last did something in this pane. A focus event within the gesture
+    // window is the user asking for the keyboard; anything later is the pane restoring
+    // its own focus, which must not take input from another device.
+    let lastInteractionAt: number | null = null
+    const noteOwnership = (next: OwnershipView) => {
+      ownership = next
+      ownsInput = next.owns
+      setInputOwnership(next)
+    }
+    const claimInput = (reason: ClaimReason) => {
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+          type: 'claim_input',
+          reason,
+          device,
+          // A minimized or backgrounded window answers false and so cannot passively
+          // take the keyboard from the device in front of the user.
+          focused: !document.hidden && document.hasFocus(),
+        }))
+      }
       // Focus here also makes this terminal the target for inserted text (clipboard
       // history, prompt templates) once an overlay has taken DOM focus away.
       noteTerminalFocus(session.id)
     }
+    claimInputRef.current = (reason: ClaimReason) => { lastInteractionAt = Date.now(); claimInput(reason) }
+    const claimOnFocus = () => claimInput(claimReasonForFocus(lastInteractionAt, Date.now()))
     const clearHandshakeWatchdog=()=>{
       if(handshakeTimer===undefined)return
       window.clearTimeout(handshakeTimer)
@@ -532,18 +671,30 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       nextAttemptAt=Date.now()+delay
       reconnectTimer=window.setTimeout(()=>{reconnectTimer=undefined;nextAttemptAt=null;connect(true)},delay)
     }
-    const sendInput = (data: string, protocolResponse: boolean, broadcast: boolean) => {
+    const sendInput = (data: string, protocolResponse: boolean, broadcast: boolean, retry = false) => {
       if (socket?.readyState !== WebSocket.OPEN) return
       // Typing is itself evidence this pane should own input. Without it a pane
       // displaced by another device stays silently muted until the user happens
-      // to click inside it.
-      if (!ownsInput && !protocolResponse) claimInput()
+      // to click inside it. A retry has already claimed, so it must not claim twice.
+      if (!protocolResponse) lastInteractionAt = Date.now()
+      if (!ownsInput && !protocolResponse && !retry) claimInput('gesture')
       socket.send(JSON.stringify({
         type: 'input',
         data,
         kind: protocolResponse ? 'terminal_response' : 'user',
         broadcast: protocolResponse ? false : broadcast,
+        retry,
       }))
+    }
+    // Keystrokes the daemon refused because this pane had lost input ownership without
+    // knowing it yet — the race that used to eat a large fraction of everything typed
+    // on a phone while a desktop pane was still attached. Re-claim and resend once;
+    // if that is refused too, the other device really is in use and the pane says so.
+    const replayRejectedInput = (frame: { data?: string; broadcast?: boolean; retry?: boolean }) => {
+      noteOwnership(applyRejectedFrame(ownership, frame))
+      if (!shouldReplayRejectedInput(frame)) return
+      claimInput('gesture')
+      sendInput(String(frame.data), false, frame.broadcast === true, true)
     }
     const finishReplay = () => {
       replaying = false
@@ -589,12 +740,28 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if (frame.type === 'input_owner') {
           // Ownership is claimed on pointerdown, so a device that never receives
           // another pointer event (the desktop pane still has DOM focus after the
-          // phone claimed the session) would type into a void: the daemon drops
-          // every keystroke from a non-owner and says nothing. Re-claim as soon
-          // as this pane is the focused one again.
-          ownsInput = frame.active === true
-          if (!ownsInput && document.activeElement && host.current?.contains(document.activeElement)) {
-            claimInput()
+          // phone claimed the session) would type into a void: the daemon refuses
+          // every keystroke from a non-owner. Re-claim as soon as this pane is the
+          // focused one again — but only if it really is. `document.activeElement`
+          // survives minimizing the window, and reading that as intent is what let a
+          // background desktop pane take the keyboard back from the phone forever.
+          noteOwnership(applyOwnerFrame(ownership, frame))
+          if (!ownsInput && shouldReclaimAfterDisplacement({
+            focusInHost: !!document.activeElement && host.current?.contains(document.activeElement) === true,
+            documentHidden: document.hidden,
+            windowFocused: document.hasFocus(),
+          })) {
+            claimInput('passive')
+          }
+        }
+        if (frame.type === 'input_owner_released') noteOwnership(applyOwnerReleased(ownership, frame.epoch))
+        if (frame.type === 'input_rejected') replayRejectedInput(frame)
+        if (frame.type === 'geometry') {
+          const cols = Number(frame.cols)
+          const rows = Number(frame.rows)
+          if (Number.isFinite(cols) && Number.isFinite(rows)) {
+            serverGeometry = { cols, rows }
+            scheduleFit()
           }
         }
         if (frame.type === 'exit') {
@@ -640,8 +807,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         reconnectAttempt=0
         setConnectionState('connected')
         if(!reconnecting)reportStartup('socket_open')
+        // A new socket carries none of the old one's arbitration state: the daemon has
+        // no viewport for this connection and has not told it the shared geometry yet.
+        sentViewport=null
+        serverGeometry=null
+        resetLetterbox()
         const fitted = refitVisibleTerminal(fit, host.current)
-        next.send(JSON.stringify(terminalAttachReadyFrame(term.cols, term.rows, activeRenderer)))
+        next.send(JSON.stringify(terminalAttachReadyFrame(term.cols, term.rows, activeRenderer, document.hidden)))
+        // attach_ready is itself a viewport registration; recording it keeps the fit
+        // pass that follows from sending the same dimensions again.
+        sentViewport={cols:term.cols,rows:term.rows,hidden:document.hidden}
         diagnoseRender?.('attach_ready_sent', {
           fitted,
           cols: term.cols,
@@ -649,7 +824,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           renderer: activeRenderer,
         })
         scheduleFit()
-        claimInput()
+        // Attaching is not the user asking for the keyboard: a passive claim takes
+        // input only when nobody else is actively using this session.
+        claimInput('passive')
         reportTerminalState()
         // Mobile browsers should receive focus from the user's terminal tap.
         // Pre-focusing an invisible textarea outside a gesture can leave Gboard
@@ -839,7 +1016,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       },60)
     }
     const pointerClaim = (event: PointerEvent) => {
-      claimInput()
+      // Touching the terminal is the user asking for the keyboard on this device, and
+      // that always wins: it is the one signal no heuristic should be able to override.
+      lastInteractionAt = Date.now()
+      claimInput('gesture')
       activePointerId=event.pointerId
       if (event.pointerType === 'touch') {
         lastTouchAt = Date.now()
@@ -969,7 +1149,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     host.current.addEventListener('mousedown',mobileMouseClaim,true)
     window.addEventListener('pointerup', pointerEnd)
     window.addEventListener('pointercancel', pointerCancel)
-    host.current.addEventListener('focusin', claimInput)
+    // Focus alone is ambiguous: the pane focuses its own terminal on attach and on tab
+    // switches. Only focus that follows a real interaction claims as a gesture.
+    host.current.addEventListener('focusin', claimOnFocus)
     host.current.addEventListener('contextmenu', openMenu)
     host.current.addEventListener('paste', pasteEvent, true)
     host.current.addEventListener('dragenter', dragEnter)
@@ -985,7 +1167,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     window.addEventListener('resize', scheduleFit)
     // Redraw only: reconnect decisions all belong to the liveness watcher below, which
     // owns the attempt bookkeeping and can also recover from a stalled handshake.
-    const onVisibility=()=>{if(!document.hidden)scheduleFullRedraw()}
+    // Scheduled in both directions: becoming hidden is what deregisters this pane's
+    // viewport, so the PTY stops being sized for a window nobody is looking at.
+    const onVisibility=()=>{document.hidden?scheduleFit():scheduleFullRedraw()}
     const onPageShow=()=>scheduleFullRedraw()
     const onWindowFocus=()=>scheduleFullRedraw()
     document.addEventListener('visibilitychange',onVisibility)
@@ -1002,7 +1186,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     window.visualViewport?.addEventListener('resize',scheduleFit)
     loadLatestReply()
     connect(false)
-    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimInput);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{} }
+    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput])
 
   const copy = async () => {
@@ -1215,7 +1399,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     return <button key={item.id} class={item.className||''} title={item.title||payload} onClick={()=>injectText(payload,item.submit)}>{item.label}</button>
   }
 
-  return <div class="terminal-surface"><div class="terminal-host" ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)} onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{railItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{offTail&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={()=>{termRef.current?.scrollToBottom();if(!keyboardOffRef.current)focusTerminalInputRef.current()}}>↓ latest</button>}{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  const ownerNotice=inputOwnerNotice(inputOwnership)
+  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)} onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{railItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{offTail&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={()=>{termRef.current?.scrollToBottom();if(!keyboardOffRef.current)focusTerminalInputRef.current()}}>↓ latest</button>}{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }
@@ -1225,7 +1410,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     <button class={findCase ? 'active' : ''} title="Match case" aria-pressed={findCase} onClick={() => { setFindCase(value => !value); setFindResult('') }}>Aa</button>
     <span class={findResult === 'no match' ? 'missing' : ''}>{findResult}</span>
     <button title="Close find" onClick={closeFind}>×</button>
-  </div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
+  </div>}{ownerNotice&&<div class="terminal-input-owner" role="status"><span>{ownerNotice}{letterboxActive?' · showing its size':''}</span><button title="Take terminal input on this device" onClick={()=>{claimInputRef.current('gesture');focusTerminalInputRef.current()}}>Take over</button></div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
     const data=event.clipboardData
     const image=data&&clipboardImage(Array.from(data.items))
     if(image){event.preventDefault();void insertTerminalImage(termRef.current!,session,image).then(()=>{setManualPaste(false);showClipboardStatus('Pasted')}).catch(cause=>reportError(cause instanceof Error?cause.message:'Clipboard image paste failed.'));return}

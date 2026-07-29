@@ -1324,6 +1324,11 @@ class AutomationEngine:
             )
         if session.record.parser_status == "degraded" and event.source != "native_hook":
             raise ValueError("observer disabled because transcript parsing is degraded")
+        if session.record.observation_stale_since is not None:
+            # The transcript parses fine; it is just no longer this session's
+            # conversation (an unfollowable /clear or /new). An observer reading it
+            # would title and summarize a conversation the user has already left.
+            raise ValueError("observer disabled because the followed transcript is stale")
         if not session.transcript_path or not session.transcript_path.exists():
             raise ValueError("normalized transcript is unavailable")
         model_setting = str(action.get("model") or "cheap")

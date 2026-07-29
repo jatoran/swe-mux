@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Gate for `wt land`. Must exit 0 or the branch does not land.
+# Mirrors CLAUDE.md § Verification. Live-agent marks are excluded (they need a
+# real provider session and are not appropriate for an automated landing gate).
+#
+# NOTE: swe-mux resolves its data dir from Path.home()/.mux with no env override,
+# and the suite has no conftest.py-level isolation fixture. Until that is verified
+# parallel-safe, land with WT_VERIFY_EXCLUSIVE=1 so only one worktree verifies at
+# a time (see .docs / CLAUDE.md § Worktrees).
+set -euo pipefail
+
+step() { printf '\n=== %s ===\n' "$*" >&2; }
+
+step "pytest"
+uv run pytest tests -q -m "not live_agent and not live_subagent and not live_telemetry and not live_quota"
+
+step "ruff"
+uv run ruff check src/swe_mux tests packaging
+
+step "mypy"
+uv run mypy
+
+step "frontend tsc"
+( cd frontend && npx tsc --noEmit )
+
+step "frontend tests"
+( cd frontend && npm test )
+
+printf '\nverification passed\n' >&2

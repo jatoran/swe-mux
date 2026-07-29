@@ -28,8 +28,12 @@ export interface Session {
   spawn_cwd?:string;spawn_project_scope_id?:string;spawn_repo_group_id?:string;spawn_project_label?:string;spawn_project_root?:string
   runtime_cwd?:string;runtime_cwd_live:boolean;runtime_cwd_source:string;runtime_cwd_updated_at?:number
   runtime_project_scope_id?:string;runtime_cwd_dropped:number;agent_run_id?:string;agent_run_started_at?:number
+  /** Conversation replacements (`/clear`, `/new`) on this PTY; 0 is the run it spawned with. */
+  agent_run_seq?:number
   run_cwd?:string;run_project_scope_id?:string;run_repo_group_id?:string
   parser_status?:string;parser_diagnostic?:string;parser_events_seen?:number
+  /** Set when the followed transcript is no longer this PTY's conversation. */
+  observation_stale_since?:number
   delivery_readiness?:{state:'safe'|'blocked'|'unknown';reason:string;authorized:false}
   auto_named?:boolean;generated_title?:string
   note_id?:string;note_exists?:boolean

@@ -81,9 +81,34 @@
 - While a session is promoted, a rendered shell prompt (OSC 7) means the nested CLI exited;
   after a short post-promotion grace and a transcript-quiescence check the daemon demotes the
   session even when no shim demotion arrives. This fallback requires a cwd-integration shell.
+- **An in-CLI conversation replacement is a new agent run, not a retarget.** `/clear` (Claude)
+  and `/new` (Codex) mint a new native session id and a new transcript file under the same PTY,
+  mux session, hook secret, and MCP token. The daemon *rolls the run*: it closes the outgoing
+  one exactly as an agent exit does (final token/context figures, its own history row, its own
+  transcript path, its own indexed messages), mints a fresh `agent_run_id`, bumps
+  `agent_run_seq`, rebinds `native_session_id` **and** `agent_lifecycle_id`, resets every
+  provider measurement, and emits `agent_conversation_rolled`. Queue items bound to the
+  outgoing run strand; the auto-delivery grant lapses; Branch forks the live conversation.
+  Nothing measured on the retired conversation carries forward.
+- Two triggers, strongest evidence first. **Claude's own `SessionStart` hook** arrives over the
+  session's loopback ingress with the session's own secret and names the conversation the CLI
+  is now writing; a reported id that differs from the bound one *is* the rollover, and the
+  hook's `source` (`clear`/`resume`/`compact`/`startup`) is recorded as `start_source` but never
+  enumerated on — `compact` and `startup` report the unchanged id and so never roll. This path
+  is unaffected by sibling sessions. **The transcript-switch watcher** is the fallback for Codex
+  (which has no session-start hook) and hookless launches: a quiet observed transcript plus a
+  freshly written, unclaimed, PTY-corroborated replacement in the same run cwd.
 - If the observed transcript goes quiet while another transcript for the same run cwd is being
-  actively written and is not owned by another live session, observation retargets to it
-  (in-CLI `/resume` or new-conversation switches), re-entering historical catch-up.
+  actively written and is not owned by another live session, observation retargets to it and
+  re-enters historical catch-up as part of that rollover.
+- When the conversation cannot be followed, observation **fails closed** rather than reporting a
+  retired conversation as live. A native hook that arrives after the followed transcript has
+  been dead for `TRANSCRIPT_STALE_SECONDS` proves the CLI ran a turn that landed nowhere we can
+  see, so `observation_stale_since` is set: the transcript loses its authority over hooks (state
+  keeps moving), delivery hard-blocks on `transcript_stale`, and the session is marked in the
+  UI and the state log. It is cleared by the next record read on any followed transcript, or by
+  a rollover. Silence alone is never the trigger — an idle agent is also quiet — and PTY bytes
+  are never the evidence, because a cleared screen is presentation, not identity.
 - Initial observation and fallback detection apply the same live ownership rule: provider/native
   pairs and normalized transcript paths claimed by another live session are ineligible. Multiple
   unclaimed candidates remain ambiguous and do not promote; newest-file mtime is not ownership

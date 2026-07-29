@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -12,6 +13,29 @@ from swe_mux.event_bus import EventBus
 from swe_mux.models import SessionRecord
 from swe_mux.server import deliver_broadcast, pty_ws
 from swe_mux.session import Session
+
+
+async def next_json(ws: Any, skip: tuple[str, ...] = ("geometry",)) -> Any:
+    """Next JSON frame, ignoring the shared-geometry frames.
+
+    Geometry is arbitrated across every attached client, so a `geometry` frame can
+    arrive at any point once one attaches, resizes, or takes input over. Tests that
+    are not about geometry step over it rather than pinning an incidental ordering.
+    """
+    while True:
+        frame = await ws.receive_json()
+        if frame.get("type") not in skip:
+            return frame
+
+
+async def next_bytes(ws: Any) -> bytes:
+    """Next binary (terminal output) frame, stepping over geometry frames."""
+    while True:
+        message = await ws.receive()
+        if message.type == WSMsgType.TEXT and json.loads(message.data).get("type") == "geometry":
+            continue
+        assert message.type == WSMsgType.BINARY
+        return cast(bytes, message.data)
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
@@ -68,7 +92,13 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         assert replay.data == b"past"
         assert await ws.receive_json() == {"type": "replay_end", "reason": "attach"}
         assert resizes == [(132, 41)]
-        assert await ws.receive_json() == {"type": "input_owner", "active": True}
+        assert await next_json(ws) == {
+            "type": "input_owner",
+            "active": True,
+            "epoch": 1,
+            "reason": "granted_unowned",
+            "owner_device": "unknown",
+        }
         await ws.send_json({"type": "terminal_state", "mode": "normal"})
         await ws.send_json(
             {"type": "input", "kind": "terminal_response", "data": "\x1b[?1;2c"}
@@ -84,12 +114,10 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         assert writes[-1] == "\x1b[200~fixture\x1b[201~"
 
         session.publish_output(b"live")
-        live = await ws.receive()
-        assert live.type == WSMsgType.BINARY
-        assert live.data == b"live"
+        assert await next_bytes(ws) == b"live"
 
         assert session.transition("working", "tool", source="hook")
-        update = await ws.receive_json()
+        update = await next_json(ws)
         assert update["type"] == "update"
         assert update["revision"] == 1
         assert update["snapshot"]["state"] == "working"
@@ -107,7 +135,7 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
-async def test_only_latest_claiming_browser_can_write_input() -> None:
+async def test_only_latest_gesture_claiming_browser_can_write_input() -> None:
     writes: list[str] = []
     record = SessionRecord(
         "mux-id",
@@ -148,17 +176,27 @@ async def test_only_latest_claiming_browser_can_write_input() -> None:
         await second.receive_json()
         await first.send_json({"type": "input", "data": "ignored"})
         await first.send_json({"type": "claim_input"})
-        await first.receive_json()
+        assert (await next_json(first))["type"] == "input_rejected"
+        assert (await next_json(first))["active"] is True
         await first.send_json({"type": "input", "data": "one"})
-        await second.send_json({"type": "claim_input"})
-        await second.receive_json()
+        # A gesture claim is the user's own hand on a device: it always wins, even
+        # against an owner that was typed into a moment ago.
+        await second.send_json({"type": "claim_input", "reason": "gesture"})
+        assert (await next_json(second))["active"] is True
         await second.send_json({"type": "input", "data": "two"})
         await first.send_json({"type": "input", "data": "stale"})
         await asyncio.sleep(0.05)
+        # The displaced client is told, and its stale keystrokes come back for replay
+        # rather than disappearing.
+        displaced = [await next_json(first), await next_json(first)]
+        assert [frame["type"] for frame in displaced] == ["input_owner", "input_rejected"]
+        assert displaced[0]["reason"] == "claimed_elsewhere"
+        assert displaced[1]["data"] == "stale"
         await first.close()
         await second.close()
 
     assert writes == ["one", "two"]
+    assert session.input_rejections == 2
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
@@ -199,7 +237,7 @@ async def test_codex_drops_late_default_color_responses_from_current_and_stale_c
         assert (await ws.receive_json())["type"] == "replay_start"
         assert (await ws.receive_json())["type"] == "replay_end"
         await ws.send_json({"type": "claim_input"})
-        assert await ws.receive_json() == {"type": "input_owner", "active": True}
+        assert (await next_json(ws))["active"] is True
 
         await ws.send_json(
             {"type": "input", "kind": "terminal_response", "data": foreground}
@@ -502,3 +540,148 @@ async def test_pty_ws_unsubscribes_for_an_already_ended_session() -> None:
 
     await asyncio.sleep(0.05)
     assert session.subscribers == set()
+
+
+def _arbitration_app() -> tuple[Session, web.Application, list[str], list[tuple[int, int]]]:
+    """A live session whose PTY records every write and every resize."""
+    writes: list[str] = []
+    resizes: list[tuple[int, int]] = []
+    record = SessionRecord(
+        "mux-id", "shell", "default", "shell", "mux-id", ".", "pwsh.exe", [], state="running"
+    )
+    pty = cast(
+        Any,
+        SimpleNamespace(
+            write=writes.append,
+            resize=lambda cols, rows: resizes.append((cols, rows)),
+            isalive=lambda: True,
+        ),
+    )
+    session = Session(record, pty, cast(Any, SimpleNamespace()), 32, "secret")
+    app = web.Application()
+    app["sessions"] = SimpleNamespace(
+        resolve=lambda _identity: session, sessions={record.id: session}
+    )
+    app["events"] = EventBus()
+    app.router.add_get("/pty/{sid}", pty_ws)
+    return session, app, writes, resizes
+
+
+async def _attach(client: TestClient, cols: int, rows: int, *, hidden: bool = False) -> Any:
+    ws = await client.ws_connect("/pty/mux-id")
+    assert (await ws.receive_json())["type"] == "state"
+    await ws.send_json({"type": "attach_ready", "cols": cols, "rows": rows, "hidden": hidden})
+    assert (await next_json(ws))["type"] == "replay_start"
+    assert (await next_json(ws))["type"] == "replay_end"
+    return ws
+
+
+async def _claim(ws: Any, reason: str, device: str, *, focused: bool = True) -> Any:
+    await ws.send_json(
+        {"type": "claim_input", "reason": reason, "device": device, "focused": focused}
+    )
+    return await next_json(ws)
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_a_background_pane_cannot_take_input_from_the_device_in_use() -> None:
+    """The multi-device failure this arbitration exists for.
+
+    A desktop pane keeps `document.activeElement` inside its terminal while minimized,
+    so it re-claimed input every time the phone claimed it. The phone then typed while
+    its ownership belief was one round trip stale and the daemon dropped those
+    keystrokes silently. Now the passive re-claim is refused, and input that does lose
+    the race comes back for replay instead of vanishing.
+    """
+    session, app, writes, resizes = _arbitration_app()
+
+    async with TestClient(TestServer(app)) as client:
+        phone = await _attach(client, 40, 20)
+        assert (await _claim(phone, "gesture", "mobile"))["active"] is True
+        await phone.send_json({"type": "input", "data": "hi"})
+        await asyncio.sleep(0.02)
+
+        desktop = await _attach(client, 200, 50)
+        assert await _claim(desktop, "passive", "desktop") == {
+            "type": "input_owner",
+            "active": False,
+            "epoch": 1,
+            "reason": "denied_active_owner",
+            "owner_device": "mobile",
+        }
+        # The phone is still the one being typed into, so it still sizes the PTY.
+        assert resizes == [(40, 20)]
+
+        await desktop.send_json({"type": "input", "data": "x"})
+        rejected = await next_json(desktop)
+        assert rejected["type"] == "input_rejected"
+        assert rejected["data"] == "x"
+        assert rejected["owner_device"] == "mobile"
+        assert writes == ["hi"]
+
+        # Taking over is one gesture, and the replayed keystroke lands.
+        assert (await _claim(desktop, "gesture", "desktop"))["active"] is True
+        await desktop.send_json({"type": "input", "data": "x", "retry": True})
+        await asyncio.sleep(0.02)
+        assert writes == ["hi", "x"]
+        assert resizes == [(40, 20), (200, 50)]
+        await phone.close()
+        await desktop.close()
+
+    assert session.input_rejections == 1
+    assert session.input_claim_denials == 1
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_a_hidden_client_does_not_size_the_pty() -> None:
+    """A minimized window still reports layout; it must not rewrap the agent TUI on
+    whatever device the user is actually holding."""
+    _session, app, _writes, resizes = _arbitration_app()
+
+    async with TestClient(TestServer(app)) as client:
+        desktop = await _attach(client, 200, 50, hidden=True)
+        assert resizes == []
+
+        phone = await _attach(client, 40, 20)
+        assert resizes == [(40, 20)]
+
+        # Coming back into view registers the viewport, but with nobody owning input
+        # the smallest attached client still bounds the shared size.
+        await desktop.send_json({"type": "resize", "cols": 200, "rows": 50, "hidden": False})
+        await asyncio.sleep(0.02)
+        assert resizes == [(40, 20)]
+
+        # Owning it is what hands the size over.
+        assert (await _claim(desktop, "gesture", "desktop"))["active"] is True
+        await asyncio.sleep(0.02)
+        assert resizes == [(40, 20), (200, 50)]
+        await phone.close()
+        await desktop.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_the_owner_detaching_releases_input_and_resizes_for_who_is_left() -> None:
+    session, app, _writes, resizes = _arbitration_app()
+
+    async with TestClient(TestServer(app)) as client:
+        desktop = await _attach(client, 200, 50)
+        phone = await _attach(client, 40, 20)
+        assert (await _claim(phone, "gesture", "mobile"))["active"] is True
+        assert resizes[-1] == (40, 20)
+
+        await phone.close()
+        await asyncio.sleep(0.05)
+        assert session.input_owner is None
+        assert resizes[-1] == (200, 50)
+
+        # The pane left behind is told, so it can stop showing "input active on mobile"
+        # and go back to rendering at its own size.
+        frames: list[Any] = []
+        while len(frames) < 6:
+            frames.append(await next_json(desktop, ()))
+            if frames[-1]["type"] == "input_owner_released":
+                break
+        assert frames[-1]["type"] == "input_owner_released"
+        geometry = [frame for frame in frames if frame["type"] == "geometry"]
+        assert (geometry[-1]["cols"], geometry[-1]["rows"]) == (200, 50)
+        await desktop.close()

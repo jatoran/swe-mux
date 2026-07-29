@@ -46,6 +46,14 @@ and reattachable browser viewports.
   columns and rows. The daemon resizes ConPTY before sending replay bytes; older clients may use
   their first `resize` frame or the bounded compatibility timeout. Messages received while
   readiness is pending are processed only after the replay boundary.
+- A session attached from several devices shares one keyboard and one size, and the daemon
+  arbitrates both. An explicit gesture always takes input; a passive claim (attach, reconnect,
+  restored focus) cannot take it from a device that has been typed into in the last 10 s, nor
+  come from a window reporting itself hidden or unfocused. Input from a non-owner is refused
+  and echoed back for a single replay rather than dropped, so losing an ownership race costs
+  latency instead of keystrokes. The input owner's viewport sizes the PTY (the smallest visible
+  viewport when nobody owns it); hidden clients deregister theirs, and every other client
+  renders the arbitrated size at a reduced font size instead of fitting its own.
 - Desktop shell and Claude terminals default to WebGL with DOM fallback. Codex terminals always
   use the built-in DOM renderer because its full-screen redraws can corrupt off-tail WebGL
   scrollback. The pinned xterm 6 WebGL addon carries
@@ -124,10 +132,25 @@ and reattachable browser viewports.
   - **Switch (in-CLI resume).** Following a freshly-written transcript additionally requires
     that this session's own PTY produced output around the time the candidate appeared. An
     outside CLI leaves our PTY silent, which is what distinguishes it.
-  - **Siblings block.** Another live session in the same cwd makes a fresh transcript
-    ambiguous. That includes an unpromoted *shell* that has already echoed this backend's
-    name: its shim-less launch is about to create a transcript here, and this session's 2s
-    switch watcher can beat that shell's 0.5s detection loop to the claim.
+  - **Unresolved siblings block.** Another live session in the same cwd makes a fresh
+    transcript ambiguous — but only while it *is* ambiguous. A same-backend sibling is ruled
+    out per candidate when its own transcript was still being written after the candidate
+    appeared (it is demonstrably on its own conversation), or when its PTY produced nothing
+    across the candidate's creation (it cannot have written it). Anything else — a sibling
+    that went quiet while still talking, or one with no transcript bound yet — keeps blocking,
+    because that is indistinguishable from a sibling that just cleared. An unpromoted *shell*
+    that has echoed this backend's name blocks unconditionally: its shim-less launch is about
+    to create a transcript here, it owns no id or file to rule it out with, and this session's
+    2s switch watcher can beat that shell's 0.5s detection loop to the claim.
+- **Replacing a bound conversation is a lifecycle transition, not a rebind.** An in-CLI
+  `/clear` or `/new` keeps the PTY and replaces the conversation, so the daemon retires the
+  agent run and opens a successor (`agent_run_seq`, `agent_conversation_rolled`) rather than
+  rekeying the live one — see `backends.md`. The one-way bind above is unchanged: a hook still
+  cannot silently rekey a bound session, it can only report that the session it authenticated
+  as is now writing somewhere else, which ends the run it was bound to. A root agent's
+  `agent_run_id` is otherwise pinned to its session id by adoption; `agent_run_seq > 0` is what
+  tells the restart path that a differing run id is the daemon's own successor rather than the
+  misattribution it repairs.
 - The root process's OS creation time is captured at spawn (`SessionRecord.root_started_at`).
   A pid alone is not an identity on Windows, and exited sessions stay listed with their pid
   intact, so every later consumer of `record.pid` pairs the two.

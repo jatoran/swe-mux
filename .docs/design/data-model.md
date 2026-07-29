@@ -13,6 +13,16 @@
 - `SessionRecord.spawn_backend` and `spawn_native_session_id`: immutable root-process identity.
   The compatibility `backend`/`native_session_id` pair may describe a promoted agent only when
   the root is a shell.
+- `SessionRecord.agent_run_id`: **the scope every run-owned record is keyed by** — history rows,
+  Tier 0 facts, annotations, queue bindings, auto-delivery grants, telemetry. One run is one
+  provider conversation on one PTY. `agent_run_seq` counts the in-CLI conversation replacements
+  (`/clear`, `/new`) that produced it; 0 is the run the session spawned or was promoted with.
+  A root agent's run id is otherwise pinned to its session id, and adoption repairs any other
+  value as misattribution, so `agent_run_seq > 0` is what marks a differing id as the daemon's
+  own successor run rather than corruption.
+- `SessionRecord.observation_stale_since`: volatile. Set when the followed transcript is
+  provably no longer this PTY's conversation and no successor could be corroborated; it
+  revokes the transcript's authority over hooks and hard-blocks delivery.
 - Git `repository_id`, project scope, root, and repository group fields are derived metadata,
   separate from canonical Project ownership.
 

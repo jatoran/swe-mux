@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Bootstrap a fresh agent worktree. Run by `wt new <slug>` from inside the new
+# worktree; $WT_MAIN_ROOT points at the primary checkout.
+#
+# Only gitignored state needs handling here — tracked files come with the checkout.
+# swe-mux keeps its runtime state in ~/.mux (not in the repo), so there is no .env
+# or config to copy; the cost here is dependency installation.
+set -euo pipefail
+
+note() { printf 'worktree-setup: %s\n' "$*" >&2; }
+
+# Share the caches so per-worktree installs are near-instant rather than full downloads.
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}"
+export npm_config_cache="${npm_config_cache:-$HOME/.npm}"
+
+note "installing python deps (uv sync)"
+uv sync
+
+if [ -f frontend/package-lock.json ]; then
+    note "installing frontend deps (npm ci)"
+    ( cd frontend && npm ci )
+elif [ -f frontend/package.json ]; then
+    note "installing frontend deps (npm install)"
+    ( cd frontend && npm install )
+fi
+
+note "ready"

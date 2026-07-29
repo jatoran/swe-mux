@@ -26,6 +26,7 @@ from .runtime_cwd import Osc7Parser, local_directory_from_osc7
 from .scrollback import ScrollbackBuffer
 from .spawn_contract import infer_agent_executable_backend, scrub_claude_session_markers
 from .supervisor_client import RemotePtyHost, SupervisorClient, host_for_adoption
+from .terminal_arbitration import OwnerState, effective_geometry, release_owner
 from .win_jobobj import ReaperJob
 
 log = logging.getLogger(__name__)
@@ -36,6 +37,14 @@ log = logging.getLogger(__name__)
 TRANSCRIPT_SWITCH_POLL_SECONDS = 2.0
 TRANSCRIPT_SWITCH_QUIET_SECONDS = 5.0
 TRANSCRIPT_SWITCH_FRESH_SECONDS = 5.0
+
+# When the followed transcript has been quiet this long while the PTY kept
+# producing output and no replacement could be corroborated, observation is marked
+# stale rather than left silently pointed at a conversation that may have been
+# replaced (Codex `/new` behind an unresolvable sibling is the motivating case).
+# Comfortably longer than a slow tool call so an ordinary long turn never trips it:
+# a working agent writes transcript records continuously, a replaced one never will.
+TRANSCRIPT_STALE_SECONDS = 90.0
 
 # A shell prompt rendered while a session is promoted means the nested CLI has
 # exited (the shell is otherwise blocked on it). Prompts within the grace window
@@ -724,6 +733,28 @@ class Session:
         # The owner's socket, so a displaced owner can be told it lost the claim.
         # Silent displacement left the previous client typing into a void.
         self.input_owner_socket: Any = None
+        # Transfer counter and the owning device's label, carried on every
+        # `input_owner` frame so a client can discard an ownership notification that
+        # lost a race with a newer one. See terminal_arbitration.
+        self.input_owner_epoch = 0
+        self.input_owner_device: str | None = None
+        # Monotonic time of the last gesture-backed claim or keystroke by the owner:
+        # what protects an actively typed-in device from a passive re-claim by a
+        # background pane on another device.
+        self.input_owner_gesture_ts: float | None = None
+        # Non-owner input is refused rather than silently dropped; these make the
+        # refusals visible in telemetry instead of leaving the user to notice
+        # missing characters by feel.
+        self.input_rejections = 0
+        self.last_input_reject_report_ts = 0.0
+        # Passive claims refused because another device is actively being typed into:
+        # the direct measure of how often a background pane tried to steal the keyboard.
+        self.input_claim_denials = 0
+        # Per-connection fitted terminal size for every attached client that reports
+        # itself visible. Hidden panes deregister, so a minimized window can no longer
+        # reshape ConPTY for the device a human is actually using.
+        self.viewports: dict[str, tuple[int, int]] = {}
+        self.geometry: tuple[int, int] | None = None
         self.revision = 0
         self.state_source_priority = -1
         # Diagnostics for end-detection health: when the state last changed, when a
@@ -827,6 +858,84 @@ class Session:
         if not subscriber.resync_pending:
             subscriber.resync_pending = True
             subscriber.queue.put_nowait({"type": "resync"})
+
+    # --- terminal input ownership and shared geometry (see terminal_arbitration) ---
+
+    def owner_state(self) -> OwnerState:
+        return OwnerState(
+            connection_id=self.input_owner,
+            epoch=self.input_owner_epoch,
+            device=self.input_owner_device,
+            last_gesture_at=self.input_owner_gesture_ts,
+        )
+
+    def apply_owner_state(self, state: OwnerState) -> None:
+        self.input_owner = state.connection_id
+        self.input_owner_epoch = state.epoch
+        self.input_owner_device = state.device
+        self.input_owner_gesture_ts = state.last_gesture_at
+
+    def note_owner_input(self, now: float) -> None:
+        """Human keystrokes renew the owner's protection from passive claims."""
+        self.input_owner_gesture_ts = now
+
+    def release_input_owner(self, connection_id: str) -> bool:
+        """Drop ownership held by a detaching connection. True when it held it."""
+        if self.input_owner != connection_id:
+            return False
+        self.apply_owner_state(release_owner(self.owner_state(), connection_id))
+        self.input_owner_socket = None
+        return True
+
+    def set_viewport(self, connection_id: str, cols: int, rows: int, *, hidden: bool) -> None:
+        """Record (or, for a hidden client, forget) one client's fitted size."""
+        if hidden:
+            self.viewports.pop(connection_id, None)
+            return
+        self.viewports[connection_id] = (max(2, cols), max(1, rows))
+
+    def drop_viewport(self, connection_id: str) -> None:
+        self.viewports.pop(connection_id, None)
+
+    def apply_geometry(self) -> bool:
+        """Resize the PTY to the arbitrated size. True when it actually changed.
+
+        Called after every viewport update, ownership transfer and detach. Resizing is
+        gated on a real change because each one is a SIGWINCH that makes an agent TUI
+        repaint its whole screen.
+        """
+        size = effective_geometry(self.viewports, self.input_owner)
+        if size is None or size == self.geometry:
+            return False
+        self.geometry = size
+        self.pty.resize(size[0], size[1])
+        self.publish_control(self.geometry_frame())
+        return True
+
+    def geometry_frame(self) -> dict[str, Any]:
+        # getattr-guarded for the lightweight PTY stubs used by protocol tests, which
+        # implement resize/write but carry no dimensions of their own.
+        cols, rows = self.geometry or (
+            int(getattr(self.pty, "cols", 80)),
+            int(getattr(self.pty, "rows", 24)),
+        )
+        return {
+            "type": "geometry",
+            "cols": cols,
+            "rows": rows,
+            "owner_device": self.input_owner_device,
+        }
+
+    def publish_control(self, frame: dict[str, Any]) -> None:
+        """Fan out a small control frame. Unlike output it is never worth a resync:
+        a client mid-resync gets the current geometry with its resync `update`."""
+        for subscriber in tuple(self.subscribers):
+            if subscriber.resync_pending:
+                continue
+            try:
+                subscriber.queue.put_nowait(frame)
+            except asyncio.QueueFull:
+                self._schedule_resync(subscriber)
 
     def publish_output(self, data: bytes) -> None:
         for subscriber in tuple(self.subscribers):
@@ -1332,8 +1441,12 @@ class SessionManager:
         if inferred is not None:
             return inferred
         # Older direct-agent records already used the mux id as their durable
-        # history owner. A promoted shell receives a separate run id.
-        if record.backend in AGENT_BACKENDS and record.agent_run_id == record.id:
+        # history owner. A promoted shell receives a separate run id — as does a
+        # root agent that has rolled its conversation, which is what agent_run_seq
+        # distinguishes from the promoted case.
+        if record.backend in AGENT_BACKENDS and (
+            record.agent_run_id == record.id or record.agent_run_seq > 0
+        ):
             return record.backend
         return "shell"
 
@@ -1473,7 +1586,11 @@ class SessionManager:
             # A direct root agent has priority over mutable metadata. For a
             # promoted shell, the active backend/native pair remains authoritative.
             if root_backend in AGENT_BACKENDS:
-                if backend == "claude":
+                if other.agent_run_seq > 0 and other.backend == backend:
+                    # A rolled conversation is no longer the one it spawned with,
+                    # so the spawn id claims nothing and the live id claims the file.
+                    native_id = other.native_session_id
+                elif backend == "claude":
                     native_id = other.spawn_native_session_id or other.id
                 elif other.backend == backend:
                     native_id = other.native_session_id
@@ -1523,7 +1640,13 @@ class SessionManager:
             if (backend, native_id) not in claimed_ids
             and self._path_key(path) not in claimed_paths
         ]
-        expected = record.spawn_native_session_id
+        # After a conversation rollover the spawn id names a retired conversation;
+        # the live native id is what this run is expected to be writing.
+        expected = (
+            record.native_session_id
+            if record.agent_run_seq > 0
+            else record.spawn_native_session_id
+        )
         exact = [item for item in unclaimed if item[2] == expected]
         if exact:
             return max(exact)[1]
@@ -1554,6 +1677,7 @@ class SessionManager:
         record.parser_unknown_events = 0
         record.parser_unknown_signatures = {}
         record.parser_schema_version = None
+        record.observation_stale_since = None
 
     def _reconcile_adopted_root_identity(
         self,
@@ -1612,10 +1736,18 @@ class SessionManager:
         current_claimed = (record.backend, record.native_session_id) in claimed_ids or (
             current_path is not None and self._path_key(current_path) in claimed_paths
         )
+        # A root agent's run id is normally its session id, and anything else is
+        # corruption to repair. A conversation rollover is the one legitimate
+        # exception: `agent_run_seq > 0` records that the daemon itself minted a
+        # successor run for this PTY, so the id is expected rather than bad. Without
+        # this the first daemon restart after a `/clear` would "repair" the live run
+        # away and quarantine its history row as misattributed.
+        rolled = record.agent_run_seq > 0 and bool(record.agent_run_id)
+        expected_run_id = record.agent_run_id if rolled else record.id
         changed = (
             record.backend != backend
             or current_claimed
-            or record.agent_run_id != record.id
+            or record.agent_run_id != expected_run_id
             or (
                 current_path is not None
                 and (
@@ -1631,13 +1763,17 @@ class SessionManager:
             "native_session_id": record.native_session_id,
             "transcript_path": str(current_path) if current_path else "",
         }
-        bad_run_id = record.agent_run_id if record.agent_run_id != record.id else None
+        bad_run_id = record.agent_run_id if record.agent_run_id != expected_run_id else None
         record.backend = backend
-        record.native_session_id = (
-            transcript_native or record.spawn_native_session_id or record.id
+        fallback_native_id = (
+            record.native_session_id
+            if rolled
+            else (record.spawn_native_session_id or record.id)
         )
-        record.agent_run_id = record.id
-        record.agent_run_started_at = record.created_at
+        record.native_session_id = transcript_native or fallback_native_id
+        record.agent_run_id = expected_run_id
+        if not rolled:
+            record.agent_run_started_at = record.created_at
         record.run_cwd = record.spawn_cwd or record.cwd
         record.run_project_scope_id = record.spawn_project_scope_id or record.project_scope_id
         record.run_repo_group_id = record.spawn_repo_group_id or record.repo_group_id
@@ -1737,9 +1873,17 @@ class SessionManager:
             session.scrollback.seed(replay, int(response.get("position", len(replay))))
             session.transcript_path = transcript_path
             lifecycle = meta.get("agent_lifecycle_id")
+            # The lifecycle anchor is what Branch forks from and what the exit
+            # check demotes against, and the observer never rewrites it. A promoted
+            # shell has always carried one; a *root* agent now does too once it has
+            # rolled its conversation, and dropping it there would send Branch back
+            # to the pre-rollover conversation after every daemon restart.
             session.agent_lifecycle_id = (
                 lifecycle
-                if record.spawn_backend == "shell" and isinstance(lifecycle, str)
+                if isinstance(lifecycle, str)
+                and lifecycle
+                and record.backend in AGENT_BACKENDS
+                and (record.spawn_backend == "shell" or record.agent_run_seq > 0)
                 else None
             )
             if record.spawn_backend == "shell" and record.backend in AGENT_BACKENDS:
@@ -1775,7 +1919,7 @@ class SessionManager:
                             record,
                             str(session.transcript_path) if session.transcript_path else "",
                         )
-                        await self.history.reopen_agent_run(record.id)
+                        await self.history.reopen_agent_run(record.agent_run_id or record.id)
                     await self.events.emit(
                         "session_identity_reconciled",
                         session_id=sid,
@@ -2030,11 +2174,7 @@ class SessionManager:
         session.ignored_detection_runs.add((backend, observed_native_id))
         await self.history.update_agent_summary(session.record)
         await self.history.agent_run_ended(session.record, "agent_exit")
-        session.agent_stop_event.set()
-        if session.observer_task and not session.observer_task.done():
-            session.observer_task.cancel()
-            await asyncio.gather(session.observer_task, return_exceptions=True)
-        session.observer_task = None
+        await self._stop_observer(session)
         session.agent_lifecycle_id = None
         session.adapter = self.adapters["shell"]
         session.pty.graceful_exit = session.adapter.graceful_exit_keys()
@@ -2084,6 +2224,161 @@ class SessionManager:
         self._start_detection(session)
         return session
 
+    async def _stop_observer(self, session: Session) -> None:
+        """Halt transcript observation and wait for the tail task to be gone.
+
+        Callers that are about to rewrite the record's conversation identity must
+        do this first: a still-running observer re-derives ``native_session_id``
+        from the file it is tailing at the top of every loop, so a cancellation
+        that has not landed yet can put the *previous* conversation's id back over
+        the one just written.
+        """
+        session.agent_stop_event.set()
+        if session.observer_task and not session.observer_task.done():
+            session.observer_task.cancel()
+            await asyncio.gather(session.observer_task, return_exceptions=True)
+        session.observer_task = None
+
+    async def _apply_conversation_rollover(
+        self,
+        session: Session,
+        *,
+        native_id: str,
+        transcript: Path | None,
+        reason: str,
+        source: str,
+    ) -> bool:
+        """Retire the current agent run and open a new one on the same PTY.
+
+        An in-CLI ``/clear`` (Claude) or ``/new`` (Codex) replaces the provider
+        conversation underneath a live session: new native id, new transcript file,
+        same PTY, same mux session, same hook secret and MCP token. That is a new
+        *agent run*, and treating it as one is what keeps every run-scoped consumer
+        honest — queue bindings strand instead of delivering into a wiped
+        conversation, Tier 0 facts and detector evidence stop spanning the seam,
+        the titler retitles, and Branch forks the conversation the user is actually
+        in rather than its predecessor.
+
+        The outgoing run is closed exactly as an agent exit closes it, so its
+        history row keeps its own native id, transcript path, indexed messages, and
+        final token/context figures. The successor gets a *new* row. Nothing that
+        measured the old conversation carries into the new one.
+
+        Does not touch the observer task — the two callers differ on that. Returns
+        ``True`` when a rollover actually happened.
+        """
+        record = session.record
+        backend = record.backend
+        if backend not in AGENT_BACKENDS or session.stopping:
+            return False
+        if record.state in TERMINAL_STATES:
+            return False
+        if not native_id or native_id == record.native_session_id:
+            return False
+        if session.agent_lifecycle_id == native_id:
+            return False
+        await self._await_registration(session)
+        previous_run_id = record.agent_run_id
+        previous_native_id = record.native_session_id
+        # Close the outgoing run against its own final numbers, before any reset.
+        await self.history.update_agent_summary(record)
+        await self.history.agent_run_ended(record, reason)
+        # Spooled hook events and the retired conversation both belong to the run
+        # that just ended; replaying either into the successor is cross-attribution.
+        self.discard_hook_spool(record.id)
+        if previous_native_id:
+            session.ignored_detection_runs.add((backend, previous_native_id))
+        record.agent_run_id = str(uuid.uuid4())
+        record.agent_run_started_at = time.time()
+        record.agent_run_seq += 1
+        record.native_session_id = native_id
+        session.agent_lifecycle_id = native_id
+        session.transcript_path = transcript
+        record.observation_stale_since = None
+        record.tokens_in = 0
+        record.tokens_out = 0
+        record.context_window = 0
+        record.context_pct = 0.0
+        record.context_peak_pct = 0.0
+        record.compaction_count = 0
+        record.last_compaction_at = None
+        record.compaction_capability = None
+        record.compaction_confidence = None
+        record.model = None
+        record.measurement_source = None
+        record.parser_status = "waiting"
+        record.parser_diagnostic = None
+        record.parser_events_seen = 0
+        record.parser_unknown_events = 0
+        record.parser_unknown_signatures = {}
+        record.parser_schema_version = None
+        session.observation_state = {
+            "root_turn_active": False,
+            "root_completion_seen": False,
+            "codex_scope": "root",
+        }
+        session.observation_replay = False
+        session.agent_promoted_at = time.time()
+        session.state_source_priority = -1
+        session.transition(
+            "starting", None, source="daemon", evidence=f"conversation_rolled:{source}", force=True
+        )
+        await self.history.session_promoted(record, str(transcript) if transcript else "")
+        session.publish_update()
+        await self.events.emit(
+            "agent_conversation_rolled",
+            session_id=record.id,
+            source="daemon",
+            backend=backend,
+            reason=reason,
+            trigger=source,
+            previous_agent_run_id=previous_run_id,
+            agent_run_id=record.agent_run_id,
+            previous_native_session_id=previous_native_id,
+            native_session_id=native_id,
+            agent_run_seq=record.agent_run_seq,
+        )
+        return True
+
+    async def roll_agent_conversation(
+        self,
+        sid: str,
+        *,
+        native_id: str,
+        reason: str,
+        source: str,
+        transcript: Path | None = None,
+    ) -> bool:
+        """Public rollover entry point for callers outside the observer.
+
+        Never call this *from* the observer task: it stops and restarts
+        observation, which would cancel the caller. The observer applies the
+        rollover in place instead and keeps following.
+        """
+        session = self.sessions.get(sid)
+        if session is None:
+            return False
+        record = session.record
+        if record.backend not in AGENT_BACKENDS:
+            return False
+        adapter = self.adapters.get(record.backend)
+        if transcript is None and adapter is not None:
+            transcript = adapter.transcript_path(
+                native_id, Path(record.run_cwd or record.cwd)
+            )
+        # Stop first: an in-flight observer would otherwise re-bind the retired
+        # conversation id from the file it is still tailing.
+        await self._stop_observer(session)
+        rolled = await self._apply_conversation_rollover(
+            session,
+            native_id=native_id,
+            transcript=transcript,
+            reason=reason,
+            source=source,
+        )
+        self._start_observer(session, transcript if rolled else session.transcript_path)
+        return rolled
+
     async def _observe(
         self, session: Session, transcript: Path | None, stop_event: asyncio.Event
     ) -> None:
@@ -2114,6 +2409,19 @@ class SessionManager:
                     observe_task.cancel()
                 await asyncio.gather(observe_task, return_exceptions=True)
             if switch is not None:
+                # Following a different transcript is not a file-path detail: the
+                # CLI is on another conversation, so the agent run ends here and a
+                # new one begins. Applied in place rather than through
+                # roll_agent_conversation, which would cancel this very task.
+                switched_native = adapter.transcript_native_id(switch)
+                if switched_native:
+                    await self._apply_conversation_rollover(
+                        session,
+                        native_id=switched_native,
+                        transcript=switch,
+                        reason="conversation_rolled",
+                        source="transcript_switch",
+                    )
                 path = switch
                 backoff = OBSERVER_RESTART_BACKOFF_MIN_SECONDS
                 continue
@@ -2174,7 +2482,52 @@ class SessionManager:
                     path=str(candidate),
                 )
                 return candidate
+            await self._note_transcript_staleness(session, current)
         return None
+
+    async def _note_transcript_staleness(self, session: Session, current: Path) -> None:
+        """Fail closed when the conversation moved somewhere we cannot prove.
+
+        Codex has no session-start hook, so a `/new` behind a sibling that cannot
+        be ruled out leaves the observer tailing a file that will never change
+        again. Silence alone is not evidence of that — an idle agent is also quiet
+        — but a *native hook that arrived after the transcript went dead* is: the
+        CLI ran a turn and none of it landed in the file being followed.
+
+        Marking it stale is what stops the session from reporting a retired
+        conversation's status as live: hooks resume driving state
+        (`_transcript_authoritative` goes false) and delivery hard-blocks. It is
+        cleared by the next record read on any followed transcript, or by a
+        rollover.
+        """
+        record = session.record
+        try:
+            current_mtime = current.stat().st_mtime
+        except OSError:
+            return
+        now = time.time()
+        stale = (
+            now - current_mtime >= TRANSCRIPT_STALE_SECONDS
+            and session.last_hook_ts > current_mtime + TRANSCRIPT_SWITCH_QUIET_SECONDS
+        )
+        if not stale or record.observation_stale_since is not None:
+            return
+        record.observation_stale_since = now
+        record.parser_diagnostic = (
+            f"transcript {current.name} last written "
+            f"{int(now - current_mtime)}s ago while the CLI kept reporting activity; "
+            "the conversation may have been replaced"
+        )
+        session.publish_update()
+        await self.events.emit(
+            "observation_stale",
+            session_id=record.id,
+            source="daemon",
+            backend=record.backend,
+            transcript_path=str(current),
+            transcript_mtime=current_mtime,
+            last_hook_ts=session.last_hook_ts,
+        )
 
     @staticmethod
     def _resolved_cwd(record: SessionRecord) -> Path:
@@ -2184,31 +2537,70 @@ class SessionManager:
         except OSError:
             return cwd
 
-    def _has_transcript_sibling(self, session: Session, cwd: Path) -> bool:
-        """True when another live session may write this backend's transcripts here.
-
-        Same-backend agent sessions are the obvious case. An *unpromoted shell*
-        that has already echoed the agent's name counts too: its shim-less launch
-        is about to create a transcript in this cwd, and this session's 2s switch
-        watcher can beat that shell's 0.5s detection loop to the claim — stealing
-        the new CLI's conversation and permanently rekeying this record's native id.
-        """
+    def _same_cwd_siblings(self, session: Session, cwd: Path) -> list[Session]:
         try:
             key = cwd.resolve()
         except OSError:
             key = cwd
+        return [
+            other
+            for other in self.sessions.values()
+            if other is not session
+            and other.record.state not in TERMINAL_STATES
+            and self._resolved_cwd(other.record) == key
+        ]
+
+    def _pending_agent_launch_sibling(self, session: Session, cwd: Path) -> bool:
+        """An unpromoted shell here is about to create a transcript of its own.
+
+        Its shim-less launch has echoed the agent's name but has not been promoted
+        yet, so it owns no transcript and no native id — there is nothing to rule
+        it out *with*. This session's 2s switch watcher can beat that shell's 0.5s
+        detection loop to the claim, stealing the new CLI's conversation and
+        permanently rekeying this record. Blocks unconditionally.
+        """
         backend = session.record.backend
-        for other in self.sessions.values():
-            if other is session:
+        return any(
+            other.record.backend == "shell" and backend in other.pending_agent_backends
+            for other in self._same_cwd_siblings(session, cwd)
+        )
+
+    def _unresolved_transcript_sibling(
+        self, session: Session, cwd: Path, created: float
+    ) -> bool:
+        """True when a same-backend sibling here cannot be excluded as the writer.
+
+        The blanket "any sibling in this cwd blocks the switch" rule was correct
+        but far too broad: in a project with two agents open it suppressed every
+        in-CLI conversation change forever, which is how a `/clear` left the
+        observer tailing a dead file. The ambiguity it defends against is specific
+        — *which* session created this new transcript — and two pieces of evidence
+        already on the record settle it per candidate:
+
+        - a sibling whose own transcript was still being written after the
+          candidate appeared is demonstrably still on its own conversation, and
+        - a sibling whose PTY produced nothing across the candidate's creation
+          cannot have produced the candidate (the mirror of the corroboration
+          ``_session_could_have_written`` applies to this session).
+
+        Anything else — a quiet sibling that was also talking, or one with no
+        transcript bound yet — stays a blocker. Uncertainty keeps the old answer.
+        """
+        backend = session.record.backend
+        for other in self._same_cwd_siblings(session, cwd):
+            if other.record.backend != backend:
                 continue
-            if other.record.state in TERMINAL_STATES:
+            sibling_path = getattr(other, "transcript_path", None)
+            if sibling_path is not None:
+                try:
+                    if sibling_path.stat().st_mtime > created:
+                        continue
+                except OSError:
+                    pass
+            last_output = other.record.last_activity_ts
+            if last_output and last_output < created - TRANSCRIPT_SWITCH_QUIET_SECONDS:
                 continue
-            if self._resolved_cwd(other.record) != key:
-                continue
-            if other.record.backend == backend:
-                return True
-            if other.record.backend == "shell" and backend in other.pending_agent_backends:
-                return True
+            return True
         return False
 
     def _transcript_switch_candidate(self, session: Session, current: Path) -> Path | None:
@@ -2222,14 +2614,10 @@ class SessionManager:
             return None
         started = record.agent_run_started_at or record.created_at
         cwd = Path(record.run_cwd or record.cwd)
-        # Following a freshly-written transcript is only safe when this is the sole
-        # agent writing into that directory. With sibling sessions in the same cwd,
-        # a fresh sibling transcript is indistinguishable from this CLI resuming
-        # into a new conversation; switching would attach this observer to the
-        # sibling's file and bleed its status/tokens/context into this record (the
-        # native-id swap seen with multiple sessions in one project). The
-        # single-session in-CLI resume case still works — it has no sibling.
-        if self._has_transcript_sibling(session, cwd):
+        # A shim-less agent launch in a sibling shell is about to create a
+        # transcript here and cannot be ruled out by any evidence, so it blocks
+        # every candidate. Same-backend siblings are evaluated per candidate below.
+        if self._pending_agent_launch_sibling(session, cwd):
             return None
         other_native_ids = {
             other.record.native_session_id
@@ -2256,6 +2644,9 @@ class SessionManager:
             if now - modified > TRANSCRIPT_SWITCH_FRESH_SECONDS:
                 continue
             if not self._session_could_have_written(session, path):
+                continue
+            created = file_created_at(path)
+            if created is None or self._unresolved_transcript_sibling(session, cwd, created):
                 continue
             if best is None or modified > best[0]:
                 best = (modified, path)

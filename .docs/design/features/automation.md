@@ -82,8 +82,14 @@ a single label per run. It derives the title from the scan timeline where enable
 to bounded transcript slices otherwise), keying on the user's actual asks and the agent's salient
 responses rather than interim tool activity, and recomputes only on a material shift (novelty
 spike, work-phase or target change, new user request) with debounce and hysteresis so the title
-neither flickers nor costs a call every turn. An explicit user rename pins the title and disables
-auto-update for that session; the automation never overwrites a human-chosen name. Generated
+neither flickers nor costs a call every turn. A conversation rollover (an in-CLI `/clear` or
+`/new` — `backends.md`) always retitles: it is the strongest material shift there is, since the
+existing title describes work the conversation no longer contains. It is also what made the
+still-shipping one-shot titler visibly wrong — its reserve is per `agent_run_id`, and before the
+run boundary existed a cleared session kept its pre-clear title for the rest of its life. An
+explicit user rename pins the title and disables auto-update for that session, and the pin is a
+property of the session, so it survives a rollover too — a human who named a tab did not un-name
+it by clearing the conversation. The automation never overwrites a human-chosen name. Generated
 titles are compact task labels for tabs/sidebar, without backend or “terminal session” prefixes:
 the prompt targets 2-3 words and caps at 4, because the tab strip and sidebar rows are narrow
 enough that a longer-but-equally-accurate title only buys an ellipsis.

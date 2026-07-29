@@ -91,6 +91,12 @@ def session_summary(record: Any) -> dict[str, Any]:
         "project_id": record.project_id,
         "project_label": record.project_label,
         "agent_run_id": record.agent_run_id,
+        # How many times this session's conversation has been replaced in place
+        # (`/clear`, `/new`). Without it a caller that remembers a sibling's
+        # agent_run_id cannot tell "a different session" from "the same session,
+        # a conversation later" — and the second one means the agent it is talking
+        # about has no memory of what it was told about.
+        "agent_run_seq": record.agent_run_seq,
         "native_session_id": record.native_session_id,
         "created_at": record.created_at,
         "last_activity_ts": record.last_activity_ts,

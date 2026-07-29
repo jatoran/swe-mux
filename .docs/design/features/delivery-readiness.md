@@ -12,7 +12,12 @@ a PTY or authorize automation.
   human-input fact is positively known.
 - `blocked` means current evidence positively forbids delivery, such as working, approval,
   elicitation, rate limit, alternate screen, recent/post-completion input, disconnect,
-  interrupted turn, demotion, or exit.
+  interrupted turn, demotion, exit, or a stale transcript.
+- `transcript_stale` blocks rather than degrading to unknown. When the followed transcript is
+  no longer this PTY's conversation (an unfollowable in-CLI `/clear`/`/new` — `backends.md`),
+  every positive signal here is being read off a retired conversation, so the evidence is not
+  *missing*, it is *wrong about a different session*. Writing into a session whose state we
+  are provably misreading is precisely the false-safe case this contract exists to prevent.
 - `unknown` means evidence is missing, stale, replaced, or degraded. Unknown is never safe.
 
 Every result remains `authorized: false`: the tracker classifies evidence and never grants
@@ -32,7 +37,9 @@ golden corpus below, plus a volume/duration proving period counted in SQLite and
 
 Native hooks and transcripts normalize to root-scoped lifecycle/tool events or explicitly
 subagent-scoped activity. Child stops never complete a root turn. Hook/transcript duplicates
-coalesce, while completion boundaries remain tied to a stable `agent_run_id`.
+coalesce, while completion boundaries remain tied to a stable `agent_run_id` — and
+"stable" now includes the in-CLI conversation boundary: a `/clear` mints a new run id, so
+`stable_run_identity` fails and the tracker refuses until the successor proves itself.
 
 Provider identity and transcript ownership are prerequisites for interpreting that evidence.
 Root-process provider identity is immutable; nested launcher hooks cannot replace it. A

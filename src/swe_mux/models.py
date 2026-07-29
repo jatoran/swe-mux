@@ -95,9 +95,22 @@ class SessionRecord:
     runtime_cwd_dropped: int = 0
     agent_run_id: str | None = None
     agent_run_started_at: float | None = None
+    # Which agent run of this session this is: 0 is the run the session spawned
+    # (or was promoted into), and every in-CLI conversation replacement (`/clear`,
+    # `/new`) increments it. A root agent's run id is otherwise indistinguishable
+    # from a corrupted one — the adoption path repairs `agent_run_id != id` back to
+    # the session id — so the counter is what makes a legitimately rolled run
+    # survive a daemon restart instead of being quarantined as misattribution.
+    agent_run_seq: int = 0
     run_cwd: str | None = None
     run_project_scope_id: str | None = None
     run_repo_group_id: str | None = None
+    # Set when the followed transcript has gone quiet while this PTY is still
+    # producing output and no switch could be corroborated: the conversation moved
+    # somewhere we cannot prove. Observation then fails closed — hooks resume
+    # driving state and delivery blocks — rather than reporting a dead
+    # conversation's status as live.
+    observation_stale_since: float | None = None
     last_activity_ts: float = field(default_factory=time.time)
     git: GitState = field(default_factory=GitState)
     pinned_attention: bool = False

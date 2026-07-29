@@ -22,8 +22,9 @@ a remote request.
   Standing authorization is what turns a bounded convenience into an unattended actuator, so
   the grant is deliberately not sticky. A **manual** send resets the consecutive count —
   a human at the keyboard is exactly the evidence the cap exists to require.
-- **Same live run only.** A replaced run (resume, branch, restart into a new conversation)
-  disables the opt-in rather than inheriting it. Consent was for *that* conversation.
+- **Same live run only.** A replaced run (resume, branch, restart into a new conversation,
+  or an in-CLI `/clear`/`/new` — `backends.md`) disables the opt-in rather than inheriting it.
+  Consent was for *that* conversation.
 - **Stability, not a snapshot.** `delivery_state` must read `safe` continuously for
   `auto_delivery_stable_seconds` (default 8) for the *same* message revision. One safe
   sample is a race; a held window is evidence. Any flap resets the window.

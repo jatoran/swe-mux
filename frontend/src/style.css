@@ -222,7 +222,7 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .agent-prefix { margin-right:6px;color:#79a982;font-weight:500 }.agent-prefix.claude { color:#d49a78 }.agent-prefix.codex { color:#77c9a7 }
 /* Provider mark (same glyphs as the usage rail) stands in for the [claude]/[codex] tag. */
 .session-copy .agent-prefix { display:inline-flex;align-items:center;vertical-align:-2px;margin-right:5px;font-size:12px }
-.session-copy .agent-prefix .provider-mark { width:12px;height:12px;display:block }.agent-status { color:#6f8976!important }.agent-status.working { color:#83b7e8!important }.agent-status.idle { color:#72b87d!important }.agent-status.awaiting { color:#dec267!important }.agent-status.crashed { color:#ef767f!important }.pane-state { max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#66796b;font-size:8px }.pane-state.working { color:#7ca7cf }.pane-state.awaiting { color:#d0b65e }.state-dot.working { animation:agent-pulse 1.4s steps(2,end) infinite }.state-dot.awaiting { animation:attention-pulse 1.2s ease-in-out infinite }
+.session-copy .agent-prefix .provider-mark { width:12px;height:12px;display:block }.agent-status { color:#6f8976!important }.agent-status.working { color:#83b7e8!important }.agent-status.idle { color:#72b87d!important }.agent-status.awaiting { color:#dec267!important }.agent-status.crashed { color:#ef767f!important }.pane-state { max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#66796b;font-size:8px }.pane-state.working { color:#7ca7cf }.pane-state.awaiting { color:#d0b65e }.pane-state.observation-stale { color:#d08f5e!important }.state-dot.working { animation:agent-pulse 1.4s steps(2,end) infinite }.state-dot.awaiting { animation:attention-pulse 1.2s ease-in-out infinite }
 @keyframes agent-pulse { 50% { opacity:.35;box-shadow:none } } @keyframes attention-pulse { 50% { opacity:.55 } }
 .session-row:hover .session-copy strong { color:#e0ebe3 }
 .session-row.active .session-copy strong { color:#9beaa8 }
@@ -1157,6 +1157,16 @@ body {
 .terminal-image-drop{position:absolute;z-index:18;inset:10px;display:grid;place-items:center;border:2px dashed var(--green);background:color-mix(in srgb,var(--bg) 82%,transparent);color:var(--green);font-weight:700;letter-spacing:.06em;text-transform:uppercase;pointer-events:none}
 .terminal-connection{position:absolute;z-index:13;top:5px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;padding:3px 7px;border:1px solid var(--line);background:var(--panel);color:var(--muted);pointer-events:none}
 .terminal-connection.reconnecting{color:var(--amber)}.terminal-connection.ended{color:var(--red)}
+/* A pane that does not own terminal input says so instead of pretending to accept it:
+   the daemon refuses keystrokes from a non-owner, and a silent refusal is what used to
+   read as a hung terminal. The button is the one-gesture way to take the keyboard. */
+.terminal-input-owner{position:absolute;z-index:14;top:5px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;max-width:calc(100% - 12px);padding:3px 7px;border:1px solid var(--amber);background:var(--panel);color:var(--amber);pointer-events:none}
+.terminal-input-owner span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.terminal-input-owner button{pointer-events:auto;min-height:0;padding:1px 6px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+@media(hover:none){.terminal-input-owner button{min-height:26px;padding:0 10px}}
+/* Letterboxed: the grid is sized by whichever device owns input, so it keeps that size
+   inside this pane (centered) rather than stretching to fill it. */
+.terminal-host.letterboxed .xterm-screen{margin:0 auto}
 /* The badge itself never eats terminal input; only its retry button does. */
 .terminal-connection-retry{pointer-events:auto;min-height:0;padding:1px 6px;border:1px solid var(--line);background:var(--panel2);color:inherit;font:inherit;cursor:pointer}
 @media(hover:none){.terminal-connection-retry{min-height:26px;padding:0 10px}}

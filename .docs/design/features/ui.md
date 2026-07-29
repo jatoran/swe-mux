@@ -302,6 +302,13 @@ responsive controls.
   recognition and dispatch (`resolveGestureCommand`), toggled by the hot-reloadable
   `mobile_gesture_swipe_away_close` config bool (default on, checkbox in Settings → Input →
   touch gestures).
+- A pane that does not own terminal input says so, instead of silently swallowing keystrokes:
+  a strip names the device holding the keyboard and offers a one-click "Take over" (a gesture
+  claim, which always wins). It appears only after the daemon has actually refused this pane —
+  a displacement or a rejected keystroke — never on a session nobody is typing into. While the
+  arbitrated size is another device's, the pane letterboxes: it renders that grid at a reduced
+  font size rather than re-fitting, since re-fitting is what pushed two devices into resizing
+  each other in a loop.
 - A terminal scrolled off its newest line shows a jump-to-latest chip in the terminal's own
   grid cell, above the action rail. It is checked per render, not only on scroll, because
   output arriving while scrolled up moves the buffer base without moving the viewport.

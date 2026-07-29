@@ -14,6 +14,7 @@ It should call domain packages rather than acquire their storage or process resp
 | `__main__.py` | daemon argument/config resolution and reusable aiohttp site lifecycle | desktop window/tray state |
 | `session.py` | live session registry, immutable root-provider identity, nested promotion/demotion, transcript ownership, spawn/stop, PTY fanout, bounded replay, interactive vs one-shot exit lifecycle, supervisor-session adoption/repair | provider transcript parsing, Project mutation |
 | `pty_host.py` | ConPTY/process creation, resize, low-level I/O, root exit status, dead-host release | HTTP, SQLite, layout |
+| `terminal_arbitration.py` | pure multi-device rules for one shared PTY: input-ownership claims (gesture beats passive, passive cannot displace an actively typed-into owner or come from a hidden window), epoch/release bookkeeping, and the arbitrated geometry (owner's viewport, else the smallest visible one) | sockets, PTYs, telemetry — `session.py` holds the state and `server.py` applies the decisions |
 | `supervisor.py` | standalone PTY supervisor process: ConPTY + read-loop + authoritative scrollback ownership, reaper Job, loopback IPC server, discovery file, single-instance mutex, reap-all teardown | HTTP composition, SQLite, orchestration, observation — anything volatile |
 | `supervisor_client.py` | daemon-side supervisor connection (framing/RPC/output dispatch), `RemotePtyHost` PtyHost facade, discover-or-spawn, metadata mirroring, `kill_server` | ConPTY creation, session registry |
 | `scrollback.py` | byte-exact scrollback ring (append/seed/replay cursoring) shared by daemon sessions and the supervisor | subscribers, persistence |
@@ -107,6 +108,14 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   transcript candidate is checked against other live native/path claims. Supervisor snapshots
   mirror mutable observation state, not authority: adoption reasserts immutable spawn identity,
   repairs legacy conflicts, and quarantines any history run proven to contain sibling evidence.
+- Conversation identity is a third axis beneath both: an in-CLI `/clear`/`/new` keeps the PTY
+  and the root identity while replacing the provider conversation, so it is a **new agent run**
+  (`_apply_conversation_rollover`), never an in-place rekey. Stop the observer before rewriting
+  that identity — it re-derives `native_session_id` from the file it is tailing at the top of
+  every loop, so a cancellation that has not landed will put the retired id back. The observer's
+  own switch path applies the rollover in place for the same reason (calling the public entry
+  point would cancel the caller). Adoption treats `agent_run_id != session id` on a root agent as
+  corruption; `agent_run_seq > 0` is the marker that exempts a legitimately rolled run.
 - A one-shot Project Action spawns its target directly under the supervisor's ConPTY: the shell
   for a `shell` step, the PATH-resolved program (or `%COMSPEC%` for a `.cmd`/`.bat` shim) for a
   `process` step. **No swe-mux executable may appear in a task's process tree.** One did once

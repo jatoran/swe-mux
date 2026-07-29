@@ -288,7 +288,8 @@ order, then target liveness/agent-run identity and delivery readiness immediatel
 PTY write. Typed refusals carry a machine `code`: `head_of_line_blocked`,
 `revision_conflict`, `delivery_not_safe` (retryable with `confirm: true`),
 `delivery_protected` (approval/Q&A/identity — never overridable), `target_ended` /
-`target_run_replaced` (the message is stranded, not retargeted). A repeated
+`target_run_replaced` (the message is stranded, not retargeted — an in-CLI `/clear` or `/new`
+reaches this path too, via `agent_conversation_rolled`). A repeated
 `idempotency_key` replays the recorded outcome instead of delivering twice. Delivery audit
 rows and `queue_updated`/`queue_delivery` events never carry the prompt body; export redacts
 credential-shaped bodies unless the caller opts out.
@@ -406,10 +407,47 @@ startup probe can expire during the browser/WebSocket round trip and would then 
 reply as composer text. Codex falls back to the console palette. The daemon also rejects exact
 Codex OSC 10/11 reply payloads from older cached browser builds that labeled them as user input.
 On initial attach, the daemon sends `state` and waits up to 250 ms for
-`{type:"attach_ready", cols, rows, renderer}`. It applies those dimensions before
+`{type:"attach_ready", cols, rows, renderer, hidden}`. It applies those dimensions before
 `replay_start`; an old-style `resize` frame also releases replay, and timeout preserves
 compatibility with clients that send neither. Other frames arriving during this window are
 buffered and handled after `replay_end`. Later `attach_ready` frames are equivalent to `resize`.
+
+### Multi-device arbitration
+
+One session can be attached from several devices, and both of the things they share — who
+may type, and how big the PTY is — are decided by the daemon, not by whoever spoke last.
+
+`{type:"claim_input", reason:"gesture"|"passive", device, focused}` asks for input.
+A `gesture` claim (tap, click, keystroke) always wins. A `passive` claim (attach,
+reconnect, restored DOM focus) is refused while another connection has been typed into
+within 10 s, and refused outright when `focused` is false. A missing `reason` is read as
+`gesture`, so pre-existing clients keep their old semantics. The reply is
+`{type:"input_owner", active, epoch, reason, owner_device}`; the displaced owner gets the
+same frame with `reason:"claimed_elsewhere"`, and every remaining client gets
+`{type:"input_owner_released", epoch}` when the owner detaches. `epoch` increments on each
+transfer (not on an owner renewing its own claim) so a client can discard an ownership
+frame that lost a race with a newer one.
+
+Input from a connection that is not the owner is refused, not dropped:
+`{type:"input_rejected", epoch, owner_device, data, broadcast, retry}` echoes the payload
+back so the client can claim and resend it once (`retry:true`, which is never echoed into
+a second retry). Refused xterm device replies are discarded instead — a late one is worse
+than none. Refusals are counted per session and surface in `GET /api/sessions/{id}/state-log`
+as `input_arbitration`, alongside the refused-claim count and the current geometry.
+
+`GET /api/sessions/{id}/state-log` also reports the conversation identity behind the state:
+`agent_run_id`, `agent_run_seq`, `native_session_id`, `agent_lifecycle_id`, and
+`observation_stale_since` beside the transcript path and its mtime. This is the endpoint for
+"which conversation am I actually looking at", and staleness is the one fault that otherwise
+presents as a perfectly healthy session (`features/backends.md`).
+
+`{type:"resize", cols, rows, hidden}` registers a client's fitted size, or deregisters it
+when `hidden` is true — a minimized window still reports layout and must not reshape the
+PTY for the device in use. The daemon resizes to the input owner's viewport, or, with no
+owner, to the smallest attached one, and announces the result to every client as
+`{type:"geometry", cols, rows, owner_device}` (also sent after `replay_end` and after a
+resync). A client whose own fit differs renders that geometry at a reduced font size
+rather than fitting, which is what keeps two devices from resizing each other in a loop.
 `GET /sessions/{id}/last-reply` returns the newest meaningful Claude/Codex assistant turn for
 gesture-safe clipboard prefetch. Provider control acknowledgements are skipped; the route does
 not type `/copy` into the PTY.

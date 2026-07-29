@@ -47,6 +47,7 @@ def record(
         project_scope_id=scope_id,
         project_label="Work",
         agent_run_id=sid,
+        agent_run_seq=0,
         native_session_id=sid,
         created_at=1.0,
         last_activity_ts=2.0,

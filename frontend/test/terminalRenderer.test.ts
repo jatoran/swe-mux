@@ -20,12 +20,22 @@ test('Codex always uses the DOM renderer so off-tail scrollback stays stable', (
   assert.equal(shouldLoadWebgl('dom', false, 'codex'), false)
 })
 
-test('attach readiness carries fitted dimensions and the active renderer', () => {
+test('attach readiness carries fitted dimensions, renderer, and visibility', () => {
   assert.deepEqual(terminalAttachReadyFrame(132, 41, 'webgl'), {
     type: 'attach_ready',
     cols: 132,
     rows: 41,
     renderer: 'webgl',
+    hidden: false,
+  })
+  // A pane attaching while its window is hidden registers no viewport at all, so it
+  // cannot size the PTY for the device the user is actually looking at.
+  assert.deepEqual(terminalAttachReadyFrame(132, 41, 'dom', true), {
+    type: 'attach_ready',
+    cols: 132,
+    rows: 41,
+    renderer: 'dom',
+    hidden: true,
   })
 })
 

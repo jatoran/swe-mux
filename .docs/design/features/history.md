@@ -10,6 +10,14 @@
   registered Project, preferring the most-specific registered root.
 - Each row also carries the owning terminal `note_id`. Opening `Session note` lazily creates or
   reopens the Project file for that terminal; nested agent-run IDs never fork the terminal note.
+- **One row per agent run, and an in-CLI `/clear` or `/new` ends a run** (`backends.md`). The
+  retired conversation keeps its own row with its own `native_id`, transcript path, indexed
+  messages, and final token/context figures; the successor gets a separate row under a new
+  `agent_run_id`. Both remain searchable and resumable. This is what the run boundary bought:
+  the previous behaviour rewrote the live row's `native_id` and `transcript_path` in place,
+  and the message indexer — which replaces a row's messages wholesale from its current
+  transcript — then deleted the pre-clear conversation from search, leaving it recoverable
+  only as a detached `external=1` backfill row with no link to the session that produced it.
 - History is an ordinary workspace pane tab. Desktop panes can split/move it; mobile projects
   it into the unified tab rail without changing desktop layout.
 - History search is cursor-paginated across provider, Project, state, origin, and four text

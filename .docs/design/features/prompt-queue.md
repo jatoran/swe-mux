@@ -23,7 +23,12 @@ queue).
   `agent_run_id` it was staged against. An item staged against a still-starting session
   binds to the first run that session gets and is never re-bound: an ended session or a
   replaced run **strands** the item (visible, exportable, retarget-by-explicit-act only) —
-  the daemon never silently retargets a successor conversation.
+  the daemon never silently retargets a successor conversation. An in-CLI `/clear` or `/new`
+  counts: it retires the run and opens a successor (`agent_conversation_rolled`,
+  `backends.md`), which strands pending items with "target agent conversation was replaced".
+  Before the run boundary existed this was the one way to defeat bind-on-first-run — the
+  session and its run id both survived, so a message written for one conversation delivered
+  into the wiped one.
 - **Explicit states.** `draft | armed | blocked | delivering | sent | failed | cancelled |
   stranded`. Transitions are transactional (conditional UPDATEs on one store worker) and
   idempotent. `blocked` records the last refused delivery's reasons; an edit or re-arm

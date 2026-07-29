@@ -905,6 +905,10 @@ async def _record_parser_observation(
 ) -> None:
     record = session.record
     previous_status = record.parser_status
+    if record.observation_stale_since is not None:
+        # A record read from the followed transcript is proof it is the live
+        # conversation after all: whatever made it look abandoned has resolved.
+        record.observation_stale_since = None
     if recognized:
         record.parser_events_seen += 1
     else:
@@ -967,7 +971,15 @@ def _transcript_authoritative(session: Session) -> bool:
     record of turn boundaries and tool activity, so hooks must not drive that
     state; while it is still warming up (``watching``, no recognized records yet)
     or has ``degraded``, hooks remain the fallback that keeps state moving.
+
+    A *stale* transcript revokes that authority outright. The parser is healthy and
+    the file is well-formed; it is simply no longer the conversation this PTY is
+    running (an unfollowable `/clear` or `/new`). Continuing to treat it as
+    authoritative is what froze such sessions: the transcript can no longer report
+    a turn boundary, and hooks were being dropped as redundant to it.
     """
+    if getattr(session.record, "observation_stale_since", None):
+        return False
     return getattr(session.record, "parser_status", "") == "ready"
 
 
@@ -1199,6 +1211,43 @@ async def _bind_native_id_from_hook(
         native_session_id=native_id,
     )
     session.publish_update()
+
+
+def conversation_rollover_native_id(
+    session: Session, event_type: str, payload: dict[str, Any]
+) -> str | None:
+    """The new conversation id when this hook proves the CLI replaced its own.
+
+    `/clear` mints a fresh session id and starts a fresh transcript file, then
+    fires `SessionStart` — over this session's loopback ingress, with this
+    session's own secret — reporting the id it is now writing. That is the
+    strongest identity evidence available and, unlike the filesystem watcher, it
+    is unaffected by sibling sessions sharing the cwd.
+
+    The reason is deliberately not enumerated from the hook's `source`
+    (`clear` / `resume` / `compact` / `startup`). "The CLI says it is now writing a
+    different conversation" is the fact; the id comparison is what establishes it.
+    `compact` and `startup` report the *unchanged* id and so never match, which is
+    exactly right — a compaction is the same conversation.
+
+    Distinct from `_bind_native_id_from_hook`, which fills an *unknown* id and is
+    still forbidden from rekeying a bound session. Replacing a bound conversation
+    is a lifecycle transition (a new agent run), not a rebind.
+    """
+    if event_type != "SessionStart" or hook_event_scope(event_type, payload) != "root":
+        return None
+    if session.record.backend not in {"claude", "codex"}:
+        return None
+    current = session.record.native_session_id or ""
+    if not _HOOK_NATIVE_ID.fullmatch(current):
+        # Nothing bound yet: that is the bind path's job, not a rollover.
+        return None
+    native_id = str(payload.get("session_id") or payload.get("sessionId") or "")
+    if not _HOOK_NATIVE_ID.fullmatch(native_id) or native_id == current:
+        return None
+    if session.agent_lifecycle_id == native_id:
+        return None
+    return native_id
 
 
 async def apply_hook_observation(

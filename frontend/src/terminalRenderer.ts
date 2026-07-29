@@ -28,6 +28,13 @@ export function windowsPtyCompatibility(value: unknown): WindowsPtyCompatibility
   return { backend: 'conpty', buildNumber }
 }
 
-export function terminalAttachReadyFrame(cols: number, rows: number, renderer: ActiveTerminalRenderer) {
-  return { type: 'attach_ready' as const, cols, rows, renderer }
+/** `hidden` reports that this client is not on screen, which deregisters its viewport
+ *  from the daemon's geometry arbitration instead of registering these dimensions. */
+export function terminalAttachReadyFrame(
+  cols: number,
+  rows: number,
+  renderer: ActiveTerminalRenderer,
+  hidden = false,
+) {
+  return { type: 'attach_ready' as const, cols, rows, renderer, hidden }
 }
