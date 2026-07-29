@@ -9,8 +9,8 @@ Live agent/terminal sessions are owned by a separate PTY supervisor process and 
 daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
 
 - **Frontend change**: `cd frontend && npm run build` (outputs into `src/swe_mux/static`,
-  which is **gitignored build output** — never commit it, and expect a fresh clone or
-  worktree to have no UI until you run this once),
+  whose hashed `assets/` and `index.html` are **gitignored build output** — never commit
+  them, and expect a fresh clone or worktree to serve no UI until you run this once),
   then refresh the browser / UI menu → "Reload UI". **This only reaches the running app if
   the daemon serves from source** (`uv run` / dev). The **frozen desktop app** (`dist/`,
   what the tray icon and any remote/phone client connect to) serves its OWN bundled copy at

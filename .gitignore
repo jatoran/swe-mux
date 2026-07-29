@@ -39,17 +39,21 @@ out/
 packaging/swe-mux.ico
 .runtime/
 
-# Vite build output. Every file here is generated: `assets/*` is the bundle, and
-# `icons/`, `manifest.webmanifest`, `notification-sounds/`, `sw.js` are copied verbatim
-# from `frontend/public/`. vite.config sets `emptyOutDir: true`, so nothing hand-authored
-# could survive here anyway. Tracking it meant every `npm run build` produced a
-# hash-churn diff that dirtied the tree, blocked the automatic fast-forward of the base
-# branch, and gave parallel agents meaningless conflicts over generated bundles.
-# Packaging does NOT read this: build_desktop.py builds its own copy into
-# .runtime/desktop-frontend-build and publishes from there.
-# Consequence: a fresh clone or worktree has no UI until you run one `npm run build`
-# in `frontend/`. Worktrees never serve the app, so only a fresh clone cares.
-src/swe_mux/static/
+# Content-hashed vite output, and the index.html that names it. These are the only files
+# under src/swe_mux/static that churn: every `npm run build` renames the bundle, so
+# tracking them dirtied the tree on every build, blocked the automatic fast-forward of
+# the base branch at land time, and gave parallel agents meaningless conflicts over
+# generated bundles. Packaging does not read them either — build_desktop.py builds its
+# own copy into .runtime/desktop-frontend-build and publishes from there.
+src/swe_mux/static/assets/
+src/swe_mux/static/index.html
+
+# The REST of src/swe_mux/static stays tracked on purpose, even though vite also
+# generates it by copying frontend/public/ (and wipes it each build via emptyOutDir).
+# Those copies are byte-stable, so they never churn, and `create_app` registers
+# /notification-sounds and /icons only `if <dir>.is_dir()` — untracking them silently
+# drops those routes in any tree that has not been built yet, which
+# test_phase3_daily_workflow::test_phase3_routes_are_registered correctly fails on.
 
 # === JetBrains IDEs ===
 .idea/
