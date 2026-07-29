@@ -111,9 +111,12 @@ export function GitTab({ project, sessions }: Props) {
       setNote(`Removed ${pathTail(item.path)}.`)
       await refresh()
     } catch (cause) {
-      // Git refuses a tree holding modified or untracked files. That refusal is the
-      // useful answer, so it is shown on the row along with the one override Git offers.
-      setConfirm({ path: item.path, force: true, error: describeGitError(cause, 'The removal') })
+      // Git refuses a tree holding modified or untracked files. That refusal is the useful
+      // answer, so it stays on the row — and the override is offered only when Git itself
+      // named it. `--force` deletes uncommitted work, so a timeout, a 409, or any other
+      // failure re-arms the ordinary removal rather than escalating to the destructive one.
+      const error = describeGitError(cause, 'The removal')
+      setConfirm({ path: item.path, force: error.includes('--force'), error })
     } finally {
       setBusy('')
     }
@@ -208,7 +211,12 @@ export function GitTab({ project, sessions }: Props) {
                 ? <span class="git-quiet" title={blocked}>{blocked}</span>
                 : armed
                   ? <>
-                    <button class="danger" disabled={busy === item.path} onClick={() => void remove(item, armed.force)}>
+                    <button
+                      class="danger"
+                      disabled={busy === item.path}
+                      title={armed.force ? 'Deletes the directory along with the uncommitted work Git just refused to discard.' : undefined}
+                      onClick={() => void remove(item, armed.force)}
+                    >
                       {busy === item.path ? 'removing…' : armed.force ? 'Force remove ✓' : 'Confirm remove ✓'}
                     </button>
                     <button onClick={() => setConfirm(null)}>Cancel</button>
