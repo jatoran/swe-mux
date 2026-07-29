@@ -312,6 +312,16 @@ responsive controls.
 - A terminal scrolled off its newest line shows a jump-to-latest chip in the terminal's own
   grid cell, above the action rail. It is checked per render, not only on scroll, because
   output arriving while scrolled up moves the buffer base without moving the viewport.
+- Reaching the tail — from the chip or from a command-rail key — goes through
+  `scrollTerminalToTail`, which re-issues xterm's scroll while it still makes progress. One
+  call is not always enough: xterm applies scrolls through the DOM scroller in its `Viewport`
+  and republishes that scroller's range only from `_sync()`, but answers `onResize` with
+  `queueSync()`, which defers the update to a queued render callback. A refit moves the buffer
+  base immediately, so a scroll issued before that callback is clamped to the pre-resize
+  maximum and stops exactly `oldRows - newRows` rows short. A phone sits in that window
+  constantly — the soft keyboard fires `visualViewport` resizes throughout its open animation,
+  and every one refits the pane. The retry needs no timer and no frame wait: the first call's
+  `onScroll` is what makes `_sync()` republish the real range, so the next one lands.
 - Every in-flow child of `.terminal-surface` names `grid-column:1`, and the surface declares a
   single explicit column. Overlays that share the terminal's cell must stack, never displace:
   auto-placement refuses to put an auto-column item into an occupied cell, so while the column
