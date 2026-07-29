@@ -290,6 +290,14 @@ responsive controls.
   touchstart has claimed the gesture, then dropped when the sequence ends. Registering it during
   touchstart dispatch still yields cancelable moves, so owned gestures keep working while drags
   inside a scroller meet no handler at all.
+- It also yields to a **pointer drag**, and that yield is stated rather than measured. Dragging a
+  drawer tab along the strip is, in coordinates, exactly the single-finger horizontal swipe that
+  toggles a panel — so rearranging tabs on a phone fired the swipe bindings until the drag began
+  claiming the pointer (`pointerDragClaim.ts`, `workspace-layout.md` § Pointer drag contract).
+  The claim is taken at the drag's 5 px threshold, so a swipe that merely starts on a tab is
+  unaffected, and a sequence is dropped if a drag ran at *any* point inside it — a live "is a drag
+  running" flag read at `touchend` would always say no, since `pointerup` releases the claim first.
+  Applies to every drag on the contract, not the drawer strip alone.
 - A recognized gesture gives a short haptic tick, and tab navigation shows a transient label
   pill naming the tab it landed on. Both exist because a swipe that lands on an unbound slot,
   or a tab change the eye misses, is otherwise indistinguishable from "nothing happened".
@@ -519,7 +527,8 @@ responsive controls.
   It uses the app's pointer-drag contract like every other reorderable surface — no native DnD,
   refs and a single DOM drop-indicator attribute during the move, commit on pointer-up
   (`workspace-layout.md`) — so the pointer-up that ends a drag has its click suppressed on both
-  surfaces, or moving a tab would also switch to it.
+  surfaces, or moving a tab would also switch to it. On touch the drag also owns the pointer for
+  its duration, which is what keeps rearranging the strip from doubling as a swipe gesture.
 - The order is **server-persisted** in the `drawerTabs` settings domain, in one canonical bucket
   like the command rail and the file tree, rather than in localStorage beside drawer width and
   last-used tab. Those two are genuinely per-device; an arrangement says which surfaces *you*
