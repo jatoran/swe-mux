@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>jump-to-latest scroll harness</title>
+  </head>
+  <body>
+    <div class="mobile-unified-active">
+      <div class="terminal-pane">
+        <div class="terminal-surface">
+          <div class="terminal-host"></div>
+          <div class="terminal-action-rail"><button id="rail-key">^End</button></div>
+          <button class="terminal-jump-latest" id="chip">↓ latest</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/test/renderer/jumpLatest.ts"></script>
+  </body>
+</html>
