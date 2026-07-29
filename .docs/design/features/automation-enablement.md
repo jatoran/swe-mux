@@ -15,8 +15,14 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   surface renders dependencies straight from this registry, so a placeholder edge presented
   as a complete dependency set would let a user switch on something that then does nothing.
   Enabling an unimplemented id is refused (`409 automation_not_implemented`).
-- **Substrate**: captures facts but never acts or spends (`raw_store`, `tier0`,
-  `project_card`, `scan_timeline`). Inert.
+- **Substrate**: the foundation consumers read from (`raw_store`, `tier0`, `project_card`,
+  `scan_timeline`). Inert in the sense that matters — none of it acts, notifies, or writes
+  toward a session. Most of it also never spends; `project_card` is the exception and is
+  called out below.
+- **Substrate that spends**: `project_card` costs one cheap model call per documentation
+  fingerprint and `scan_timeline` will cost more, which is exactly why they are opt-in
+  rather than ambient. The card is additionally *lazy*: enabling it schedules nothing, so a
+  project no consumer reads costs nothing (`project-card.md`).
 - **Consumer**: a feature assembled from substrate (`provenance_graph`,
   `declared_vs_verified`, `loop_detection`, `doc_debt`, `dead_end_memory`,
   `continuous_title`, `cross_session_interlocks`, `absence_report`, `attention_ranking`,
@@ -37,9 +43,10 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   set, never global automations: a Project that never opted in contributes nothing.
 - Enablement gating is distinct from config-value precedence. Once enabled, a setting
   value still resolves session/request → project → global-default.
-- Tier 0 capture and the deterministic consumers share one resolver and one short TTL cache
-  per Project root, so a Project can never have one running under a stale answer the other
-  already refreshed (`tier0-facts.md`, `deterministic-consumers.md`).
+- Tier 0 capture, the deterministic consumers, and the project card share one resolver and
+  one short TTL cache per Project root, so a Project can never have one running under a
+  stale answer another already refreshed (`tier0-facts.md`, `deterministic-consumers.md`,
+  `project-card.md`).
 
 ## Toggle surface
 

@@ -1114,8 +1114,12 @@ on top of it. No dependency on Phases 4–5, but it **does** depend on Phase 5.4
 a claim about one continuous piece of work, and without the run boundary it would describe
 two unrelated conversations as one session's history.
 
-- [ ] Project card (CP §5.4): distilled, cached architecture summary that feeds the scan
-  timeline and later Tier 2 analysis.
+- [x] Project card (CP §5.4): distilled, cached architecture summary that feeds the scan
+  timeline and later Tier 2 analysis. Per-project opt-in (`project_card`), one budgeted
+  cheap-model call per documentation fingerprint, a deterministic file → area map the model
+  never rewrites, cache validity decided by source content rather than a TTL, and no card at
+  all — never a guessed one — when a provider is unavailable. Internal API only; the scan
+  timeline and screenshot-to-agent are its consumers. `design/features/project-card.md`.
 - [ ] Scan timeline (CP §5.5): periodic and event-triggered cheap-model records forming a
   per-session timeline, per-project opt-in, budgeted, and inert when disabled.
 - [ ] **Scan records carry `agent_run_id`, not `session_id` alone, and a run is the timeline's
