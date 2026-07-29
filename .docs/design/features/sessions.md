@@ -50,10 +50,12 @@ and reattachable browser viewports.
   arbitrates both. An explicit gesture always takes input; a passive claim (attach, reconnect,
   restored focus) cannot take it from a device that has been typed into in the last 10 s, nor
   come from a window reporting itself hidden or unfocused. Which device the human is at is
-  decided once for the whole app, not per session (`device_presence.py`): a passive claim
-  cannot cross to the device class in use, and does cross *from* an idle one when the
-  claimant's class is the one in use — otherwise every session opened on a phone needs a
-  manual takeover, and any desktop reconnect undoes it. Input from a non-owner is refused
+  decided once for the whole app, not per session (`device_presence.py`): passive claims
+  follow the device class touched most recently, so a phone in hand keeps input across
+  session switches while a desktop left open and focused does not take it back. Recency,
+  not mere activity, because a focused desktop stays active for two minutes after its
+  last keystroke — the exact window in which someone picks up their phone. The desktop
+  takes input back by being used: a click in a terminal is a gesture and wins at once. Input from a non-owner is refused
   and echoed back for a single replay rather than dropped, so losing an ownership race costs
   latency instead of keystrokes. The input owner's viewport sizes the PTY (the smallest visible
   viewport when nobody owns it); hidden clients deregister theirs, and every other client
