@@ -44,6 +44,10 @@
   `design/interfaces.md`, `design/data-model.md`
 - Changing root-session or quota-reset sounds: `design/features/notifications.md`,
   `design/features/voice.md`
+- Changing web push, which device a notification reaches, device presence, or the
+  notification preference shape: `design/features/notifications.md`,
+  `design/interfaces.md`, `technical/backend/packages.md`,
+  `technical/frontend/packages.md`
 - Changing Claude/Codex account capture, switching, or quota polling:
   `design/features/provider-accounts.md`, `design/features/backends.md`
 - Changing history, transcripts, or cross-vendor review: `design/features/history.md`,

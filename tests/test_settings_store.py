@@ -109,6 +109,30 @@ def test_normalize_ignores_wrong_types() -> None:
     assert result == default_notifications()
 
 
+def test_suppress_defaults_differ_by_device_class() -> None:
+    """The phone is the device notified about work happening elsewhere; the desktop
+    is where that work happens, so "active elsewhere" must not silence it."""
+    assert default_notifications("mobile")["suppress"] == "anyDevice"
+    assert default_notifications("desktop")["suppress"] == "focused"
+
+
+def test_suppress_migrates_from_the_boolean_it_replaced() -> None:
+    # An explicit opt-out was a deliberate "notify me anyway" and is preserved.
+    assert normalize_notifications({"suppressWhenFocused": False}, "mobile")["suppress"] == "never"
+    # The old default was never actually chosen, so it lands on the new default
+    # rather than pinning every existing install to the previous behaviour.
+    assert (
+        normalize_notifications({"suppressWhenFocused": True}, "mobile")["suppress"] == "anyDevice"
+    )
+    assert (
+        normalize_notifications({"suppressWhenFocused": True}, "desktop")["suppress"] == "focused"
+    )
+    # An explicit mode always wins over the legacy key, and junk falls back.
+    both = {"suppress": "focused", "suppressWhenFocused": False}
+    assert normalize_notifications(both, "mobile")["suppress"] == "focused"
+    assert normalize_notifications({"suppress": "sometimes"}, "mobile")["suppress"] == "anyDevice"
+
+
 def test_quiet_time_same_day_window() -> None:
     window = {"quietStart": "09:00", "quietEnd": "17:00"}
     assert in_quiet_time(window, time.struct_time((2026, 7, 23, 12, 0, 0, 0, 0, -1))) is True

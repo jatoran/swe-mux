@@ -682,6 +682,18 @@ missed than the page carries, a leading `{"type": "events_gap", "reason":
 "catchup_truncated"}` frame tells the client to full-refresh rather than assume it caught up.
 A malformed `after_seq` is rejected with 400.
 
+The stream is otherwise server-to-client, with one exception: clients may send
+`{"type":"presence", profile, visible, focused, interaction_age}` to report which device
+the user is at. `interaction_age` is seconds since the last pointer/key event on that
+client — an age, not a timestamp, so a phone's clock skew cannot make it look
+permanently present. This socket carries it (rather than the push-presence endpoint)
+because every client holds one whether or not it can receive Web Push, and because the
+socket closing is itself the signal that the device is gone. Unparseable frames and
+unknown profiles are ignored without dropping the connection. `GET /api/push/presence`
+returns the daemon's current view — per device: visible, focused, interaction age,
+heartbeat age, and whether it counts as active — because the suppression it feeds is
+invisible by construction: getting it wrong shows up as a notification that never came.
+
 `GET /api/settings/bundle?cwd=<path>` aggregates the Settings panel's open payload
 (config, automation rules, keybindings, profiles, projects, automation status, provider
 status, usage, and — when `cwd` is supplied — project config) into one response. `config`
