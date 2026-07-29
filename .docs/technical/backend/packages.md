@@ -36,6 +36,8 @@ It should call domain packages rather than acquire their storage or process resp
 | `operational_telemetry.py` | process/quota/reset/context/tool evidence; provider-evidence reset after proven session-identity repair | credentials, automatic process killing |
 | `provider_accounts.py` | saved auth snapshots, explicit switching, safe quota reads | concurrent provider homes |
 | `voice.py` | completed-reply TTS segments, bounded Whisper STT with GPU/CPU fallback, temporary audio lifecycle, voice-submit idempotency | browser microphone permission, PTY ownership |
+| `device_presence.py` | which device class the human is at: per-`/events`-connection visible/focused plus interaction age, aggregated to active device classes, and the "did anyone touch another device since this alert" question a deferred push turns on. Fails open on every staleness path | push subscriptions, delivery, settings |
+| `push.py` | VAPID identity, subscriptions, per-endpoint focus presence, event→notification classification, and the routing plan (`notification_plan`) plus the deferral lifecycle for alerts held while another device is in use | which device is active (that is `device_presence.py`), notification preferences (`settings_store.py`) |
 | `tailscale.py` | direct-tailnet discovery/status and ephemeral certificate preparation for the daemon's direct private HTTPS listener | ACL/policy changes, Serve/Funnel enablement, browser permission |
 | `processes.py` | descendant inspection/actions; Project-wide loopback registration, discovery, listener attribution, and route maps | proxy transport, authoritative ownership from PID alone |
 | `adapters/` | provider command/resume/transcript/state normalization | public HTTP shapes |
