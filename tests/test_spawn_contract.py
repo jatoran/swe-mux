@@ -8,8 +8,73 @@ from swe_mux.spawn_contract import (
     MAX_SPAWN_ENV,
     SpawnRequest,
     resolve_contained_cwd,
+    resolve_listed_cwd,
     scrub_claude_session_markers,
 )
+
+
+def _listed(*paths: Path) -> dict[str, str]:
+    """Mimic `_listed_worktree_paths`: casefolded resolved path -> reported path."""
+    return {str(p.resolve()).casefold(): str(p) for p in paths}
+
+
+def test_listed_cwd_admits_a_registered_worktree_outside_the_project_root(
+    tmp_path: Path,
+) -> None:
+    # The whole point: a sibling worktree is outside the root, so containment refuses it
+    # and the allow-list is the only thing that can let a session in.
+    root = tmp_path / "repo"
+    worktree = tmp_path / ".worktrees" / "repo" / "agent-a"
+    worktree.mkdir(parents=True)
+    root.mkdir()
+
+    with pytest.raises(ValueError):
+        resolve_contained_cwd(str(worktree), root)
+
+    assert resolve_listed_cwd(str(worktree), _listed(worktree)) == str(worktree.resolve())
+
+
+def test_listed_cwd_refuses_a_path_git_never_reported(tmp_path: Path) -> None:
+    registered = tmp_path / ".worktrees" / "repo" / "agent-a"
+    registered.mkdir(parents=True)
+    elsewhere = tmp_path / "somewhere-else"
+    elsewhere.mkdir()
+
+    with pytest.raises(ValueError):
+        resolve_listed_cwd(str(elsewhere), _listed(registered))
+
+
+def test_listed_cwd_refuses_relative_values(tmp_path: Path) -> None:
+    # Relative paths only mean something against a root, and this entry point has none;
+    # resolving them against the process cwd would be a silent escape.
+    registered = tmp_path / "agent-a"
+    registered.mkdir()
+    with pytest.raises(ValueError):
+        resolve_listed_cwd("agent-a", _listed(registered))
+
+
+def test_listed_cwd_refuses_an_empty_allow_list(tmp_path: Path) -> None:
+    target = tmp_path / "agent-a"
+    target.mkdir()
+    with pytest.raises(ValueError):
+        resolve_listed_cwd(str(target), {})
+
+
+def test_listed_cwd_matches_case_insensitively(tmp_path: Path) -> None:
+    # Windows paths arrive with inconsistent drive/segment casing.
+    registered = tmp_path / "AgentA"
+    registered.mkdir()
+    allowed = _listed(registered)
+    assert resolve_listed_cwd(str(registered).upper(), allowed) == str(registered.resolve())
+
+
+def test_listed_cwd_does_not_admit_a_subdirectory_of_a_worktree(tmp_path: Path) -> None:
+    # Only the worktree root is admitted. A subdirectory is not something git reported,
+    # so it must go through the containment check against that worktree instead.
+    registered = tmp_path / "agent-a"
+    (registered / "frontend").mkdir(parents=True)
+    with pytest.raises(ValueError):
+        resolve_listed_cwd(str(registered / "frontend"), _listed(registered))
 
 
 def test_scrub_drops_parent_claude_markers_but_keeps_user_configuration() -> None:

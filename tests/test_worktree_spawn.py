@@ -1,0 +1,88 @@
+"""Spawning a session into a freshly created git worktree.
+
+The contract that matters here is failure containment: `POST /api/git/worktrees` creates
+the worktree first, and the worktree is the durable artefact. A spawn that is rejected or
+that blows up must be *reported*, never raised, or the caller would see the whole request
+fail and be unable to tell that the worktree exists.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from swe_mux import server
+
+# The helper never touches the app on any path under test; typed Any so mypy accepts it.
+APP: Any = SimpleNamespace()
+
+
+@pytest.fixture
+def worktree(tmp_path: Path) -> str:
+    path = tmp_path / ".worktrees" / "repo" / "agent-a"
+    path.mkdir(parents=True)
+    return str(path)
+
+
+@pytest.mark.asyncio
+async def test_spawn_is_skipped_when_the_body_is_not_an_object(worktree: str) -> None:
+    result = await server._spawn_into_worktree(APP, "claude", worktree)
+    assert result["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_spawn_requires_a_project_id(worktree: str) -> None:
+    result = await server._spawn_into_worktree(APP, {"backend": "claude"}, worktree)
+    assert result["status"] == "error"
+    assert "project_id" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_cwd_is_forced_to_the_new_worktree(
+    monkeypatch: pytest.MonkeyPatch, worktree: str
+) -> None:
+    seen: dict[str, Any] = {}
+
+    async def fake_spawn(app: Any, body: dict[str, Any]) -> Any:
+        seen.update(body)
+        return SimpleNamespace(record=SimpleNamespace(id="sess-1"))
+
+    monkeypatch.setattr(server, "_spawn_from_body", fake_spawn)
+    # A caller trying to redirect the session elsewhere must not be able to.
+    result = await server._spawn_into_worktree(
+        APP, {"project_id": "p1", "cwd": "C:/somewhere/else"}, worktree
+    )
+    assert result == {"status": "spawned", "session_id": "sess-1", "cwd": worktree}
+    assert seen["cwd"] == worktree
+    assert seen["project_id"] == "p1"
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_spawn_is_reported_not_raised(
+    monkeypatch: pytest.MonkeyPatch, worktree: str
+) -> None:
+    async def refuse(app: Any, body: dict[str, Any]) -> Any:
+        raise ValueError("unknown project: p1")
+
+    monkeypatch.setattr(server, "_spawn_from_body", refuse)
+    result = await server._spawn_into_worktree(APP, {"project_id": "p1"}, worktree)
+    assert result["status"] == "error"
+    assert "unknown project" in result["error"]
+    assert Path(worktree).is_dir(), "the worktree must survive a rejected spawn"
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_failure_still_leaves_the_worktree(
+    monkeypatch: pytest.MonkeyPatch, worktree: str
+) -> None:
+    async def explode(app: Any, body: dict[str, Any]) -> Any:
+        raise RuntimeError("pty supervisor unreachable")
+
+    monkeypatch.setattr(server, "_spawn_from_body", explode)
+    result = await server._spawn_into_worktree(APP, {"project_id": "p1"}, worktree)
+    assert result["status"] == "error"
+    assert "RuntimeError" in result["error"]
+    assert Path(worktree).is_dir(), "the worktree must survive an unexpected spawn failure"

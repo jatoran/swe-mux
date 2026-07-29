@@ -366,7 +366,13 @@ Project ownership changes.
 `cwd` defaults to the owning Project root and may name a subdirectory of it (a task that runs
 in `./frontend`). Containment is enforced in the spawn handler, which is the only layer that
 knows which Project owns the request: the value is resolved (relative against the root,
-symlinks collapsed) and rejected if it lands outside. `env` merges over the shell profile's
+symlinks collapsed) and rejected if it lands outside. One allow-listed exception, and only
+for spawns: a path that `git worktree list --porcelain` reports as a worktree of the
+Project's own repository is admitted even though it sits outside the root, because a
+parallel agent checkout is the same codebase on another branch. Git is the authority, so no
+arbitrary absolute path qualifies; only worktree roots do; and the query runs only after
+plain containment has already failed. Project Actions do not get this exception
+(`features/git.md`). `env` merges over the shell profile's
 environment and under mux's own identity variables, so a spawned shell can never present
 another session's hook credentials. Both exist because a Project Action step declares its own
 directory and environment; encoding them into `argv` instead is what previously forced a
@@ -568,6 +574,13 @@ error}` (502). It never writes a PTY. See `features/processes-and-previews.md`.
 
 Git scopes/worktrees are derived tooling APIs, not canonical Project/session ownership and
 not first-class frontend navigation.
+
+`POST /git/worktrees` takes `{cwd, path, branch?, start_point?, spawn?}`. With `spawn`
+present (an ordinary spawn body; `project_id` required) it creates the worktree and then
+starts a session whose cwd is forced to the new tree. The reply always carries
+`spawn: {status}` where status is `not_requested | spawned | error`, plus `session_id` on
+success or `error` on failure — the worktree is the durable artefact, so a failed spawn is
+reported rather than raised and never unwinds it.
 
 Process snapshots expose bounded observational states `active | exited | escaped |
 suspected_orphan | stale | inaccessible`. Actions revalidate PID, creation-time identity,

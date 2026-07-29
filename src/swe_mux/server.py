@@ -141,7 +141,12 @@ from .reconcile import reconcile_external_history
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import STATE_WATCHDOG_LOOP, Session, SessionManager
 from .settings_store import SettingsStore
-from .spawn_contract import SpawnRequest, resolve_contained_cwd, scrub_claude_session_markers
+from .spawn_contract import (
+    SpawnRequest,
+    resolve_contained_cwd,
+    resolve_listed_cwd,
+    scrub_claude_session_markers,
+)
 from .subprocess_flags import background_creation_flags, popen_outside_job
 from .supervisor_client import SupervisorClient
 from .tailscale import (
@@ -3356,11 +3361,18 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
     # A spawn may target a subdirectory of its own project (a task that runs in
     # ./frontend); the containment check is here because this is the only layer
     # that knows which project owns the request.
-    cwd = (
-        resolve_contained_cwd(spec.cwd, Path(owning_project.root))
-        if spec.cwd
-        else owning_project.root
-    )
+    cwd = owning_project.root
+    if spec.cwd:
+        try:
+            cwd = resolve_contained_cwd(spec.cwd, Path(owning_project.root))
+        except ValueError:
+            # Outside the root. Before refusing, ask git whether this is a worktree of
+            # the project's own repository — parallel agent worktrees are the same
+            # codebase on another branch and a session belongs in them. The git query
+            # only runs on this failure path, so ordinary spawns pay nothing for it.
+            cwd = resolve_listed_cwd(
+                spec.cwd, await _listed_worktree_paths(owning_project.root)
+            )
     executable = spec.executable
     argv = list(spec.argv)
     profile_id: str | None = None
@@ -6096,6 +6108,33 @@ async def _listed_worktree_paths(cwd: str) -> dict[str, str]:
     }
 
 
+async def _spawn_into_worktree(
+    app: web.Application, spawn_body: Any, path: str
+) -> dict[str, Any]:
+    """Start a session whose cwd is a worktree that was just created.
+
+    Reports failure rather than raising: the worktree already exists and is the durable
+    artefact, so a rejected or failed spawn must not unwind it or turn the whole request
+    into an error. The caller sees ``status`` and can retry the spawn alone.
+
+    The cwd is forced to the new worktree — a caller cannot use this path to redirect a
+    session somewhere else, and `_spawn_from_body` re-validates it against
+    `git worktree list` regardless.
+    """
+    if not isinstance(spawn_body, dict):
+        return {"status": "error", "error": "spawn must be an object"}
+    if not spawn_body.get("project_id"):
+        return {"status": "error", "error": "spawn requires project_id"}
+    try:
+        session = await _spawn_from_body(app, {**spawn_body, "cwd": path})
+    except ValueError as exc:
+        return {"status": "error", "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001 - the worktree must survive any spawn failure
+        logging.getLogger(__name__).exception("spawn into worktree %s failed", path)
+        return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+    return {"status": "spawned", "session_id": session.record.id, "cwd": path}
+
+
 async def create_worktree(request: web.Request) -> web.Response:
     body = await request.json()
     cwd, path = str(body["cwd"]), str(Path(body["path"]).resolve())
@@ -6122,11 +6161,8 @@ async def create_worktree(request: web.Request) -> web.Response:
             504 if code == 124 else 400,
         )
     result: dict[str, Any] = {"ok": True, "path": path, "spawn": {"status": "not_requested"}}
-    if body.get("spawn") is not None:
-        result["spawn"] = {
-            "status": "unsupported",
-            "error": "worktrees are Git-only; create sessions from an explicit project",
-        }
+    if (spawn_body := body.get("spawn")) is not None:
+        result["spawn"] = await _spawn_into_worktree(request.app, spawn_body, path)
     await request.app["events"].emit("worktree_created", source="user", cwd=cwd, path=path)
     return json_response(result, 201)
 

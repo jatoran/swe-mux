@@ -21,8 +21,9 @@
 - Add/list/remove worktrees through argument-vector subprocesses; no shell interpolation.
 - Removal validates the exact requested path against Git's current porcelain worktree
   list before mutation.
-- Worktrees have no first-class sidebar row, workspace tab, launcher, or session context
-  action. Their one surface is the utility drawer's Git tab, below.
+- Worktrees have no first-class sidebar row or workspace tab. Their one surface is the
+  utility drawer's Git tab, below — plus one launcher: creation may start a session in the
+  new tree (see "Spawning a session into a worktree").
 
 ## Git drawer tab
 
@@ -65,6 +66,39 @@
   refetched when `worktree_created`/`worktree_removed`/`git_changed` reach the client. A
   worktree created by hand in a terminal emits no event at all, which is what the explicit
   Refresh is for.
+
+## Spawning a session into a worktree
+
+Parallel agent work needs a session *inside* the worktree, which collides with spawn
+containment: `resolve_contained_cwd` refuses any cwd outside the owning Project's root,
+and a worktree at `../.worktrees/<repo>/<slug>` is outside it by construction.
+
+- `POST /api/git/worktrees` accepts an optional `spawn` object. When present, the worktree
+  is created first and a session is then started with its cwd forced to the new tree; the
+  caller's own `cwd` is ignored, so this cannot be used to redirect a session elsewhere.
+  `spawn.project_id` is required, and the rest of the body is an ordinary spawn request.
+- **The worktree is the durable artefact, so spawn failures are reported, not raised.**
+  The response always carries `spawn.status` — `not_requested`, `spawned` (with
+  `session_id`), or `error` (with `error`) — and a failed spawn never unwinds the worktree
+  or fails the request. The caller retries the spawn alone.
+- Containment is widened by exactly one allow-list, `resolve_listed_cwd`, keyed on
+  `git worktree list --porcelain` output. Git is the authority on which paths are worktrees
+  of a given repository, so this admits parallel checkouts of the same codebase without
+  admitting arbitrary absolute paths. Only worktree **roots** qualify; a subdirectory of a
+  worktree is not something Git reported and is refused.
+- The git query runs **only** when plain containment has already failed, so ordinary spawns
+  into the Project root or a subdirectory pay nothing for it.
+- **Project Actions deliberately do not get this widening.** An action is repo-authored
+  script content, so its reach stays bounded by the Project root; only spawns, which are
+  user- or client-initiated, can reach a sibling worktree.
+- Project config (`.swe-mux/`) is still read from the **Project root**, not the worktree.
+  The session's cwd is the worktree, which is what the agent and its `CLAUDE.md` discovery
+  care about, but per-worktree project configuration is not a thing yet.
+- **Dependency bootstrap is not performed.** A fresh worktree has no `.venv` or
+  `node_modules`, and running a repo-authored setup script from an HTTP endpoint is
+  untrusted code execution that belongs behind the Project Actions trust gate
+  (`project-actions.md`). Until that is wired, the spawned agent installs its own
+  dependencies, which is what `gwt new` does outside the API.
 
 ## Key files
 

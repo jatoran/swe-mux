@@ -59,13 +59,43 @@ def scrub_claude_session_markers(environment: Mapping[str, str]) -> dict[str, st
     }
 
 
+WORKTREE_CWD_REFUSAL = "cwd must stay inside the Project root, or be a git worktree of it"
+
+
+def resolve_listed_cwd(value: str, allowed: Mapping[str, str]) -> str:
+    """Resolve a spawn cwd against an explicit allow-list of absolute directories.
+
+    The escape hatch from :func:`resolve_contained_cwd`, and deliberately the *only*
+    one: a parallel agent worktree is the same repository on another branch, so a
+    session belongs there, but it lives outside the Project root and containment
+    rejects it. ``allowed`` is keyed by casefolded resolved path and is expected to
+    come from ``git worktree list`` — git itself is the authority on which paths are
+    worktrees of a given repo, so this cannot be talked into an arbitrary directory
+    the way accepting any absolute path could.
+
+    Relative values are refused outright here: they are only meaningful against a
+    root, and this path has none.
+    """
+    target = Path(value)
+    if not target.is_absolute():
+        raise ValueError(WORKTREE_CWD_REFUSAL)
+    match = allowed.get(str(target.resolve(strict=False)).casefold())
+    if not match:
+        raise ValueError(WORKTREE_CWD_REFUSAL)
+    return str(Path(match).resolve(strict=False))
+
+
 def resolve_contained_cwd(value: str, root: Path) -> str:
     """Resolve a spawn/action cwd, refusing anything outside the project root.
 
-    The single containment check for both entry points: a Project Action step's
-    declared cwd and a spawn request's ``cwd`` field. Relative values resolve
-    against the root, and symlinks are collapsed before the comparison so a link
-    inside the project cannot point a session at an arbitrary directory.
+    The containment check for both entry points: a Project Action step's declared cwd
+    and a spawn request's ``cwd`` field. Relative values resolve against the root, and
+    symlinks are collapsed before the comparison so a link inside the project cannot
+    point a session at an arbitrary directory.
+
+    Spawns may fall back to :func:`resolve_listed_cwd` when this refuses. Project
+    Actions deliberately may not: an action is repo-authored script content, so its
+    reach stays bounded by the Project root.
     """
     target = Path(value) if value else root
     if not target.is_absolute():
