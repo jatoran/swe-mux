@@ -9,7 +9,7 @@ branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
 case "$branch" in
     main|master|integration|develop|release/*)
         echo "pre-commit: refusing to commit directly onto '$branch'." >&2
-        echo "  Agents: run 'wt new <slug>' and work on an agent/* branch." >&2
+        echo "  Agents: run 'gwt new <slug>' and work on an agent/* branch." >&2
         echo "  Humans: HUMAN=1 git commit ... to override." >&2
         [ "${HUMAN:-}" = "1" ] || exit 1
         echo "pre-commit: HUMAN=1 set, allowing." >&2
