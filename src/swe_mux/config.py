@@ -79,6 +79,8 @@ BUILTIN_THEME_PAIRS = {
 CCUSAGE_PACKAGE = "ccusage@latest"
 MAX_PROJECT_INIT_SCRIPTS = 32
 INIT_SCRIPT_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# HH:MM, 24-hour — the same shape the notification quiet window already uses.
+QUIET_TIME = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 DEFAULT_PROJECT_IGNORE_PATTERNS = [
     ".git",
     ".swe-mux",
@@ -346,6 +348,37 @@ class Config:
     # Prompt-queue history (sent/cancelled/failed/stranded items and their
     # delivery audit) ages out on this window; pending items never do.
     prompt_queue_retention_days: int = 90
+    # Phase 5 auto-delivery. The master switch is off by default and per-session
+    # opt-in is required on top of it; the emergency pause lives in SQLite
+    # (`queue_auto_policy`) so it stays instant, persistent, and independent of
+    # config-file writes. These knobs are the *bounds* an opt-in runs under.
+    auto_delivery_enabled: bool = False
+    # How long `delivery_state=safe` must hold, continuously, before a send.
+    auto_delivery_stable_seconds: float = 8.0
+    # Consecutive automatic sends allowed before the opt-in disables itself. A
+    # manual send by the user resets the count — it is evidence of attention.
+    auto_delivery_max_consecutive: int = 3
+    # An opt-in expires on its own; standing authorization is what turns a
+    # bounded convenience into an unattended actuator.
+    auto_delivery_session_ttl_minutes: int = 60
+    # Local-time quiet window (HH:MM). Auto-delivery pauses inside it; manual
+    # sends are unaffected.
+    auto_delivery_quiet_start: str = ""
+    auto_delivery_quiet_end: str = ""
+    # Back-off after a refused automatic attempt, so a session whose readiness
+    # flaps cannot spin the audit log.
+    auto_delivery_refusal_backoff_seconds: float = 30.0
+    # Phase 5 agent-to-agent messaging (`mux.notify`). The tool exists by
+    # default because a notify lands as an inert draft unless the *receiving*
+    # session opted in to accepting agent messages.
+    agent_messaging_enabled: bool = True
+    agent_message_max_chars: int = 4000
+    agent_message_hourly_budget: int = 20
+    agent_message_pending_per_target: int = 5
+    agent_message_max_chain_depth: int = 3
+    # `mux.requestSpawn` creates an inert observation-inbox draft and nothing
+    # else; approval is a human act.
+    request_spawn_enabled: bool = True
     automation_concurrency: int = 2
     automation_queue_size: int = 256
     automation_max_input_tokens: int = 4096
@@ -600,6 +633,29 @@ def _validate(config: Config) -> None:
         errors["automation_retention_days"] = "must be between 1 and 3650"
     if not 1 <= config.prompt_queue_retention_days <= 3650:
         errors["prompt_queue_retention_days"] = "must be between 1 and 3650"
+    # Auto-delivery bounds. The lower bounds are the point: a zero-length
+    # stability window or an unbounded opt-in would defeat the gate they exist
+    # to be (`ROADMAP.md` Phase 5).
+    if not 2 <= config.auto_delivery_stable_seconds <= 600:
+        errors["auto_delivery_stable_seconds"] = "must be between 2 and 600 seconds"
+    if not 1 <= config.auto_delivery_max_consecutive <= 50:
+        errors["auto_delivery_max_consecutive"] = "must be between 1 and 50 sends"
+    if not 1 <= config.auto_delivery_session_ttl_minutes <= 1440:
+        errors["auto_delivery_session_ttl_minutes"] = "must be between 1 and 1440 minutes"
+    if not 0 <= config.auto_delivery_refusal_backoff_seconds <= 3600:
+        errors["auto_delivery_refusal_backoff_seconds"] = "must be between 0 and 3600 seconds"
+    for field_name in ("auto_delivery_quiet_start", "auto_delivery_quiet_end"):
+        value = str(getattr(config, field_name) or "")
+        if value and not QUIET_TIME.fullmatch(value):
+            errors[field_name] = "must be empty or a HH:MM time"
+    if not 1 <= config.agent_message_max_chars <= 100_000:
+        errors["agent_message_max_chars"] = "must be between 1 and 100000 characters"
+    if not 0 <= config.agent_message_hourly_budget <= 1000:
+        errors["agent_message_hourly_budget"] = "must be between 0 and 1000 messages per hour"
+    if not 1 <= config.agent_message_pending_per_target <= 100:
+        errors["agent_message_pending_per_target"] = "must be between 1 and 100 messages"
+    if not 1 <= config.agent_message_max_chain_depth <= 10:
+        errors["agent_message_max_chain_depth"] = "must be between 1 and 10 hops"
     if not 1 <= config.automation_concurrency <= 16:
         errors["automation_concurrency"] = "must be between 1 and 16"
     if not 16 <= config.automation_queue_size <= 4096:

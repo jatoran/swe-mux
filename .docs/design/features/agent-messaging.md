@@ -1,0 +1,135 @@
+# Agent messaging, the mailbox, and drafted spawns
+
+## What it is
+
+Bounded messaging *between sessions that already exist*, plus a way for an agent to ask a
+human to create one. Roadmap Phase 5; `CONTROL_PLANE_ROADMAP.md` §7.2. Three surfaces over
+one message store:
+
+- `mux.notify(target, body)` — an agent stages a message in a sibling session's prompt
+  queue. A caller over `PromptQueueService.enqueue`, never a second delivery path.
+- `mux.requestSpawn(prompt, …)` — an agent writes an **inert draft** into the Project's
+  observation inbox. It starts nothing; a human approving it is what spawns the session.
+- The **mailbox** — inbox/outbox over the same `queue_messages` rows, with sender/target
+  labels, delivery state, revocation, and the emergency auto-delivery controls.
+
+What is deliberately absent: an agent cannot deliver, cannot spawn, cannot address a
+session outside its Project, and cannot claim to be anyone else.
+
+## Key concepts
+
+- **Sender provenance is derived, never claimed.** `sender_kind` is one of `user`
+  (loopback browser/CLI), `remote_user` (authenticated remote device — recorded, never
+  privileged), `agent` (from the MCP token), `rule`, `queue_draft`. The HTTP route derives
+  the human kinds from the transport; the MCP tools derive `agent` from the token. No API
+  anywhere accepts a sender argument.
+- **The receiver decides how much a message is worth.** By default an agent-authored
+  message lands as an inert `draft` that a human arms. A session whose operator turned on
+  `accept_agent_messages` receives it `armed` — at which point it still waits for
+  head-of-line order and delivery readiness, and is only actually delivered by a human
+  "Send now" or by that session's own auto-delivery opt-in (`auto-delivery.md`). Arming is
+  authorization; auto-delivery is who presses send. The two toggles are independent.
+- **Every bound lives in the daemon operation, not in the tool** (CP §7.1), so the browser,
+  the CLI, and any later client inherit them:
+
+  | Bound | Default | Refusal code |
+  |---|---|---|
+  | target in the caller's Project, live agent session, not the caller | — | `unknown_target`, `not_agent_target`, `self_notify` |
+  | body size | 4 000 chars | `body_too_large` |
+  | per-origin hourly budget | 20 messages | `origin_budget_exhausted` |
+  | undelivered agent messages per target | 5 | `target_backlog_full` |
+  | relay chain depth | 3 hops | `chain_depth_exceeded` |
+  | cycle over the recorded relay path | — | `relay_cycle` |
+  | kill switch (`agent_messaging_enabled`) | on | `agent_messaging_disabled` |
+  | expiry | 24 h | item is cancelled, `cancel_kind: expired` |
+
+- **Chain depth and cycles are derived from the queue itself.** Each message records
+  `chain_depth` and an `origin.path` of session ids. A session's inbound depth is read from
+  the deepest *delivered* agent message it received, so no separate relay-state table can
+  drift out of sync with the audit trail. A→B→A is refused, which is how a pair of agents
+  would otherwise burn a plan's worth of tokens talking to each other.
+- **Retry-safe correlation.** An optional `correlation_id` is unique per sender; a retry
+  returns the original message instead of a duplicate in the target's queue.
+- **One audit trail.** An MCP-originated message is an ordinary queue item: same states,
+  same head-of-line rule, same `queue_deliveries` rows, distinguishable only by
+  `sender_kind` and its provenance. Events (`queue_message_received`) carry ids and counts,
+  never the body.
+- **Spawn is drafted, never granted** (CP §7.2/§16). `request_spawn` appends a typed
+  `spawn_request` item to `<project>/.swe-mux/observations.json` with the proposed prompt,
+  backend, cwd, and calling-session provenance, and emits `spawn_request_drafted`.
+  Approving it (`POST …/observations/{id}/decide`) spawns through the ordinary spawn path
+  with the prompt as `seed_text`; dismissing marks it decided. A request can only be decided
+  once. An agent holding real spawn authority turns one prompt injection into unbounded
+  fan-out — that is the failure mode a queue purge cannot undo.
+
+## The same-host boundary (decided 2026-07-28, re-affirmed 2026-07-29)
+
+Phase 4.5 shipped under "same-host agents are fully trusted", with a standing requirement to
+revisit before Phase 5 armed any write path. Re-examined and **re-affirmed**, with the
+reasoning recorded so it is not rediscovered:
+
+- The enforcement option on the table was a token check on the mutating `/api` routes, with
+  the browser given a daemon-local bearer at page load and sessions never receiving one.
+  It cannot deliver the property it appears to: an agent session runs as the same user on
+  the same host, so it can request whatever the browser is given (fetch `/`, read the page,
+  ask the same endpoint). Any secret reachable by the browser is reachable by the agent.
+  A real boundary here needs OS-level isolation — a separate user account or an ACL'd pipe —
+  which is a different product.
+- What that means, stated plainly: **the bounds in this document constrain well-behaved
+  callers.** A prompt-injected agent can still reach `POST /api/sessions/{id}/input` on
+  localhost, exactly as it could before Phase 5. That surface predates MCP and is unchanged
+  by it.
+- The compensating design is the one that *is* enforceable: agent-reachable authority stays
+  strictly narrower than the browser's. No tool delivers, spawns, or writes to a PTY; every
+  write is attributable to a session token, bounded, expiring, revocable, and visible in the
+  mailbox; and the receiver's own policy decides whether an agent message is even armed.
+- If the day comes that the local HTTP surface must be an authorization boundary, the
+  enforceable path is OS-level: bind the daemon to a per-user pipe/socket with an ACL that
+  spawned sessions do not hold, and give the browser the only handle. That is a deliberate
+  future decision, not a config flag.
+
+## UI
+
+- **Mailbox** (app menu → Mailbox…, works on mobile): inbox/outbox, sender and target
+  labels, delivery state, per-item revoke, "open queue", pause-all auto-delivery, and
+  "report unsafe delivery". Not a transcript — it shows delivery state and provenance only.
+- **Queue rows** show `from <sender>` and the hop number for relayed messages.
+- **Observation inbox** renders `spawn_request` items with the prompt, the requesting
+  session, and `approve & start session` / `dismiss`.
+
+## API surface
+
+```text
+GET  /api/queue/mailbox?role=all|inbox|outbox
+POST /api/queue/messages/{id}/cancel            {kind: revoked}
+POST /api/projects/{pid}/observations/{oid}/decide  {decision: approve|dismiss, …overrides}
+MCP  notify(target, body, reason?, correlation_id?)
+MCP  request_spawn(prompt, backend?, name?, reason?)
+```
+
+## Configuration
+
+`agent_messaging_enabled`, `agent_message_max_chars`, `agent_message_hourly_budget`,
+`agent_message_pending_per_target`, `agent_message_max_chain_depth`,
+`request_spawn_enabled` (`config.py`). Per-session `accept_agent_messages` is runtime state
+in `queue_auto_policy`.
+
+## Key files
+
+- `src/swe_mux/agent_messaging.py` — `AgentMessagingService` (relay policy, drafts, mailbox).
+- `src/swe_mux/mcp.py` — the two tools as thin callers.
+- `src/swe_mux/prompt_queue.py` — sender columns, correlation index, relay queries.
+- `src/swe_mux/project_files.py` — typed inbox items (`kind`/`request`) and
+  `update_observation_request`.
+- `src/swe_mux/server.py` — mailbox route, spawn-request decision handler.
+- `frontend/src/Mailbox.tsx`, `frontend/src/Observations.tsx`, `frontend/src/queueApi.ts`.
+- Tests: `tests/test_agent_messaging.py`, `tests/test_mcp.py`,
+  `tests/test_frontend_phase5_contract.py`.
+
+## Relates to
+
+- `mux-mcp.md` — the transport and caller identity.
+- `prompt-queue.md` — the message model and delivery contract.
+- `auto-delivery.md` — the receiver-side machinery that may deliver an armed message.
+- `observations.md` — the inbox spawn requests draft into.
+- `../development/CONTROL_PLANE_ROADMAP.md` §7.1–7.2, §16.

@@ -15,8 +15,18 @@ a PTY or authorize automation.
   interrupted turn, demotion, or exit.
 - `unknown` means evidence is missing, stale, replaced, or degraded. Unknown is never safe.
 
-Every result remains `authorized: false`. The implementation is shadow diagnostics for a
-future queue phase, not an actuation mechanism.
+Every result remains `authorized: false`: the tracker classifies evidence and never grants
+authority. Two callers act on that classification, both outside this module — the Phase 4
+queue's `send_next` (a human act, with an explicit confirm for blocked/unknown) and the
+Phase 5 auto-delivery controller (which requires `safe` held continuously across a window
+and can never confirm). See `auto-delivery.md`.
+
+**Promotion criteria.** Widening auto-delivery beyond its Phase 5 bounds requires zero known
+false-safe results across six fixture classes — `approval_required`, `awaiting_user_input`,
+`rate_limited`, `subagent_activity`, `active_operator_input`, `run_replacement` — pinned by
+`tests/test_delivery_readiness_promotion.py` both directly against this tracker and over the
+golden corpus below, plus a volume/duration proving period counted in SQLite and reported at
+`GET /api/queue/auto`. An operator's unsafe report resets the clock and pauses the feature.
 
 ## Runtime evidence contract
 

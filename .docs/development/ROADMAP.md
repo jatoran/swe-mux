@@ -96,7 +96,7 @@ Phase 1  Evidence replay + delivery-readiness contract
           -> Phase 4  Persistent manual prompt queue
             -> Phase 4.5  mux MCP v0: read + discovery surface        [CP step 2.5, §7.5]
               -> Phase 5  Gated auto-delivery + mailbox + bounded agent communication
-                 (incl. mux.notify / mux.requestSpawn over the queue) [CP §7.2]
+                 (incl. mux.notify / mux.requestSpawn over the queue) [CP §7.2]  [done]
                 -> Phase 5.5  Control-plane project card + scan timeline  [CP steps 4-5]
                   -> Phase 6  Portable instructions and skills
                      (instruction sync = return-path channel 2)       [CP §7]
@@ -135,7 +135,7 @@ document and are not duplicated here.
 | 4–5 · Project card + scan timeline | **Phase 5.5** | first model-cost layer; no Phase 5 dependency |
 | 6–7 · Narration + attention ranking | **Phase 6.5** | needs Phase 2 telemetry and Phase 3 notification channels |
 | 8 · Cross-session + mux MCP v1 | **Phase 7.5** | needs CP 4–5 substrate and the Phase 7 typed daemon operations |
-| §7.2 return-path write tools | inside **Phase 5** | callers over the Phase 5 A→B queue, not a separate path |
+| §7.2 return-path write tools | shipped (Phase 5) | callers over the Phase 5 A→B queue, not a separate path |
 | §13 queue-draft channel | inside **Phase 4** | `sender_kind` + typed payload land with the queue model |
 
 Ordering rules across the two tracks:
@@ -768,57 +768,100 @@ auto-approval, arbitrary PTY writes, or uncontrolled relay chains.
 
 **Standing precondition (from the Phase 4.5 boundary decision, 2026-07-28): before this
 phase arms any auto-delivery or agent-to-agent write path, revisit the same-host caller
-boundary.** v0 shipped under "same-host agents are fully trusted"; that makes every
-budget/allowlist/cycle bound in this phase advisory against a prompt-injected same-host
-caller, which can reach the un-tokened mutating `/api` routes directly. Either extend the
-per-session token check to the mutating routes (browser gets a daemon-local bearer at page
-load; sessions never receive it) or re-affirm the trust statement explicitly with that
-limitation written into this phase's design.
+boundary.** — **DONE 2026-07-29: re-examined and re-affirmed, with the limitation written
+into the design (`design/features/agent-messaging.md` § the same-host boundary).** The
+enforcement option (token check on mutating routes + a daemon-local browser bearer) cannot
+deliver the property it appears to: an agent session runs as the same user on the same
+host, so it can request whatever credential the browser is given. A real boundary here needs
+OS-level isolation (a per-user ACL'd pipe/socket the browser holds and spawned sessions do
+not), which is a separate product decision, recorded in the design as the enforceable path
+if it is ever needed. What was done instead is the part that *is* enforceable: agent-reachable
+authority stays strictly narrower than the browser's — no tool delivers, spawns, or writes
+to a PTY; every agent write is token-attributed, bounded, expiring, revocable, and visible in
+the mailbox; and the receiving session's own policy decides whether an agent message is even
+armed. Stated plainly in the design: the bounds below constrain well-behaved callers, and a
+prompt-injected agent can still reach `POST /api/sessions/{id}/input` exactly as it could
+before Phase 5.
 
 ### User-authored same-session auto-delivery
 
-- [ ] Define quantitative promotion criteria for Phase 1 shadow readiness, including zero
+- [x] Define quantitative promotion criteria for Phase 1 shadow readiness, including zero
   known false-safe deliveries across approval, Q&A, rate-limit, subagent, active-input, and
   run-replacement fixtures plus an operator-reviewed proving period.
-- [ ] Add opt-in auto-delivery for armed, user-authored messages to the same live agent run
+  `auto_delivery.promotion_status`: zero false-safe (machine-checked over the six fixture
+  classes in `tests/test_delivery_readiness_promotion.py`, directly against the tracker and
+  over the golden replay corpus, plus the operator's `report_unsafe`, which resets the clock
+  and pauses the feature), ≥50 automatic sends, ≥14 proving days. Counters are persisted and
+  reported at `GET /api/queue/auto`.
+- [x] Add opt-in auto-delivery for armed, user-authored messages to the same live agent run
   only when `delivery_state=safe` remains stable for a bounded debounce window.
-- [ ] Re-check target identity, message revision, head-of-line state, input ownership,
+  `AutoDeliveryController`: master switch (off by default) plus a per-session grant bound to
+  `agent_run_id`; the window is `auto_delivery_stable_seconds` (default 8) held continuously
+  for the same message revision, and any flap resets it.
+- [x] Re-check target identity, message revision, head-of-line state, input ownership,
   composer state, terminal mode, and adapter capability atomically immediately before send.
-- [ ] On uncertainty, remain blocked and surface the reason. Never retry blindly after
-  partial/unknown PTY delivery; require user reconciliation.
-- [ ] Provide pause-all, per-session enablement, expiry, maximum consecutive sends, quiet
-  hours, audit view, and an emergency disable independent of provider availability.
-- [ ] Add time-based delivery — "send after N minutes" and "send at a time" — as a *delivery
-  constraint on a queue item*, never as a private timer in a sender's UI. A browser-side timer
-  dies with the tab and a daemon-side one is an unaudited second delivery path; both contradict
-  Phase 4's rule that every delivery is an explicit, auditable user action. This belongs here
-  and not in Phase 4 because a clock firing a send is auto-delivery: it inherits this phase's
-  readiness re-check, quiet hours, consecutive-send bound, and emergency disable. Recurring or
-  schedule-driven sends remain out of scope until those bounds are proven.
+  Unchanged from Phase 4 — the controller calls the same `send_next`, which claims
+  state/revision/head-of-line in one transaction and then re-checks liveness, run identity,
+  and full readiness before the write.
+- [x] On uncertainty, remain blocked and surface the reason. Never retry blindly after
+  partial/unknown PTY delivery; require user reconciliation. The controller cannot pass
+  `confirm` at all (`confirm_requires_user`), and a failed delivery disables the session's
+  opt-in with "verify the terminal before re-enabling"; a refusal backs the session off
+  instead of spinning the audit log.
+- [x] Provide pause-all, per-session enablement, expiry, maximum consecutive sends, quiet
+  hours, audit view, and an emergency disable independent of provider availability. The
+  pause is a persisted SQLite flag (not config, not a provider), the grant expires
+  (default 60 min) and caps consecutive sends (default 3, reset by any manual send), quiet
+  hours pause automatic sends only, and `queue_deliveries.initiator` records who pressed
+  send. Surfaced in the Queue tab strip and the Mailbox overlay (mobile included).
+- [x] Add time-based delivery — "send after N minutes" and "send at a time" — as a *delivery
+  constraint on a queue item*, never as a private timer in a sender's UI.
+  `constraints_json` (`not_before`/`expires_at`, 30-day horizon, `delay_seconds` resolved at
+  write time). Both paths honour it: an early manual send is refused `delivery_not_due` and
+  keeps its state, "Send now" is the explicit human override, and an expired item is
+  cancelled rather than delivered late. Recurring/schedule-driven sends remain out of scope.
 
 ### Human/device mailbox
 
-- [ ] Expose the generalized message model with explicit sender provenance for local user,
+- [x] Expose the generalized message model with explicit sender provenance for local user,
   authenticated remote user/device, deterministic rule, and session/agent sources.
-- [ ] Deliver human/device messages through the same queue and readiness contract; remote
-  origin never weakens target selection, confirmation, expiry, or input-owner checks.
-- [ ] Add inbox/outbox, delivery status, sender/target labels, retry-safe correlation, and
+  `sender_kind` is `user | remote_user | agent | rule | queue_draft` and is **derived**
+  (transport for the human kinds, MCP token for `agent`) — no API accepts a sender argument.
+- [x] Deliver human/device messages through the same queue and readiness contract; remote
+  origin never weakens target selection, confirmation, expiry, or input-owner checks. Remote
+  origin is recorded and changes nothing downstream.
+- [x] Add inbox/outbox, delivery status, sender/target labels, retry-safe correlation, and
   revocation. Avoid creating a second transcript or conversation archive.
+  `GET /api/queue/mailbox` + `Mailbox.tsx` project the existing `queue_messages` rows;
+  `correlation_id` is partial-unique per sender (a retry returns the original message);
+  revocation is `cancel_kind: revoked`. No new store.
 
 ### Agent-to-agent communication
 
-- [ ] Start with explicit user-authored or user-approved “send output from A to B.” Session A
-  does not gain unrestricted knowledge of or authority over session B.
-- [ ] Preserve source session/run, exact selected output span or annotation, requesting
-  user/rule, target, transformations, and delivery result as provenance.
-- [ ] Add target allowlists, maximum message/body size, expiry, rate limits, max chain depth,
-  cycle detection, per-origin budgets, and loop kill switches.
-- [ ] Require receiver-side readiness and queue policy. A message from another agent waits;
-  it never interrupts an active turn or bypasses approvals/Q&A.
-- [ ] Permit deterministic rules to enqueue only fixed/user-reviewed templates or bounded
+- [x] Start with explicit user-authored or user-approved “send output from A to B.” Session A
+  does not gain unrestricted knowledge of or authority over session B. An `mux.notify`
+  message lands as an inert draft unless the *receiving* session opted in
+  (`accept_agent_messages`), so the default really is user-approved.
+- [x] Preserve source session/run, exact selected output span or annotation, requesting
+  user/rule, target, transformations, and delivery result as provenance. `origin_json`
+  carries the relay path, source session/run/backend, and the stated reason; the delivery
+  audit carries the rest.
+- [x] Add target allowlists, maximum message/body size, expiry, rate limits, max chain depth,
+  cycle detection, per-origin budgets, and loop kill switches. All in the daemon operation
+  (`agent_messaging.py`), so the browser and any later client inherit them: Project scope +
+  live-agent + not-self, 4 000 chars, 24 h expiry, 20 messages/hour per origin, 5 undelivered
+  per target, 3 hops, cycle detection over the recorded path, and `agent_messaging_enabled`.
+- [x] Require receiver-side readiness and queue policy. A message from another agent waits;
+  it never interrupts an active turn or bypasses approvals/Q&A. It is an ordinary queue item:
+  head-of-line order, the same readiness gate, the same non-overridable protections.
+- [x] Permit deterministic rules to enqueue only fixed/user-reviewed templates or bounded
   annotation output. Do not automatically lift arbitrary model output into another prompt.
-- [ ] Keep autonomous model-authored routing, worker spawning, approval decisions, command
-  execution, and arbitrary network destinations outside this phase.
+  Unchanged from Phase 4: `rule`/`queue_draft` senders create inert drafts only, and arming
+  them is a human act.
+- [x] Keep autonomous model-authored routing, worker spawning, approval decisions, command
+  execution, and arbitrary network destinations outside this phase. `mux.requestSpawn` is a
+  draft producer; nothing here selects a target on the model's behalf beyond the tool call
+  the human can read in the mailbox.
 
 ### Agent-facing surface: mux MCP write tools
 
@@ -826,17 +869,21 @@ Phase 5's A→B path is what an agent reaches through the Phase 4.5 MCP transpor
 are thin callers over the typed queue operation defined above; they are not a second
 implementation of it (`CONTROL_PLANE_ROADMAP.md` §7.1–7.2).
 
-- [ ] Add `mux.notify(target, body)` as a caller over the same typed A→B operation the
+- [x] Add `mux.notify(target, body)` as a caller over the same typed A→B operation the
   browser and CLI use. It inherits target allowlists, size/expiry/rate limits, chain depth,
   cycle detection, per-origin budgets, receiver-side readiness, and the kill switch by
-  construction, because those live in the daemon operation and not in the tool.
-- [ ] Derive the sender from the calling session's Phase 4.5 token, never from a tool
-  argument, so per-origin budgets and cycle detection are enforceable.
-- [ ] Add `mux.requestSpawn(...)` as a **draft producer only**: it writes an inert entry into
+  construction, because those live in the daemon operation and not in the tool. The tool
+  body is four lines: resolve args, call `AgentMessagingService.notify`.
+- [x] Derive the sender from the calling session's Phase 4.5 token, never from a tool
+  argument, so per-origin budgets and cycle detection are enforceable. Pinned by
+  `tests/test_agent_messaging.py::test_the_mcp_tools_derive_the_sender_from_the_token`
+  (a forged `from_session` argument is simply ignored).
+- [x] Add `mux.requestSpawn(...)` as a **draft producer only**: it writes an inert entry into
   the observation inbox with the proposed target Project, prompt, and calling-session
   provenance, and starts nothing. Approving the draft is an explicit human action (available
-  on mobile) and is what actually spawns the session.
-- [ ] Keep the queue path and the MCP path on one audit trail. A message that arrived through
+  on mobile) and is what actually spawns the session — `POST …/observations/{id}/decide`,
+  which seeds the new session through the ordinary spawn path and can be decided once.
+- [x] Keep the queue path and the MCP path on one audit trail. A message that arrived through
   MCP is distinguishable by sender provenance but is otherwise an ordinary queue item.
 
 Scope boundary (reconciling the `.swe-mux/notes/project.md` agent-to-agent request): the
@@ -852,15 +899,43 @@ does not let one agent create another.
 
 ### Phase 5 exit criteria
 
-- [ ] User-authored same-session auto-delivery is opt-in, conservative, bounded, and shows
-  no unsafe delivery in the proving corpus/period.
-- [ ] Human/device and approved A→B messages retain provenance, cannot loop indefinitely,
-  and never silently retarget ended runs.
-- [ ] Disabling Phase 5 leaves the Phase 4 manual queue and ordinary agent sessions usable.
-- [ ] An MCP-originated message is indistinguishable in safety terms from a browser-originated
+- [x] User-authored same-session auto-delivery is opt-in, conservative, bounded, and shows
+  no unsafe delivery in the proving corpus/period. Live-verified 2026-07-29 on the frozen
+  app with a browser-equivalent terminal observer attached to a real Claude session: an
+  armed user message auto-delivered 16 s after readiness went `safe`
+  (`initiator=auto, confirmed=false, delivery_state=safe`), the third consecutive automatic
+  send disabled the opt-in ("reached 3 consecutive automatic sends"), the emergency pause
+  held an armed message undelivered, and both the pause and the opt-in survived
+  `POST /api/daemon/restart` with no duplicate delivery. Schedule (`delivery_not_due`, item
+  stays armed) and expiry (`cancelled`/`expired`) both verified. Corpus side: zero false-safe
+  across the six fixture classes (`tests/test_delivery_readiness_promotion.py`); the
+  volume/duration proving period is instrumented and running, not yet met — by design, since
+  it gates *widening*, not the bounded opt-in.
+- [x] Human/device and approved A→B messages retain provenance, cannot loop indefinitely,
+  and never silently retarget ended runs. Live: an `mux.notify` from one live agent landed in
+  the sibling's queue carrying `sender_kind=agent`, sender label, relay path, `chain_depth`,
+  and a 24 h expiry. Bounds (size, per-origin budget, target backlog, depth, cycle, self,
+  cross-Project) are refused by the daemon operation and pinned in
+  `tests/test_agent_messaging.py`. Ended/replaced runs still strand — unchanged Phase 4
+  behaviour, and the auto controller additionally disables its opt-in on a replaced run.
+- [x] Disabling Phase 5 leaves the Phase 4 manual queue and ordinary agent sessions usable.
+  Live-verified with the master switch off and nothing paused: stage → arm → view → cancel
+  all worked, and the summary route answered normally.
+- [x] An MCP-originated message is indistinguishable in safety terms from a browser-originated
   one: same readiness gate, same bounds, same audit trail, no separate delivery path.
-- [ ] `mux.requestSpawn` has produced no session without an explicit human approval, and
-  disabling the tool leaves the rest of Phase 5 intact.
+  Live: the agent-authored message was delivered by the *same* `send_next` (audit row
+  `('user','sent',confirmed)` for the manual send, `('auto','sent',false,'safe')` for the
+  automatic one), in head-of-line order, with the body appearing only in `queue_messages`.
+- [x] `mux.requestSpawn` has produced no session without an explicit human approval, and
+  disabling the tool leaves the rest of Phase 5 intact. Live: the tool wrote a `pending`
+  observation-inbox draft and started nothing; `POST …/observations/{id}/decide` with
+  `approve` created the session with the drafted prompt seeded and marked the request
+  `approved`; a second decision was refused `409 already_decided`. `request_spawn_enabled=false`
+  yields a typed refusal and touches nothing else (`tests/test_agent_messaging.py`).
+
+Also observed live and worth keeping: the agent CLI's own permission prompt gates the first
+use of each mux write tool, so a notify or spawn draft costs the operator one deliberate
+approval inside the session before it ever reaches the daemon.
 
 ## Phase 5.5 — Control-plane project card and scan timeline
 

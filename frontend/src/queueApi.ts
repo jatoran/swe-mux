@@ -8,6 +8,15 @@ export type QueueMessageState =
   | 'draft' | 'armed' | 'blocked' | 'delivering'
   | 'sent' | 'failed' | 'cancelled' | 'stranded'
 
+/** Who authored a message. The daemon derives it; a client never claims it. */
+export type QueueSenderKind = 'user' | 'remote_user' | 'rule' | 'agent' | 'queue_draft'
+
+/** Phase 5 delivery constraints, carried on the item and honoured by both paths. */
+export interface QueueConstraints {
+  not_before?: number
+  expires_at?: number
+}
+
 export interface QueueMessage {
   id: string
   target_session_id: string
@@ -19,17 +28,62 @@ export interface QueueMessage {
   state: QueueMessageState
   body: string
   revision: number
-  sender_kind: 'user' | 'queue_draft'
+  sender_kind: QueueSenderKind
   sender_id: string | null
+  sender_label: string | null
+  origin_session_id: string | null
+  correlation_id: string | null
+  chain_depth: number
+  origin: { from_name?: string; reason?: string; path?: string[] } | null
+  constraints: QueueConstraints | null
   blocked_reasons: string[] | null
   stranded_reason: string | null
-  cancel_kind: 'cancelled' | 'skipped' | null
+  cancel_kind: 'cancelled' | 'skipped' | 'revoked' | 'expired' | null
   retargeted_from: { session_id: string; label: string | null } | null
   created_at: number
   updated_at: number
   edited_at: number | null
   armed_at: number | null
   sent_at: number | null
+  target_live?: boolean
+}
+
+/** Runtime auto-delivery policy: one master switch, one pause, per-session opt-ins. */
+export interface QueueAutoSession {
+  session_id: string
+  enabled: boolean
+  accept_agent_messages: boolean
+  agent_run_id: string | null
+  label: string | null
+  live: boolean
+  run_matches: boolean
+  expires_in_s: number | null
+  sends_used: number
+  max_sends: number
+  sends_remaining: number
+  disabled_reason: string | null
+}
+
+export interface QueueAutoStatus {
+  master_enabled: boolean
+  paused: boolean
+  quiet_hours: { start: string; end: string; active: boolean }
+  stable_seconds: number
+  max_consecutive: number
+  session_ttl_minutes: number
+  sessions: QueueAutoSession[]
+  counters: Record<string, number>
+  promotion: {
+    criteria: Record<string, boolean>
+    met: boolean
+    auto_sends: number
+    unsafe_reports: number
+    proving_days: number
+    required_sends: number
+    required_days: number
+    fixture_classes: string[]
+  }
+  last_error: string
 }
 
 export interface QueueTargetView {
@@ -84,14 +138,25 @@ export const fetchQueue = (sessionId: string) =>
 export const enqueueMessage = (
   targetSessionId: string,
   body: string,
-  options: { armed?: boolean; insertAfter?: string } = {},
+  options: { armed?: boolean; insertAfter?: string; constraints?: QueueConstraints } = {},
 ) =>
   api<QueueMessage>('POST', '/api/queue/messages', {
     target_session_id: targetSessionId,
     body,
     armed: options.armed ?? false,
     insert_after: options.insertAfter,
+    constraints: options.constraints,
   })
+
+/**
+ * Schedule (or clear) a queued message. The constraint lives on the item, not
+ * in this tab: a browser timer dies with the tab, and the daemon honours the
+ * same constraint whether a human or the auto-delivery controller sends.
+ */
+export const scheduleQueueMessage = (
+  messageId: string,
+  constraints: QueueConstraints | null,
+) => api<QueueMessage>('PATCH', `/api/queue/messages/${messageId}`, { constraints })
 
 export const editQueueMessage = (messageId: string, revision: number, body: string) =>
   api<QueueMessage>('PATCH', `/api/queue/messages/${messageId}`, { body, revision })
@@ -107,8 +172,71 @@ export const retargetQueueMessage = (messageId: string, targetSessionId: string)
     retarget_session_id: targetSessionId,
   })
 
-export const cancelQueueMessage = (messageId: string, kind: 'cancelled' | 'skipped') =>
-  api<QueueMessage>('POST', `/api/queue/messages/${messageId}/cancel`, { kind })
+export const cancelQueueMessage = (
+  messageId: string,
+  kind: 'cancelled' | 'skipped' | 'revoked',
+) => api<QueueMessage>('POST', `/api/queue/messages/${messageId}/cancel`, { kind })
+
+// ---------------------------------------------------------------- Phase 5
+
+export const fetchAutoStatus = () =>
+  api<QueueAutoStatus>('GET', '/api/queue/auto', undefined, { timeoutMs: 10_000 })
+
+/** The emergency disable. Persisted server-side; not a client-side toggle. */
+export const setAutoPaused = (paused: boolean) =>
+  api<QueueAutoStatus>('POST', '/api/queue/auto/pause', { paused })
+
+export const setSessionAutoPolicy = (
+  sessionId: string,
+  patch: {
+    enabled?: boolean
+    ttlMinutes?: number
+    maxSends?: number
+    acceptAgentMessages?: boolean
+  },
+) =>
+  api<QueueAutoStatus>('PUT', `/api/queue/auto/sessions/${sessionId}`, {
+    enabled: patch.enabled,
+    ttl_minutes: patch.ttlMinutes,
+    max_sends: patch.maxSends,
+    accept_agent_messages: patch.acceptAgentMessages,
+  })
+
+/** Operator review: one confirmed bad automatic delivery resets the proving period. */
+export const reportUnsafeDelivery = (note: string) =>
+  api<QueueAutoStatus>('POST', '/api/queue/auto/report-unsafe', { note })
+
+export const fetchMailbox = (role: 'all' | 'inbox' | 'outbox') =>
+  api<{ role: string; messages: QueueMessage[] }>(
+    'GET',
+    `/api/queue/mailbox?role=${role}`,
+    undefined,
+    { timeoutMs: 10_000 },
+  )
+
+/** `due` | `scheduled` | `expired` — mirrors the daemon's `schedule_status`. */
+export function scheduleStatus(message: QueueMessage, now = Date.now() / 1000): string {
+  const expires = message.constraints?.expires_at
+  if (typeof expires === 'number' && now >= expires) return 'expired'
+  const notBefore = message.constraints?.not_before
+  if (typeof notBefore === 'number' && now < notBefore) return 'scheduled'
+  return 'due'
+}
+
+/** Short human label for a sender, used on queue rows and in the mailbox. */
+export function senderLabel(message: QueueMessage): string {
+  switch (message.sender_kind) {
+    case 'agent':
+      return `from ${message.sender_label || message.sender_id || 'another agent'}`
+    case 'remote_user':
+      return 'from you (remote)'
+    case 'rule':
+    case 'queue_draft':
+      return 'from an observer'
+    default:
+      return ''
+  }
+}
 
 /** What a `send-next` attempt came to, with the daemon's typed refusals made explicit. */
 export type QueueSendOutcome =
@@ -117,6 +245,8 @@ export type QueueSendOutcome =
   | { status: 'blocked'; reasons: string[]; protected: boolean }
   | { status: 'stranded'; error: string }
   | { status: 'revision_conflict'; revision: number }
+  | { status: 'not_due'; notBefore: number }
+  | { status: 'expired'; error: string }
   | { status: 'error'; error: string }
 
 /** Map a queue-operation ApiError to a typed outcome; unknown failures rethrow-as-error. */
@@ -135,6 +265,10 @@ export function mapQueueSendError(cause: unknown): QueueSendOutcome {
       return { status: 'stranded', error: error.message }
     case 'revision_conflict':
       return { status: 'revision_conflict', revision: Number(detail.revision) || 0 }
+    case 'delivery_not_due':
+      return { status: 'not_due', notBefore: Number(detail.not_before) || 0 }
+    case 'delivery_expired':
+      return { status: 'expired', error: error.message }
     default:
       return { status: 'error', error: error instanceof Error ? error.message : String(cause) }
   }

@@ -1,18 +1,20 @@
-# mux MCP: the agent return path (v0 — read and discovery)
+# mux MCP: the agent return path (reads + two bounded writes)
 
 ## What it is
 
 A streamable-HTTP MCP endpoint (`POST /mcp`) hosted in the daemon that gives every spawned
-agent session read-only visibility into its own Project: sibling sessions, their live
-status, bounded transcript reads, and full-text search over the archived conversation
-history. Roadmap Phase 4.5 / control-plane build-order step 2.5 (`CONTROL_PLANE_ROADMAP.md`
-§7.3–7.5). Registered automatically into every spawned Claude and Codex session — no user
-setup — and reachable by a user-typed `claude`/`codex` inside a mux shell session via the
-agent shims.
+agent session visibility into its own Project — sibling sessions, their live status,
+bounded transcript reads, full-text search over the archived conversation history — plus
+two bounded write tools added in Phase 5. Roadmap Phase 4.5 (reads) and Phase 5
+(`notify`, `request_spawn`) / control-plane build-order step 2.5
+(`CONTROL_PLANE_ROADMAP.md` §7.1–7.5). Registered automatically into every spawned Claude
+and Codex session — no user setup — and reachable by a user-typed `claude`/`codex` inside a
+mux shell session via the agent shims.
 
-v0 is **read-only end to end**: no tool can enqueue, deliver, spawn, or write to a PTY.
-`notify`/`requestSpawn` arrive as callers over the Phase 5 queue; the v1 memory tools
-(`provenance`, `priorResolutions`, `deadEnds`) stay in control-plane step 8.
+**No tool delivers anything.** `notify` stages a message in another session's Phase 4
+queue, where head-of-line order, receiver readiness, and (by default) human arming still
+apply; `request_spawn` writes an inert observation-inbox draft and starts nothing. The v1
+memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plane step 8.
 
 ## Key concepts
 
@@ -38,12 +40,19 @@ v0 is **read-only end to end**: no tool can enqueue, deliver, spawn, or write to
   records go out through an explicit field allowlist (`session_summary`) — never
   `record.snapshot()`, which carries `spawn_env`. Any message or excerpt that trips the
   clipboard credential gate (`looks_like_secret`) is replaced with a redaction marker.
-- **Same-host callers are fully trusted (decision 2026-07-28, `ROADMAP.md` Phase 4.5).**
-  The token is identity and read scope, not an authorization boundary — the un-tokened
-  mutating `/api` surface predates MCP and is unchanged. Must be revisited before Phase 5
-  arms any write path.
+- **Same-host callers are fully trusted (decided 2026-07-28, re-affirmed for Phase 5 on
+  2026-07-29).** The token is identity and read scope, not an authorization boundary. The
+  Phase 5 re-examination concluded that a token check on the mutating routes cannot deliver
+  the property it appears to: any same-user process on this host can request whatever
+  credential the browser is given. The compensating design is that these tools grant
+  strictly *less* authority than the un-tokened HTTP surface already does — no delivery, no
+  spawn, no PTY write — so a compromised agent gains nothing here. Full reasoning and its
+  limits: `agent-messaging.md` (§ same-host boundary).
+- **A refused write is a result, not a protocol error.** Bounds (`body_too_large`,
+  `origin_budget_exhausted`, `relay_cycle`, …) come back as typed `isError` content so the
+  agent can adapt or stop, rather than as a JSON-RPC fault it will retry blindly.
 
-## Tool surface (v0)
+## Tool surface
 
 | Tool | Returns |
 |---|---|
@@ -51,6 +60,12 @@ v0 is **read-only end to end**: no tool can enqueue, deliver, spawn, or write to
 | `get_session` | status + metadata for one session by id or exact name, live or ended |
 | `read_transcript` | bounded tail of a session's transcript (role, ts, text) |
 | `search_history` | FTS over the Project's archived Claude/Codex conversations, keyset-paginated |
+| `notify` | stages a message in another Project session's queue (draft unless the receiver opted in); returns the message id, state, and chain depth |
+| `request_spawn` | writes an inert spawn draft into the Project's observation inbox; returns the request id and starts nothing |
+
+The write tools are listed even when disabled by config: they answer with a typed refusal,
+because an MCP client caches `tools/list` at session start and a tool that vanishes is
+indistinguishable from a broken server.
 
 ## Registration per backend
 
@@ -79,21 +94,25 @@ session ended or predates the surface — explicitly *not* a retry-forever condi
 - Loopback-only, like hook ingress; the Host allowlist of `security_middleware` applies.
 - Per-session sliding-window rate limit (120 calls/min) with the same sweep pattern as
   `hook_ingress_windows`; 256 KiB request-body cap.
-- `calls`/`denied` counters under `mcp` in `GET /api/diagnostics/background`.
+- `calls`/`denied`/`writes` counters under `mcp` in `GET /api/diagnostics/background`.
 - JSON-RPC methods: `initialize` (protocol 2025-06-18, older versions negotiated),
   `ping`, `tools/list`, `tools/call`; notifications get 202. Batching is rejected.
 
 ## Key files
 
 - Protocol + tools: `src/swe_mux/mcp.py`
+- Write-tool policy (bounds, provenance, drafts): `src/swe_mux/agent_messaging.py`
 - Endpoint handler, rate limit, wiring: `src/swe_mux/server.py`
 - Token mint / env / meta mirror / adoption recovery: `src/swe_mux/session.py`
 - Registration: `src/swe_mux/adapters/claude.py`, `src/swe_mux/adapters/codex.py`,
   `src/swe_mux/agent_launcher.py`, `src/swe_mux/launchers.py`
-- Tests: `tests/test_mcp.py`
+- Tests: `tests/test_mcp.py`, `tests/test_agent_messaging.py`
 
 ## Relates to
 
+- `agent-messaging.md` — what the write tools may do, and every bound behind them.
+- `prompt-queue.md` — where a `notify` lands and how it is delivered.
+- `observations.md` — the inbox `request_spawn` drafts into.
 - `delivery-readiness.md` — the operator-input evidence contract this phase also closed.
 - `status-detection.md` — the status contract MCP reads through.
 - `history.md` — the archive `search_history` queries.

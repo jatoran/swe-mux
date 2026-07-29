@@ -10,6 +10,14 @@ project-owned resource file. Vision: `../../development/CONTROL_PLANE_ROADMAP.md
 
 - **Observation**: `{ id, body, done, created_at }`. Append-only capture; edits (toggle
   done, delete, reorder) replace the whole list under a revision check.
+- **Typed request** (Phase 5): an item may also carry `kind: "spawn_request"` and a
+  `request` payload (`prompt`, `backend`, `name`, `reason`, `cwd`, calling-session
+  provenance, `status`). Written by `mux.requestSpawn` and inert by construction — it is
+  text in the user's own file until a human decides. Approving it spawns through the
+  ordinary spawn path with the prompt as `seed_text`; dismissing marks it decided. A
+  request can be decided once (`already_decided` afterwards), and typed requests never join
+  the "insert open items into agent" batch — they are decisions, not notes. See
+  `agent-messaging.md`.
 - **Batch handoff**: open (not-done) items are inserted into the focused agent's composer
   (terminal paste semantics, never submitted) or copied to the clipboard.
 - **Entry point**: a Project's own context menu (sidebar right-click, or the mobile top-bar
@@ -41,7 +49,13 @@ project-owned resource file. Vision: `../../development/CONTROL_PLANE_ROADMAP.md
 GET  /api/projects/{project_id}/observations
 POST /api/projects/{project_id}/observations   {body}          append one
 PUT  /api/projects/{project_id}/observations   {observations, revision}   replace
+POST /api/projects/{project_id}/observations/{observation_id}/decide
+                                               {decision: approve|dismiss, …overrides}
 ```
+
+The decision route records its own outcome without a revision check: it is the daemon
+writing the result of an act it just performed, and losing that to a concurrent edit of an
+unrelated note would leave a started session looking like a pending request.
 
 ## Configuration
 
@@ -49,12 +63,15 @@ PUT  /api/projects/{project_id}/observations   {observations, revision}   replac
 
 ## Key files
 
-- Store (read/append/write, validation): `src/swe_mux/project_files.py`
-- Endpoints: `src/swe_mux/server.py`
-- UI (capture + list + batch/copy): `frontend/src/Observations.tsx`
+- Store (read/append/write, validation, typed requests): `src/swe_mux/project_files.py`
+- Endpoints (including the spawn-request decision): `src/swe_mux/server.py`
+- Drafting side: `src/swe_mux/agent_messaging.py`
+- UI (capture + list + batch/copy + request approval): `frontend/src/Observations.tsx`
 - Command/menu wiring: `frontend/src/App.tsx` (`observations.open`)
 
 ## Relates to
 
 - `project-resources.md` — the `.swe-mux/` project-owned resource model.
 - `prompt-library.md` — the same insert-never-submit composer contract.
+- `agent-messaging.md` — `mux.requestSpawn`, the drafts it writes here, and why spawn
+  authority stays with the human.

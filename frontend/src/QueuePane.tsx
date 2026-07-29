@@ -3,16 +3,18 @@ import { browserUuid } from './layout'
 import { stateDotClass } from './sessionStatus'
 import { agentTargetName, agentTargets } from './agentTargets'
 import {
-  armQueueMessage, cancelQueueMessage, editQueueMessage, enqueueMessage, fetchQueue,
-  isPendingQueueState, moveQueueMessage, queueHead, retargetQueueMessage, sendQueueMessage,
-  type QueueMessage, type QueueSendOutcome, type QueueTargetView,
+  armQueueMessage, cancelQueueMessage, editQueueMessage, enqueueMessage, fetchAutoStatus,
+  fetchQueue, isPendingQueueState, moveQueueMessage, queueHead, retargetQueueMessage,
+  scheduleQueueMessage, scheduleStatus, senderLabel, sendQueueMessage, setSessionAutoPolicy,
+  type QueueAutoStatus, type QueueMessage, type QueueSendOutcome, type QueueTargetView,
 } from './queueApi'
 import type { Session } from './types'
 
-// Phase 4: the Queue workspace tab, attached to one target session/agent run.
-// Everything here is manual: add, edit, arm, reorder, cancel/skip, and the
-// explicit "send next now" — the daemon enforces order, revision, readiness,
-// and identity; this view only shows state and forwards user acts.
+// The Queue workspace tab, attached to one target session/agent run. Phase 4
+// manual acts (add, edit, arm, reorder, cancel/skip, "send next now") plus the
+// Phase 5 controls: a bounded per-session auto-delivery opt-in, whether this
+// session accepts messages from other agents, and per-item scheduling. Every
+// bound is the daemon's — this view shows state and forwards user acts.
 
 type Props = {
   sessionId: string
@@ -45,9 +47,35 @@ function describeOutcome(outcome: QueueSendOutcome): string {
       return outcome.error
     case 'revision_conflict':
       return 'The message changed since this view loaded; it has been refreshed.'
+    case 'not_due':
+      return `Scheduled for ${new Date(outcome.notBefore * 1000).toLocaleString()}. “Send now” overrides the clock.`
+    case 'expired':
+      return outcome.error
     case 'error':
       return outcome.error
   }
+}
+
+/** Presets for "send later"; the daemon resolves the delay to an absolute time. */
+const DELAY_PRESETS: { label: string; seconds: number }[] = [
+  { label: '+5m', seconds: 300 },
+  { label: '+15m', seconds: 900 },
+  { label: '+1h', seconds: 3600 },
+]
+
+function describeAuto(status: QueueAutoStatus | null, sessionId: string): string {
+  if (!status) return ''
+  if (!status.master_enabled) return 'auto-delivery is off for this install'
+  if (status.paused) return 'auto-delivery is paused (emergency stop)'
+  const row = status.sessions.find(item => item.session_id === sessionId)
+  if (!row?.enabled) {
+    return row?.disabled_reason ? `off — ${row.disabled_reason}` : 'off'
+  }
+  const minutes = row.expires_in_s === null ? null : Math.max(0, Math.round(row.expires_in_s / 60))
+  const parts = [`${row.sends_remaining} send${row.sends_remaining === 1 ? '' : 's'} left`]
+  if (minutes !== null) parts.push(`${minutes} min left`)
+  if (status.quiet_hours.active) parts.push('quiet hours — paused')
+  return `on · ${parts.join(' · ')}`
 }
 
 export function QueuePane({ sessionId, sessions, onSelectSession }: Props) {
@@ -58,12 +86,16 @@ export function QueuePane({ sessionId, sessions, onSelectSession }: Props) {
   const [editing, setEditing] = useState<{ id: string; revision: number; body: string } | null>(null)
   const [composer, setComposer] = useState('')
   const [retargetFor, setRetargetFor] = useState('')
+  const [auto, setAuto] = useState<QueueAutoStatus | null>(null)
   const alive = useRef(true)
 
   const refresh = useCallback(async () => {
     try {
-      const next = await fetchQueue(sessionId)
-      if (alive.current) setView(next)
+      const [next, policy] = await Promise.all([fetchQueue(sessionId), fetchAutoStatus()])
+      if (alive.current) {
+        setView(next)
+        setAuto(policy)
+      }
     } catch (cause) {
       if (alive.current) setError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -147,6 +179,8 @@ export function QueuePane({ sessionId, sessions, onSelectSession }: Props) {
     const isHead = head?.id === message.id
     const busy = busyId === message.id
     const isEditing = editing?.id === message.id
+    const schedule = scheduleStatus(message)
+    const from = senderLabel(message)
     return (
       <li
         key={message.id}
@@ -158,6 +192,17 @@ export function QueuePane({ sessionId, sessions, onSelectSession }: Props) {
           </span>
           {isHead && <span class="queue-next-marker">next</span>}
           <span class="queue-item-revision">rev {message.revision}</span>
+          {from && (
+            <span class="queue-item-sender" title={message.origin?.reason || undefined}>
+              {from}
+              {message.chain_depth > 1 ? ` · hop ${message.chain_depth}` : ''}
+            </span>
+          )}
+          {schedule === 'scheduled' && message.constraints?.not_before && (
+            <span class="queue-item-schedule">
+              scheduled {new Date(message.constraints.not_before * 1000).toLocaleTimeString()}
+            </span>
+          )}
           {message.blocked_reasons?.length ? (
             <span class="queue-item-reasons">{message.blocked_reasons.join(', ')}</span>
           ) : null}
@@ -254,6 +299,34 @@ export function QueuePane({ sessionId, sessions, onSelectSession }: Props) {
                 >
                   {isHead ? 'Skip' : 'Cancel'}
                 </button>
+                {schedule === 'scheduled' ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void run(message.id, () => scheduleQueueMessage(message.id, null))}
+                  >
+                    Clear schedule
+                  </button>
+                ) : (
+                  DELAY_PRESETS.map(preset => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      class="queue-schedule-preset"
+                      title={`Deliver no earlier than ${preset.label} from now`}
+                      disabled={busy}
+                      onClick={() =>
+                        void run(message.id, () =>
+                          scheduleQueueMessage(message.id, {
+                            not_before: Date.now() / 1000 + preset.seconds,
+                          }),
+                        )
+                      }
+                    >
+                      {preset.label}
+                    </button>
+                  ))
+                )}
               </>
             )}
             {message.state === 'stranded' && (
@@ -309,6 +382,12 @@ export function QueuePane({ sessionId, sessions, onSelectSession }: Props) {
 
   const targetLabel = session ? agentTargetName(session) : view?.target.label || sessionId
   const live = view?.target.live ?? !!session
+  const policy = auto?.sessions.find(item => item.session_id === sessionId) ?? null
+  const autoOn = !!policy?.enabled
+  const setPolicy = (patch: Parameters<typeof setSessionAutoPolicy>[1]) =>
+    void run('auto', async () => {
+      setAuto(await setSessionAutoPolicy(sessionId, patch))
+    })
   return (
     <div class="queue-pane">
       <header class="queue-pane-header">
@@ -318,6 +397,39 @@ export function QueuePane({ sessionId, sessions, onSelectSession }: Props) {
           {live ? `${view?.pending ?? 0} pending` : 'target ended — pending items are stranded'}
         </span>
       </header>
+      {live && (
+        <div class="queue-auto-strip">
+          <label class="queue-auto-toggle" title="Bounded, expiring, and never overrides a not-safe target">
+            <input
+              type="checkbox"
+              checked={autoOn}
+              disabled={busyId === 'auto' || !auto?.master_enabled}
+              onChange={event => setPolicy({ enabled: event.currentTarget.checked })}
+            />
+            <span>auto-deliver armed messages</span>
+          </label>
+          <span class={`queue-auto-state${autoOn ? ' queue-auto-on' : ''}`}>
+            {describeAuto(auto, sessionId)}
+          </span>
+          <label class="queue-auto-toggle" title="Agent messages arrive armed instead of as drafts">
+            <input
+              type="checkbox"
+              checked={!!policy?.accept_agent_messages}
+              disabled={busyId === 'auto'}
+              onChange={event =>
+                setPolicy({ acceptAgentMessages: event.currentTarget.checked })
+              }
+            />
+            <span>accept agent messages armed</span>
+          </label>
+        </div>
+      )}
+      {auto && !auto.master_enabled && (
+        <p class="queue-auto-note">
+          Auto-delivery is off for this install. Turn on <code>auto_delivery_enabled</code> in
+          Settings to make the per-session opt-in available.
+        </p>
+      )}
       {error && (
         <p class="queue-pane-error" role="alert">
           {error}

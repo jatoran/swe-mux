@@ -2,15 +2,16 @@
 
 ## What it is
 
-Durable, ordered messages a user stages against a target agent run, delivered only by an
-explicit user act, surviving daemon and browser restarts without duplicate delivery.
-Roadmap Phase 4. The storage model is mailbox-shaped so later senders (the Phase 5
-mailbox and agent-to-agent messages, the control-plane queue-draft channel of
-`CONTROL_PLANE_ROADMAP.md` §13) are added as new callers of the same typed operations, not
-as new delivery paths.
+Durable, ordered messages staged against a target agent run, delivered through one typed
+operation, surviving daemon and browser restarts without duplicate delivery. Roadmap
+Phase 4. The storage model is mailbox-shaped, so Phase 5's senders (agent messages, remote
+devices) and the control-plane queue-draft channel (`CONTROL_PLANE_ROADMAP.md` §13) are new
+*callers* of the same typed operations, not new delivery paths.
 
-Nothing in this feature delivers on a timer or autonomously. Time-based and auto-delivery
-are Phase 5, gated behind the shadow-readiness promotion criteria.
+Phase 4 delivers only on an explicit user act. Phase 5 adds two bounded callers on top,
+both off by default and both documented separately: `auto-delivery.md` (who else may press
+send, and under what gate) and `agent-messaging.md` (who else may put a message in a
+queue).
 
 ## Key concepts
 
@@ -36,7 +37,7 @@ are Phase 5, gated behind the shadow-readiness promotion criteria.
 - **The body shown is the body delivered.** No hidden rendered variant exists. Edits
   increment `revision`; `send-next` validates the exact revision the user last saw and
   refuses (`revision_conflict`) otherwise. Sent/delivering items are immutable.
-- **Every delivery is a user act.** `send-next` claims the head atomically (state,
+- **Every delivery is an audited act with a named initiator.** `send-next` claims the head atomically (state,
   revision, head-of-line in one transaction), then re-checks target liveness, run identity,
   and `delivery_readiness` immediately before writing. Blocked/unknown readiness requires
   an explicit per-send `confirm`; the protections that can never be overridden are
@@ -44,7 +45,14 @@ are Phase 5, gated behind the shadow-readiness promotion criteria.
   `approval|question|elicitation` — text typed at an approval prompt can *answer* it) and
   target identity/liveness (those strand instead). Overridable-with-confirm mirrors what
   the send-to-agent dialog allowed before the queue owned delivery: working target,
-  operator recently typed, alternate screen, unknown evidence.
+  operator recently typed, alternate screen, unknown evidence. `initiator` (`user` |
+  `auto`) is recorded on every attempt, and a non-human initiator may never pass `confirm`
+  (`confirm_requires_user`) — an override is a human act by construction.
+- **Delivery constraints belong to the item.** `constraints_json` carries `not_before` and
+  `expires_at` (Phase 5 scheduling), bounded by a 30-day horizon. Both paths honour them: an
+  early manual send is refused as `delivery_not_due` and keeps its state ("Send now"
+  overrides the clock), and an expired item is cancelled (`cancel_kind: expired`) rather
+  than delivered late.
 - **Delivery bytes mirror the browser paste path.** Bracketed paste with newlines as CR,
   a 180 ms settle, then a separate `\r` — both writes through the shared operator-input
   accounting helper (`source="queue"`, `input_owner=False`), so `input_revision` /
@@ -57,13 +65,15 @@ are Phase 5, gated behind the shadow-readiness promotion criteria.
   target identity, readiness state + reasons, confirmation flag, outcome, byte count, and
   error. Prompt text lives only in `queue_messages`; `queue_updated` / `queue_delivery`
   events carry ids and counts only.
-- **Provenance-rich sender model, day one.** `sender_kind` (`user | queue_draft`),
-  `sender_id`, `origin_json` (originating rule/observer id, source Tier 0
-  facts/fingerprints, annotation snapshot), `payload_json` (a typed action payload
-  re-validated at send time), and `constraints_json` (Phase 5 delivery constraints) are
-  persisted now so the queue-draft channel needs no schema migration. The HTTP create
-  route pins `sender_kind="user"`; non-human senders are in-process callers only and can
-  create inert drafts exclusively — arming is a human act.
+- **Provenance-rich sender model.** `sender_kind` (`user | remote_user | agent | rule |
+  queue_draft`), `sender_id`/`sender_label`, `origin_session_id`, `correlation_id` (unique
+  per sender: a retry returns the original message, never a duplicate), `chain_depth`,
+  `origin_json` (relay path, originating rule/observer id, source Tier 0
+  facts/fingerprints), `payload_json` (a typed action payload re-validated at send time),
+  and `constraints_json`. **The kind is derived, never claimed**: the HTTP route reads it
+  from the transport (loopback → `user`, remote device → `remote_user`), the MCP tools from
+  the caller's token. Observer/rule senders create inert drafts only; an `agent` sender may
+  arrive armed only because the *receiving* session granted it (`agent-messaging.md`).
 - **Stranding triggers.** `session_exited` / `session_crashed` / `backend_demoted` events;
   send-time identity failures; and the startup reconcile after supervisor adoption (target
   missing, ended, or running a different bound run). Stranded items offer copy, explicit
@@ -108,8 +118,9 @@ are Phase 5, gated behind the shadow-readiness promotion criteria.
 
 - Targets are live Claude/Codex sessions only; shells are never offered (a paste would
   execute) and the daemon enforces it (`not_agent_target`).
-- No timers, no auto-delivery, no agent-initiated sends. Phase 5 adds those as gated
-  callers over these same operations.
+- Delivery has exactly one implementation. Phase 5's schedule constraints, auto-delivery
+  controller, and agent messages are callers and gates over these operations — nothing
+  writes to a target PTY except `send_next`.
 - The queue holds messages *toward* sessions; it is not a transcript, a conversation
   archive, or a second history store.
 
@@ -130,6 +141,8 @@ are Phase 5, gated behind the shadow-readiness promotion criteria.
 
 ## Relates to
 
+- `auto-delivery.md` — the Phase 5 gate that may press send, and item scheduling.
+- `agent-messaging.md` — the Phase 5 senders (agent, remote device) and the mailbox view.
 - `delivery-readiness.md` — the readiness evidence `send-next` consumes and the shared
   operator-input accounting the delivery writes go through.
 - `../development/ROADMAP.md` Phase 4 (completion record), Phase 5 (what wraps these

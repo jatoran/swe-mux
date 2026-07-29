@@ -328,6 +328,14 @@ responsive controls.
 - The pane tools row carries `note`, `queue[:N]` (agent sessions only — opens the session's
   prompt-queue tab, the count is its pending items; `features/prompt-queue.md`), `proc`, and
   the `⋯` session menu.
+- The Queue tab's auto-delivery strip is a status line as much as a control: the toggle, the
+  bounds actually in force (sends left, minutes left, quiet hours, why it is off), and the
+  separate "accept agent messages armed" switch. It is unavailable — with the reason shown —
+  when the install's master switch is off (`features/auto-delivery.md`).
+- The **Mailbox** overlay (app menu → Mailbox…) is app-level, not per-Project: messages
+  point at sessions across every Project, and it carries the two controls that must be one
+  gesture away on any device — pause all auto-delivery and report an unsafe delivery
+  (`features/agent-messaging.md`).
 - The pane header is `[status] [cwd] [voice] [tools]` and **must stay one row**. It is a grid
   with `grid-auto-flow:column`, which is what enforces that: without it, an item beyond the
   declared column count auto-places into a *second row*, and the voice group is a

@@ -1561,4 +1561,39 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-composer-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .queue-composer-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .pane-tools .queue-chip.has-pending{color:var(--accent)}
-@media(max-width:760px){.queue-item-actions button,.queue-item-actions select{min-height:38px}.queue-composer-actions button{min-height:40px}}
+
+/* ---- Phase 5: auto-delivery strip, schedules, mailbox, spawn requests ---- */
+.queue-auto-strip{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:5px 10px;border-bottom:1px solid var(--line);color:var(--muted);font-size:9px}
+.queue-auto-toggle{display:flex;align-items:center;gap:5px;cursor:pointer}
+.queue-auto-state{margin-left:auto}
+.queue-auto-on{color:var(--accent)}
+.queue-auto-note{margin:0;padding:6px 10px;border-bottom:1px solid var(--line);color:var(--muted);line-height:1.45}
+.queue-item-sender{color:var(--accent)}
+.queue-item-schedule{color:var(--amber)}
+.queue-item-actions .queue-schedule-preset{color:var(--muted)}
+.mailbox-panel{max-width:900px}
+.mailbox-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:7px 12px;border-bottom:1px solid var(--line)}
+.mailbox-roles,.mailbox-auto{display:flex;gap:6px}
+.mailbox-auto{margin-left:auto}
+.mailbox-controls button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.mailbox-controls button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+.mailbox-controls button.danger{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
+.mailbox-list{list-style:none;margin:0;padding:0}
+.mailbox-item{display:grid;gap:5px;padding:8px 12px;border-bottom:1px solid var(--line)}
+.mailbox-item-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:var(--muted);font-size:9px}
+.mailbox-item-note{margin-left:auto}
+.mailbox-item-body{margin:0;white-space:pre-wrap;word-break:break-word;line-height:1.4;max-height:120px;overflow:auto}
+.mailbox-item-actions{display:flex;gap:6px}
+.mailbox-item-actions button{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.mailbox-sent .mailbox-item-body{opacity:.6}
+.observation-request{display:grid;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}
+.observation-request.done{opacity:.6}
+.observation-request-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:var(--muted);font-size:9px}
+.observation-request-tag{padding:1px 6px;border:1px solid color-mix(in srgb,var(--amber) 55%,var(--line));color:var(--amber)}
+.observation-request-status{margin-left:auto}
+.observation-request-reason{margin:0;color:var(--muted)}
+.observation-request-prompt{margin:0;max-height:150px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:inherit;line-height:1.4}
+.observation-request-actions{display:flex;gap:6px;align-items:center}
+.observation-request-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.observation-request-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+@media(max-width:760px){.queue-item-actions button,.queue-item-actions select{min-height:38px}.queue-composer-actions button{min-height:40px}.mailbox-controls button,.mailbox-item-actions button,.observation-request-actions button{min-height:40px}}

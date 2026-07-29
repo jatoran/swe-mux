@@ -2,12 +2,33 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { useModalFocus } from './modalFocus'
 
-type Observation = { id: string; body: string; done: boolean; created_at: number }
+type SpawnRequest = {
+  prompt?: string
+  backend?: string
+  name?: string
+  reason?: string
+  from_name?: string
+  from_session?: string
+  status?: string
+  session_id?: string
+}
+type Observation = {
+  id: string
+  body: string
+  done: boolean
+  created_at: number
+  kind?: string
+  request?: SpawnRequest
+}
 type InboxState = { revision: string; observations: Observation[] }
 
 // The observation inbox: a per-project capture surface. Drop quick notes while
 // testing without switching to the agent, then hand the batch over in one insert.
 // No AI. See CONTROL_PLANE_IDEAS.md §6.9.
+//
+// Phase 5 adds one typed item: an agent's `mux.requestSpawn` draft. It is inert
+// text until a human approves it here — approving is the act that creates the
+// session, which is why it lives in the inbox and not behind an agent tool.
 export function Observations(
   { project, onClose, onInsertBatch }:
   { project: { id: string; name: string }; onClose: () => void; onInsertBatch?: (text: string) => void }
@@ -50,8 +71,54 @@ export function Observations(
     void replace(state.observations.filter(o => o.id !== item.id))
   const clearDone = () => void replace(state.observations.filter(o => !o.done))
 
+  const decide = async (item: Observation, decision: 'approve' | 'dismiss') => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const result = await api<InboxState & { session?: { name?: string } }>(
+        'POST', `${base}/${item.id}/decide`, { decision },
+      )
+      setState(result)
+      setNote(decision === 'approve'
+        ? `Started ${result.session?.name || 'the session'} with the requested prompt.`
+        : 'Request dismissed. Nothing was started.')
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : String(err))
+      await load()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const spawnRequestRow = (item: Observation) => {
+    const request = item.request || {}
+    const decided = request.status && request.status !== 'pending'
+    return <li class={`observation-request${item.done ? ' done' : ''}`}>
+      <div class="observation-request-head">
+        <span class="observation-request-tag">spawn request</span>
+        <span>{request.from_name || request.from_session || 'an agent'}</span>
+        {request.backend && <span>{request.backend}</span>}
+        {decided && <span class="observation-request-status">{request.status}</span>}
+      </div>
+      {request.reason && <p class="observation-request-reason">{request.reason}</p>}
+      <pre class="observation-request-prompt">{request.prompt || item.body}</pre>
+      <div class="observation-request-actions">
+        {decided
+          ? <span>{request.status === 'approved' ? 'approved — session started' : 'dismissed'}</span>
+          : <>
+              <button class="primary" disabled={busy} onClick={() => void decide(item, 'approve')}>
+                approve &amp; start session
+              </button>
+              <button disabled={busy} onClick={() => void decide(item, 'dismiss')}>dismiss</button>
+            </>}
+        <button aria-label="Delete request" onClick={() => remove(item)}>×</button>
+      </div>
+    </li>
+  }
+
   const open = state.observations.filter(o => !o.done)
-  const asText = () => open.map(o => `- ${o.body}`).join('\n')
+  // Typed requests are decisions, not notes: they never ride the batch insert.
+  const asText = () => open.filter(o => o.kind !== 'spawn_request').map(o => `- ${o.body}`).join('\n')
   const copyAll = () => { void navigator.clipboard.writeText(asText()); setNote('Copied open items to clipboard.') }
   const sendBatch = () => {
     if (!onInsertBatch) { setNote('Focus an agent terminal to insert into.'); return }
@@ -78,10 +145,12 @@ export function Observations(
         {state.observations.length === 0
           ? <div class="automation-empty"><strong>Inbox empty</strong><span>Drop a line whenever something catches your eye. Nothing is sent until you say so.</span></div>
           : <ul class="observations-list">{state.observations.map(item =>
-            <li class={item.done ? 'done' : ''}>
-              <label><input type="checkbox" checked={item.done} onChange={() => toggle(item)} /><span>{item.body}</span></label>
-              <button aria-label="Delete observation" onClick={() => remove(item)}>×</button>
-            </li>)}</ul>}
+            item.kind === 'spawn_request'
+              ? spawnRequestRow(item)
+              : <li class={item.done ? 'done' : ''}>
+                  <label><input type="checkbox" checked={item.done} onChange={() => toggle(item)} /><span>{item.body}</span></label>
+                  <button aria-label="Delete observation" onClick={() => remove(item)}>×</button>
+                </li>)}</ul>}
       </main>
       <footer>
         <button class="primary" disabled={!open.length} onClick={sendBatch}>↑ insert open items into agent</button>

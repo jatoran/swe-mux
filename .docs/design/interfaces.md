@@ -255,17 +255,27 @@ are returned explicitly. Template bodies are bounded inert UTF-8 text and termin
 characters are rejected. The browser's Insert action uses terminal paste semantics and never
 adds Enter or submits.
 
-## Prompt queue (Phase 4)
+## Prompt queue (Phase 4) and its Phase 5 callers
 
 ```text
 GET    /queue                                       per-target aggregates
 GET    /queue/messages?target_session_id=           one target's ordered queue
-POST   /queue/messages                              {target_session_id, body, armed?, insert_after?}
-PATCH  /queue/messages/{message_id}                 {body, revision} | {armed} | {after} | {retarget_session_id}
-POST   /queue/messages/{message_id}/cancel          {kind: cancelled|skipped}
+POST   /queue/messages                              {target_session_id, body, armed?, insert_after?,
+                                                     constraints?, correlation_id?}
+PATCH  /queue/messages/{message_id}                 {body, revision} | {armed} | {after} |
+                                                     {retarget_session_id} | {constraints}
+POST   /queue/messages/{message_id}/cancel          {kind: cancelled|skipped|revoked}
 GET    /queue/messages/{message_id}/deliveries      audit rows (no prompt text)
 POST   /queue/send-next                             {message_id, revision, idempotency_key?, confirm?}
 GET    /queue/export?target_session_id=[&redact_secrets=0]
+
+GET    /queue/auto                                  master switch, pause, per-session opt-ins,
+                                                     counters, promotion criteria
+POST   /queue/auto/pause                            {paused}   emergency disable
+PUT    /queue/auto/sessions/{sid}                   {enabled?, ttl_minutes?, max_sends?,
+                                                     accept_agent_messages?}
+POST   /queue/auto/report-unsafe                    {note}     operator review input
+GET    /queue/mailbox?role=all|inbox|outbox         cross-target messages with provenance
 ```
 
 The typed daemon operations of the persistent manual prompt queue — the daemon owns
@@ -282,6 +292,16 @@ PTY write. Typed refusals carry a machine `code`: `head_of_line_blocked`,
 `idempotency_key` replays the recorded outcome instead of delivering twice. Delivery audit
 rows and `queue_updated`/`queue_delivery` events never carry the prompt body; export redacts
 credential-shaped bodies unless the caller opts out.
+
+Phase 5 adds two more refusal codes — `delivery_not_due` (a scheduled item; the item keeps
+its state and "Send now" overrides) and `delivery_expired` (cancelled, never delivered
+late) — plus `confirm_requires_user`, which refuses a confirmation from a non-human
+initiator. `sender_kind` is derived from the transport (`user` on loopback, `remote_user`
+from an authenticated remote device) and never read from the body; `initiator` (`user` |
+`auto`) is recorded on every delivery attempt. The `/queue/auto*` routes carry runtime
+policy, not config: the pause survives a restart and depends on no provider
+(`features/auto-delivery.md`). `/queue/mailbox` is a view over the same message rows, with
+sender/target labels and delivery state (`features/agent-messaging.md`).
 
 ## Clipboard history
 

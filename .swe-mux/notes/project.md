@@ -7,7 +7,8 @@ id = "29a044bb-a06b-4216-95e4-39c5e91d48fb"
 
 Agentic Controle Plane (ACP)
 
-
+what happens with session transcripts/tracking when i /new or /clear an agent session within a session?
+	im not sure we have this handled 
 
 Test automations/control plane before proceeding through remaining roadmap
 	Ensure everything is firing and working properly across the control plane/automation/observation hierarchy

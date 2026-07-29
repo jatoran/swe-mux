@@ -28,6 +28,8 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
 from .adapters import BackendAdapter, ClaudeAdapter, CodexAdapter, ShellAdapter
+from .agent_messaging import AgentMessagingService
+from .auto_delivery import AutoDeliveryController
 from .automation import (
     MAX_SLICE_BYTES,
     OBSERVER_SCHEMAS,
@@ -97,6 +99,7 @@ from .project_files import (
     read_project_file,
     search_project_files,
     session_note_summaries,
+    update_observation_request,
     write_note,
     write_observations,
     write_project_config,
@@ -426,6 +429,13 @@ def create_app(
             web.get("/api/queue/messages/{message_id}/deliveries", queue_message_deliveries),
             web.post("/api/queue/send-next", queue_send_next),
             web.get("/api/queue/export", queue_export),
+            # Phase 5: auto-delivery policy, the mailbox view, and the
+            # emergency controls. Runtime state, not config-file state.
+            web.get("/api/queue/auto", queue_auto_status),
+            web.post("/api/queue/auto/pause", queue_auto_pause),
+            web.put("/api/queue/auto/sessions/{sid}", queue_auto_session),
+            web.post("/api/queue/auto/report-unsafe", queue_auto_report_unsafe),
+            web.get("/api/queue/mailbox", queue_mailbox),
             web.get("/api/projects", list_projects),
             web.post("/api/projects", create_project),
             web.put("/api/projects/order", reorder_projects),
@@ -440,6 +450,13 @@ def create_app(
             web.get("/api/projects/{project_id}/observations", get_observations),
             web.post("/api/projects/{project_id}/observations", post_observation),
             web.put("/api/projects/{project_id}/observations", put_observations),
+            # Approving a drafted spawn request is the human act that creates
+            # the session (`CONTROL_PLANE_ROADMAP.md` §7.2); dismissing it is
+            # the other half. Both live here so mobile can do either.
+            web.post(
+                "/api/projects/{project_id}/observations/{observation_id}/decide",
+                decide_observation_request,
+            ),
             web.get("/api/projects/{project_id}/automations", get_project_automations),
             web.put("/api/projects/{project_id}/automations", put_project_automations),
             web.get("/api/session-notes", list_session_notes),
@@ -752,6 +769,18 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             events, session, data, source="queue", input_owner=False
         ),
     )
+    # Phase 5: the one non-human caller of send_next, and the relay policy over
+    # enqueue. Neither is a second delivery path — both call the typed queue
+    # operations above (`CONTROL_PLANE_ROADMAP.md` §7.1).
+    auto_delivery = AutoDeliveryController(prompt_queue, sessions, config)
+    agent_messaging = AgentMessagingService(
+        prompt_queue,
+        sessions,
+        projects,
+        config,
+        auto_delivery,
+        append_observation=append_observation,
+    )
     prompt_library = PromptLibrary(config.data_dir)
     settings_store = SettingsStore(config.data_dir)
     clipboard = ClipboardStore(
@@ -853,6 +882,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # After supervisor adoption: the startup reconcile strands queue items
     # whose target session or agent run did not survive the restart.
     await prompt_queue.start()
+    # The auto-delivery controller starts regardless of the master switch: it
+    # also sweeps message expiry, which is a promise the user made about any
+    # delivery path, and it re-checks its own enablement every tick.
+    auto_delivery.start()
     project_watcher.start()
     # Every long-lived loop runs under the background-task supervisor: restarted
     # with capped backoff, faults counted, health surfaced at
@@ -880,7 +913,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         projects=projects,
         history_backfills=history_backfills,
         sessions=sessions,
-        mcp=McpService(sessions, history),
+        mcp=McpService(sessions, history, agent_messaging),
         reaper=reaper,
         supervisor=supervisor_client,
         git_monitor=git_monitor,
@@ -901,6 +934,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         voice_store=voice_store,
         prompt_library=prompt_library,
         prompt_queue=prompt_queue,
+        auto_delivery=auto_delivery,
+        agent_messaging=agent_messaging,
         settings_store=settings_store,
         clipboard=clipboard,
         push_store=push_store,
@@ -928,6 +963,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await hooks.stop()
     await automation.stop()
     await consumers.stop()
+    await auto_delivery.stop()
     await prompt_queue.stop()
     await voice.stop()
     await project_watcher.stop()
@@ -2646,6 +2682,90 @@ async def put_observations(request: web.Request) -> web.Response:
     return json_response(result)
 
 
+async def decide_observation_request(request: web.Request) -> web.Response:
+    """Approve or dismiss a drafted `mux.requestSpawn` (Phase 5, CP §7.2).
+
+    Approval is the human act that creates the session — the agent never held
+    spawn authority, it only asked. The prompt travels as ``seed_text`` through
+    the ordinary spawn path, so nothing about the new session is special.
+    """
+    project = _observations_project(request)
+    observation_id = request.match_info["observation_id"]
+    body = await request.json()
+    decision = str(body.get("decision") or "").strip()
+    if decision not in {"approve", "dismiss"}:
+        raise ValueError("decision must be approve or dismiss")
+    identity = _registered_identity(project)
+    current = await read_observations(project.root, project=identity)
+    if current.get("status") == "malformed":
+        return json_response(
+            {"error": str(current.get("error") or ""), "code": "observations_unreadable"}, 409
+        )
+    item = next(
+        (
+            entry
+            for entry in current["observations"]
+            if entry.get("id") == observation_id and entry.get("kind") == "spawn_request"
+        ),
+        None,
+    )
+    if item is None:
+        raise ValueError("no such spawn request")
+    spawn_request = dict(item.get("request") or {})
+    if spawn_request.get("status") not in {None, "", "pending"}:
+        return json_response(
+            {
+                "error": f"this request was already {spawn_request.get('status')}",
+                "code": "already_decided",
+            },
+            409,
+        )
+    if decision == "dismiss":
+        result = await update_observation_request(
+            project.root,
+            observation_id,
+            {"status": "dismissed", "decided_by": _human_sender_kind(request)},
+            done=True,
+            project=identity,
+        )
+        result.update({"project_id": project.id, "project_name": project.name})
+        return json_response(result)
+    prompt = str(body.get("prompt") or spawn_request.get("prompt") or "")
+    if not prompt.strip():
+        raise ValueError("the request has no prompt to seed")
+    spawn_body: dict[str, Any] = {
+        "project_id": project.id,
+        "backend": str(body.get("backend") or spawn_request.get("backend") or "claude"),
+        "seed_text": prompt,
+    }
+    name = str(body.get("name") or spawn_request.get("name") or "")
+    if name:
+        spawn_body["name"] = name
+    cwd = str(body.get("cwd") or spawn_request.get("cwd") or "")
+    if cwd:
+        spawn_body["cwd"] = cwd
+    session = await _spawn_from_body(request.app, spawn_body)
+    result = await update_observation_request(
+        project.root,
+        observation_id,
+        {
+            "status": "approved",
+            "session_id": session.record.id,
+            "decided_by": _human_sender_kind(request),
+        },
+        done=True,
+        project=identity,
+    )
+    result.update(
+        {
+            "project_id": project.id,
+            "project_name": project.name,
+            "session": session.record.snapshot(),
+        }
+    )
+    return json_response(result, 201)
+
+
 async def get_project_automations(request: web.Request) -> web.Response:
     """The per-project control-plane opt-in state, with its dependency graph.
 
@@ -3650,17 +3770,35 @@ async def queue_messages(request: web.Request) -> web.Response:
     return json_response(await request.app["prompt_queue"].target_view(target))
 
 
+def _human_sender_kind(request: web.Request) -> str:
+    """`user` for a local act, `remote_user` for an authenticated remote device.
+
+    Derived from the transport, never from the request body: sender provenance
+    that a client can claim is provenance that means nothing (`ROADMAP.md`
+    Phase 5, "explicit sender provenance"). Remote origin is recorded, not
+    privileged — it weakens no check anywhere downstream.
+    """
+    peer = request.transport.get_extra_info("peername") if request.transport else None
+    host = peer[0] if peer else ""
+    return "user" if host in {"127.0.0.1", "::1", ""} else "remote_user"
+
+
 async def queue_create_message(request: web.Request) -> web.Response:
     body = await request.json()
+    sender_kind = _human_sender_kind(request)
     message = await request.app["prompt_queue"].enqueue(
         target_session_id=str(body.get("target_session_id") or ""),
         body=str(body.get("body") or ""),
         armed=bool(body.get("armed", False)),
         insert_after=str(body["insert_after"]) if body.get("insert_after") else None,
-        # The HTTP surface is a human surface: sender_kind is pinned to "user".
-        # queue_draft senders are in-process control-plane callers only.
-        sender_kind="user",
+        # The HTTP surface is a human surface: the sender kind is derived from
+        # the transport (local vs remote device). Agent and observer senders
+        # are in-process callers only and never reach this route.
+        sender_kind=sender_kind,
         sender_id=str(body["sender_id"]) if body.get("sender_id") else None,
+        sender_label=str(body["sender_label"])[:80] if body.get("sender_label") else None,
+        correlation_id=str(body["correlation_id"]) if body.get("correlation_id") else None,
+        constraints=body.get("constraints"),
     )
     return json_response(message, 201)
 
@@ -3688,6 +3826,11 @@ async def queue_patch_message(request: web.Request) -> web.Response:
         after = body.get("after")
         return json_response(
             await queue.move(message_id, after=str(after) if after else None)
+        )
+    if "constraints" in body:
+        # Scheduling is a property of the queued item, not of a sender's UI.
+        return json_response(
+            await queue.set_constraints(message_id, body.get("constraints"))
         )
     raise ValueError("nothing to change")
 
@@ -3735,6 +3878,68 @@ async def queue_export(request: web.Request) -> web.Response:
     redact = request.query.get("redact_secrets", "1") not in {"0", "false"}
     return json_response(
         await request.app["prompt_queue"].export_target(target, redact_secrets=redact)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: auto-delivery policy, mailbox, and the emergency controls. The
+# bounds live in AutoDeliveryController/AgentMessagingService; these handlers
+# only carry user acts to them.
+
+
+async def queue_auto_status(request: web.Request) -> web.Response:
+    return json_response(await request.app["auto_delivery"].status())
+
+
+async def queue_auto_pause(request: web.Request) -> web.Response:
+    """Pause-all / emergency disable. One flag, persisted, provider-independent."""
+    body = await request.json()
+    controller: AutoDeliveryController = request.app["auto_delivery"]
+    await controller.set_paused(bool(body.get("paused", True)), by=_human_sender_kind(request))
+    return json_response(await controller.status())
+
+
+async def queue_auto_session(request: web.Request) -> web.Response:
+    """Per-session opt-in: auto-delivery and/or accepting agent messages."""
+    controller: AutoDeliveryController = request.app["auto_delivery"]
+    session_id = request.match_info["sid"]
+    body = await request.json()
+    by = _human_sender_kind(request)
+    if "accept_agent_messages" in body:
+        await controller.set_accept_agent_messages(
+            session_id, bool(body["accept_agent_messages"]), by=by
+        )
+    if "enabled" in body:
+        if body["enabled"]:
+            await controller.enable_session(
+                session_id,
+                ttl_minutes=int(body["ttl_minutes"]) if body.get("ttl_minutes") else None,
+                max_sends=int(body["max_sends"]) if body.get("max_sends") else None,
+                by=by,
+            )
+        else:
+            await controller.disable_session(session_id, reason="disabled by user", by=by)
+    return json_response(await controller.status())
+
+
+async def queue_auto_report_unsafe(request: web.Request) -> web.Response:
+    """Operator review: record a confirmed bad automatic delivery.
+
+    Resets the proving period and pauses auto-delivery — the promotion criteria
+    require zero known false-safe deliveries, so this is not a statistic to
+    average away.
+    """
+    body = await request.json()
+    controller: AutoDeliveryController = request.app["auto_delivery"]
+    await controller.report_unsafe(str(body.get("note") or ""))
+    return json_response(await controller.status())
+
+
+async def queue_mailbox(request: web.Request) -> web.Response:
+    role = request.query.get("role", "all").strip() or "all"
+    limit = int(request.query.get("limit", "100") or 100)
+    return json_response(
+        await request.app["agent_messaging"].mailbox(role=role, limit=limit)
     )
 
 

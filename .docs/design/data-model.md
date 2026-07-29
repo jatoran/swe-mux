@@ -55,16 +55,27 @@
   target's first run binds, then never re-bound), with a target label/backend/project
   snapshot for stranded queues, gap-free `position` per target, state
   (`draft|armed|blocked|delivering|sent|failed|cancelled|stranded`), body, `revision`,
-  and the provenance-rich sender model — `sender_kind` (`user|queue_draft`), `sender_id`,
-  `origin_json` (rule id / Tier 0 fact fingerprints / annotation snapshot), `payload_json`
-  (typed action payload for control-plane drafts), `constraints_json` (Phase 5 delivery
-  constraints, carried now) — plus blocked reasons, stranded reason, `cancel_kind`,
-  `retargeted_from_json`, and lifecycle timestamps.
+  and the provenance-rich sender model — `sender_kind`
+  (`user|remote_user|agent|rule|queue_draft`, derived from the transport or the caller's
+  MCP token, never claimed), `sender_id`/`sender_label`, `origin_session_id`,
+  `correlation_id` (partial-unique per sender: a retried send returns the original row),
+  `chain_depth`, `origin_json` (relay path / rule id / Tier 0 fact fingerprints),
+  `payload_json` (typed action payload for control-plane drafts), `constraints_json`
+  (`not_before`, `expires_at`) — plus blocked reasons, stranded reason, `cancel_kind`
+  (`cancelled|skipped|revoked|expired`), `retargeted_from_json`, and lifecycle timestamps.
 - `queue_deliveries`: the delivery audit — per attempt: revision, target identity,
-  readiness state + reasons, explicit-confirmation flag, outcome
-  (`pending|sent|refused|failed`), error, byte count, and a partial-unique
-  `idempotency_key` (a repeated key replays the recorded outcome instead of delivering
-  twice). Deliberately carries no prompt text; bodies live in `queue_messages` only.
+  readiness state + reasons, explicit-confirmation flag, `initiator` (`user|auto` — who
+  pressed send), outcome (`pending|sent|refused|failed`), error, byte count, and a
+  partial-unique `idempotency_key` (a repeated key replays the recorded outcome instead of
+  delivering twice). Deliberately carries no prompt text; bodies live in `queue_messages`
+  only.
+- `queue_auto_policy` / `queue_auto_counters` (Phase 5, `features/auto-delivery.md`):
+  runtime auto-delivery state, deliberately not config — the per-session opt-in (bound
+  `agent_run_id`, `expires_at`, `max_sends`/`sends_used`, `accept_agent_messages`,
+  `disabled_reason`), one reserved `*` row for the emergency pause, and the persisted
+  proving-period counters (`auto_sent`, `auto_refused`, `auto_failed`, `unsafe_reported`,
+  `proving_since`). The store carries a v1→v2 migration: the Phase 5 columns are added in
+  place, because `CREATE TABLE IF NOT EXISTS` would otherwise reach only fresh databases.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
 - `automation_annotations`: observer/rule/detector output. Anchored to `agent_run_id` **or**
@@ -96,7 +107,10 @@
   effective/public options.
 - `<project>/.swe-mux/observations.json`: the Project's capture inbox — a bounded list of
   `{id, body, done, created_at}` notes-to-self, append-only capture with revision-checked
-  edits. Not stored in SQLite. See `features/observations.md`.
+  edits. An item may also carry `kind: "spawn_request"` and a typed, inert `request`
+  payload written by `mux.requestSpawn` (prompt, backend, cwd, calling-session provenance,
+  decision status) — text in the user's own file until a human approves it. Not stored in
+  SQLite. See `features/observations.md`, `features/agent-messaging.md`.
 - `<project>/.swe-mux/preview-shots/<id>.png`: headless preview screenshots saved into the
   owning Project (data-dir fallback) so a local agent can read them. See
   `features/processes-and-previews.md`.

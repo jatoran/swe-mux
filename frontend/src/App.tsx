@@ -23,6 +23,7 @@ import { ProjectsManager, type ProjectPatch, type ProjectsManagerTab } from './P
 import { MenuGroup } from './MenuGroup'
 import { detectedServers, type DetectedServer } from './sessionProcesses'
 import { PreviewPane } from './PreviewPane'
+import { Mailbox } from './Mailbox'
 import { Observations } from './Observations'
 import type { NotificationData, UiNotification } from './Notifications'
 import { UsageDashboard } from './UsageDashboard'
@@ -324,6 +325,7 @@ export function App() {
   // The inbox is per-Project, so it carries its Project rather than following the
   // active one — it opens from a Project's own context menu.
   const [observationsProject,setObservationsProject]=useState<Project|null>(null)
+  const [mailboxOpen,setMailboxOpen]=useState(false)
   // The utility drawer: open state, which tab, and (desktop) the docked column's
   // width. All three are device-local UI preferences, like sidebar width, so the
   // drawer reopens where you left it on this device.
@@ -1821,7 +1823,13 @@ export function App() {
           return { status: 'done' }
         case 'blocked':
           return { status: 'blocked', messageId, revision, reasons: outcome.reasons, protected: outcome.protected }
+        case 'not_due':
+          // A scheduled item reached this path (retarget/confirm of an
+          // existing message): it is queued, just not yet due.
+          await openQueueForSession(sid)
+          return { status: 'done' }
         case 'stranded':
+        case 'expired':
         case 'revision_conflict':
         case 'error':
           return { status: 'error', error: 'error' in outcome ? outcome.error : 'The message changed underneath this dialog; check the Queue tab.' }
@@ -2104,6 +2112,9 @@ export function App() {
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
     { id:'observations.open',label:'Open selected project’s observation inbox',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setObservationsProject(commandProject||null);setMainMenuOpen(false);setProjectMenu(null)} },
+    // The mailbox spans every Project (messages toward any session) and carries
+    // the emergency auto-delivery controls, so it is an app-level overlay.
+    { id:'mailbox.open',label:'Open mailbox (queued messages, auto-delivery)',category:'input',available:true,run:()=>{setMailboxOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
     { id: 'session.spawnShell', label: 'New terminal in current project', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => void spawnTerminal() },
     { id: 'session.quickLaunch', label: 'New terminal custom…', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => openLauncher() },
     // `project.create` predates this and opens the registry; adding a Project is
@@ -3153,6 +3164,7 @@ export function App() {
       <button onClick={() => runNamedCommand('processes.project')}>Processes…</button>
       <button onClick={() => runNamedCommand('prompts.openProject')}>Prompt library…</button>
       <button onClick={() => runNamedCommand('observations.open')}>Observation inbox…</button>
+      <button onClick={() => runNamedCommand('mailbox.open')}>Mailbox…</button>
       <button onClick={()=>{openProjectFiles(projectMenu.project);setProjectMenu(null)}}>Browse files…</button>
       <div class="context-subtitle">PROJECT</div>
       <button onClick={() => runNamedCommand('project.reveal')}>Reveal in Explorer</button>
@@ -3325,6 +3337,7 @@ export function App() {
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={active?.backend} onClose={()=>setPromptLibraryOpen(false)} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}}))}/>}
 
     {observationsProject&&<Observations project={observationsProject} onClose={()=>setObservationsProject(null)} onInsertBatch={activeId?text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}})):undefined}/>}
+    {mailboxOpen&&<Mailbox onClose={()=>setMailboxOpen(false)} onOpenQueue={sessionId=>{setMailboxOpen(false);void openQueueForSession(sessionId)}}/>}
 
     {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}
     {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}

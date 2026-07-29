@@ -771,11 +771,17 @@ Two consequences to design for up front:
   separate explicit grant. The default answer to "what may this agent see" is its own
   Project, consistent with per-project opt-in (§8).
 
-**Same-host boundary decision (2026-07-28, `ROADMAP.md` Phase 4.5):** same-host agents
-are fully trusted in v0 — the token is identity and read scope, not authorization; the
-un-tokened mutating HTTP surface is unchanged. Must be revisited before Phase 5 arms any
-write path (the enforcement option is a token check on mutating routes with a
-daemon-local browser bearer).
+**Same-host boundary decision (2026-07-28, re-affirmed 2026-07-29 with Phase 5):**
+same-host agents are fully trusted — the token is identity and read scope, not
+authorization; the un-tokened mutating HTTP surface is unchanged. The Phase 5
+re-examination concluded the proposed enforcement (token check on mutating routes +
+daemon-local browser bearer) cannot deliver the property: a same-user process on this host
+can request whatever credential the browser is given, so the only real boundary is OS-level
+isolation (an ACL'd per-user pipe the browser holds and sessions do not). Consequence to
+carry forward: **the budgets, allowlists, depth caps, and cycle detection in §7.2 bound
+well-behaved callers, not a compromised one.** What compensates is that agent-reachable
+authority is strictly narrower than the browser's — no tool delivers, spawns, or writes to a
+PTY. Full reasoning: `design/features/agent-messaging.md`.
 
 ### 7.5 Shipping order: a v0 read surface long before v1 memory
 
@@ -909,6 +915,12 @@ another agent can pick up mid-plan. Section links point to the design detail.
     survives adoption, typed 401 for a token the daemon no longer knows. Also closed the
     human-input evidence hole (Phase 4.5 checklist) so readiness shadow metrics are honest
     before Phase 5 reads them.
+  - [x] **§7.2 write tools shipped 2026-07-29** with `ROADMAP.md` Phase 5: `notify` (a thin
+    caller over the queue's typed enqueue — every bound lives in `agent_messaging.py`, not
+    in the tool) and `request_spawn` (an inert observation-inbox draft; approval is a human
+    act and is what spawns). One audit trail with the browser path; sender derived from the
+    token. Design: `design/features/agent-messaging.md`. The same-host boundary was
+    re-examined and re-affirmed with its limits written down (§7.4).
 - [x] **3 · Deterministic consumers** (§6.1, 6.3, 6.4, 6.5). No model; write to `annotations`.
   Design: `design/features/deterministic-consumers.md`.
   - [x] Annotation anchor + evidence schema: `automation_annotations.agent_run_id` is now

@@ -586,6 +586,26 @@ async def write_project_config(
 OBSERVATIONS_VERSION = 1
 MAX_OBSERVATIONS = 500
 MAX_OBSERVATION_CHARS = 2000
+# Phase 5: an inbox item may carry a typed, inert *request* alongside its human
+# summary line — today only `mux.requestSpawn` (`ROADMAP.md` Phase 5,
+# `CONTROL_PLANE_ROADMAP.md` §7.2/§16). The item is text until a human approves
+# it; nothing here starts anything.
+OBSERVATION_KINDS = ("note", "spawn_request")
+MAX_SPAWN_REQUEST_PROMPT = 8000
+_REQUEST_STRING_FIELDS = (
+    "prompt",
+    "backend",
+    "name",
+    "reason",
+    "cwd",
+    "from_session",
+    "from_name",
+    "from_run_id",
+    "project_id",
+    "status",
+    "session_id",
+    "decided_by",
+)
 
 
 class ObservationsUnreadableError(ValueError):
@@ -611,15 +631,33 @@ def _load_observations(path: Path) -> list[dict[str, Any]]:
     for item in items:
         if not isinstance(item, dict) or not isinstance(item.get("id"), str):
             continue
-        result.append(
-            {
-                "id": item["id"],
-                "body": str(item.get("body") or "")[:MAX_OBSERVATION_CHARS],
-                "done": bool(item.get("done")),
-                "created_at": float(item.get("created_at") or 0.0),
-            }
-        )
+        entry: dict[str, Any] = {
+            "id": item["id"],
+            "body": str(item.get("body") or "")[:MAX_OBSERVATION_CHARS],
+            "done": bool(item.get("done")),
+            "created_at": float(item.get("created_at") or 0.0),
+        }
+        kind = str(item.get("kind") or "note")
+        if kind in OBSERVATION_KINDS and kind != "note":
+            entry["kind"] = kind
+            entry["request"] = _clean_request(item.get("request"))
+        result.append(entry)
     return result
+
+
+def _clean_request(request: Any) -> dict[str, Any]:
+    """Normalize a typed request payload; unknown keys are dropped, not trusted."""
+    source = request if isinstance(request, dict) else {}
+    cleaned: dict[str, Any] = {}
+    for key in _REQUEST_STRING_FIELDS:
+        value = source.get(key)
+        if isinstance(value, str) and value:
+            cleaned[key] = value[:MAX_SPAWN_REQUEST_PROMPT]
+    created = source.get("created_at")
+    if isinstance(created, int | float):
+        cleaned["created_at"] = float(created)
+    cleaned.setdefault("status", "pending")
+    return cleaned
 
 
 def _validate_observations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -639,14 +677,19 @@ def _validate_observations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(identity)
         if not isinstance(body, str) or not body.strip() or len(body) > MAX_OBSERVATION_CHARS:
             raise ValueError(f"observation body must be 1–{MAX_OBSERVATION_CHARS} characters")
-        cleaned.append(
-            {
-                "id": identity,
-                "body": body,
-                "done": bool(item.get("done")),
-                "created_at": float(item.get("created_at") or 0.0),
-            }
-        )
+        entry: dict[str, Any] = {
+            "id": identity,
+            "body": body,
+            "done": bool(item.get("done")),
+            "created_at": float(item.get("created_at") or 0.0),
+        }
+        kind = str(item.get("kind") or "note")
+        if kind not in OBSERVATION_KINDS:
+            raise ValueError(f"observation kind must be one of {', '.join(OBSERVATION_KINDS)}")
+        if kind != "note":
+            entry["kind"] = kind
+            entry["request"] = _clean_request(item.get("request"))
+        cleaned.append(entry)
     return cleaned
 
 
@@ -692,14 +735,26 @@ async def read_observations(
 
 
 async def append_observation(
-    cwd: str | Path, body: str, *, project: ProjectIdentity | None = None
+    cwd: str | Path,
+    body: str,
+    *,
+    project: ProjectIdentity | None = None,
+    kind: str = "note",
+    request: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Append one observation. Append-only capture is conflict-free, so no revision check."""
+    """Append one observation. Append-only capture is conflict-free, so no revision check.
+
+    ``kind``/``request`` carry a typed, inert draft (Phase 5
+    ``mux.requestSpawn``). The item is still just a row in the user's own inbox
+    until a human approves it.
+    """
     text = body.strip()
     if not text:
         raise ValueError("observation body must not be empty")
     if len(text) > MAX_OBSERVATION_CHARS:
         raise ValueError(f"observation body must be {MAX_OBSERVATION_CHARS} characters or fewer")
+    if kind not in OBSERVATION_KINDS:
+        raise ValueError(f"observation kind must be one of {', '.join(OBSERVATION_KINDS)}")
     if project is None:
         project, mux_dir = await project_status(cwd)
     else:
@@ -708,14 +763,53 @@ async def append_observation(
     current = _load_observations(path)
     if len(current) >= MAX_OBSERVATIONS:
         raise ValueError(f"observation inbox is full ({MAX_OBSERVATIONS} items); clear some first")
-    current.append(
-        {
-            "id": uuid.uuid4().hex[:16],
-            "body": text,
-            "done": False,
-            "created_at": time.time(),
-        }
-    )
+    identity = uuid.uuid4().hex[:16]
+    entry: dict[str, Any] = {
+        "id": identity,
+        "body": text,
+        "done": False,
+        "created_at": time.time(),
+    }
+    if kind != "note":
+        entry["kind"] = kind
+        entry["request"] = _clean_request({**(request or {}), "created_at": time.time()})
+    current.append(entry)
+    _atomic_write(path, _serialize_observations(_validate_observations(current)))
+    result = await read_observations(cwd, project=project)
+    result["appended_id"] = identity
+    return result
+
+
+async def update_observation_request(
+    cwd: str | Path,
+    observation_id: str,
+    patch: dict[str, Any],
+    *,
+    done: bool | None = None,
+    project: ProjectIdentity | None = None,
+) -> dict[str, Any]:
+    """Record the outcome of a typed request (approved/dismissed) in place.
+
+    Deliberately not revision-checked: this is the daemon writing the result of
+    an act it just performed, and losing that record to a concurrent edit of an
+    unrelated note would leave an approved request looking pending.
+    """
+    if project is None:
+        project, mux_dir = await project_status(cwd)
+    else:
+        mux_dir = Path(project.root) / ".swe-mux"
+    path = mux_dir / "observations.json"
+    current = _load_observations(path)
+    found = False
+    for item in current:
+        if item.get("id") != observation_id:
+            continue
+        found = True
+        item["request"] = _clean_request({**(item.get("request") or {}), **patch})
+        if done is not None:
+            item["done"] = done
+    if not found:
+        raise ValueError("no such observation")
     _atomic_write(path, _serialize_observations(_validate_observations(current)))
     return await read_observations(cwd, project=project)
 

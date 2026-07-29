@@ -211,7 +211,19 @@ EVENT_PAYLOAD_FIELDS: dict[str, set[str]] = {
     "broadcast_delivered": {"targets"},
     # Prompt-queue events carry ids/counters only — never the prompt body.
     "queue_updated": {"message_id", "state", "pending"},
-    "queue_delivery": {"message_id", "outcome", "delivery_state", "confirmed", "bytes"},
+    "queue_delivery": {
+        "message_id",
+        "outcome",
+        "delivery_state",
+        "confirmed",
+        "initiator",
+        "bytes",
+    },
+    # Phase 5: auto-delivery opt-in changes and bounded agent-to-agent
+    # messages. Ids, kinds, and counts only — never a message body.
+    "queue_auto_policy": {"enabled", "reason"},
+    "queue_message_received": {"message_id", "sender_kind", "from_session", "chain_depth"},
+    "spawn_request_drafted": {"request_id", "project_id", "from_session"},
     "capability_degraded": {"capability", "reason", "minimum"},
     "annotation_created": {"annotation_id", "tag", "rule_id"},
     "notification_created": {"notification_id", "kind"},

@@ -1,0 +1,417 @@
+"""Phase 5: gated auto-delivery.
+
+What these pin is the gate, not the delivery: delivery itself is the Phase 4
+queue operation and is already covered. Here: two independent opt-ins, an
+expiry, a consecutive-send cap that a human send resets, a stability window
+that a single safe sample cannot satisfy, quiet hours, the persisted emergency
+pause, schedule constraints honoured by both paths, the never-overrides rule,
+and fail-closed behaviour after a failed delivery.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from swe_mux.auto_delivery import (
+    COUNTER_SENT,
+    COUNTER_UNSAFE,
+    AutoDeliveryController,
+    in_quiet_window,
+    promotion_status,
+)
+from swe_mux.config import Config
+from swe_mux.prompt_queue import PromptQueueService, PromptQueueStore, QueueError
+
+
+def record(sid: str, **kw: Any) -> Any:
+    defaults = dict(
+        id=sid,
+        name=f"claude-{sid}",
+        backend="claude",
+        state="idle",
+        awaiting_reason=None,
+        agent_run_id=f"run-{sid}",
+        project_id="p1",
+        project_scope_id="scope-1",
+        cwd="C:/repo",
+    )
+    defaults.update(kw)
+    return SimpleNamespace(**defaults)
+
+
+def live_session(sid: str, **kw: Any) -> Any:
+    return SimpleNamespace(record=record(sid, **kw))
+
+
+class EventsStub:
+    def __init__(self) -> None:
+        self.emitted: list[tuple[str, dict[str, Any]]] = []
+
+    def emit_background(self, event_type: str, **payload: Any) -> None:
+        self.emitted.append((event_type, payload))
+
+    def subscribe(self, *, name: str = "anonymous") -> asyncio.Queue[Any]:
+        return asyncio.Queue()
+
+    def unsubscribe(self, queue: Any) -> None:
+        pass
+
+
+class ReadinessStub:
+    def __init__(self, state: str = "safe") -> None:
+        self.state = state
+
+    def evaluate(self, session: Any) -> dict[str, Any]:
+        return {"delivery_state": self.state, "reasons": ["all_required_evidence_positive"]}
+
+
+class Harness:
+    def __init__(self, tmp_path: Path, *sessions: Any, **config_overrides: Any) -> None:
+        self.store = PromptQueueStore(tmp_path / "queue.db")
+        self.events = EventsStub()
+        self.readiness = ReadinessStub()
+        self.manager = SimpleNamespace(
+            sessions={session.record.id: session for session in sessions}
+        )
+        self.writes: list[tuple[str, str]] = []
+        self.service = PromptQueueService(
+            self.store,
+            self.manager,
+            self.events,
+            self.readiness,
+            lambda session, data: self.writes.append((session.record.id, data)),
+            submit_delay=0.0,
+        )
+        defaults: dict[str, Any] = {
+            "auto_delivery_enabled": True,
+            # Comfortably under the settle sleep below: asyncio may fire a timer
+            # up to the platform clock resolution *early* (~15 ms on Windows),
+            # so a window close to the sleep makes the wait order-dependent.
+            "auto_delivery_stable_seconds": 0.01,
+            "auto_delivery_max_consecutive": 2,
+            "auto_delivery_refusal_backoff_seconds": 0.0,
+        }
+        defaults.update(config_overrides)
+        self.config = Config(**defaults)
+        self.auto = AutoDeliveryController(self.service, self.manager, self.config)
+
+    async def settle(self) -> None:
+        """One tick that only starts the stability window, then one that may send."""
+        await self.auto.tick()
+        await asyncio.sleep(float(self.config.auto_delivery_stable_seconds) + 0.05)
+        return None
+
+    def close(self) -> None:
+        self.store.close()
+
+
+@pytest.fixture
+def harness(tmp_path: Path):  # type: ignore[no-untyped-def]
+    built = Harness(tmp_path, live_session("s1"))
+    yield built
+    built.close()
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_delivered_without_both_opt_ins(harness: Harness) -> None:
+    message = await harness.service.enqueue(
+        target_session_id="s1", body="go", armed=True
+    )
+    # Master switch on, no per-session opt-in.
+    await harness.settle()
+    assert await harness.auto.tick() == []
+    # Per-session opt-in on, master switch off.
+    await harness.auto.enable_session("s1")
+    harness.config.auto_delivery_enabled = False
+    await harness.settle()
+    assert await harness.auto.tick() == []
+    harness.config.auto_delivery_enabled = True
+    await harness.settle()
+    assert await harness.auto.tick() == [message["id"]]
+    assert harness.writes
+
+
+@pytest.mark.asyncio
+async def test_only_an_armed_user_message_is_eligible(harness: Harness) -> None:
+    await harness.auto.enable_session("s1")
+    draft = await harness.service.enqueue(target_session_id="s1", body="draft", armed=False)
+    await harness.settle()
+    assert await harness.auto.tick() == []
+    # An unarmed head also blocks everything behind it (strict head-of-line),
+    # so arming the second message must not jump the queue.
+    await harness.service.enqueue(target_session_id="s1", body="second", armed=True)
+    await harness.settle()
+    assert await harness.auto.tick() == []
+    armed = await harness.service.set_armed(draft["id"], True)
+    await harness.settle()
+    assert await harness.auto.tick() == [armed["id"]]
+
+
+@pytest.mark.asyncio
+async def test_an_agent_message_needs_the_receivers_opt_in(harness: Harness) -> None:
+    await harness.auto.enable_session("s1")
+    message = await harness.service.enqueue(
+        target_session_id="s1",
+        body="from another agent",
+        armed=True,
+        sender_kind="agent",
+        sender_id="s2",
+    )
+    await harness.settle()
+    assert await harness.auto.tick() == []
+    await harness.auto.set_accept_agent_messages("s1", True)
+    await harness.settle()
+    assert await harness.auto.tick() == [message["id"]]
+
+
+@pytest.mark.asyncio
+async def test_one_safe_sample_is_not_enough(harness: Harness) -> None:
+    await harness.auto.enable_session("s1")
+    await harness.service.enqueue(target_session_id="s1", body="go", armed=True)
+    # First observation only opens the window.
+    assert await harness.auto.tick() == []
+    # Readiness flapping to not-safe resets it; the next safe sample starts over.
+    harness.readiness.state = "unknown"
+    await asyncio.sleep(0.06)
+    assert await harness.auto.tick() == []
+    harness.readiness.state = "safe"
+    assert await harness.auto.tick() == []
+    await asyncio.sleep(0.06)
+    assert len(await harness.auto.tick()) == 1
+
+
+@pytest.mark.asyncio
+async def test_not_safe_is_never_overridden(harness: Harness) -> None:
+    await harness.auto.enable_session("s1")
+    await harness.service.enqueue(target_session_id="s1", body="go", armed=True)
+    harness.readiness.state = "blocked"
+    await harness.settle()
+    assert await harness.auto.tick() == []
+    assert not harness.writes
+    # And the queue operation refuses a non-human initiator that tries anyway.
+    with pytest.raises(QueueError) as caught:
+        await harness.service.send_next(
+            "whatever", revision=1, confirm=True, initiator="auto"
+        )
+    assert caught.value.code == "confirm_requires_user"
+
+
+@pytest.mark.asyncio
+async def test_the_consecutive_cap_disables_the_opt_in_and_a_human_send_resets_it(
+    harness: Harness,
+) -> None:
+    await harness.auto.enable_session("s1", max_sends=1)
+    first = await harness.service.enqueue(target_session_id="s1", body="one", armed=True)
+    await harness.settle()
+    assert await harness.auto.tick() == [first["id"]]
+    second = await harness.service.enqueue(target_session_id="s1", body="two", armed=True)
+    await harness.settle()
+    assert await harness.auto.tick() == []
+    policy = await harness.store.auto_policy("s1")
+    assert policy is not None and not policy["enabled"]
+    assert "consecutive" in str(policy["disabled_reason"])
+    # A manual delivery is evidence of attention: it resets the budget.
+    await harness.service.send_next(second["id"], revision=second["revision"])
+    refreshed = await harness.store.auto_policy("s1")
+    assert refreshed is not None and refreshed["sends_used"] == 0
+
+
+@pytest.mark.asyncio
+async def test_expiry_and_run_replacement_end_the_opt_in(harness: Harness) -> None:
+    await harness.auto.enable_session("s1")
+    await harness.store.set_auto_policy("s1", expires_at=time.time() - 1)
+    await harness.service.enqueue(target_session_id="s1", body="go", armed=True)
+    await harness.settle()
+    assert await harness.auto.tick() == []
+    policy = await harness.store.auto_policy("s1")
+    assert policy is not None and not policy["enabled"]
+    assert "expired" in str(policy["disabled_reason"])
+
+    await harness.auto.enable_session("s1")
+    harness.manager.sessions["s1"].record.agent_run_id = "run-replaced"
+    await harness.settle()
+    assert await harness.auto.tick() == []
+    replaced = await harness.store.auto_policy("s1")
+    assert replaced is not None and not replaced["enabled"]
+    assert "replaced" in str(replaced["disabled_reason"])
+
+
+@pytest.mark.asyncio
+async def test_the_emergency_pause_is_persisted_and_stops_everything(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path, live_session("s1"))
+    try:
+        await harness.auto.enable_session("s1")
+        await harness.service.enqueue(target_session_id="s1", body="go", armed=True)
+        await harness.auto.set_paused(True)
+        await harness.settle()
+        assert await harness.auto.tick() == []
+    finally:
+        harness.close()
+    # A restart re-reads the pause from SQLite: an emergency stop that a daemon
+    # restart clears is not an emergency stop.
+    revived = Harness(tmp_path, live_session("s1"))
+    try:
+        assert await revived.auto.paused() is True
+        assert await revived.auto.tick() == []
+    finally:
+        revived.close()
+
+
+@pytest.mark.asyncio
+async def test_quiet_hours_pause_automatic_sends_only() -> None:
+    # Window helper, independent of the loop, including the midnight wrap.
+    midday = time.struct_time((2026, 7, 29, 12, 0, 0, 2, 210, -1))
+    night = time.struct_time((2026, 7, 29, 23, 30, 0, 2, 210, -1))
+    assert in_quiet_window("23:00", "07:00", midday) is False
+    assert in_quiet_window("23:00", "07:00", night) is True
+    assert in_quiet_window("", "", night) is False
+
+
+@pytest.mark.asyncio
+async def test_quiet_hours_block_the_controller(tmp_path: Path) -> None:
+    harness = Harness(
+        tmp_path,
+        live_session("s1"),
+        auto_delivery_quiet_start="00:00",
+        auto_delivery_quiet_end="23:59",
+    )
+    try:
+        await harness.auto.enable_session("s1")
+        message = await harness.service.enqueue(
+            target_session_id="s1", body="go", armed=True
+        )
+        await harness.settle()
+        assert await harness.auto.tick() == []
+        # A manual send is unaffected by quiet hours.
+        result = await harness.service.send_next(message["id"], revision=message["revision"])
+        assert result["status"] == "sent"
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_a_scheduled_message_waits_for_its_time_on_both_paths(
+    harness: Harness,
+) -> None:
+    await harness.auto.enable_session("s1")
+    message = await harness.service.enqueue(
+        target_session_id="s1",
+        body="later",
+        armed=True,
+        constraints={"delay_seconds": 3600},
+    )
+    await harness.settle()
+    assert await harness.auto.tick() == []
+    # Manual send refuses without confirmation, and leaves the item armed.
+    with pytest.raises(QueueError) as caught:
+        await harness.service.send_next(message["id"], revision=message["revision"])
+    assert caught.value.code == "delivery_not_due"
+    still = await harness.store.message(message["id"])
+    assert still is not None and still["state"] == "armed"
+    # "Send now" is an explicit human override of the clock.
+    result = await harness.service.send_next(
+        message["id"], revision=message["revision"], confirm=True
+    )
+    assert result["status"] == "sent"
+
+
+@pytest.mark.asyncio
+async def test_an_expired_message_is_cancelled_not_delivered(harness: Harness) -> None:
+    message = await harness.service.enqueue(
+        target_session_id="s1",
+        body="stale",
+        armed=True,
+        constraints={"expires_at": time.time() + 0.05},
+    )
+    await asyncio.sleep(0.06)
+    await harness.auto.tick()  # the sweep runs on the first tick
+    stored = await harness.store.message(message["id"])
+    assert stored is not None
+    assert stored["state"] == "cancelled" and stored["cancel_kind"] == "expired"
+    with pytest.raises(QueueError) as caught:
+        await harness.service.send_next(message["id"], revision=message["revision"])
+    assert caught.value.code == "invalid_state"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_delivery_disables_the_opt_in(tmp_path: Path) -> None:
+    session = live_session("s1")
+    harness = Harness(tmp_path, session)
+
+    def explode(target: Any, data: str) -> None:
+        raise OSError("the pipe is gone")
+
+    harness.service._write = explode  # type: ignore[assignment]
+    try:
+        await harness.auto.enable_session("s1")
+        await harness.service.enqueue(target_session_id="s1", body="go", armed=True)
+        await harness.settle()
+        assert await harness.auto.tick() == []
+        policy = await harness.store.auto_policy("s1")
+        assert policy is not None and not policy["enabled"]
+        assert "verify the terminal" in str(policy["disabled_reason"])
+        counters = await harness.store.counters()
+        assert counters.get("auto_failed") == 1
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_delivery_audit_records_who_pressed_send(harness: Harness) -> None:
+    await harness.auto.enable_session("s1")
+    message = await harness.service.enqueue(target_session_id="s1", body="go", armed=True)
+    await harness.settle()
+    await harness.auto.tick()
+    deliveries = await harness.store.deliveries(message["id"])
+    assert [row["initiator"] for row in deliveries] == ["auto"]
+    manual = await harness.service.enqueue(target_session_id="s1", body="second", armed=True)
+    await harness.service.send_next(manual["id"], revision=manual["revision"])
+    assert (await harness.store.deliveries(manual["id"]))[0]["initiator"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_an_unsafe_report_resets_the_proving_period_and_pauses(
+    harness: Harness,
+) -> None:
+    await harness.auto.enable_session("s1")
+    counters = await harness.store.counters()
+    assert counters.get("proving_since")
+    await harness.auto.report_unsafe("typed into an approval prompt")
+    assert await harness.auto.paused() is True
+    status = await harness.auto.status()
+    assert status["promotion"]["criteria"]["no_false_safe"] is False
+    assert status["promotion"]["met"] is False
+
+
+def test_promotion_criteria_are_quantitative() -> None:
+    fresh = promotion_status({})
+    assert fresh["met"] is False
+    proven = promotion_status(
+        {
+            COUNTER_SENT: 60.0,
+            COUNTER_UNSAFE: 0.0,
+            "proving_since": time.time() - 20 * 86400,
+        }
+    )
+    assert proven["criteria"] == {
+        "no_false_safe": True,
+        "min_sends": True,
+        "min_days": True,
+    }
+    assert proven["met"] is True
+    tainted = promotion_status(
+        {
+            COUNTER_SENT: 60.0,
+            COUNTER_UNSAFE: 1.0,
+            "proving_since": time.time() - 20 * 86400,
+        }
+    )
+    assert tainted["met"] is False

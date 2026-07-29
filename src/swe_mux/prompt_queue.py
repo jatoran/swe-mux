@@ -52,7 +52,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-QUEUE_SCHEMA_VERSION = 1
+QUEUE_SCHEMA_VERSION = 2
 QUEUE_EVENT_LOOP = "prompt-queue-events"
 
 # States exactly per the roadmap. `delivering` is transient but persisted so a
@@ -62,10 +62,27 @@ ACTIVE_STATES = (*PENDING_STATES, "delivering")
 TERMINAL_STATES = ("sent", "failed", "cancelled", "stranded")
 ALL_STATES = (*ACTIVE_STATES, *TERMINAL_STATES)
 
-SENDER_KINDS = ("user", "queue_draft")
+# Phase 5 generalizes the sender model (`ROADMAP.md` Phase 5, "Human/device
+# mailbox"): a message records *which kind of actor authored it*, and the
+# daemon derives that from the transport rather than trusting a client claim —
+# `user` is a loopback browser/CLI act, `remote_user` an authenticated remote
+# device, `agent` an `mux.notify` call attributed to its MCP token, `rule` a
+# deterministic observer, `queue_draft` the control-plane draft channel (§13).
+SENDER_KINDS = ("user", "remote_user", "rule", "agent", "queue_draft")
+# Sender kinds a human is behind. Only these may be created armed by their
+# author, and only these are eligible for user-authored auto-delivery.
+HUMAN_SENDER_KINDS = frozenset({"user", "remote_user"})
+CANCEL_KINDS = ("cancelled", "skipped", "revoked", "expired")
+
+# The auto-delivery policy table keys per-session rows by session id and keeps
+# one reserved row for daemon-wide state (the emergency pause).
+AUTO_POLICY_GLOBAL = "*"
 
 MAX_BODY_CHARS = 500_000
 HISTORY_LIMIT = 200
+# A scheduled send is still a send: a horizon keeps "in 30 days" from becoming
+# "whenever this daemon happens to be running in 2030".
+MAX_SCHEDULE_HORIZON_SECONDS = 30 * 86400
 
 # Delivery bytes mirror the browser's live-session path (`noteSelection.ts`):
 # a multi-line body sent unwrapped would submit at every newline, so the text
@@ -109,6 +126,10 @@ CREATE TABLE IF NOT EXISTS queue_messages (
   revision INTEGER NOT NULL DEFAULT 1,
   sender_kind TEXT NOT NULL DEFAULT 'user',
   sender_id TEXT,
+  sender_label TEXT,
+  origin_session_id TEXT,
+  correlation_id TEXT,
+  chain_depth INTEGER NOT NULL DEFAULT 0,
   origin_json TEXT,
   payload_json TEXT,
   constraints_json TEXT,
@@ -126,6 +147,14 @@ CREATE INDEX IF NOT EXISTS idx_queue_messages_target
   ON queue_messages(target_session_id, position);
 CREATE INDEX IF NOT EXISTS idx_queue_messages_state
   ON queue_messages(state, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_queue_messages_sender
+  ON queue_messages(sender_kind, sender_id, created_at DESC);
+-- Retry-safe correlation (`ROADMAP.md` Phase 5, mailbox): a sender that
+-- retries the same logical message reuses its correlation id and gets the
+-- original row back instead of a second copy in the target's queue.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_messages_correlation
+  ON queue_messages(sender_kind, sender_id, correlation_id)
+  WHERE correlation_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS queue_deliveries (
   id TEXT PRIMARY KEY,
   message_id TEXT NOT NULL,
@@ -136,6 +165,7 @@ CREATE TABLE IF NOT EXISTS queue_deliveries (
   delivery_state TEXT,
   reasons_json TEXT,
   confirmed INTEGER NOT NULL DEFAULT 0,
+  initiator TEXT NOT NULL DEFAULT 'user',
   outcome TEXT NOT NULL,
   error TEXT,
   bytes INTEGER,
@@ -146,6 +176,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_deliveries_idempotency
   ON queue_deliveries(idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_queue_deliveries_message
   ON queue_deliveries(message_id, created_at DESC);
+-- Phase 5 runtime state, deliberately not in config.toml: the emergency pause
+-- and every per-session opt-in must be flippable instantly, survive a restart,
+-- and stay independent of file writes and provider availability.
+CREATE TABLE IF NOT EXISTS queue_auto_policy (
+  session_id TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  agent_run_id TEXT,
+  accept_agent_messages INTEGER NOT NULL DEFAULT 0,
+  expires_at REAL,
+  max_sends INTEGER NOT NULL DEFAULT 0,
+  sends_used INTEGER NOT NULL DEFAULT 0,
+  paused INTEGER NOT NULL DEFAULT 0,
+  disabled_reason TEXT,
+  enabled_at REAL,
+  updated_at REAL NOT NULL,
+  updated_by TEXT
+);
+-- Proving-period instrumentation: the promotion criteria are quantitative, so
+-- the counts behind them are persisted rather than recomputed from logs.
+CREATE TABLE IF NOT EXISTS queue_auto_counters (
+  name TEXT PRIMARY KEY,
+  value REAL NOT NULL DEFAULT 0,
+  updated_at REAL
+);
 """
 
 _MESSAGE_JSON_FIELDS = (
@@ -204,9 +258,49 @@ class PromptQueueStore:
     def _connect(self) -> None:
         with self._operation_lock:
             self._db = connect_or_quarantine(self._path, self._open)
+            # Migrate before the schema script: it creates indexes over columns
+            # a v1 table does not have yet, so running it first fails before
+            # the migration could add them.
+            self._migrate_schema()
             self._db.executescript(QUEUE_SCHEMA)
             write_schema_version(self._db, "prompt_queue", QUEUE_SCHEMA_VERSION)
             self._db.commit()
+
+    def _migrate_schema(self) -> None:
+        """v1 → v2: the Phase 5 sender/relay columns, added in place.
+
+        ``CREATE TABLE IF NOT EXISTS`` no-ops on an existing table, so a plain
+        column add in the schema script would only ever reach fresh databases
+        and every upgrade-in-place would fail on the first insert naming it.
+        """
+        columns = {
+            str(row["name"])
+            for row in self._db.execute("PRAGMA table_info(queue_messages)").fetchall()
+        }
+        if not columns:
+            return
+        additions = (
+            ("sender_label", "TEXT"),
+            ("origin_session_id", "TEXT"),
+            ("correlation_id", "TEXT"),
+            ("chain_depth", "INTEGER NOT NULL DEFAULT 0"),
+        )
+        for name, declaration in additions:
+            if name not in columns:
+                self._db.execute(
+                    f"ALTER TABLE queue_messages ADD COLUMN {name} {declaration}"
+                )
+        delivery_columns = {
+            str(row["name"])
+            for row in self._db.execute("PRAGMA table_info(queue_deliveries)").fetchall()
+        }
+        if delivery_columns and "initiator" not in delivery_columns:
+            # Who pressed send is audit-load-bearing once a controller can:
+            # every pre-Phase-5 attempt was a human act, hence the default.
+            self._db.execute(
+                "ALTER TABLE queue_deliveries ADD COLUMN initiator TEXT NOT NULL DEFAULT 'user'"
+            )
+        self._db.commit()
 
     def _open(self) -> sqlite3.Connection:
         db = sqlite3.connect(self._path, check_same_thread=False)
@@ -255,6 +349,10 @@ class PromptQueueStore:
         armed: bool,
         sender_kind: str,
         sender_id: str | None,
+        sender_label: str | None = None,
+        origin_session_id: str | None = None,
+        correlation_id: str | None = None,
+        chain_depth: int = 0,
         origin: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
         constraints: dict[str, Any] | None = None,
@@ -265,6 +363,16 @@ class PromptQueueStore:
         state = "armed" if armed else "draft"
 
         def op() -> dict[str, Any]:
+            if correlation_id:
+                # Retry-safe correlation: the same logical message re-sent
+                # returns the row it already created, never a duplicate.
+                existing = self._db.execute(
+                    "SELECT * FROM queue_messages WHERE sender_kind=? AND"
+                    " IFNULL(sender_id,'')=IFNULL(?,'') AND correlation_id=?",
+                    (sender_kind, sender_id, correlation_id),
+                ).fetchone()
+                if existing is not None:
+                    return {**_row_to_message(existing), "deduplicated": True}
             rows = self._db.execute(
                 "SELECT id FROM queue_messages WHERE target_session_id=? ORDER BY position",
                 (target_session_id,),
@@ -281,9 +389,10 @@ class PromptQueueStore:
             self._db.execute(
                 "INSERT INTO queue_messages"
                 "(id,target_session_id,target_agent_run_id,target_backend,target_label,"
-                "project_id,position,state,body,revision,sender_kind,sender_id,origin_json,"
+                "project_id,position,state,body,revision,sender_kind,sender_id,sender_label,"
+                "origin_session_id,correlation_id,chain_depth,origin_json,"
                 "payload_json,constraints_json,created_at,updated_at,armed_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     identity,
                     target_session_id,
@@ -296,6 +405,10 @@ class PromptQueueStore:
                     body,
                     sender_kind,
                     sender_id,
+                    sender_label,
+                    origin_session_id,
+                    correlation_id,
+                    max(0, int(chain_depth)),
                     _dumps(origin),
                     _dumps(payload),
                     _dumps(constraints),
@@ -587,7 +700,12 @@ class PromptQueueStore:
     # -- delivery -------------------------------------------------------------
 
     async def claim_for_delivery(
-        self, message_id: str, revision: int, idempotency_key: str | None
+        self,
+        message_id: str,
+        revision: int,
+        idempotency_key: str | None,
+        *,
+        initiator: str = "user",
     ) -> dict[str, Any]:
         """Atomically claim the queue head for delivery.
 
@@ -645,8 +763,8 @@ class PromptQueueStore:
             self._db.execute(
                 "INSERT INTO queue_deliveries"
                 "(id,message_id,idempotency_key,revision,target_session_id,"
-                "target_agent_run_id,confirmed,outcome,created_at) "
-                "VALUES(?,?,?,?,?,?,0,'pending',?)",
+                "target_agent_run_id,confirmed,initiator,outcome,created_at) "
+                "VALUES(?,?,?,?,?,?,0,?,'pending',?)",
                 (
                     delivery_id,
                     message_id,
@@ -654,6 +772,7 @@ class PromptQueueStore:
                     revision,
                     row["target_session_id"],
                     row["target_agent_run_id"],
+                    initiator,
                     now,
                 ),
             )
@@ -680,6 +799,7 @@ class PromptQueueStore:
         byte_count: int | None = None,
         blocked_reasons: list[str] | None = None,
         stranded_reason: str | None = None,
+        cancel_kind: str | None = None,
     ) -> dict[str, Any]:
         now = time.time()
 
@@ -707,11 +827,13 @@ class PromptQueueStore:
             )
             self._db.execute(
                 "UPDATE queue_messages SET state=?, blocked_reasons_json=?, stranded_reason=?,"
+                " cancel_kind=COALESCE(?,cancel_kind),"
                 " sent_at=CASE WHEN ?='sent' THEN ? ELSE sent_at END, updated_at=? WHERE id=?",
                 (
                     message_state,
                     _dumps(blocked_reasons),
                     stranded_reason,
+                    cancel_kind,
                     message_state,
                     now,
                     now,
@@ -741,6 +863,308 @@ class PromptQueueStore:
                 item["reasons"] = json.loads(raw) if raw else None
                 result.append(item)
             return result
+
+        return await self._run(op)
+
+    # -- Phase 5: constraints, mailbox, relay bounds --------------------------
+
+    async def set_constraints(
+        self, message_id: str, constraints: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Replace a pending message's delivery constraints (schedule/expiry).
+
+        A schedule is a property of the queue item, never a timer held by a
+        sender's UI (`ROADMAP.md` Phase 5): a browser timer dies with the tab
+        and a private daemon timer would be a second, unaudited delivery path.
+        Constraints do not change the body, so they do not bump ``revision`` —
+        the revision contract is about the text the user saw being the text
+        delivered.
+        """
+        now = time.time()
+
+        def op() -> dict[str, Any]:
+            row = self._db.execute(
+                "SELECT * FROM queue_messages WHERE id=?", (message_id,)
+            ).fetchone()
+            if row is None:
+                raise QueueError("not_found", "no such queue message", status=404)
+            if row["state"] not in PENDING_STATES:
+                raise QueueError(
+                    "immutable_state",
+                    f"a {row['state']} message cannot be rescheduled",
+                    state=row["state"],
+                )
+            self._db.execute(
+                "UPDATE queue_messages SET constraints_json=?, updated_at=? WHERE id=?",
+                (_dumps(constraints or None), now, message_id),
+            )
+            self._db.commit()
+            fresh = self._db.execute(
+                "SELECT * FROM queue_messages WHERE id=?", (message_id,)
+            ).fetchone()
+            assert fresh is not None
+            return _row_to_message(fresh)
+
+        return await self._run(op)
+
+    async def expired_pending(self, now: float) -> list[dict[str, Any]]:
+        """Pending items whose ``constraints.expires_at`` has passed."""
+
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT * FROM queue_messages WHERE state IN ('draft','armed','blocked')"
+                " AND constraints_json IS NOT NULL",
+            ).fetchall()
+            due: list[dict[str, Any]] = []
+            for row in rows:
+                item = _row_to_message(row)
+                constraints = item.get("constraints") or {}
+                expires_at = constraints.get("expires_at")
+                if isinstance(expires_at, int | float) and now >= float(expires_at):
+                    due.append(item)
+            return due
+
+        return await self._run(op)
+
+    async def mailbox(
+        self, *, role: str = "all", limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Cross-target message list for the mailbox view.
+
+        ``inbox`` is everything a non-human sender addressed to one of this
+        install's sessions; ``outbox`` is what the human (local or remote)
+        authored. One store, one audit trail — deliberately not a second
+        transcript (`ROADMAP.md` Phase 5).
+        """
+        if role == "inbox":
+            kinds = tuple(kind for kind in SENDER_KINDS if kind not in HUMAN_SENDER_KINDS)
+        elif role == "outbox":
+            kinds = tuple(sorted(HUMAN_SENDER_KINDS))
+        else:
+            kinds = SENDER_KINDS
+
+        def op() -> list[dict[str, Any]]:
+            placeholders = ",".join("?" for _ in kinds)
+            rows = self._db.execute(
+                f"SELECT * FROM queue_messages WHERE sender_kind IN ({placeholders})"
+                " ORDER BY created_at DESC LIMIT ?",
+                (*kinds, max(1, min(limit, 500))),
+            ).fetchall()
+            return [_row_to_message(row) for row in rows]
+
+        return await self._run(op)
+
+    async def sender_message_count(
+        self, sender_kind: str, sender_id: str, since: float
+    ) -> int:
+        """How many messages one origin has staged since ``since`` (per-origin budget)."""
+
+        def op() -> int:
+            row = self._db.execute(
+                "SELECT COUNT(*) n FROM queue_messages WHERE sender_kind=? AND sender_id=?"
+                " AND created_at>=?",
+                (sender_kind, sender_id, since),
+            ).fetchone()
+            return int(row["n"]) if row else 0
+
+        return await self._run(op)
+
+    async def pending_from_sender_kind(
+        self, target_session_id: str, sender_kind: str
+    ) -> int:
+        """Outstanding pending items of one sender kind aimed at a target."""
+
+        def op() -> int:
+            row = self._db.execute(
+                "SELECT COUNT(*) n FROM queue_messages WHERE target_session_id=?"
+                " AND sender_kind=? AND state IN ('draft','armed','blocked','delivering')",
+                (target_session_id, sender_kind),
+            ).fetchone()
+            return int(row["n"]) if row else 0
+
+        return await self._run(op)
+
+    async def inbound_relay_context(
+        self, session_id: str, agent_run_id: str | None
+    ) -> dict[str, Any]:
+        """The deepest relay message this session's current run has received.
+
+        Chain depth and the cycle path are derived from the queue itself — the
+        message rows already record who sent what to whom — so no separate
+        relay-state table can drift out of sync with the audit trail.
+        """
+
+        def op() -> dict[str, Any]:
+            rows = self._db.execute(
+                "SELECT * FROM queue_messages WHERE target_session_id=? AND sender_kind='agent'"
+                " AND state='sent' ORDER BY chain_depth DESC, sent_at DESC LIMIT 1",
+                (session_id,),
+            ).fetchall()
+            for row in rows:
+                item = _row_to_message(row)
+                if agent_run_id and item.get("target_agent_run_id") not in (None, agent_run_id):
+                    continue
+                origin = item.get("origin") or {}
+                path = origin.get("path") if isinstance(origin, dict) else None
+                return {
+                    "depth": int(item.get("chain_depth") or 0),
+                    "path": [str(entry) for entry in path] if isinstance(path, list) else [],
+                }
+            return {"depth": 0, "path": []}
+
+        return await self._run(op)
+
+    # -- Phase 5: auto-delivery policy and proving-period counters ------------
+
+    async def auto_policy(self, session_id: str) -> dict[str, Any] | None:
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM queue_auto_policy WHERE session_id=?", (session_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+        return await self._run(op)
+
+    async def auto_policies(self) -> list[dict[str, Any]]:
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT * FROM queue_auto_policy WHERE session_id!=? ORDER BY updated_at DESC",
+                (AUTO_POLICY_GLOBAL,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+        return await self._run(op)
+
+    async def set_auto_policy(self, session_id: str, **fields: Any) -> dict[str, Any]:
+        """Upsert one policy row; only the named columns change."""
+        allowed = {
+            "enabled",
+            "agent_run_id",
+            "accept_agent_messages",
+            "expires_at",
+            "max_sends",
+            "sends_used",
+            "paused",
+            "disabled_reason",
+            "enabled_at",
+            "updated_by",
+        }
+        unknown = set(fields) - allowed
+        if unknown:
+            raise QueueError(
+                "invalid_policy", f"unknown policy fields: {sorted(unknown)}", status=400
+            )
+        now = time.time()
+
+        def op() -> dict[str, Any]:
+            self._db.execute(
+                "INSERT INTO queue_auto_policy(session_id,updated_at) VALUES(?,?)"
+                " ON CONFLICT(session_id) DO NOTHING",
+                (session_id, now),
+            )
+            if fields:
+                assignments = ", ".join(f"{name}=?" for name in fields)
+                self._db.execute(
+                    f"UPDATE queue_auto_policy SET {assignments}, updated_at=? WHERE session_id=?",
+                    (*fields.values(), now, session_id),
+                )
+            else:
+                self._db.execute(
+                    "UPDATE queue_auto_policy SET updated_at=? WHERE session_id=?",
+                    (now, session_id),
+                )
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT * FROM queue_auto_policy WHERE session_id=?", (session_id,)
+            ).fetchone()
+            assert row is not None
+            return dict(row)
+
+        return await self._run(op)
+
+    async def consume_auto_send(self, session_id: str, max_sends: int) -> bool:
+        """Atomically take one auto-send slot; False when the budget is spent.
+
+        The reservation happens before the PTY write, so a crash mid-send can
+        only ever *lose* a slot, never let the cap be exceeded.
+        """
+        now = time.time()
+
+        def op() -> bool:
+            cursor = self._db.execute(
+                "UPDATE queue_auto_policy SET sends_used=sends_used+1, updated_at=?"
+                " WHERE session_id=? AND enabled=1 AND (?<=0 OR sends_used<?)",
+                (now, session_id, max_sends, max_sends),
+            )
+            self._db.commit()
+            return bool(cursor.rowcount)
+
+        return await self._run(op)
+
+    async def release_auto_send(self, session_id: str) -> None:
+        """Give back a reserved slot when the attempt never reached the PTY."""
+        now = time.time()
+
+        def op() -> None:
+            self._db.execute(
+                "UPDATE queue_auto_policy SET sends_used=MAX(0,sends_used-1), updated_at=?"
+                " WHERE session_id=?",
+                (now, session_id),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def reset_auto_sends(self, session_id: str) -> None:
+        """A human send resets the consecutive-auto-send count.
+
+        The cap exists to bound *unattended* runs; a manual delivery is direct
+        evidence the user is at the keyboard. Never inserts a policy row — a
+        session with no opt-in has nothing to reset.
+        """
+        now = time.time()
+
+        def op() -> None:
+            self._db.execute(
+                "UPDATE queue_auto_policy SET sends_used=0, updated_at=? WHERE session_id=?",
+                (now, session_id),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def bump_counter(self, name: str, delta: float = 1.0) -> None:
+        now = time.time()
+
+        def op() -> None:
+            self._db.execute(
+                "INSERT INTO queue_auto_counters(name,value,updated_at) VALUES(?,?,?)"
+                " ON CONFLICT(name) DO UPDATE SET value=value+excluded.value,"
+                " updated_at=excluded.updated_at",
+                (name, delta, now),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def set_counter(self, name: str, value: float) -> None:
+        now = time.time()
+
+        def op() -> None:
+            self._db.execute(
+                "INSERT INTO queue_auto_counters(name,value,updated_at) VALUES(?,?,?)"
+                " ON CONFLICT(name) DO UPDATE SET value=excluded.value,"
+                " updated_at=excluded.updated_at",
+                (name, value, now),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def counters(self) -> dict[str, float]:
+        def op() -> dict[str, float]:
+            rows = self._db.execute("SELECT name, value FROM queue_auto_counters").fetchall()
+            return {str(row["name"]): float(row["value"]) for row in rows}
 
         return await self._run(op)
 
@@ -998,6 +1422,10 @@ class PromptQueueService:
         insert_after: str | None = None,
         sender_kind: str = "user",
         sender_id: str | None = None,
+        sender_label: str | None = None,
+        origin_session_id: str | None = None,
+        correlation_id: str | None = None,
+        chain_depth: int = 0,
         origin: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
         constraints: dict[str, Any] | None = None,
@@ -1010,8 +1438,12 @@ class PromptQueueService:
             )
         if sender_kind not in SENDER_KINDS:
             raise QueueError("invalid_sender", "unknown sender kind", status=400)
-        # Non-human senders write inert drafts only; arming is a human act.
-        if sender_kind != "user":
+        constraints = normalize_constraints(constraints)
+        # Only a human's own message may be staged armed by its author. An
+        # agent-authored message may still *arrive* armed, but that is the
+        # receiving session's standing policy granting it (see
+        # `agent_messaging.py`), never the sender's claim.
+        if sender_kind not in HUMAN_SENDER_KINDS and armed and sender_kind != "agent":
             armed = False
         session = self._live_target(target_session_id)
         record = session.record
@@ -1027,13 +1459,44 @@ class PromptQueueService:
             armed=armed,
             sender_kind=sender_kind,
             sender_id=sender_id,
+            sender_label=sender_label,
+            origin_session_id=origin_session_id,
+            correlation_id=correlation_id,
+            chain_depth=chain_depth,
             origin=origin,
             payload=payload,
             constraints=constraints,
             insert_after=insert_after,
         )
-        await self._emit_updated(message["id"], target_session_id, str(message["state"]))
+        if not message.get("deduplicated"):
+            await self._emit_updated(
+                message["id"], target_session_id, str(message["state"])
+            )
         return message
+
+    async def set_constraints(
+        self, message_id: str, constraints: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Schedule/expire a pending item (Phase 5 time-based delivery)."""
+        message = await self.store.set_constraints(
+            message_id, normalize_constraints(constraints)
+        )
+        await self._emit_updated(
+            message_id, str(message["target_session_id"]), str(message["state"])
+        )
+        return message
+
+    async def expire_due(self) -> list[dict[str, Any]]:
+        """Cancel pending items whose expiry passed. Called by the auto controller."""
+        now = time.time()
+        expired: list[dict[str, Any]] = []
+        for item in await self.store.expired_pending(now):
+            message = await self.store.cancel(str(item["id"]), kind="expired")
+            await self._emit_updated(
+                str(item["id"]), str(item["target_session_id"]), str(message["state"])
+            )
+            expired.append(message)
+        return expired
 
     async def edit(self, message_id: str, *, revision: int, body: str) -> dict[str, Any]:
         if not body or len(body) > MAX_BODY_CHARS:
@@ -1063,8 +1526,12 @@ class PromptQueueService:
         return message
 
     async def cancel(self, message_id: str, *, kind: str = "cancelled") -> dict[str, Any]:
-        if kind not in {"cancelled", "skipped"}:
-            raise QueueError("invalid_cancel_kind", "kind must be cancelled or skipped", status=400)
+        if kind not in CANCEL_KINDS:
+            raise QueueError(
+                "invalid_cancel_kind",
+                f"kind must be one of {', '.join(CANCEL_KINDS)}",
+                status=400,
+            )
         message = await self.store.cancel(message_id, kind=kind)
         await self._emit_updated(
             message_id, str(message["target_session_id"]), str(message["state"])
@@ -1094,16 +1561,30 @@ class PromptQueueService:
         revision: int,
         idempotency_key: str | None = None,
         confirm: bool = False,
+        initiator: str = "user",
     ) -> dict[str, Any]:
-        """The one typed delivery operation: "send next now", as a user act.
+        """The one typed delivery operation: "send next now".
 
         Atomically re-checks pending state, revision, and head-of-line in the
-        claim; then target liveness, run identity, and delivery readiness
-        immediately before the PTY write. Blocked or unknown readiness
-        requires ``confirm=True``, and even then the protected reasons
-        (approval/Q&A, identity, ended target) are never overridable.
+        claim; then delivery constraints (schedule/expiry), target liveness,
+        run identity, and delivery readiness immediately before the PTY write.
+        Blocked or unknown readiness requires ``confirm=True``, and even then
+        the protected reasons (approval/Q&A, identity, ended target) are never
+        overridable.
+
+        ``initiator`` records *who pressed send* in the audit row. The Phase 5
+        auto-delivery controller is the only non-human caller and it never
+        passes ``confirm=True``: an override is a human act by construction.
         """
-        claim = await self.store.claim_for_delivery(message_id, revision, idempotency_key)
+        if initiator != "user" and confirm:
+            raise QueueError(
+                "confirm_requires_user",
+                "only a human act may override a not-safe delivery",
+                status=400,
+            )
+        claim = await self.store.claim_for_delivery(
+            message_id, revision, idempotency_key, initiator=initiator
+        )
         if claim["status"] == "duplicate":
             recorded = claim["delivery"]
             return {
@@ -1124,7 +1605,9 @@ class PromptQueueService:
             delivery_state: str | None = None,
             reasons: list[str] | None = None,
             stranded_reason: str | None = None,
+            cancel_kind: str | None = None,
             protected: bool = False,
+            **payload: Any,
         ) -> QueueError:
             await self.store.finalize_delivery(
                 delivery_id,
@@ -1136,10 +1619,40 @@ class PromptQueueService:
                 error=error,
                 blocked_reasons=reasons if message_state == "blocked" else None,
                 stranded_reason=stranded_reason,
+                cancel_kind=cancel_kind,
             )
             await self._emit_updated(message_id, target_id, message_state)
             return QueueError(
-                code, error, reasons=reasons or [], protected=protected, state=message_state
+                code,
+                error,
+                reasons=reasons or [],
+                protected=protected,
+                state=message_state,
+                **payload,
+            )
+
+        # Delivery constraints are properties of the item, checked here so the
+        # manual and automatic paths cannot diverge (`ROADMAP.md` Phase 5).
+        constraints = message.get("constraints") or {}
+        now = time.time()
+        expires_at = constraints.get("expires_at")
+        if isinstance(expires_at, int | float) and now >= float(expires_at):
+            raise await refuse(
+                "delivery_expired",
+                "this message expired before it was sent",
+                message_state="cancelled",
+                cancel_kind="expired",
+                protected=True,
+            )
+        not_before = constraints.get("not_before")
+        if isinstance(not_before, int | float) and now < float(not_before) and not confirm:
+            # Not a block: the item keeps its current state and its schedule.
+            # Only a human "send now" (confirm) overrides the clock.
+            raise await refuse(
+                "delivery_not_due",
+                "this message is scheduled for later; send now to override",
+                message_state=str(message["state"]),
+                not_before=float(not_before),
             )
 
         session = self.sessions.sessions.get(target_id)
@@ -1223,6 +1736,7 @@ class PromptQueueService:
                 outcome="failed",
                 delivery_state=delivery_state,
                 confirmed=confirmed,
+                initiator=initiator,
                 bytes=byte_count,
             )
             raise QueueError(
@@ -1239,6 +1753,9 @@ class PromptQueueService:
             byte_count=byte_count,
         )
         await self._emit_updated(message_id, target_id, "sent")
+        if initiator == "user":
+            # Attention resets the unattended-run budget (`auto_delivery.py`).
+            await self.store.reset_auto_sends(target_id)
         self.events.emit_background(
             "queue_delivery",
             session_id=target_id,
@@ -1246,6 +1763,7 @@ class PromptQueueService:
             outcome="sent",
             delivery_state=delivery_state,
             confirmed=confirmed,
+            initiator=initiator,
             bytes=byte_count,
         )
         return {
@@ -1253,6 +1771,7 @@ class PromptQueueService:
             "delivery_id": delivery_id,
             "confirmed": confirmed,
             "delivery_state": delivery_state,
+            "initiator": initiator,
             "message": final,
         }
 
@@ -1298,6 +1817,64 @@ class PromptQueueService:
                 item = {**item, "body": "[redacted: credential-shaped content]", "redacted": True}
             messages.append(item)
         return {"target_session_id": target_session_id, "messages": messages}
+
+
+def normalize_constraints(constraints: Any) -> dict[str, Any] | None:
+    """Validate and bound a message's delivery constraints.
+
+    ``not_before`` and ``expires_at`` are absolute epoch seconds — the daemon's
+    clock, not the browser's, is authoritative, and a horizon bound keeps a
+    typo from parking an item in the queue for a decade. ``delay_seconds`` is
+    accepted as a convenience and resolved to ``not_before`` here so exactly
+    one representation is ever persisted.
+    """
+    if not constraints:
+        return None
+    if not isinstance(constraints, dict):
+        raise QueueError("invalid_constraints", "constraints must be an object", status=400)
+    result: dict[str, Any] = {}
+    now = time.time()
+    delay = constraints.get("delay_seconds")
+    not_before = constraints.get("not_before")
+    if not_before is None and isinstance(delay, int | float):
+        not_before = now + float(delay)
+    for key, value in (("not_before", not_before), ("expires_at", constraints.get("expires_at"))):
+        if value is None:
+            continue
+        if not isinstance(value, int | float):
+            raise QueueError(
+                "invalid_constraints", f"{key} must be epoch seconds", status=400
+            )
+        moment = float(value)
+        if moment > now + MAX_SCHEDULE_HORIZON_SECONDS:
+            raise QueueError(
+                "invalid_constraints",
+                f"{key} is further out than the {MAX_SCHEDULE_HORIZON_SECONDS // 86400}-day"
+                " scheduling horizon",
+                status=400,
+            )
+        result[key] = moment
+    if (
+        "not_before" in result
+        and "expires_at" in result
+        and result["expires_at"] <= result["not_before"]
+    ):
+        raise QueueError(
+            "invalid_constraints", "expires_at must be after not_before", status=400
+        )
+    return result or None
+
+
+def schedule_status(message: dict[str, Any], now: float) -> str:
+    """``due`` | ``scheduled`` | ``expired`` for one message, from its constraints."""
+    constraints = message.get("constraints") or {}
+    expires_at = constraints.get("expires_at")
+    if isinstance(expires_at, int | float) and now >= float(expires_at):
+        return "expired"
+    not_before = constraints.get("not_before")
+    if isinstance(not_before, int | float) and now < float(not_before):
+        return "scheduled"
+    return "due"
 
 
 def paste_payload(message: str) -> str:

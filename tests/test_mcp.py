@@ -241,9 +241,17 @@ async def test_initialize_negotiates_and_lists_only_read_tools() -> None:
     )
     assert listing is not None
     names = {tool["name"] for tool in listing["result"]["tools"]}
-    # Read-only end to end: this exact set, nothing that can enqueue, deliver,
-    # spawn, or write. A new tool must be added here deliberately.
-    assert names == {"list_sessions", "get_session", "read_transcript", "search_history"}
+    # A closed allowlist: four read tools plus the two bounded Phase 5 writes,
+    # neither of which delivers or spawns anything by itself. A new tool must
+    # be added here deliberately.
+    assert names == {
+        "list_sessions",
+        "get_session",
+        "read_transcript",
+        "search_history",
+        "notify",
+        "request_spawn",
+    }
     assert names == {tool["name"] for tool in TOOLS}
 
 

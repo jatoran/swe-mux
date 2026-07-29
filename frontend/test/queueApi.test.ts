@@ -4,6 +4,8 @@ import {
   isPendingQueueState,
   mapQueueSendError,
   queueHead,
+  scheduleStatus,
+  senderLabel,
   type QueueMessage,
 } from '../src/queueApi.ts'
 
@@ -20,6 +22,12 @@ const message = (id: string, position: number, state: QueueMessage['state']): Qu
   revision: 1,
   sender_kind: 'user',
   sender_id: null,
+  sender_label: null,
+  origin_session_id: null,
+  correlation_id: null,
+  chain_depth: 0,
+  origin: null,
+  constraints: null,
   blocked_reasons: null,
   stranded_reason: null,
   cancel_kind: null,
@@ -76,6 +84,41 @@ test('typed daemon refusals map to typed outcomes', () => {
     mapQueueSendError(apiError({ code: 'revision_conflict', revision: 4 })),
     { status: 'revision_conflict', revision: 4 },
   )
+})
+
+test('the Phase 5 refusals are typed too', () => {
+  assert.deepEqual(
+    mapQueueSendError(apiError({ code: 'delivery_not_due', not_before: 1800 })),
+    { status: 'not_due', notBefore: 1800 },
+  )
+  assert.equal(
+    mapQueueSendError(apiError({ code: 'delivery_expired', error: 'expired' })).status,
+    'expired',
+  )
+})
+
+test('schedule status mirrors the daemon: due, scheduled, or expired', () => {
+  const now = 1_000
+  const plain = message('m', 0, 'armed')
+  assert.equal(scheduleStatus(plain, now), 'due')
+  assert.equal(scheduleStatus({ ...plain, constraints: { not_before: 2_000 } }, now), 'scheduled')
+  assert.equal(scheduleStatus({ ...plain, constraints: { not_before: 500 } }, now), 'due')
+  // Expiry wins over a schedule: an expired item is never "about to send".
+  assert.equal(
+    scheduleStatus({ ...plain, constraints: { not_before: 2_000, expires_at: 900 } }, now),
+    'expired',
+  )
+})
+
+test('sender labels name non-human authors and stay silent for your own messages', () => {
+  const plain = message('m', 0, 'armed')
+  assert.equal(senderLabel(plain), '')
+  assert.equal(
+    senderLabel({ ...plain, sender_kind: 'agent', sender_label: 'claude-worker' }),
+    'from claude-worker',
+  )
+  assert.equal(senderLabel({ ...plain, sender_kind: 'remote_user' }), 'from you (remote)')
+  assert.equal(senderLabel({ ...plain, sender_kind: 'queue_draft' }), 'from an observer')
 })
 
 test('an unknown failure degrades to a plain error outcome, never a throw', () => {

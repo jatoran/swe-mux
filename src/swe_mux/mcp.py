@@ -1,11 +1,16 @@
-"""mux MCP v0: the read and discovery surface (roadmap Phase 4.5, CP §7.5).
+"""The mux MCP surface (roadmap Phase 4.5 reads, Phase 5 writes; CP §7.5).
 
 A streamable-HTTP MCP endpoint hosted in the daemon — never the supervisor
-(CP §7.3) — exposing four read-only tools over machinery that already exists:
-live session listing, session status, bounded transcript read, and history
-search. MCP is transport, not authority (CP §7.1): every tool is a thin caller
-over the same services the browser routes use, and nothing here can enqueue,
-deliver, spawn, or write to a PTY.
+(CP §7.3). Four read tools over machinery that already exists (live session
+listing, session status, bounded transcript read, history search) and two
+bounded write tools added in Phase 5: `notify` (a message into another
+session's queue) and `request_spawn` (an inert draft; it starts nothing).
+
+MCP is transport, not authority (CP §7.1): every tool is a thin caller over the
+same typed daemon operations the browser routes use. No tool implements
+delivery, and none can write to a PTY directly — a notify becomes an ordinary
+queue item subject to head-of-line order, receiver readiness, and (by default)
+human arming.
 
 Load-bearing properties:
 
@@ -20,8 +25,13 @@ Load-bearing properties:
   message-capped; any message or excerpt that looks credential-shaped is
   replaced, reusing the clipboard secret gate.
 - **Same-host callers are fully trusted** (boundary decision 2026-07-28,
-  `ROADMAP.md` Phase 4.5): the token scopes reads and attributes calls; it is
-  not an authorization boundary. Revisit before Phase 5 arms any write path.
+  re-affirmed for Phase 5 on 2026-07-29): the token scopes reads, attributes
+  calls, and bounds *well-behaved* callers; it is not an authorization
+  boundary, because a same-user process on the same host can reach the
+  un-tokened HTTP surface directly no matter what this endpoint checks. The
+  compensating design is that these tools grant strictly *less* authority than
+  the browser already has — no delivery, no spawn, no PTY write — so a
+  compromised agent gains nothing here it did not already have.
 """
 
 from __future__ import annotations
@@ -33,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from .clipboard_store import looks_like_secret
+from .prompt_queue import QueueError
 from .transcript_view import parse_transcript_cached, searchable_transcript_messages
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
@@ -178,6 +189,67 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "notify",
+        "description": (
+            "Send a short message to another agent session in your Project. It "
+            "enters that session's prompt queue and waits: it never interrupts "
+            "an active turn, never answers an approval prompt, and by default "
+            "lands as an inert draft a human must approve. Use it to hand off "
+            "or to flag something the other session needs; do not use it to "
+            "issue instructions you would not want a human to read first."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Session id or exact name of the receiving session",
+                },
+                "body": {"type": "string", "description": "The message text"},
+                "reason": {
+                    "type": "string",
+                    "description": "Short note on why you are sending it (kept as provenance)",
+                },
+                "correlation_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional idempotency key: retrying with the same value "
+                        "returns the original message instead of a duplicate"
+                    ),
+                },
+            },
+            "required": ["target", "body"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "request_spawn",
+        "description": (
+            "Ask the human to start a new agent session in your Project with a "
+            "prompt you supply. This starts nothing: it writes an inert draft "
+            "into the Project's observation inbox, and a person decides. Use it "
+            "when work should continue in a separate session."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "The prompt the new session would be seeded with",
+                },
+                "backend": {
+                    "type": "string",
+                    "enum": ["claude", "codex"],
+                    "description": "Preferred agent CLI (defaults to yours)",
+                },
+                "name": {"type": "string", "description": "Suggested session name"},
+                "reason": {"type": "string", "description": "Why a separate session is warranted"},
+            },
+            "required": ["prompt"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "search_history",
         "description": (
             "Full-text search over your Project's archived agent conversations "
@@ -214,13 +286,17 @@ class McpAuthError(Exception):
 
 
 class McpService:
-    """The v0 tool implementations, one thin layer over existing services."""
+    """The tool implementations, one thin layer over existing services."""
 
-    def __init__(self, sessions: Any, history: Any) -> None:
+    def __init__(self, sessions: Any, history: Any, messaging: Any = None) -> None:
         self.sessions = sessions
         self.history = history
+        # Phase 5 write tools. Absent (tests, minimal wiring) the tools still
+        # list but answer that they are unavailable — never a partial write.
+        self.messaging = messaging
         self.calls = 0
         self.denied = 0
+        self.writes = 0
 
     # ------------------------------------------------------------ identity
 
@@ -400,6 +476,46 @@ class McpService:
             items.append(summary)
         return {"entries": items, "next_cursor": page.get("next_cursor")}
 
+    # ----------------------------------------------------------- write tools
+
+    def _messaging(self) -> Any:
+        if self.messaging is None:
+            raise RuntimeError(
+                "transient: the mux messaging service is not available on this daemon"
+            )
+        return self.messaging
+
+    async def notify(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.notify`: a caller over the Phase 5 A→B queue operation.
+
+        Every bound (allowlist, size, budget, chain depth, cycle detection,
+        receiver readiness, kill switch) lives in the daemon operation, not
+        here — that is the whole point of MCP being transport and not authority
+        (`CONTROL_PLANE_ROADMAP.md` §7.1). The sender is the token's session;
+        there is no sender argument to forge.
+        """
+        self.writes += 1
+        result = await self._messaging().notify(
+            caller,
+            target=str(args.get("target") or ""),
+            body=str(args.get("body") or ""),
+            reason=str(args.get("reason") or ""),
+            correlation_id=str(args.get("correlation_id") or "") or None,
+        )
+        return dict(result)
+
+    async def request_spawn(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.requestSpawn`: a draft producer. It starts nothing."""
+        self.writes += 1
+        result = await self._messaging().request_spawn(
+            caller,
+            prompt=str(args.get("prompt") or ""),
+            backend=str(args.get("backend") or ""),
+            name=str(args.get("name") or ""),
+            reason=str(args.get("reason") or ""),
+        )
+        return dict(result)
+
     # ------------------------------------------------------------ protocol
 
     async def dispatch_tool(self, caller: Any, name: str, args: dict[str, Any]) -> Any:
@@ -409,6 +525,8 @@ class McpService:
             "get_session": self.get_session,
             "read_transcript": self.read_transcript,
             "search_history": self.search_history,
+            "notify": self.notify,
+            "request_spawn": self.request_spawn,
         }
         handler = handlers.get(name)
         if handler is None:
@@ -445,10 +563,15 @@ class McpService:
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "mux", "version": "0.1.0"},
                     "instructions": (
-                        "Read-only visibility into your swe-mux Project: sibling "
-                        "sessions, their live status, transcripts, and archived "
-                        "conversation search. Results are scoped to your Project; "
-                        "an empty result means nothing relevant exists."
+                        "Visibility into your swe-mux Project: sibling sessions, "
+                        "their live status, transcripts, and archived conversation "
+                        "search. Results are scoped to your Project; an empty "
+                        "result means nothing relevant exists. Two bounded write "
+                        "tools exist: `notify` puts a message into another "
+                        "session's prompt queue (it waits for that session's "
+                        "readiness and, by default, for a human to approve it), "
+                        "and `request_spawn` drafts a new-session request for a "
+                        "human to approve — it starts nothing."
                     ),
                 }
             )
@@ -464,6 +587,24 @@ class McpService:
             )
             try:
                 result = await self.dispatch_tool(caller, name, arguments)
+            except QueueError as exc:
+                # A refused write is a *result*, not a protocol error: the
+                # agent needs the typed code to decide whether to adapt (too
+                # large, budget spent) or stop (disabled, cycle).
+                return ok(
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(
+                                    {"error": exc.code, "message": str(exc), **exc.payload},
+                                    default=str,
+                                ),
+                            }
+                        ],
+                        "isError": True,
+                    }
+                )
             except KeyError:
                 # Scope miss and true miss answer identically: not found.
                 return ok(
@@ -492,4 +633,4 @@ class McpService:
         return error(-32601, f"method not found: {method}")
 
     def status(self) -> dict[str, Any]:
-        return {"calls": self.calls, "denied": self.denied}
+        return {"calls": self.calls, "denied": self.denied, "writes": self.writes}

@@ -551,6 +551,89 @@ def test_queue_routes_are_registered(tmp_path: Path) -> None:
     assert ("GET", "/api/queue/messages/{message_id}/deliveries") in routes
     assert ("POST", "/api/queue/send-next") in routes
     assert ("GET", "/api/queue/export") in routes
+    # Phase 5 surface.
+    assert ("GET", "/api/queue/auto") in routes
+    assert ("POST", "/api/queue/auto/pause") in routes
+    assert ("PUT", "/api/queue/auto/sessions/{sid}") in routes
+    assert ("POST", "/api/queue/auto/report-unsafe") in routes
+    assert ("GET", "/api/queue/mailbox") in routes
+    assert (
+        "POST",
+        "/api/projects/{project_id}/observations/{observation_id}/decide",
+    ) in routes
+
+
+# ------------------------------------------------------------- schema v2
+
+
+@pytest.mark.asyncio
+async def test_a_v1_database_migrates_in_place(tmp_path: Path) -> None:
+    """A queue written by a Phase 4 build must keep working after the upgrade.
+
+    `CREATE TABLE IF NOT EXISTS` no-ops on the old table, so without the
+    migration the Phase 5 columns would exist only in fresh databases and the
+    first insert naming one would fail.
+    """
+    import sqlite3
+
+    path = tmp_path / "queue.db"
+    legacy = sqlite3.connect(path)
+    legacy.executescript(
+        """
+        CREATE TABLE queue_messages (
+          id TEXT PRIMARY KEY, target_session_id TEXT NOT NULL, target_agent_run_id TEXT,
+          target_backend TEXT, target_label TEXT, project_id TEXT, position INTEGER NOT NULL,
+          state TEXT NOT NULL, body TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+          sender_kind TEXT NOT NULL DEFAULT 'user', sender_id TEXT, origin_json TEXT,
+          payload_json TEXT, constraints_json TEXT, blocked_reasons_json TEXT,
+          stranded_reason TEXT, cancel_kind TEXT, retargeted_from_json TEXT,
+          created_at REAL NOT NULL, updated_at REAL NOT NULL, edited_at REAL,
+          armed_at REAL, sent_at REAL
+        );
+        CREATE TABLE queue_deliveries (
+          id TEXT PRIMARY KEY, message_id TEXT NOT NULL, idempotency_key TEXT,
+          revision INTEGER NOT NULL, target_session_id TEXT NOT NULL,
+          target_agent_run_id TEXT, delivery_state TEXT, reasons_json TEXT,
+          confirmed INTEGER NOT NULL DEFAULT 0, outcome TEXT NOT NULL, error TEXT,
+          bytes INTEGER, created_at REAL NOT NULL, completed_at REAL
+        );
+        """
+    )
+    legacy.execute(
+        "INSERT INTO queue_messages(id,target_session_id,position,state,body,revision,"
+        "sender_kind,created_at,updated_at) VALUES('m1','s1',0,'armed','legacy',1,'user',1,1)"
+    )
+    legacy.commit()
+    legacy.close()
+
+    store = PromptQueueStore(path)
+    try:
+        kept = await store.message("m1")
+        assert kept is not None and kept["body"] == "legacy"
+        assert kept["chain_depth"] == 0 and kept["correlation_id"] is None
+        fresh = await store.create_message(
+            target_session_id="s1",
+            target_agent_run_id="run-s1",
+            target_backend="claude",
+            target_label="claude-s1",
+            project_id="p1",
+            body="after the upgrade",
+            armed=True,
+            sender_kind="agent",
+            sender_id="s2",
+            correlation_id="corr-1",
+            chain_depth=1,
+        )
+        assert fresh["chain_depth"] == 1
+        # The legacy item still holds the head of the line, exactly as it did
+        # before the upgrade.
+        await store.cancel("m1", kind="skipped")
+        claim = await store.claim_for_delivery(fresh["id"], 1, None, initiator="auto")
+        assert claim["status"] == "claimed"
+        rows = await store.deliveries(fresh["id"])
+        assert rows[0]["initiator"] == "auto"
+    finally:
+        store.close()
 
 
 # -------------------------------------------------------------- seed staging
