@@ -66,19 +66,23 @@ app, or trigger a redeploy from inside a worktree — it will collide with the l
 and your real sessions. All of the session-preserving reload flows above apply to the
 **primary checkout only**.
 
-**Land with the verification lock on:**
+**Just `gwt land`.** Do NOT set `WT_VERIFY_EXCLUSIVE=1`: the suite is parallel-safe, so
+serialising verification only makes several agents finishing at once take N times longer
+for nothing.
 
-```
-WT_VERIFY_EXCLUSIVE=1 gwt land
-```
+Measured 2026-07-29 — two and then three worktrees running
+`.worktree-verify` simultaneously: 996 passed in each, at 58/58/62s against ~60s for a
+solo run, so there is no contention and no slowdown. Why it holds, in case someone is
+tempted to re-add the lock on a hunch:
 
-`.worktree-verify` runs the full suite, and swe-mux resolves its data dir from
-`Path.home()/.mux` with no environment override, and the suite has no `conftest.py`
-providing repo-wide isolation. Two suites running at once across worktrees may therefore
-contend over `~/.mux` and over the SQLite files the tests create. The lock serialises
-verification across worktrees; the CAS retry in `gwt land` absorbs the extra wait. If
-someone later confirms the suite is parallel-safe (or adds a data-dir env override), this
-can be dropped.
+- No test points at the real `~/.mux`. 29 construct `Config(data_dir=...)` explicitly;
+  `provider_accounts.py` and `reconcile.py` take an injectable `home`; and the single bare
+  `Config()` (`tests/test_usage_phase4.py`) only reads two command strings and does no I/O.
+- The SQLite files tests create live under `tests/`, which is per-worktree.
+- No test binds a port. Every `8765` in the suite is a string assertion.
+
+If any of those three stops being true, the lock is the stopgap — but fix the isolation
+instead, because serialised verification is the single biggest cost in a parallel land.
 
 Worktree bootstrap (`.worktree-setup`) is `uv sync` plus `npm ci`, sharing the uv and npm
 caches, so it is a dependency install rather than a download. It is not free: if agent
