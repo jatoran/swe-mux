@@ -122,4 +122,8 @@ regression is valuable because these user-visible paths historically exposed lea
   they are unreachable by every later path (picker, retention, "clear history"), so leaving
   them would keep verbatim copied text on disk against this store's own bound.
 - `src/swe_mux/tier0_store.py`, `src/swe_mux/deterministic_consumers.py`
+- `src/swe_mux/project_card.py` — writes one `project_cards` row per Project through
+  `AutomationStore`. The row is a cache whose validity is a source fingerprint, not an age,
+  so it is deliberately excluded from the retention prune (like `automation_model_cache`,
+  it is bounded by construction).
 - `tests/test_automation_phase6.py`

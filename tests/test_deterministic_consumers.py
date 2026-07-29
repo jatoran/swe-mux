@@ -456,8 +456,11 @@ def test_every_deterministic_consumer_is_implemented_and_needs_only_tier0() -> N
 def test_unimplemented_automations_are_marked_so_the_toggle_cannot_mislead() -> None:
     # The toggle surface renders dependencies straight from this registry, so a
     # reserved id with a placeholder edge must not present as ready to enable.
-    for automation_id in ("scan_timeline", "project_card", "attention_ranking"):
+    for automation_id in ("scan_timeline", "attention_ranking"):
         assert REGISTRY[automation_id].implemented is False, automation_id
+    # `project_card` shipped with roadmap Phase 5.5 and is a real toggle now
+    # (`test_project_card.py`); the rest of the substrate above it has not.
+    assert REGISTRY["project_card"].implemented is True
     # Ranking reads every other signal; a one-dependency tree would be a lie.
     assert set(REGISTRY["attention_ranking"].requires) >= {
         "loop_detection",

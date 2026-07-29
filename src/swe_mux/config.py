@@ -389,6 +389,13 @@ class Config:
     automation_rule_daily_budget_usd: float = 0.5
     automation_hourly_call_cap: int = 60
     automation_rule_hourly_call_cap: int = 20
+    # Control-plane project card (CP §5.4). Per-project opt-in gates whether it
+    # runs at all; these bound what one build may cost. Empty model falls back
+    # to the automation cheap model; with neither set there is simply no card.
+    project_card_model: str = ""
+    project_card_daily_budget_usd: float = 0.25
+    project_card_max_input_tokens: int = 6000
+    project_card_max_output_tokens: int = 600
     openrouter_cheap_model: str = ""
     openrouter_standard_model: str = ""
     openrouter_request_timeout_seconds: float = 30.0
@@ -680,6 +687,12 @@ def _validate(config: Config) -> None:
         errors["automation_hourly_call_cap"] = "must be between 1 and 10000"
     if not 1 <= config.automation_rule_hourly_call_cap <= 10_000:
         errors["automation_rule_hourly_call_cap"] = "must be between 1 and 10000"
+    if not 0 <= config.project_card_daily_budget_usd <= 100:
+        errors["project_card_daily_budget_usd"] = "must be between 0 and 100"
+    if not 512 <= config.project_card_max_input_tokens <= 128_000:
+        errors["project_card_max_input_tokens"] = "must be between 512 and 128000"
+    if not 128 <= config.project_card_max_output_tokens <= 4096:
+        errors["project_card_max_output_tokens"] = "must be between 128 and 4096"
     if not 1 <= config.openrouter_request_timeout_seconds <= 120:
         errors["openrouter_request_timeout_seconds"] = "must be between 1 and 120"
     if config.tts_default_mode not in {"off", "on_demand", "auto"}:

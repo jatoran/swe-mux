@@ -94,6 +94,7 @@ from .preview_capture import (
 from .processes import PreviewRegistry, ProcessInspector
 from .profiles import profile_payload, resolve_profile
 from .project_actions import ProjectActionService, action_spawn_body
+from .project_card import ProjectCardContext, ProjectCardService
 from .project_files import (
     ObservationsUnreadableError,
     append_observation,
@@ -886,6 +887,33 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             project_id=record.project_id or None,
         )
 
+    async def project_card_context(session_id: str) -> ProjectCardContext | None:
+        # Same gate, same TTL cache as Tier 0: a session's card is only built
+        # when its owning project opted the card in. The card is per *project*,
+        # so the session lookup exists only to name one.
+        resolved = _session_project_root(session_id)
+        if resolved is None:
+            return None
+        record, root = resolved
+        if not record.project_id:
+            return None
+        if "project_card" not in await _enabled_automations(root):
+            return None
+        return ProjectCardContext(project_id=record.project_id, project_root=root)
+
+    async def project_card_enabled(root: str) -> bool:
+        return "project_card" in await _enabled_automations(root)
+
+    # Control-plane step 4: built lazily on the first consumer request, cached
+    # per documentation fingerprint, and absent rather than guessed when no
+    # provider is available.
+    project_cards = ProjectCardService(
+        automation_store,
+        config,
+        openrouter,
+        resolve_session=project_card_context,
+        resolve_project=project_card_enabled,
+    )
     tier0.start(events, resolve_context=tier0_context)
     # Phase 3.7: model-free detectors over the facts Tier 0 just captured. Same
     # gate, same cache; writes annotations and nothing else.
@@ -950,6 +978,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         telemetry=telemetry,
         tier0=tier0,
         deterministic_consumers=consumers,
+        project_cards=project_cards,
         provider_accounts=provider_accounts,
         process_inspector=process_inspector,
         previews=previews,
@@ -3479,6 +3508,9 @@ async def get_background_health(request: web.Request) -> web.Response:
             # A detector that stopped producing findings is indistinguishable from
             # a quiet fleet unless the loop's own liveness is reported.
             "deterministic_consumers": consumers.status(),
+            # "no card" is a legitimate outcome, so the reason a project has none
+            # has to be readable somewhere or it looks like nothing was enabled.
+            "project_cards": request.app["project_cards"].status(),
             "mcp": request.app["mcp"].status(),
         }
     )

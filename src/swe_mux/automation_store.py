@@ -21,13 +21,16 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-AUTOMATION_SCHEMA_VERSION = 2
+AUTOMATION_SCHEMA_VERSION = 3
 
 # Floor for the second retention window (see `AutomationStore.prune`). Derived
 # knowledge outlives the operational trail that produced it.
 DURABLE_RETENTION_MIN_DAYS = 365
 # Every growing table is named here. `automation_model_cache` is deliberately
-# absent: CHECK(id=1) already bounds it to a single row.
+# absent: CHECK(id=1) already bounds it to a single row. `project_cards` is
+# absent for the same reason — one row per registered project, replaced in
+# place, and it is a cache whose validity is decided by its source fingerprint
+# rather than by age (see `project_card.py`).
 _OPERATIONAL_PRUNE_TABLES = (
     "automation_firings",
     "automation_action_results",
@@ -106,6 +109,13 @@ CREATE INDEX IF NOT EXISTS idx_notifications_unread
 CREATE TABLE IF NOT EXISTS automation_model_cache (
   id INTEGER PRIMARY KEY CHECK(id=1), models_json TEXT NOT NULL,
   fetched_at REAL NOT NULL, error TEXT
+);
+CREATE TABLE IF NOT EXISTS project_cards (
+  project_id TEXT PRIMARY KEY, project_root TEXT NOT NULL,
+  fingerprint TEXT NOT NULL, card_json TEXT NOT NULL,
+  schema_version INTEGER NOT NULL, requested_model TEXT, resolved_model TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL, created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS session_lineage (
   id TEXT PRIMARY KEY, parent_run_id TEXT NOT NULL, child_run_id TEXT NOT NULL,
@@ -589,6 +599,64 @@ class AutomationStore:
             return {"tokens": int(row["tokens"]), "cost_usd": float(row["cost"])}
 
         return await self._run(op)
+
+    async def project_card(self, project_id: str) -> dict[str, Any] | None:
+        """The cached card row for one project, whatever its validity.
+
+        Validity is the caller's decision, not the store's: a row is only usable
+        when its `fingerprint` still matches the project's current documentation
+        (`project_card.py`). Returning the row regardless keeps that rule in one
+        place instead of splitting it across a query.
+        """
+
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM project_cards WHERE project_id=?", (project_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+        return await self._run(op)
+
+    async def save_project_card(
+        self,
+        *,
+        project_id: str,
+        project_root: str,
+        fingerprint: str,
+        card: dict[str, Any],
+        schema_version: int,
+        requested_model: str | None,
+        resolved_model: str | None,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float | None,
+    ) -> None:
+        """Replace one project's card. One row per project, never appended to."""
+        payload = json.dumps(card, separators=(",", ":"), default=str)
+
+        def op() -> None:
+            self._db.execute(
+                "INSERT OR REPLACE INTO project_cards"
+                "(project_id,project_root,fingerprint,card_json,schema_version,requested_model,"
+                "resolved_model,input_tokens,output_tokens,cost_usd,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    project_id,
+                    project_root,
+                    fingerprint,
+                    payload,
+                    schema_version,
+                    requested_model,
+                    resolved_model,
+                    input_tokens,
+                    output_tokens,
+                    cost_usd,
+                    time.time(),
+                ),
+            )
+            self._db.commit()
+
+        await self._run(op)
 
     async def observer_call_count(self, since: float, *, rule_id: str | None = None) -> int:
         sql = "SELECT COUNT(*) count FROM automation_observer_calls WHERE created_at>=?"
