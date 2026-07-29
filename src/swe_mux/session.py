@@ -1,3 +1,9 @@
+"""Agent/terminal session state and its SQLite-backed store.
+
+Live sessions are owned by the PTY supervisor process, so they outlive daemon
+restarts and app rebuilds; this module holds only the daemon-side view of them.
+"""
+
 from __future__ import annotations
 
 import asyncio
