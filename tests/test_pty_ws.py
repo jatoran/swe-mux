@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -9,6 +10,7 @@ import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux.device_presence import DevicePresenceStore, DeviceReport
 from swe_mux.event_bus import EventBus
 from swe_mux.models import SessionRecord
 from swe_mux.server import deliver_broadcast, pty_ws
@@ -563,8 +565,17 @@ def _arbitration_app() -> tuple[Session, web.Application, list[str], list[tuple[
         resolve=lambda _identity: session, sessions={record.id: session}
     )
     app["events"] = EventBus()
+    app["device_presence"] = DevicePresenceStore()
     app.router.add_get("/pty/{sid}", pty_ws)
     return session, app, writes, resizes
+
+
+def _in_use(app: web.Application, profile: str, interaction_age: float = 1.0) -> None:
+    """Report `profile` as the device class the human is using right now."""
+    app["device_presence"].report(
+        f"{profile}-events",
+        DeviceReport(profile=profile, visible=True, focused=True, interaction_age=interaction_age),
+    )
 
 
 async def _attach(client: TestClient, cols: int, rows: int, *, hidden: bool = False) -> Any:
@@ -684,4 +695,62 @@ async def test_the_owner_detaching_releases_input_and_resizes_for_who_is_left() 
         assert frames[-1]["type"] == "input_owner_released"
         geometry = [frame for frame in frames if frame["type"] == "geometry"]
         assert (geometry[-1]["cols"], geometry[-1]["rows"]) == (200, 50)
+        await desktop.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_the_phone_keeps_input_across_sessions_while_it_is_the_device_in_use() -> None:
+    """The reported failure: on the phone, every session had to be taken over by hand,
+    and pausing on one let the desktop take it straight back.
+
+    Per-session ownership cannot express "the human is on their phone right now": the
+    gesture window only protects the one session being typed into, and only for
+    seconds. So a desktop pane that was already attached owned every *other* session,
+    and its next reconnect reclaimed the one the phone had just been given.
+    """
+    session, app, writes, _resizes = _arbitration_app()
+    _in_use(app, "mobile")
+
+    async with TestClient(TestServer(app)) as client:
+        # A desktop pane got there first and holds input, as it would for every
+        # session left open in the desktop workspace.
+        desktop = await _attach(client, 200, 50)
+        assert (await _claim(desktop, "gesture", "desktop"))["active"] is True
+
+        # The phone opens that session. Attaching is passive — no tap on the terminal
+        # itself — and that is exactly the case that used to demand "take over".
+        phone = await _attach(client, 40, 20)
+        granted = await _claim(phone, "passive", "mobile")
+        assert granted["active"] is True
+        assert granted["reason"] == "granted_device_in_use"
+        await phone.send_json({"type": "input", "data": "hi"})
+        await asyncio.sleep(0.02)
+        assert writes == ["hi"]
+        # The desktop pane is told it lost the claim.
+        assert (await next_json(desktop))["reason"] == "claimed_elsewhere"
+
+        # Now the phone sits idle past its gesture protection while the desktop pane
+        # reconnects and re-claims, the way a background pane does on its own.
+        session.input_owner_gesture_ts = time.monotonic() - 60
+        denied = await _claim(desktop, "passive", "desktop")
+        assert denied["active"] is False
+        assert denied["reason"] == "denied_device_in_use"
+        assert session.input_owner_device == "mobile"
+        await phone.close()
+        await desktop.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_sitting_down_at_the_other_device_still_takes_input_with_one_click() -> None:
+    """The rule above must not strand a device: a real click is still a real click."""
+    session, app, _writes, _resizes = _arbitration_app()
+    _in_use(app, "mobile")
+
+    async with TestClient(TestServer(app)) as client:
+        phone = await _attach(client, 40, 20)
+        assert (await _claim(phone, "gesture", "mobile"))["active"] is True
+        desktop = await _attach(client, 200, 50)
+        assert (await _claim(desktop, "gesture", "desktop"))["active"] is True
+        assert session.input_owner_device == "desktop"
+        await phone.close()
         await desktop.close()

@@ -60,6 +60,62 @@ def test_a_passive_claim_from_a_hidden_window_is_refused_outright() -> None:
     assert decision.reason == "denied_unfocused"
 
 
+def test_a_passive_claim_never_crosses_to_the_device_in_use() -> None:
+    """The report this rule exists for: every session opened on the phone demanded a
+    manual "take over", and pausing on one let the desktop take it straight back.
+
+    Ownership is per session and the gesture window is seconds long, so neither could
+    express "the human is on their phone right now" — a fact about the whole app."""
+    # The desktop holds this session and was typed into moments ago, but the human is
+    # on their phone now. Opening the session there must not require a manual claim.
+    owned = OwnerState("desktop-conn", 5, "desktop", last_gesture_at=99.0)
+    request = ClaimRequest(
+        "phone-conn", 100.0, "passive", "mobile", True, this_device_in_use=True
+    )
+    decision = evaluate_claim(owned, request)
+    assert decision.granted and decision.changed
+    assert decision.reason == "granted_device_in_use"
+
+    # And the reverse: a desktop pane reattaching cannot take it back, even though the
+    # phone's own gesture protection has long since lapsed.
+    idle_phone_owner = OwnerState("phone-conn", 6, "mobile", last_gesture_at=None)
+    intruder = ClaimRequest(
+        "desktop-conn", 100.0, "passive", "desktop", True, other_device_in_use=True
+    )
+    refused = evaluate_claim(idle_phone_owner, intruder)
+    assert not refused.granted
+    assert refused.reason == "denied_device_in_use"
+
+
+def test_the_device_in_use_rule_still_yields_to_a_real_gesture() -> None:
+    """Someone sitting down at the desktop and clicking into a terminal is not a
+    background pane; the whole point of the gesture tier is that it always works."""
+    owned = OwnerState("phone-conn", 5, "mobile", last_gesture_at=99.0)
+    request = ClaimRequest(
+        "desktop-conn", 100.0, "gesture", "desktop", True, other_device_in_use=True
+    )
+    assert evaluate_claim(owned, request).granted
+
+
+def test_being_the_device_in_use_does_not_settle_contention_within_it() -> None:
+    """Two panes on the same device are the case the gesture window was written for,
+    and it still decides them."""
+    owned = OwnerState("desk-a", 5, "desktop", last_gesture_at=99.0)
+    sibling = ClaimRequest(
+        "desk-b", 100.0, "passive", "desktop", True, this_device_in_use=True
+    )
+    assert evaluate_claim(owned, sibling).reason == "denied_active_owner"
+
+
+def test_the_owner_renewing_its_claim_is_unaffected_by_another_device() -> None:
+    owned = OwnerState("phone-conn", 5, "mobile", last_gesture_at=90.0)
+    request = ClaimRequest(
+        "phone-conn", 100.0, "passive", "mobile", True, other_device_in_use=True
+    )
+    decision = evaluate_claim(owned, request)
+    assert decision.granted and not decision.changed
+
+
 def test_a_passive_claim_takes_an_abandoned_session() -> None:
     owned = OwnerState("phone-conn", 5, "mobile", last_gesture_at=50.0)
     decision = evaluate_claim(owned, desktop(now=100.0))

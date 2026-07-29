@@ -49,6 +49,7 @@ import {
   type ClaimReason,
   type OwnershipView,
 } from './inputOwnership'
+import { deviceIsFocused } from './devicePresence'
 import { localPreviewUrl } from './previewLinks'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness, type ConnectionPhase } from './liveness'
 import {
@@ -641,6 +642,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       ownsInput = next.owns
       setInputOwnership(next)
     }
+    // Per device class, because `hasFocus()` is a desktop concept a phone answers
+    // inconsistently — see deviceIsFocused. Reporting it raw made the phone's every
+    // claim look like it came from a background window.
+    const paneIsFocused = () => deviceIsFocused({
+      profile: device,
+      visible: !document.hidden,
+      hasFocus: document.hasFocus(),
+    })
     const claimInput = (reason: ClaimReason) => {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({
@@ -649,7 +658,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           device,
           // A minimized or backgrounded window answers false and so cannot passively
           // take the keyboard from the device in front of the user.
-          focused: !document.hidden && document.hasFocus(),
+          focused: paneIsFocused(),
         }))
       }
       // Focus here also makes this terminal the target for inserted text (clipboard
@@ -749,7 +758,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           if (!ownsInput && shouldReclaimAfterDisplacement({
             focusInHost: !!document.activeElement && host.current?.contains(document.activeElement) === true,
             documentHidden: document.hidden,
-            windowFocused: document.hasFocus(),
+            windowFocused: paneIsFocused(),
           })) {
             claimInput('passive')
           }

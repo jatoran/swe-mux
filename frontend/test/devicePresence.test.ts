@@ -1,6 +1,22 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { PRESENCE_MIN_REPORT_MS, presenceFrame, shouldReportInteraction } from '../src/devicePresence.ts'
+import { deviceIsFocused, PRESENCE_MIN_REPORT_MS, presenceFrame, shouldReportInteraction } from '../src/devicePresence.ts'
+
+test('a visible phone counts as focused; a desktop window must actually have focus', () => {
+  // `hasFocus()` answers a window-manager question a phone has no answer for, and
+  // mobile engines report it inconsistently. Believing a false there cost the phone
+  // both halves of this system: never "in use" for notifications, and every terminal
+  // claim refused as unfocused — which is what made every session demand a manual
+  // "take over" while tapping (a gesture, which ignores the flag) still worked.
+  assert.equal(deviceIsFocused({ profile: 'mobile', visible: true, hasFocus: false }), true)
+  assert.equal(deviceIsFocused({ profile: 'desktop', visible: true, hasFocus: false }), false)
+  assert.equal(deviceIsFocused({ profile: 'desktop', visible: true, hasFocus: true }), true)
+})
+
+test('nothing hidden is ever focused, on either device class', () => {
+  assert.equal(deviceIsFocused({ profile: 'mobile', visible: false, hasFocus: true }), false)
+  assert.equal(deviceIsFocused({ profile: 'desktop', visible: false, hasFocus: true }), false)
+})
 
 test('interaction is reported as an age, never a timestamp', () => {
   // A phone whose clock is minutes off would otherwise look permanently active

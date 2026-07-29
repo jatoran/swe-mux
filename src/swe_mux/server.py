@@ -3478,6 +3478,10 @@ async def get_session_state_log(request: web.Request) -> web.Response:
             # arrived from a client that had lost input ownership; non-zero denials
             # mean a background pane tried to take it back.
             "input_arbitration": {
+                # The device classes the daemon believes are in use: a passive claim
+                # from any other one is refused, so this is the first thing to check
+                # when input ownership is not where it is expected to be.
+                "active_devices": sorted(request.app["device_presence"].active_profiles()),
                 "owner_device": session.input_owner_device,
                 "owner_epoch": session.input_owner_epoch,
                 "attached_viewports": len(session.viewports),
@@ -6513,15 +6517,24 @@ async def _claim_terminal_input(
     frame: dict[str, Any],
 ) -> None:
     reason: ClaimReason = "passive" if frame.get("reason") == "passive" else "gesture"
+    device = str(frame.get("device") or "unknown")[:32]
+    # Which device the human is at is a property of the whole app, not of this
+    # session, so it comes from the daemon's presence tracking rather than from the
+    # claiming client. Absent (older client, or a test app that wires no store) means
+    # "no signal", which leaves the per-session rules to decide exactly as before.
+    presence: DevicePresenceStore | None = request.app.get("device_presence")
+    in_use = presence.active_profiles() if presence is not None else set()
     decision = evaluate_claim(
         session.owner_state(),
         ClaimRequest(
             connection_id=connection_id,
             now=time.monotonic(),
             reason=reason,
-            device=str(frame.get("device") or "unknown")[:32],
+            device=device,
             # Absent on legacy clients, which only claimed on real interaction.
             focused=frame.get("focused") is not False,
+            other_device_in_use=bool(in_use - {device}),
+            this_device_in_use=device in in_use,
         ),
     )
     if not decision.granted:

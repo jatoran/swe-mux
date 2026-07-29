@@ -17,6 +17,14 @@ The rules here are pure so they can be tested without a PTY, a socket, or a brow
 * A *passive* claim — attach, reconnect, or restored DOM focus — may not displace an
   owner a human has typed into within `PASSIVE_CLAIM_HOLD_SECONDS`, and may not
   displace anyone at all when the claiming client reports itself unfocused or hidden.
+* A passive claim may never cross device classes while another device class is the
+  one in use (`device_presence.py`). Ownership is per session, so the gesture window
+  above only protects the session being typed into, and only for seconds — which left
+  the original complaint half-fixed: reading a session on the phone for a while let
+  the next desktop reconnect take input back, and every *other* session opened on the
+  phone still had to be claimed by hand because a desktop pane had attached to it
+  first. Which device the human is at is not a per-session fact, so it is not decided
+  per session.
 * The input owner dictates PTY geometry; everyone else letterboxes locally. With no
   owner, the smallest visible viewport wins so no attached client is truncated.
 """
@@ -37,9 +45,11 @@ PASSIVE_CLAIM_HOLD_SECONDS = 10.0
 GRANT_UNOWNED = "granted_unowned"
 GRANT_GESTURE = "granted_gesture"
 GRANT_IDLE_OWNER = "granted_idle_owner"
+GRANT_DEVICE_IN_USE = "granted_device_in_use"
 GRANT_RENEWED = "renewed"
 DENY_ACTIVE_OWNER = "denied_active_owner"
 DENY_UNFOCUSED = "denied_unfocused"
+DENY_DEVICE_IN_USE = "denied_device_in_use"
 
 
 @dataclass(frozen=True)
@@ -64,6 +74,11 @@ class ClaimRequest:
     #: The client's own report of whether its document is visible and its window
     #: focused. A minimized desktop pane answers False and so cannot passively steal.
     focused: bool = True
+    #: Which device classes are actually in use, from the daemon's own presence
+    #: tracking (`device_presence.py`) rather than any client's word for it. Both
+    #: False when nothing is known, which restores the per-session rules below.
+    other_device_in_use: bool = False
+    this_device_in_use: bool = False
 
 
 @dataclass(frozen=True)
@@ -98,6 +113,20 @@ def evaluate_claim(
         return ClaimDecision(True, _granted(state, request), GRANT_GESTURE, changed=True)
     if not request.focused:
         return ClaimDecision(False, state, DENY_UNFOCUSED, changed=False)
+    if request.other_device_in_use:
+        # Another device class is the one the human is demonstrably using. Nothing a
+        # background pane does on its own — attaching, reconnecting, regaining DOM
+        # focus — may take the keyboard away from it. Without this the per-session
+        # gesture window was the only defence, and it lapses in seconds: reading a
+        # session on the phone for half a minute was long enough for the next desktop
+        # reconnect to take input back.
+        return ClaimDecision(False, state, DENY_DEVICE_IN_USE, changed=False)
+    if request.this_device_in_use and state.device != request.device:
+        # This device is the one in use and the owner's is not. The gesture window
+        # exists to stop a background pane stealing from an active one; applying it
+        # here would do the opposite — it is why every session opened on the phone
+        # demanded a manual "take over" after any recent desktop typing.
+        return ClaimDecision(True, _granted(state, request), GRANT_DEVICE_IN_USE, changed=True)
     if _owner_is_active(state, request.now, hold_seconds):
         return ClaimDecision(False, state, DENY_ACTIVE_OWNER, changed=False)
     return ClaimDecision(True, _granted(state, request), GRANT_IDLE_OWNER, changed=True)

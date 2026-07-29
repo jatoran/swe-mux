@@ -26,6 +26,26 @@ export const PRESENCE_INTERVAL_MS = 30_000
 /** Floor between interaction-triggered reports, so typing is not a frame per key. */
 export const PRESENCE_MIN_REPORT_MS = 10_000
 
+/** Whether this device should count as focused, per device class.
+ *
+ * `document.hasFocus()` is a desktop concept: it answers "is this window the one the
+ * window manager gave focus to". A phone shows one app at a time and has no such
+ * notion, and mobile engines answer it inconsistently — a visible foreground PWA can
+ * report false. Believing that costs the phone both halves of this system: it is
+ * never "in use" for notification routing, and every terminal claim it makes is
+ * refused as unfocused, which is what made every session on the phone demand a
+ * manual "take over" while gestures (which ignore the flag) still worked.
+ *
+ * So on mobile, visible *is* focused. On desktop both still have to hold. */
+export function deviceIsFocused(input: {
+  profile: string
+  visible: boolean
+  hasFocus: boolean
+}): boolean {
+  if (!input.visible) return false
+  return input.profile === 'mobile' || input.hasFocus
+}
+
 export function presenceFrame(input: {
   profile: string
   visible: boolean
@@ -82,10 +102,12 @@ export function watchDevicePresence(
   let lastReportAt: number | null = null
   const report = () => {
     lastReportAt = now()
+    const visible = document.visibilityState === 'visible'
+    const current = profile()
     send(presenceFrame({
-      profile: profile(),
-      visible: document.visibilityState === 'visible',
-      focused: document.hasFocus(),
+      profile: current,
+      visible,
+      focused: deviceIsFocused({ profile: current, visible, hasFocus: document.hasFocus() }),
       now: lastReportAt,
       lastInteractionAt,
     }))
