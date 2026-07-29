@@ -4859,6 +4859,31 @@ async def resume_history(request: web.Request) -> web.Response:
             {"error": code.replace("_", " "), "code": code},
             409 if code == "transcript_unavailable" else 422,
         )
+    # A conversation a live session currently claims must not be resumed into a
+    # second pane: two sessions tracking one conversation is exactly the linked
+    # status/token cross-attribution the identity invariant forbids. The live
+    # pane is where that conversation continues; Branch is the flow for forking
+    # it. Rows whose pane has since rolled to a different conversation resume
+    # fine — their native id is no longer claimed.
+    live_owner = next(
+        (
+            other
+            for other in request.app["sessions"].sessions.values()
+            if other.record.backend == row["backend"]
+            and other.record.state not in {"exited", "crashed"}
+            and other.record.native_session_id == row["native_id"]
+        ),
+        None,
+    )
+    if live_owner is not None:
+        return json_response(
+            {
+                "error": f"conversation is live in session {live_owner.record.name}",
+                "code": "conversation_live",
+                "session_id": live_owner.record.id,
+            },
+            409,
+        )
     owning_project = request.app["projects"].projects[target_project]
     session = await request.app["sessions"].spawn(
         backend=str(row["backend"]),
