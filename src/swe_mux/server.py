@@ -1,3 +1,10 @@
+"""HTTP/WebSocket control plane for the swe-mux daemon.
+
+The daemon binds a single port and owns one data dir, so exactly one instance may
+run per machine. Git worktrees do not change that: they isolate the working tree,
+not the runtime.
+"""
+
 from __future__ import annotations
 
 import asyncio
