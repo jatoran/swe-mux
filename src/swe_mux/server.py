@@ -6105,6 +6105,16 @@ async def hook_ingress(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
+# The branch parallel agent work lands onto before it reaches main/master. Worktree rows
+# are measured against it so unlanded work is visible rather than something you have to
+# remember to go looking for. Overridable per request; see `gwt` in ~/.claude/CLAUDE.md.
+DEFAULT_AGENT_TRUNK = "integration"
+
+# Git accepts far more than this in a ref name, but this is what we are willing to
+# interpolate into an argument vector from a query string.
+_SAFE_REF = re.compile(r"[A-Za-z0-9._/-]{1,200}")
+
+
 async def list_worktrees(request: web.Request) -> web.Response:
     cwd = request.query.get("cwd") or str(Path.cwd())
     code, output = await _git(cwd, "worktree", "list", "--porcelain")
@@ -6116,7 +6126,51 @@ async def list_worktrees(request: web.Request) -> web.Response:
             },
             504 if code == 124 else 400,
         )
-    return json_response(_parse_worktrees(output))
+    items = _parse_worktrees(output)
+    await _annotate_unlanded(cwd, request.query.get("trunk") or DEFAULT_AGENT_TRUNK, items)
+    return json_response(items)
+
+
+async def unlanded_branch_counts(cwd: str, trunk: str = DEFAULT_AGENT_TRUNK) -> dict[str, int]:
+    """Commits each local branch holds that `trunk` does not, keyed by full refname.
+
+    One `for-each-ref` call using the `ahead-behind` atom rather than a rev-list per
+    branch. Returns an empty mapping — never zeros — when the trunk is missing or the
+    call fails: "0 unlanded commits" reads as "nothing at risk", which is the one wrong
+    answer to give when we could not actually measure.
+    """
+    if not _SAFE_REF.fullmatch(trunk):
+        return {}
+    if (await _git(cwd, "show-ref", "--verify", "--quiet", f"refs/heads/{trunk}"))[0]:
+        return {}
+    code, output = await _git(
+        cwd,
+        "for-each-ref",
+        f"--format=%(refname) %(ahead-behind:refs/heads/{trunk})",
+        "refs/heads/",
+    )
+    if code:
+        return {}
+    counts: dict[str, int] = {}
+    for line in output.splitlines():
+        parts = line.split()
+        # "<refname> <ahead> <behind>"; anything else means the atom did not resolve.
+        if len(parts) == 3 and parts[1].isdigit():
+            counts[parts[0]] = int(parts[1])
+    return counts
+
+
+async def _annotate_unlanded(cwd: str, trunk: str, items: list[dict[str, Any]]) -> None:
+    """Add `unlanded` to each worktree row whose branch we could measure."""
+    if not any(item.get("branch") for item in items):
+        return
+    counts = await unlanded_branch_counts(cwd, trunk)
+    if not counts:
+        return
+    for item in items:
+        branch = item.get("branch")
+        if isinstance(branch, str) and branch in counts:
+            item["unlanded"] = counts[branch]
 
 
 def _parse_worktrees(output: str) -> list[dict[str, Any]]:

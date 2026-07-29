@@ -47,6 +47,21 @@ test('flag lines carry their reason, or an empty string when Git gave none', () 
   assert.equal(prunable.prunable, 'gitdir file points to non-existent location')
 })
 
+test('unlanded counts survive parsing, and an unmeasured tree is null not zero', () => {
+  // The distinction is the whole point: null means "the daemon could not measure this",
+  // and rendering that as 0 would claim there is nothing waiting to be landed.
+  const [measured, empty, missing, bogus] = parseWorktrees([
+    { worktree: '/wt/busy', branch: 'refs/heads/agent/busy', unlanded: 3 },
+    { worktree: '/wt/done', branch: 'refs/heads/agent/done', unlanded: 0 },
+    { worktree: '/wt/unknown', branch: 'refs/heads/agent/unknown' },
+    { worktree: '/wt/bogus', branch: 'refs/heads/agent/bogus', unlanded: 'lots' },
+  ])
+  assert.equal(measured.unlanded, 3)
+  assert.equal(empty.unlanded, 0)
+  assert.equal(missing.unlanded, null)
+  assert.equal(bogus.unlanded, null, 'a non-numeric count is unmeasured, not zero')
+})
+
 test('junk from the daemon yields no worktrees rather than throwing', () => {
   assert.deepEqual(parseWorktrees(null), [])
   assert.deepEqual(parseWorktrees({ error: 'not a git repository' }), [])

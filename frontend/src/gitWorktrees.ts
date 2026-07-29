@@ -20,7 +20,7 @@ import type { Session } from './types.ts'
 
 /** One record of `git worktree list --porcelain`, as `server.py`'s `_parse_worktrees` emits it:
  *  `key value` lines become strings, valueless flag lines become `true`. */
-export type WorktreePorcelain = Record<string, string | true>
+export type WorktreePorcelain = Record<string, string | number | true>
 
 export type Worktree = {
   path: string
@@ -36,6 +36,11 @@ export type Worktree = {
   prunable: string | null
   /** Git lists the main working tree first, and refuses to remove it. */
   main: boolean
+  /** Commits on this branch that the agent trunk does not have, so work that would be
+   *  lost if the tree were removed. `null` means the daemon could not measure it (no
+   *  trunk, or the Git call failed) — deliberately distinct from 0, because rendering an
+   *  unmeasured tree as "nothing to land" is the one wrong answer here. */
+  unlanded: number | null
 }
 
 /** A live session sitting somewhere in this repository, with whatever Git state it reported. */
@@ -80,9 +85,12 @@ export function shortSha(oid: string | null): string {
   return oid ? oid.slice(0, 8) : ''
 }
 
-/** A flag line carries either a reason or nothing at all; normalize both to a string. */
-function reason(value: string | true | undefined): string | null {
-  return value === undefined ? null : value === true ? '' : value
+/** A flag line carries either a reason or nothing at all; normalize both to a string.
+ *  The porcelain record also carries numeric fields now (`unlanded`), which no flag ever
+ *  is, so a number here means a malformed row rather than a lock reason. */
+function reason(value: string | number | true | undefined): string | null {
+  if (value === undefined || typeof value === 'number') return null
+  return value === true ? '' : value
 }
 
 export function parseWorktrees(raw: unknown): Worktree[] {
@@ -101,6 +109,9 @@ export function parseWorktrees(raw: unknown): Worktree[] {
       locked: reason(entry.locked),
       prunable: reason(entry.prunable),
       main: items.length === 0,
+      unlanded: typeof entry.unlanded === 'number' && Number.isFinite(entry.unlanded)
+        ? entry.unlanded
+        : null,
     })
   }
   return items

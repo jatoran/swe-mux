@@ -41,6 +41,17 @@
   cwd carries backslashes) and matches on a segment boundary, longest match first, so a
   sibling `repo-old` is never read as inside `repo` and a nested worktree is not attributed
   to the repository root containing it.
+- Each worktree row reports **unlanded commits**: how many commits its branch holds that the
+  agent trunk (`integration`, overridable with `?trunk=`) does not. This is the answer to
+  "is there agent work sitting here that never reached master", which previously required
+  asking at a shell. Measured with one `for-each-ref` call using the `ahead-behind` atom,
+  gated behind a cheap `show-ref` so a repo with no trunk pays nothing.
+- **Unmeasured is `null`, never `0`.** A missing trunk, a failed call, or a timeout omits the
+  field entirely, and the tab renders no flag. Reporting zero would claim there is nothing
+  waiting to be landed, which is the one wrong answer this measurement can give.
+- Removing a worktree deletes the directory, never the branch, so committed-but-unlanded work
+  is not at risk. The confirm says so explicitly, because the unlanded flag directly above it
+  otherwise reads as a reason not to remove.
 - A branch with no attached session has **no** working-tree state rather than a clean one.
   Dirty and divergence exist only for cwds the monitor polls, and rendering an unmeasured
   tree as clean would be a claim the daemon never made.

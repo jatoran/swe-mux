@@ -200,6 +200,12 @@ export function GitTab({ project, sessions }: Props) {
               {item.bare && <em class="git-flag">bare</em>}
               {item.locked !== null && <em class="git-flag warn" title={item.locked || 'locked'}>locked</em>}
               {item.prunable !== null && <em class="git-flag warn" title={item.prunable || 'prunable'}>prunable</em>}
+              {/* Work that has not reached the agent trunk yet. Null means the daemon could
+                  not measure it, which must not render as "nothing to land". */}
+              {!!item.unlanded && <em
+                class="git-flag warn"
+                title={`${item.unlanded} commit${item.unlanded === 1 ? '' : 's'} on ${item.branch || 'this branch'} that the trunk does not have yet. Land the branch to publish them.`}
+              >{item.unlanded} unlanded</em>}
               {!!count && <em class="git-flag live">{count} live</em>}
             </div>
             <small title={item.path}>
@@ -220,6 +226,12 @@ export function GitTab({ project, sessions }: Props) {
                       {busy === item.path ? 'removing…' : armed.force ? 'Force remove ✓' : 'Confirm remove ✓'}
                     </button>
                     <button onClick={() => setConfirm(null)}>Cancel</button>
+                    {/* Removing a worktree deletes the directory, never the branch, so
+                        committed-but-unlanded work is not at risk here. Say so, because the
+                        unlanded flag right above otherwise reads as a reason not to. */}
+                    {!!item.unlanded && <span class="git-quiet">
+                      {item.branch} keeps its {item.unlanded} unlanded commit{item.unlanded === 1 ? '' : 's'}
+                    </span>}
                   </>
                   : <button onClick={() => setConfirm({ path: item.path, force: false, error: '' })}>Remove…</button>}
             </div>

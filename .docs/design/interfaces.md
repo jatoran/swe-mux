@@ -583,6 +583,12 @@ error}` (502). It never writes a PTY. See `features/processes-and-previews.md`.
 Git scopes/worktrees are derived tooling APIs, not canonical Project/session ownership and
 not first-class frontend navigation.
 
+`GET /git/worktrees[?cwd=][&trunk=]` returns the porcelain worktree list. Each row that has
+a branch also carries `unlanded`: commits on that branch which `trunk` (default
+`integration`) does not have. The field is **absent** rather than `0` when it could not be
+measured — no such trunk, a Git failure, or a timeout — because zero would read as "nothing
+waiting to be landed". `trunk` must match `[A-Za-z0-9._/-]{1,200}`.
+
 `POST /git/worktrees` takes `{cwd, path, branch?, start_point?, spawn?}`. With `spawn`
 present (an ordinary spawn body; `project_id` required) it creates the worktree and then
 starts a session whose cwd is forced to the new tree. The reply always carries
