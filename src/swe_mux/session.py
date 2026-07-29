@@ -213,10 +213,22 @@ def fleet_status_health(sessions: Any, *, now: float | None = None) -> dict[str,
     contract_violations = 0
     observer_restarts = 0
     stuck_sessions: list[str] = []
+    native_claims: dict[tuple[str, str], list[str]] = {}
+    path_claims: dict[tuple[str, str], list[str]] = {}
     for session in sessions:
         record = session.record
         if record.backend not in {"claude", "codex"}:
             continue
+        if record.state not in {"exited", "crashed"}:
+            if record.native_session_id:
+                native_claims.setdefault(
+                    (record.backend, record.native_session_id), []
+                ).append(record.id)
+            transcript_path = getattr(session, "transcript_path", None)
+            if transcript_path:
+                path_claims.setdefault(
+                    (record.backend, str(transcript_path).casefold()), []
+                ).append(record.id)
         health = session.status_health()
         per_session.append(
             {
@@ -252,6 +264,20 @@ def fleet_status_health(sessions: Any, *, now: float | None = None) -> dict[str,
         alarm_reasons.append("status_contract_violation")
     if stuck_sessions:
         alarm_reasons.append("session_stuck_active")
+    # No two live sessions may claim one conversation or tail one transcript;
+    # a violation is exactly the cross-attribution that renders one session's
+    # status and tokens under another's identity, so it alarms.
+    identity_collisions = [
+        {"kind": kind, "backend": backend, "value": value, "sessions": sorted(ids)}
+        for kind, claims in (
+            ("native_session_id", native_claims),
+            ("transcript_path", path_claims),
+        )
+        for (backend, value), ids in claims.items()
+        if len(ids) > 1
+    ]
+    if identity_collisions:
+        alarm_reasons.append("identity_collision")
     return {
         "terminals": {
             "proven": proven_terminals,
@@ -264,6 +290,7 @@ def fleet_status_health(sessions: Any, *, now: float | None = None) -> dict[str,
         "contract_violations": contract_violations,
         "observer_restarts": observer_restarts,
         "stuck_sessions": stuck_sessions,
+        "identity_collisions": identity_collisions,
         "bounds": {
             "max_inferred_terminal_ratio": STATUS_HEALTH_MAX_INFERRED_TERMINAL_RATIO,
             "min_terminals_for_ratio_alarm": STATUS_HEALTH_MIN_TERMINALS_FOR_RATIO_ALARM,
@@ -1145,6 +1172,9 @@ class SessionManager:
         # Repairs discovered while adopting supervisor metadata are consumed by
         # the composition root to invalidate rebuildable provider telemetry.
         self.identity_repairs: list[tuple[str, str | None]] = []
+        # Collision groups the live identity sweep has already reported, so a
+        # persistent (unhealable) conflict logs once rather than every pass.
+        self._known_identity_collisions: set[tuple[str, str]] = set()
 
     async def spawn(
         self,
@@ -2753,6 +2783,150 @@ class SessionManager:
         # allowance for the CLI writing its first record before it repaints.
         return last_output >= created - TRANSCRIPT_SWITCH_QUIET_SECONDS
 
+    def _claude_owns_conversation(self, session: Session, native_id: str) -> bool:
+        """Evidence that this pane's claim on the conversation is legitimate.
+
+        Its own mux id (minted via ``--session-id``), a CLI-confirmed lifecycle
+        anchor, or an unrolled resume still sitting on the conversation it was
+        spawned to resume. Anything else claiming a contested conversation is
+        holding observer output, not identity evidence.
+        """
+        record = session.record
+        return (
+            record.id == native_id
+            or session.agent_lifecycle_id == native_id
+            or (record.agent_run_seq == 0 and record.spawn_native_session_id == native_id)
+        )
+
+    async def _reconcile_identity_collisions(self) -> None:
+        """Enforce that no two live sessions claim one conversation.
+
+        The observer machinery is designed never to create such a claim, so a
+        collision means corrupted state (legacy heuristic switches, or an in-CLI
+        resume of a live sibling's conversation). Every group is reported once;
+        Claude members whose claim is unsupported by identity evidence are healed
+        back to their own anchor, because for Claude the anchor is provable —
+        the conversation named by the pane's own mux id, or the last one the CLI
+        itself confirmed over the hook ingress.
+        """
+        groups: dict[tuple[str, str], list[Session]] = {}
+        for session in tuple(self.sessions.values()):
+            record = session.record
+            if (
+                record.backend in AGENT_BACKENDS
+                and record.state not in TERMINAL_STATES
+                and not session.stopping
+                and record.native_session_id
+            ):
+                groups.setdefault((record.backend, record.native_session_id), []).append(session)
+        collisions = {key: members for key, members in groups.items() if len(members) > 1}
+        self._known_identity_collisions &= set(collisions)
+        for (backend, native_id), members in collisions.items():
+            if (backend, native_id) not in self._known_identity_collisions:
+                self._known_identity_collisions.add((backend, native_id))
+                log.warning(
+                    "identity collision: sessions %s all claim %s conversation %s",
+                    ", ".join(sorted(s.record.id for s in members)),
+                    backend,
+                    native_id,
+                )
+                await self.events.emit(
+                    "identity_collision_detected",
+                    source="daemon",
+                    backend=backend,
+                    native_session_id=native_id,
+                    session_ids=sorted(s.record.id for s in members),
+                )
+            if backend != "claude":
+                continue
+            for session in members:
+                if not self._claude_owns_conversation(session, native_id):
+                    await self._heal_claude_identity(session, native_id)
+
+    async def _heal_claude_identity(self, session: Session, disputed: str) -> None:
+        """Send a Claude session back to its own conversation.
+
+        The disputed conversation provably is not this pane's, so keeping the
+        observer on it renders a sibling's status and tokens under this
+        session's identity. The heal is the inverse of the corruption: restore
+        the strongest available anchor, rebind the observer to that
+        conversation's deterministic transcript, and point the history row at
+        it. If the anchor is the spawn conversation, the pane's original run
+        row is reopened and the run minted for the stolen conversation is
+        quarantined; otherwise the current run row is repaired in place and its
+        copied messages dropped so the correct file reindexes from the start.
+        """
+        record = session.record
+        anchor_candidates: list[str | None] = [session.agent_lifecycle_id]
+        if record.spawn_backend == "claude":
+            anchor_candidates.extend([record.spawn_native_session_id, record.id])
+        anchor = next(
+            (
+                candidate
+                for candidate in anchor_candidates
+                if candidate and candidate != disputed and _CLAUDE_NATIVE_ID.fullmatch(candidate)
+            ),
+            None,
+        )
+        if anchor is None:
+            return
+        previous = {
+            "backend": record.backend,
+            "native_session_id": record.native_session_id,
+            "transcript_path": str(session.transcript_path) if session.transcript_path else "",
+        }
+        await self._stop_observer(session)
+        bad_run_id: str | None = None
+        if anchor == record.id:
+            if record.agent_run_id and record.agent_run_id != record.id:
+                bad_run_id = record.agent_run_id
+            record.agent_run_id = record.id
+            record.agent_run_started_at = record.created_at
+            record.agent_run_seq = 0
+        record.native_session_id = anchor
+        session.agent_lifecycle_id = anchor
+        self._reset_provider_observation(record)
+        session.observation_state = {
+            "root_turn_active": False,
+            "root_completion_seen": False,
+            "codex_scope": "root",
+        }
+        session.observation_replay = False
+        session.state_source_priority = -1
+        session.transcript_path = None
+        apply_state_transition(
+            session,
+            "starting",
+            None,
+            source="daemon",
+            evidence="identity_reconciled",
+            force=True,
+        )
+        transcript = session.adapter.transcript_path(
+            anchor, Path(record.run_cwd or record.cwd)
+        )
+        run_id = record.agent_run_id or record.id
+        if bad_run_id:
+            await self.history.quarantine_misattributed_agent_run(
+                bad_run_id, "live_identity_reconciled"
+            )
+        else:
+            await self.history.reset_run_transcript_copy(run_id)
+        await self.history.session_promoted(record, str(transcript) if transcript else "")
+        await self.history.reopen_agent_run(run_id)
+        session.publish_update()
+        await self.events.emit(
+            "session_identity_reconciled",
+            session_id=record.id,
+            source="daemon",
+            previous=previous,
+            backend=record.backend,
+            native_session_id=anchor,
+            transcript_path=str(transcript) if transcript else None,
+            trigger="live_sweep",
+        )
+        self._start_observer(session, transcript)
+
     async def state_watchdog_loop(self) -> None:
         """Safety net for a session left "working"/"awaiting" after its turn ended.
 
@@ -2768,6 +2942,7 @@ class SessionManager:
             # Never let the safety net die silently; the guard also publishes the
             # loop's liveness and fault count to /api/diagnostics/background.
             with background.iteration(STATE_WATCHDOG_LOOP):
+                await self._reconcile_identity_collisions()
                 now = time.time()
                 for session in tuple(self.sessions.values()):
                     await self._watchdog_check_session(session, now)

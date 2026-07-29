@@ -692,6 +692,24 @@ class HistoryIndex:
 
         await self._run(op)
 
+    async def reset_run_transcript_copy(self, run_id: str) -> None:
+        """Drop a run's copied messages and index cursor after its transcript rebound.
+
+        Used when live identity reconciliation repairs a run row in place: the
+        messages copied from the wrong (sibling's) transcript must not keep
+        surfacing through history search, and the stale watermark would otherwise
+        prevent the correct file from being indexed from the start.
+        """
+
+        def op() -> None:
+            with self._db:
+                self._db.execute("DELETE FROM history_messages WHERE history_id=?", (run_id,))
+                self._db.execute(
+                    "DELETE FROM history_transcript_index WHERE history_id=?", (run_id,)
+                )
+
+        await self._run(op)
+
     async def reconcile_historical_provider_collisions(
         self,
     ) -> list[tuple[str, str, str]]:
