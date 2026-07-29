@@ -425,9 +425,21 @@ may type, and how big the PTY is — are decided by the daemon, not by whoever s
 
 `{type:"claim_input", reason:"gesture"|"passive", device, focused}` asks for input.
 A `gesture` claim (tap, click, keystroke) always wins. A `passive` claim (attach,
-reconnect, restored DOM focus) is refused while another connection has been typed into
-within 10 s, and refused outright when `focused` is false. A missing `reason` is read as
-`gesture`, so pre-existing clients keep their old semantics. The reply is
+reconnect, restored DOM focus) is refused outright when `focused` is false, refused
+while a *different* device class is the one in use, granted over an owner on another
+device class when *this* one is in use, and otherwise refused while the current owner
+has been typed into within 10 s. A missing `reason` is read as `gesture`, so
+pre-existing clients keep their old semantics.
+
+Which device is in use comes from the daemon's presence tracking (see the `/events`
+`presence` frame below), not from the claim. It has to: ownership is per session and
+the 10 s window covers only the session being typed into, so neither can express "the
+human is on their phone right now" — and without that, every session opened on the
+phone had to be claimed by hand and any desktop reconnect took it straight back.
+`focused` is likewise per device class: a phone reports it from visibility alone,
+because `document.hasFocus()` answers a window-manager question a phone has no answer
+for and mobile engines report inconsistently, which had the phone refused as a
+background window on every passive claim it made. The reply is
 `{type:"input_owner", active, epoch, reason, owner_device}`; the displaced owner gets the
 same frame with `reason:"claimed_elsewhere"`, and every remaining client gets
 `{type:"input_owner_released", epoch}` when the owner detaches. `epoch` increments on each

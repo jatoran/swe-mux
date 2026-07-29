@@ -313,7 +313,10 @@ responsive controls.
 - A pane that does not own terminal input says so, instead of silently swallowing keystrokes:
   a strip names the device holding the keyboard and offers a one-click "Take over" (a gesture
   claim, which always wins). It appears only after the daemon has actually refused this pane —
-  a displacement or a rejected keystroke — never on a session nobody is typing into. While the
+  a displacement or a rejected keystroke — never on a session nobody is typing into. It is
+  meant to be rare: the device the user is actually on takes input for a session by attaching
+  to it, so the strip signals a genuine conflict rather than being the normal way to start
+  typing. Needing it on every session is the symptom of a presence problem, not of this UI. While the
   arbitrated size is another device's, the pane letterboxes: it renders that grid at a reduced
   font size rather than re-fitting, since re-fitting is what pushed two devices into resizing
   each other in a loop.
