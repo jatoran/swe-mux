@@ -7,9 +7,37 @@ id = "29a044bb-a06b-4216-95e4-39c5e91d48fb"
 
 Agentic Controle Plane (ACP)
 
+- big issue in recent sessions:
+      - a session i had renamed to "git worktree conversation"... when i went to session history to resume it, it was a different covnersation than the one i had renamed.  claude-590998 is the actual
+  one (now claude-590998 resumed)
+      - also some sessions seem linked in their status, so if one says working, anmother one will update to say working, even if its not, like its not in charge of its own status but tied to other
+  session(s) somehow
+      - Evaluate and discuss these issues. Figure out why there would be any bleed between sessions and history or anything like that
+    
+    
+- making worktrees more first class
+	- more native worktree handling when spawning new sessions - can spawn a new worktree and run the worktree creation script? and then spawn sessions inside those worktrees directly?
 
 
+- in sidebar, sesisons have an icon for "shares one pane region"
+	- i dont need that icon
 
+
+- session titling issues:
+	- i have session titling enabled - but have a bunch of sessiong going that just have their default titles. what is going on with this? update to this: so a session finished, and then i saw the new title apply. so is it waiting until the agent returns before it applies the title?
+	- actually another bug though..weird. another session finished, and then that didnt get atitle, AND the other one that HAD gotten a title...reverted to its native "claude-..." title
+	- ... so all finished, andi  went through to cpoy allof their final responses, an the titles updated again for some of them to "Clipboard copy" or "clipboard review"  so......this system needs work
+
+- session titling update:
+	- should session title periodically re-run? or run at every boundary of user/agent communication or something? maybe not always retitling, but if theres an important shift in covo, it could retitle or something? hmm. not sure.
+	
+	- should session title apply right when user sends message? (and then re-calibrate periodically?)
+	
+	- should the recalibration be tied to the scan timeline automation? rather than doing its own re-reading of transcripts?
+		- and as such.. i shouldnt make changes here until scan timeline is done?
+			- hmm. but the initial session titling should still be done id think regardless? hmm. cuz what if session title is on but scan timeline isnt?
+
+on desktop, when many tabs open in a pane, and they ahve a scrollbar, shift+mouse wheel works to scroll, but regular mouse wheel should work as well when hovered over the tabs
 
 Test automations/control plane before proceeding through remaining roadmap
 	Ensure everything is firing and working properly across the control plane/automation/observation hierarchy
@@ -40,8 +68,6 @@ command rail command: copy nth response
 
 - preview pane - allow seeing the dev console logs and entering dev console commands
 
-
-
 - setting a session to "auto-approve requests" - the harness will then automatically approve requests - basically "dangerously approve permissions" but at the control plane level
 
 - Continuity-related Updates
@@ -53,6 +79,11 @@ command rail command: copy nth response
 	- need ctrl+f search for project notes and in files - continuity update?
 	
 	- markdown outlines vieable? is this for continuity or for the wrapping application to handle? hmm
+	
+	- there are no guidelines on the embedded continuity's indented lines. the guidelines for nested lines that work great on the desktop version
+	- .
+	- on line wrapping under bullets, they work fine on the first bullet, but on nested bullets, they wrap..but then thers an extra indentation on the wrapping
+
 
 
 - ability to click file paths from agent chats and they open

@@ -1047,6 +1047,11 @@ delivery path, no model cost, and no new user surface beyond diagnostics.
   permitted. This is the honest state for a Codex `/new` behind a sibling that cannot be
   ruled out — the alternative is a session that silently reports a dead conversation's
   status forever.
+- [x] Take "demonstrably active" from hooks whose event *necessarily wrote root transcript
+  records*, not from PTY output and not from any hook. Corrected after the first live pass:
+  keying on any hook let `Notification:idle_prompt` — which fires ~60 s after a turn ends
+  precisely to say nothing is happening — mark 8 healthy idle sessions stale and 0 real ones.
+  Tracked separately as `Session.last_turn_hook_ts`.
 - [x] While stale: `_transcript_authoritative()` returns false so the hook/PTY fallback
   resumes driving state; delivery readiness hard-blocks on `transcript_stale`; the session
   inspector and `GET /api/diagnostics/*` show it with the last-observed mtime. Cleared by the
@@ -1089,12 +1094,19 @@ them is a claim about a real CLI replacing a real conversation under a real PTY,
 phase exists precisely because that path is where the fixtures had been agreeing with a wrong
 model of the world.
 
-- [ ] `/clear` in a live Claude session rolls the run within one hook round-trip, with and
+- [x] `/clear` in a live Claude session rolls the run within one hook round-trip, with and
   without sibling agents in the same cwd, and the session keeps reporting accurate status,
-  tokens, context, and model afterwards.
-- [ ] The pre-rollover conversation remains a complete, searchable history row with its own
+  tokens, context, and model afterwards. **Live-verified 2026-07-29** on the frozen app with
+  5 sibling Claude sessions in the same cwd: `SessionStart(start_source='clear')` →
+  `agent_conversation_rolled` (`agent_run_seq` 0→1, run `a62be90f…`→`0cb38e64…`, native
+  `a62be90f…`→`5d9f5d8d…`), the observer retargeted to the new transcript, `parser_status`
+  back to `ready`, and the next turn reported normally.
+- [x] The pre-rollover conversation remains a complete, searchable history row with its own
   transcript path and messages; the post-rollover conversation is a separate row. Neither
-  contains the other's messages.
+  contains the other's messages. **Live-verified**: the retired row closed
+  `exit_reason='conversation_rolled'`, `final_state='idle'`, keeping its own `native_id`,
+  transcript path, and final tokens; the successor row opened under the new run id and native
+  id with its own transcript path. Both `agent_visible=1`, sharing the terminal `note_id`.
 - [ ] A queue item armed before a `/clear` is stranded, not delivered. An auto-delivery grant
   does not survive the rollover.
 - [ ] Branch after a `/clear` reopens the conversation the user was in, not its predecessor.

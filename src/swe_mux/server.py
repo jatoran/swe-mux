@@ -4064,6 +4064,30 @@ _NORMALIZED_HOOK_EVENT_TYPES = {
     "rate_limited",
 }
 
+# Hooks whose event necessarily wrote records into the *root* transcript: a prompt
+# was submitted, a tool ran, a turn stopped. Only these date the "the CLI ran a turn
+# and none of it landed in the file we are following" evidence that marks observation
+# stale (`_note_transcript_staleness`).
+#
+# Deliberately excludes `Notification` — its most common form, `idle_prompt`, fires
+# ~60 s *after* a turn ends to report that the agent is waiting, so it is guaranteed
+# to arrive with no accompanying transcript activity. Including it marked every
+# healthy idle agent in the fleet as stale (8 false positives across 4 sessions on
+# the first live pass, and zero true ones). Also excludes `SessionStart`/`SessionEnd`
+# (lifecycle, not turn content) and the subagent hooks, whose records go to sidechain
+# files rather than the root transcript.
+_TRANSCRIPT_BACKED_HOOK_EVENTS = {
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "Stop",
+    "turn_started",
+    "turn_ended",
+    "task_started",
+    "task_complete",
+}
+
 
 def validate_session_media(media_type: str, data: bytes | bytearray) -> str:
     suffix = _MEDIA_TYPES.get(media_type)
@@ -5990,6 +6014,8 @@ async def hook_ingress(request: web.Request) -> web.Response:
     event_payload = hook_event_payload(payload)
     scope = hook_event_scope(event_type, payload)
     session.last_hook_ts = time.time()
+    if event_type in _TRANSCRIPT_BACKED_HOOK_EVENTS:
+        session.last_turn_hook_ts = session.last_hook_ts
     request.app["automation"].note_native_hook(session.record.id)
     if event_type not in _NORMALIZED_HOOK_EVENT_TYPES:
         await request.app["events"].emit(

@@ -771,6 +771,14 @@ class Session:
         self.last_state_change_monotonic = time.monotonic()
         self.last_evidence_ts = time.time()
         self.last_hook_ts = 0.0
+        # Only hooks whose event *must* have produced transcript records — a prompt
+        # submitted, a tool run, a turn stopped. Staleness detection keys off this
+        # and not `last_hook_ts`, because the hook that fires most often on a quiet
+        # session is `Notification:idle_prompt` ("waiting for your input"), which by
+        # definition accompanies no transcript activity at all. Keying off every
+        # hook made every healthy idle agent look like a replaced conversation
+        # 90 s after its last turn.
+        self.last_turn_hook_ts = 0.0
         self.state_transitions: deque[dict[str, Any]] = deque(maxlen=STATE_TRANSITION_LOG_LIMIT)
         self.state_changes: deque[dict[str, Any]] = deque(maxlen=STATE_CHANGE_LOG_LIMIT)
         self.observer_restart_count = 0
@@ -2496,9 +2504,15 @@ class SessionManager:
 
         Codex has no session-start hook, so a `/new` behind a sibling that cannot
         be ruled out leaves the observer tailing a file that will never change
-        again. Silence alone is not evidence of that — an idle agent is also quiet
-        — but a *native hook that arrived after the transcript went dead* is: the
-        CLI ran a turn and none of it landed in the file being followed.
+        again. Silence alone is not evidence of that — an idle agent is also quiet.
+        The evidence is a hook whose event *must* have written transcript records
+        (a prompt submitted, a tool run, a turn stopped) arriving after the file
+        went dead: the CLI ran a turn and none of it landed where we are looking.
+
+        `last_turn_hook_ts`, never `last_hook_ts`. The most frequent hook on a quiet
+        session is `Notification:idle_prompt`, which fires ~60 s after a turn ends to
+        say the agent is waiting — it accompanies no transcript activity by design,
+        so counting it flagged every healthy idle agent in the fleet.
 
         Marking it stale is what stops the session from reporting a retired
         conversation's status as live: hooks resume driving state
@@ -2514,7 +2528,7 @@ class SessionManager:
         now = time.time()
         stale = (
             now - current_mtime >= TRANSCRIPT_STALE_SECONDS
-            and session.last_hook_ts > current_mtime + TRANSCRIPT_SWITCH_QUIET_SECONDS
+            and session.last_turn_hook_ts > current_mtime + TRANSCRIPT_SWITCH_QUIET_SECONDS
         )
         if not stale or record.observation_stale_since is not None:
             return
@@ -2532,7 +2546,7 @@ class SessionManager:
             backend=record.backend,
             transcript_path=str(current),
             transcript_mtime=current_mtime,
-            last_hook_ts=session.last_hook_ts,
+            last_turn_hook_ts=session.last_turn_hook_ts,
         )
 
     @staticmethod

@@ -54,7 +54,7 @@ hazard, restart contract).
 ## Worktrees and landing changes
 
 Parallel agent work happens in worktrees at `../.worktrees/swe-mux/<slug>` on `agent/*`
-branches, landing onto the `integration` trunk. The general rules and the `wt` command
+branches, landing onto the `integration` trunk. The general rules and the `gwt` command
 live in `~/.claude/CLAUDE.md` § Git; this section covers what is specific to swe-mux.
 
 **A worktree is for editing and testing, not for running the app.** Worktrees isolate the
@@ -67,14 +67,14 @@ and your real sessions. All of the session-preserving reload flows above apply t
 **Land with the verification lock on:**
 
 ```
-WT_VERIFY_EXCLUSIVE=1 wt land
+WT_VERIFY_EXCLUSIVE=1 gwt land
 ```
 
 `.worktree-verify` runs the full suite, and swe-mux resolves its data dir from
 `Path.home()/.mux` with no environment override, and the suite has no `conftest.py`
 providing repo-wide isolation. Two suites running at once across worktrees may therefore
 contend over `~/.mux` and over the SQLite files the tests create. The lock serialises
-verification across worktrees; the CAS retry in `wt land` absorbs the extra wait. If
+verification across worktrees; the CAS retry in `gwt land` absorbs the extra wait. If
 someone later confirms the suite is parallel-safe (or adds a data-dir env override), this
 can be dropped.
 
@@ -88,4 +88,4 @@ Backend: `uv run pytest tests -q -m "not live_agent and not live_subagent and no
 live_telemetry and not live_quota"`, `uv run ruff check src/swe_mux tests packaging`,
 `uv run mypy`. Frontend (in `frontend/`): `npx tsc --noEmit`, `npm test`.
 
-These are exactly what `.worktree-verify` runs, so `wt land` gates on them automatically.
+These are exactly what `.worktree-verify` runs, so `gwt land` gates on them automatically.
