@@ -6656,6 +6656,7 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
 
         reader = asyncio.create_task(watch_client())
         try:
+            # unsupervised-loop-ok: lives for one /events websocket, not the daemon.
             while True:
                 getter = asyncio.create_task(queue.get())
                 done, _pending = await asyncio.wait(
