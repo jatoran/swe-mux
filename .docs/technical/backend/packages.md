@@ -116,7 +116,14 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   every loop, so a cancellation that has not landed will put the retired id back. The observer's
   own switch path applies the rollover in place for the same reason (calling the public entry
   point would cancel the caller). Adoption treats `agent_run_id != session id` on a root agent as
-  corruption; `agent_run_seq > 0` is the marker that exempts a legitimately rolled run.
+  corruption; `agent_run_seq > 0` is the marker that exempts a legitimately rolled run — but not
+  one whose conversation a sibling's root identity claims: that roll is itself corruption and is
+  repaired back to the spawn anchor. Backends whose CLI reports rollovers over the hook ingress
+  (`reports_conversation_rollover`: Claude) never take the transcript-switch heuristic, and
+  `agent_lifecycle_id` only moves on CLI-confirmed rollovers, which is what makes it the heal
+  target for the state watchdog's live identity sweep (`_reconcile_identity_collisions`): no two
+  live sessions may claim one `(backend, native_id)`, and a Claude session provably off its own
+  conversation is rebound to its anchor.
 - A one-shot Project Action spawns its target directly under the supervisor's ConPTY: the shell
   for a `shell` step, the PATH-resolved program (or `%COMSPEC%` for a `.cmd`/`.bat` shim) for a
   `process` step. **No swe-mux executable may appear in a task's process tree.** One did once

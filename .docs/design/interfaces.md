@@ -508,6 +508,11 @@ GET /api/diagnostics/background
 ```
 
 `status-health` reports the fleet's transition ledger: proven/inferred counts, bounds, alarm.
+It also reports `identity_collisions[]` — live agent sessions sharing one
+`(backend, native_session_id)` or one transcript path (`{kind, backend, value, sessions}`)
+— and any entry raises the alarm with reason `identity_collision`: two sessions on one
+conversation is the cross-attribution that renders one session's status and tokens under
+another's identity.
 
 `background` reports whether the daemon's long-lived loops are actually running:
 `loops[]` (name, running/stopped, restarts, faults, last fault + timestamp, iterations,
@@ -537,7 +542,10 @@ POST   /history/{id}/second-opinion   preview/confirm with project_id
 GET    /history/{id}/handoff
 ```
 
-Resume/review confirmation must target an existing Project and starts at its root. Backfill
+Resume/review confirmation must target an existing Project and starts at its root. Resume
+returns `409 conversation_live` (with the owning `session_id`) when a live session currently
+claims the row's native conversation — Branch, not resume, is the flow for forking a live
+conversation. Backfill
 jobs are daemon-local, cancellable, idempotent scans of complete shared native CLI history.
 Handoff Markdown exposes the swe-mux history ID, provider-native session ID, and recorded native
 transcript path; transcript bytes remain in the provider-owned file and are never copied into the

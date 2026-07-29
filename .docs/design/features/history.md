@@ -18,6 +18,12 @@
   and the message indexer — which replaces a row's messages wholesale from its current
   transcript — then deleted the pre-clear conversation from search, leaving it recoverable
   only as a detached `external=1` backfill row with no link to the session that produced it.
+- **Pane-level metadata writes land on the current run's row.** A rename
+  (`update_session_metadata`) and a pane exit (`session_ended`) key on
+  `agent_run_id or id`, never on the mux session id alone: after a rollover the row keyed by
+  the mux id is a retired conversation, and writing there is how a custom title ended up on
+  an entry that resumed a conversation the user never named. Earlier rows keep the name they
+  had when their conversation ended.
 - History is an ordinary workspace pane tab. Desktop panes can split/move it; mobile projects
   it into the unified tab rail without changing desktop layout.
 - History search is cursor-paginated across provider, Project, state, origin, and four text
@@ -33,6 +39,10 @@
   never presented as message time.
 - Resume requires a valid target Project, native ID, transcript, cwd record, and adapter. It
   creates a new Project-owned session at the target root and atomically updates its layout.
+  A conversation a live session currently claims is refused (`409 conversation_live`, naming
+  the owning session): resuming it would put two live sessions on one conversation — the
+  cross-attribution the identity invariant forbids. Branch is the flow for forking a live
+  conversation; rows whose pane has since rolled onward resume fine.
 - Index deletion never deletes or edits the native transcript.
 - When session adoption proves that a lifecycle bug indexed another live session's transcript,
   the false run is quarantined (`agent_visible=0`), its rebuildable message/index cursor is

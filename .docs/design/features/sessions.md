@@ -129,9 +129,14 @@ and reattachable browser viewports.
     ingress with this session's own secret, which is the strongest available proof of which
     conversation this PTY runs; it fills an *unknown* id only and never overwrites a bound
     one, so a hook cannot rekey a session.
-  - **Switch (in-CLI resume).** Following a freshly-written transcript additionally requires
-    that this session's own PTY produced output around the time the candidate appeared. An
-    outside CLI leaves our PTY silent, which is what distinguishes it.
+  - **Switch (in-CLI resume) is Codex-only.** Backends whose CLI reports conversation
+    replacement itself (`reports_conversation_rollover` on the adapter — Claude, via the
+    SessionStart ingress) never take the filesystem switch heuristic at all: the CLI's own
+    report is strictly stronger evidence, and guessing from mtimes is the one mechanism that
+    could latch a session onto a sibling's conversation in a shared cwd. Where the heuristic
+    does apply (Codex has no session-start hook), following a freshly-written transcript
+    additionally requires that this session's own PTY produced output around the time the
+    candidate appeared. An outside CLI leaves our PTY silent, which is what distinguishes it.
   - **Unresolved siblings block.** Another live session in the same cwd makes a fresh
     transcript ambiguous — but only while it *is* ambiguous. A same-backend sibling is ruled
     out per candidate when its own transcript was still being written after the candidate
@@ -150,7 +155,21 @@ and reattachable browser viewports.
   as is now writing somewhere else, which ends the run it was bound to. A root agent's
   `agent_run_id` is otherwise pinned to its session id by adoption; `agent_run_seq > 0` is what
   tells the restart path that a differing run id is the daemon's own successor rather than the
-  misattribution it repairs.
+  misattribution it repairs. That trust is bounded: a rolled conversation that a *sibling's*
+  root identity claims is corrupt by definition (two panes cannot write one transcript), so
+  adoption falls back to the pane's own spawn anchor, quarantines the corrupt run row, and
+  clears the roll counter — and a rolled Claude root keeps a standing claim on the
+  conversation named by its own mux id, so the rightful owner's own corruption cannot hide
+  the conflict. `agent_lifecycle_id` only ever moves on CLI-confirmed rollovers (never on a
+  heuristic switch), which is what makes it a trustworthy heal target.
+- **One live session per conversation, continuously enforced.** The state watchdog runs an
+  identity sweep each pass: any two live agent sessions claiming one `(backend, native_id)`
+  are logged and emitted as `identity_collision_detected`, and a Claude member whose claim is
+  unsupported by identity evidence (its own mux id, its CLI-confirmed lifecycle anchor, or an
+  unrolled resume's spawn id) is healed back to its strongest anchor — observer rebound to the
+  anchor conversation's deterministic transcript, history row repaired or the corrupt run row
+  quarantined (`session_identity_reconciled`, trigger `live_sweep`). Collisions also surface
+  in `/api/diagnostics/status-health` as `identity_collisions` and raise its alarm.
 - The root process's OS creation time is captured at spawn (`SessionRecord.root_started_at`).
   A pid alone is not an identity on Windows, and exited sessions stay listed with their pid
   intact, so every later consumer of `record.pid` pairs the two.

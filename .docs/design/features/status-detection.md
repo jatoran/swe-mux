@@ -202,12 +202,19 @@ since *any* evidence landed.
 - `GET /api/diagnostics/status-health` — fleet aggregate with explicit bounds and an
   `alarm` flag: inferred share of turn terminals above
   `STATUS_HEALTH_MAX_INFERRED_TERMINAL_RATIO` (5%, once ≥20 terminals), any contract
-  violation, or any session claiming to be active with **no evidence of any kind** for
-  `STATUS_HEALTH_STUCK_ACTIVE_SECONDS` (900s). Time in state is deliberately *not* the
+  violation, any session claiming to be active with **no evidence of any kind** for
+  `STATUS_HEALTH_STUCK_ACTIVE_SECONDS` (900s), or any `identity_collisions[]` entry —
+  live agent sessions sharing one `(backend, native_session_id)` or one transcript path,
+  the cross-attribution signature that shows up to the user as sessions with linked
+  status. Time in state is deliberately *not* the
   stuck signal — a single turn legitimately stays `working` for many minutes while tools
   run, and an elapsed-time bound alarmed on every healthy long turn in the live fleet.
   The soak matrix (Phase 7) asserts on this endpoint; a rise in inferred recoveries is a
   tracked regression, not silent drift.
+- The state watchdog also runs the **identity sweep** each pass (`sessions.md`): collision
+  groups emit `identity_collision_detected` once, and a Claude session provably off its own
+  conversation is healed back to its anchor (`session_identity_reconciled`, trigger
+  `live_sweep`).
 
 ## Regression defense
 

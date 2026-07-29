@@ -122,7 +122,11 @@ automatic fallback whenever the supervisor is unreachable.
     loopback route. A desktop crash leaves the separate daemon process running.
 15. A session's root provider identity is immutable. Nested-agent promotion is a shell-only
     state transition, live transcript paths/native IDs have one owner, and supervisor metadata
-    is revalidated against those facts before daemon reattachment publishes the session.
+    is revalidated against those facts before daemon reattachment publishes the session. The
+    one-owner rule is also enforced continuously: the state watchdog's identity sweep reports
+    any two live sessions claiming one conversation and heals a Claude session back to its own
+    anchor, and backends whose CLI reports conversation changes itself (Claude) never adopt a
+    conversation by filesystem heuristics.
 
 ## Failure modes
 
