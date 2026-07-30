@@ -176,6 +176,21 @@ and reattachable browser viewports.
   conversation named by its own mux id, so the rightful owner's own corruption cannot hide
   the conflict. `agent_lifecycle_id` only ever moves on CLI-confirmed rollovers (never on a
   heuristic switch), which is what makes it a trustworthy heal target.
+- **Resuming a conversation is the mirror image, and inherits its run.** A rollover is one PTY
+  moving to a new conversation; a resume is one conversation moving to a new PTY. Claude's
+  `--resume` appends to the same transcript under the same id, so the new pane continues the
+  run it resumed rather than opening a second one over one file, and `spawn_agent_run_id` —
+  immutable spawn evidence, the counterpart of `agent_run_seq` — is what tells adoption that
+  this differing run id is inherited rather than the misattribution it repairs. The inheritance
+  lapses on its own: a later rollover mints a run of the pane's own, which no longer matches.
+  Two bounds keep it honest. It is refused when a sibling's spawn claim covers the same
+  conversation (same rule as a rolled conversation, same fallback to the pane's own anchor).
+  And a run id repaired away this way is *dropped, never quarantined* — it names the resumed
+  conversation's own row, so quarantining it would delete a conversation's real history over a
+  dispute about which conversation this PTY is on. The pane's ownership evidence is unchanged
+  by any of this: an unrolled resume still proves its claim through its spawn id, so the sweep
+  still never heals it off the conversation it was spawned to continue. Codex mints a new
+  rollout id on resume, so there the pane starts a genuinely new conversation and run.
 - **A rollover onto a conversation a live sibling owns is refused outright.** The collision is
   prevented rather than repaired, because repair does not work here: a rollover moves
   `agent_lifecycle_id`, so a pane that followed an in-CLI `/resume` onto a sibling's live

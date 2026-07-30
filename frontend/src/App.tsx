@@ -72,6 +72,7 @@ import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, r
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import { reorderForHover, reorderTargetFromContainer, type DropSide, type ReorderAxis } from './dragReorder'
 import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from './pointerDragClaim'
+import { horizontalWheelDelta } from './wheelScroll'
 import {
   COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
   projectInitials, projectOpenWork, serializeCollapsedProjects, toggleCollapsed,
@@ -98,6 +99,21 @@ function isAgent(session: Session) {
 
 function isEndedSession(session: Session) {
   return session.state === 'exited' || session.state === 'crashed'
+}
+
+/** Let a plain wheel scroll a tab strip that only overflows sideways.
+ *
+ * Shift+wheel is the browser's only native way in, which is not discoverable and
+ * needs a second hand. `preventDefault` is deliberate: without it an overflowing
+ * strip consumes the wheel *and* the page keeps whatever scroll chaining it would
+ * have done, so the same notch moves two things.
+ */
+function scrollStripByWheel(event:JSX.TargetedWheelEvent<HTMLDivElement>):void {
+  const strip=event.currentTarget
+  const delta=horizontalWheelDelta(event,strip)
+  if(!delta)return
+  event.preventDefault()
+  strip.scrollLeft+=delta
 }
 
 // One naming rule for every surface that shows a session: sidebar rows, workspace
@@ -1955,9 +1971,13 @@ export function App() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
+  // Resume targets the history entry of the conversation the pane was last on,
+  // which is its run rather than its session: a pane that rolled its
+  // conversation (/clear) or inherited one (a previous resume) owns a row keyed
+  // by the run id, and asking for the session id there finds nothing.
   const resumeSession = async (session: Session) => {
     try {
-      const resumed = await api<Session>('POST', `/api/history/${session.id}/resume`, { project_id: session.project_id })
+      const resumed = await api<Session>('POST', `/api/history/${session.agent_run_id || session.id}/resume`, { project_id: session.project_id })
       setSessions(items => [...items, resumed])
       setActiveId(resumed.id)
       setContextMenu(null)
@@ -2599,7 +2619,7 @@ export function App() {
           void updateLayout(projectId,removeLeaf(latest,child.kind,child.id))
         }}>{confirming?'✓':'×'}</button>
       }
-      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={()=>setFocusedViewId(activeChild.id)}><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Workspace tabs">
+      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={()=>setFocusedViewId(activeChild.id)}><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Workspace tabs" onWheel={scrollStripByWheel}>
         {node.children.map(child=>{
           const activate=()=>{if(suppressDragClickRef.current===`tab:${child.id}`){suppressDragClickRef.current=null;return}setFocusedViewId(child.id);if(child.kind==='terminal')setActiveId(child.id);if(child.id!==activeChild.id)void updateLayout(projectId,activateStackChild(activeLayout,node.id,child.id))}
           const dragClass=dragStackTab?.overId===child.id&&dragStackTab.side?`drag-over drop-${dragStackTab.side}`:''
@@ -2932,7 +2952,7 @@ export function App() {
   // With no new-tab button left in the rail, an empty projection would render a
   // bare strip; drop the row entirely and let the empty stage own the section.
   const mobileUnifiedWorkspace=<section data-tutorial="workspace-pane" class={`pane-stack mobile-unified-workspace ${mobileProjection.tabs.length?'':'no-tabs'}`}>
-    {mobileProjection.tabs.length>0&&<div data-tutorial="tab-strip" class="stack-tabs mobile-unified-tabs" role="tablist" aria-label="All Project tabs">
+    {mobileProjection.tabs.length>0&&<div data-tutorial="tab-strip" class="stack-tabs mobile-unified-tabs" role="tablist" aria-label="All Project tabs" onWheel={scrollStripByWheel}>
       {mobileProjection.tabs.map(mobileTab)}
     </div>}
     <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open the Project note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>}</div>

@@ -196,8 +196,9 @@ after its most fragile input (it hooks *events*, not hooks — see §10).
 | **Enablement DAG** | The per-project opt-in dependency graph: a consumer cannot be enabled unless its substrate dependencies are enabled for that project (§8). |
 | **Automation layer** | Umbrella term for rules + observers when one word is needed. |
 | **Native hooks** | Reserved exclusively for the CLIs' own hook systems (Claude Code hooks, Codex `notify`). They are an event *source*, nothing more. |
-| **Agent run** (`agent_run_id`) | One continuous provider conversation on one PTY, and **the scope every control-plane record is keyed by** — Tier 0 facts, annotations, evidence sets, scan records, queue bindings. A session may have several runs in sequence; a run never spans two conversations. |
+| **Agent run** (`agent_run_id`) | One continuous provider conversation, and **the scope every control-plane record is keyed by** — Tier 0 facts, annotations, evidence sets, scan records, queue bindings. A session may have several runs in sequence; **a run never spans two conversations**, which is the invariant with teeth. It is usually also one PTY, but that is a consequence rather than a rule: a conversation the provider itself continues onto a new PTY (Claude `--resume`) is still one run. |
 | **Conversation rollover** | An in-CLI `/clear` (Claude) or `/new` (Codex): same PTY, same mux session, new provider conversation, therefore **a new agent run**. Signalled by `agent_conversation_rolled` on the event log. Consumers do not detect it themselves — they inherit the boundary from the run id (`ROADMAP.md` Phase 5.4). |
+| **Resume inheritance** | The mirror of a rollover: new PTY, new mux session, **same** provider conversation, therefore **the same agent run**. Claude's `--resume` appends to the transcript it resumed, so the pane inherits that run (`spawn_agent_run_id`) and its history entry instead of opening a second over one file — and the timeline, facts, annotations, and title continue rather than restarting blank. Codex resume mints a new rollout id, so it is a new conversation and a new run. See `design/features/history.md`. |
 | **Annotations** | Persisted observer/rule output attached to sessions (titles, summaries, verdicts, scan records). |
 | **Universal commands** | Input-side sibling of universal hooks: mux-level canned prompts injectable into any backend (see §17). |
 | **Rulepacks** | Shareable, parameterized bundles of rules + observers + scripts (see §15). |
@@ -975,9 +976,11 @@ another agent can pick up mid-plan. Section links point to the design detail.
     deterministically destroying exactly the long test/build facts §6.3–6.4 need); capture
     failures are counted and surfaced at `GET /api/diagnostics/background`
   - [x] Ownership on every fact: `agent_run_id` + `project_id` resolved at capture time.
-    Per-run queries cannot be recovered from `session_id` across resume/promotion/branch
-    — and, from `ROADMAP.md` Phase 5.4, across an in-CLI `/clear` or `/new` as well, which
-    is the one run boundary the daemon used not to draw
+    Per-run queries cannot be recovered from `session_id` across promotion, branch, or a
+    Codex resume — and, from `ROADMAP.md` Phase 5.4, across an in-CLI `/clear` or `/new` as
+    well, which is the one run boundary the daemon used not to draw. A **Claude** resume is
+    the opposite case and draws no boundary: it continues one conversation onto a new PTY, so
+    the run (and everything keyed by it) carries across the new `session_id`
   - [x] `tool_result` facts classified per action (`command_result`, `file_read_result`, …)
     with the tool's target correlated forward from its `tool_use`; the exit class no longer
     collapses success and failure onto one fingerprint
