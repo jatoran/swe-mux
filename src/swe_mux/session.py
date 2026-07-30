@@ -837,6 +837,12 @@ class Session:
         # adapter later discovers and records a different native transcript id.
         # Demotion must match this token so Codex can return to its parent shell.
         self.agent_lifecycle_id: str | None = None
+        # The most recent root prompt this pane's user submitted, bounded. Captured
+        # from the hook ingress so a session can be titled from the user's actual
+        # request before any turn has completed — the tab needs a name at the moment
+        # you spawn three panes, not a minute later. Belongs to the conversation, so
+        # a rollover clears it.
+        self.last_user_prompt: str | None = None
         # Detection is a fallback for agents launched without the mux shim. Once a
         # native run has explicitly exited, its still-recent transcript must not
         # immediately promote the containing shell again. An explicit launcher
@@ -2419,6 +2425,8 @@ class SessionManager:
         if confirmed or backend != "claude":
             session.agent_lifecycle_id = native_id
         session.transcript_path = transcript
+        # The retired conversation's last prompt must not title the new one.
+        session.last_user_prompt = None
         record.observation_stale_since = None
         record.tokens_in = 0
         record.tokens_out = 0

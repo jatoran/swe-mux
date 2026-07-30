@@ -687,13 +687,23 @@ How it stays efficient and safe:
 - **Compact task labels**, no backend or "terminal session" prefixes — the existing
   titling convention carries over.
 
-`design/features/automation.md` now describes this continuous, scan-derived,
-rename-suppressed behavior. The implementation still lags: `automation.py` reserves
-one title run per `agent_run_id` and `test_automation_phase6.py`
-(`test_builtin_titler_reserves_one_paid_call_per_agent_run`) asserts the old
-one-shot guarantee. Both must change for the doc to be true again — the reserve-once
-logic becomes material-shift gating, and the test is rewritten around the new
-behavior.
+**Partly landed.** The nameless-window half shipped ahead of the scan timeline, because
+it never needed it: `builtin.session-titler-initial` fires on `turn_started` and titles
+the pane from the user's submitted prompt, and the existing `turn_ended` titler may
+replace that provisional label exactly once. The paid full-transcript call is still one
+per `agent_run_id`, so `test_builtin_titler_reserves_one_paid_call_per_agent_run` still
+holds as written.
+
+Two things this bought beyond the earlier plan. The prompt-derived stage needs neither a
+transcript nor semantic observation, which fixes titling in the degraded-observation
+states that were failing it outright in the field (5 of 6 observed failures were
+`observer requires semantic observation; current capability is inferred`). And splitting
+the stages establishes the provisional/settled distinction the continuous titler needs
+anyway.
+
+What still lags: the settled stage reads a transcript slice rather than the scan
+timeline, and recomputation is still once-per-run rather than material-shift gated with
+debounce and hysteresis. Those are the parts that genuinely depend on §5.5.
 
 ---
 

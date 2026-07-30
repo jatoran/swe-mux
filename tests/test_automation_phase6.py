@@ -502,6 +502,131 @@ async def test_builtin_titler_reserves_one_paid_call_per_agent_run(tmp_path: Pat
     store.close()
 
 
+class InstantTitleProvider(FakeProvider):
+    """Returns a title immediately; CountingTitleProvider blocks on a release gate."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete_json(self, **_: Any) -> OpenRouterResult:
+        self.calls += 1
+        return OpenRouterResult(
+            "generation-title",
+            "vendor/cheap",
+            "vendor/cheap",
+            {"title": "Login Test Fix", "confidence": 0.95},
+            40,
+            8,
+            0.001,
+            10,
+        )
+
+
+def _titler_engine(tmp_path: Path, session: Any, store: AutomationStore) -> AutomationEngine:
+    return AutomationEngine(
+        tmp_path / "rules.toml",
+        EventBus(),
+        SimpleNamespace(sessions={session.record.id: session}),  # type: ignore[arg-type]
+        store,
+        Config(
+            data_dir=tmp_path,
+            automation_enabled=True,
+            observer_titler_enabled=True,
+            openrouter_cheap_model="vendor/cheap",
+        ),
+        InstantTitleProvider(),  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.asyncio
+async def test_initial_titler_names_a_pane_from_the_prompt_with_no_transcript(
+    tmp_path: Path,
+) -> None:
+    """A pane must get a name when the user asks, not a turn later.
+
+    The provisional titler reads the submitted request, so it needs neither a
+    transcript on disk nor semantic observation — the two things that were failing
+    live. Measured before this existed: every title waited for `turn_ended`, and 5 of
+    6 observed failures were `observer requires semantic observation`.
+    """
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item, transcript_path=None, last_user_prompt="fix the flaky login test"
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    engine = _titler_engine(tmp_path, session, store)
+
+    reports = await engine.evaluate(
+        normalized_event(item, 10, event_type="turn_started", capability="inferred")
+    )
+
+    assert reports and reports[0]["matched"] is True
+    titles = await store.annotations(agent_run_id="run-1", tag="title")
+    assert len(titles) == 1
+    assert titles[0]["rule_id"] == "builtin.session-titler-initial"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_settled_titler_upgrades_a_provisional_title_exactly_once(
+    tmp_path: Path,
+) -> None:
+    """The request-derived label is a placeholder; the completed turn is the truth.
+
+    So `turn_ended` may replace a provisional title once, and nothing may replace a
+    settled one. That keeps the paid full-transcript call at one per agent run while
+    removing the nameless window.
+    """
+    transcript = tmp_path / "claude.jsonl"
+    transcript.write_text(
+        '{"type":"user","message":{"content":"hello"}}\n'
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n',
+        encoding="utf-8",
+    )
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item, transcript_path=transcript, last_user_prompt="fix the flaky login test"
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    engine = _titler_engine(tmp_path, session, store)
+
+    await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+    await engine.evaluate(normalized_event(item, 11, source="native_hook"))
+    settled = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["rule_id"] for row in settled][0] == "builtin.session-titler"
+
+    # A second completed turn must not buy another paid call, and a later prompt
+    # must not drop the settled title back to a provisional one.
+    after_turn = await engine.evaluate(normalized_event(item, 12, source="native_hook"))
+    after_prompt = await engine.evaluate(
+        normalized_event(item, 13, event_type="turn_started")
+    )
+
+    assert after_turn[0]["guarded"] is True
+    assert after_prompt[0]["guarded"] is True
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert len(rows) == 2
+    assert rows[0]["rule_id"] == "builtin.session-titler"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_initial_titler_is_skipped_when_no_prompt_was_observed(
+    tmp_path: Path,
+) -> None:
+    """Codex has no prompt hook, so it has nothing to title from until a turn ends."""
+    item = record(tmp_path)
+    session = SimpleNamespace(record=item, transcript_path=None, last_user_prompt=None)
+    store = AutomationStore(tmp_path / "mux.db")
+    engine = _titler_engine(tmp_path, session, store)
+
+    reports = await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+
+    assert not await store.annotations(agent_run_id="run-1", tag="title")
+    assert reports and reports[0].get("error")
+    store.close()
+
+
 @pytest.mark.asyncio
 async def test_missing_reported_cost_is_reconciled_by_generation_id(tmp_path: Path) -> None:
     transcript = tmp_path / "claude.jsonl"
@@ -942,6 +1067,7 @@ def test_status_lists_enabled_and_disabled_builtin_observers(tmp_path: Path) -> 
     builtins = {item["id"]: item for item in engine.status()["built_in_rules"]}
 
     assert set(builtins) == {
+        "builtin.session-titler-initial",
         "builtin.session-titler",
         "builtin.turn-summarizer",
         "builtin.stalled-triage",

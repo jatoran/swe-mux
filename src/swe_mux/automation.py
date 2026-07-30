@@ -90,7 +90,26 @@ ACTION_FIELDS = {
         "minimum_capability",
     },
 }
-SLICE_KINDS = {"last_turn", "last_n_messages", "since_event", "since_annotation", "summary_chain"}
+SLICE_KINDS = {
+    "last_turn",
+    "last_n_messages",
+    "since_event",
+    "since_annotation",
+    "summary_chain",
+    # The user's own latest request, taken from the hook ingress rather than the
+    # transcript. The only slice that needs neither a parsed transcript nor
+    # semantic observation, which is what lets a pane be titled immediately and
+    # lets titling survive the degraded-observation states that used to fail it.
+    "prompt_text",
+}
+TRANSCRIPT_FREE_SLICES = {"prompt_text", "summary_chain"}
+# Titling runs in two stages against one agent run: a provisional label from the
+# user's request the moment they submit it, then one settled label once a turn has
+# completed and there is something to read. The settled call is still capped at one
+# per run; the provisional one is what stops a fresh pane from sitting nameless.
+SETTLED_TITLE_RULE_ID = "builtin.session-titler"
+PROVISIONAL_TITLE_RULE_ID = "builtin.session-titler-initial"
+TITLE_RULE_IDS = {SETTLED_TITLE_RULE_ID, PROVISIONAL_TITLE_RULE_ID}
 CAPABILITY_RANK = {"telemetry": 1, "inferred": 1, "semantic": 2, "derived": 2, "trusted": 3}
 ADAPTER_CAPABILITIES: dict[str, dict[str, Any]] = {
     "claude": {
@@ -129,6 +148,17 @@ ADAPTER_CAPABILITIES: dict[str, dict[str, Any]] = {
 # than rules.toml entries. Keep their user-facing inventory explicit so the control plane
 # can show the complete effective setup, including disabled observers.
 BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
+    {
+        "id": "builtin.session-titler-initial",
+        "name": "Session titler (initial)",
+        "setting_key": "observer_titler_enabled",
+        "setting_label": "Session titler",
+        "trigger": "turn_started",
+        "input": "The user's request",
+        "model": "Cheap model",
+        "result": "Provisional session title, replaced once a turn completes",
+        "description": "Names a pane from the request the user just submitted.",
+    },
     {
         "id": "builtin.session-titler",
         "name": "Session titler",
@@ -676,6 +706,22 @@ class TranscriptSliceService:
         )
 
     @staticmethod
+    def from_prompt(text: str, kind: str = "prompt_text") -> TranscriptSlice:
+        """A one-message slice holding the user's request, read from no file."""
+        messages = (
+            {"role": "user", "ts": time.time(), "content": [{"type": "text", "text": text}]},
+        )
+        encoded = json.dumps(messages, separators=(",", ":"), ensure_ascii=False).encode()
+        return TranscriptSlice(
+            kind,
+            messages,
+            len(encoded),
+            max(1, len(encoded) // 4),
+            False,
+            hashlib.sha256(encoded).hexdigest(),
+        )
+
+    @staticmethod
     def from_annotations(
         items: list[dict[str, Any]], kind: str = "summary_chain"
     ) -> TranscriptSlice:
@@ -1189,9 +1235,16 @@ class AutomationEngine:
         # user-authored rule reusing the builtin titler id plus `unless_annotation`
         # is enough), and the leaked key then blocked that run's title forever.
         unique_key: tuple[str, str] | None = None
-        if rule.id == "builtin.session-titler" and event.agent_run_id:
-            if await self.store.recent_annotation(event.agent_run_id, "title", 0):
-                return False
+        if rule.id in TITLE_RULE_IDS and event.agent_run_id:
+            existing = await self.store.recent_annotation(event.agent_run_id, "title", 0)
+            if existing is not None:
+                # The provisional title is derived from the user's request alone, so
+                # the settled titler is allowed to replace it once, when it finally
+                # has the completed turn to work from. Nothing may replace a settled
+                # title: that is still one paid full-transcript call per run.
+                provisional = str(existing.get("rule_id") or "") == PROVISIONAL_TITLE_RULE_ID
+                if rule.id == PROVISIONAL_TITLE_RULE_ID or not provisional:
+                    return False
             unique_key = self._unique_guard_key(rule, event)
             if unique_key in self._unique_inflight:
                 return False
@@ -1224,7 +1277,7 @@ class AutomationEngine:
 
     @staticmethod
     def _unique_guard_key(rule: Rule, event: NormalizedEvent) -> tuple[str, str] | None:
-        if rule.id == "builtin.session-titler" and event.agent_run_id:
+        if rule.id in TITLE_RULE_IDS and event.agent_run_id:
             return rule.id, event.agent_run_id
         return None
 
@@ -1329,7 +1382,13 @@ class AutomationEngine:
             # conversation (an unfollowable /clear or /new). An observer reading it
             # would title and summarize a conversation the user has already left.
             raise ValueError("observer disabled because the followed transcript is stale")
-        if not session.transcript_path or not session.transcript_path.exists():
+        needs_transcript = (
+            str((action.get("input") or {}).get("slice") or "last_turn")
+            not in TRANSCRIPT_FREE_SLICES
+        )
+        if needs_transcript and (
+            not session.transcript_path or not session.transcript_path.exists()
+        ):
             raise ValueError("normalized transcript is unavailable")
         model_setting = str(action.get("model") or "cheap")
         model = {
@@ -1358,7 +1417,12 @@ class AutomationEngine:
             raise ValueError("rule hourly observer call cap is exhausted")
         input_spec = action.get("input") or {}
         slice_kind = str(input_spec.get("slice") or "last_turn")
-        if slice_kind == "summary_chain":
+        if slice_kind == "prompt_text":
+            prompt_text = getattr(session, "last_user_prompt", None)
+            if not prompt_text:
+                raise ValueError("no user prompt has been observed for this run")
+            transcript = self.slices.from_prompt(prompt_text)
+        elif slice_kind == "summary_chain":
             summaries = await self.store.annotations(
                 agent_run_id=event.agent_run_id, tag="turn-summary", limit=24
             )
@@ -1366,6 +1430,11 @@ class AutomationEngine:
                 raise ValueError("summary chain is unavailable")
             transcript = self.slices.from_annotations(summaries)
         else:
+            if session.transcript_path is None:
+                # Unreachable: every slice kind that lands here is transcript-backed,
+                # so the availability check above already ran. Stated for the reader
+                # and the type checker rather than left to inference.
+                raise ValueError("normalized transcript is unavailable")
             since_ts: float | None = None
             if slice_kind == "since_event":
                 since_ts = float(input_spec.get("since_ts") or event.ts)
@@ -1607,6 +1676,45 @@ class AutomationEngine:
         if cached is not None:
             return cached
         raw: list[dict[str, Any]] = []
+        if event.type == "turn_started" and self.config.observer_titler_enabled:
+            raw.append(
+                {
+                    "id": PROVISIONAL_TITLE_RULE_ID,
+                    "name": "Session titler (initial)",
+                    "enabled": True,
+                    "shadow": False,
+                    # Debounced past the hook/transcript race: whichever source opens
+                    # the turn, the prompt has to have been recorded before this runs.
+                    "on": {"trigger": "turn_started", "debounce_s": 2.0},
+                    "when": [],
+                    "do": [
+                        {
+                            "kind": "llm",
+                            "model": "cheap",
+                            # Reads no transcript, so it works before one exists and
+                            # keeps working when observation has degraded to inferred.
+                            "input": {"slice": "prompt_text"},
+                            "minimum_capability": "telemetry",
+                            "prompt": (
+                                "Create a compact task-oriented title for a terminal tab and "
+                                "sidebar, from the user's request alone. Prefer 2-3 words and "
+                                "never exceed 4; the tab is narrow, so shorter wins whenever it "
+                                "stays accurate. Describe the concrete user goal or work topic, "
+                                "and drop filler words rather than the distinguishing one. "
+                                "Never prefix with Terminal Session, Session, Claude, "
+                                "Codex, User, or Conversation. Do not label simple greetings as "
+                                "greetings. Return only the schema."
+                            ),
+                            "schema": "title_v1",
+                            "on_result": {
+                                "kind": "annotate",
+                                "tag": "title",
+                                "content": "{result.title}",
+                            },
+                        }
+                    ],
+                }
+            )
         if event.type == "turn_ended" and self.config.observer_titler_enabled:
             raw.append(
                 {

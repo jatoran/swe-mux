@@ -1198,6 +1198,26 @@ def conversation_unbound(session: Session) -> bool:
     return native == record.id
 
 
+MAX_REMEMBERED_PROMPT_CHARS = 4000
+
+
+def _remember_user_prompt(session: Session, payload: dict[str, Any]) -> None:
+    """Keep this pane's latest root request for the initial titler.
+
+    Bounded rather than stored whole: a long prompt is no more informative for a
+    2-3 word tab label, and the observer input budget would reject it anyway. Only
+    root prompts count — a subagent's instructions are not what the tab is about.
+    """
+    if hook_event_scope("UserPromptSubmit", payload) != "root":
+        return
+    prompt = payload.get("prompt")
+    if not isinstance(prompt, str):
+        return
+    text = prompt.strip()
+    if text:
+        session.last_user_prompt = text[:MAX_REMEMBERED_PROMPT_CHARS]
+
+
 async def _bind_native_id_from_hook(
     session: Session, payload: dict[str, Any], events: EventBus
 ) -> None:
@@ -1313,6 +1333,12 @@ async def apply_hook_observation(
         await _bind_native_id_from_hook(session, payload, events)
         await _transition(session, events, "idle", source="hook", evidence="hook:SessionStart")
     elif event_type in {"UserPromptSubmit", "turn_started", "task_started"}:
+        # Capture the request itself before the authority check below, which returns
+        # early whenever the transcript is driving state — i.e. for every healthy
+        # session. This is the only place the user's prompt is available without
+        # reading the transcript, and titling from it is what gives a pane a name
+        # before its first turn finishes.
+        _remember_user_prompt(session, payload)
         if _transcript_authoritative(session):
             return
         await _begin_root_turn(session, events, source="hook", evidence=f"hook:{event_type}")

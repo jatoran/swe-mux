@@ -77,12 +77,27 @@ and the declared minimum observation capability.
 Built-ins are an explicit-name-preserving session titler, one-line turn summarizer, stalled-run
 triage, approval-request triage, and context-handoff suggestion. Duplicate hook/transcript
 completion evidence is coalesced before completion-triggered calls.
-The titler adapts a session's title continuously as the session progresses rather than emitting
-a single label per run. It derives the title from the scan timeline where enabled (falling back
-to bounded transcript slices otherwise), keying on the user's actual asks and the agent's salient
-responses rather than interim tool activity, and recomputes only on a material shift (novelty
-spike, work-phase or target change, new user request) with debounce and hysteresis so the title
-neither flickers nor costs a call every turn. A conversation rollover (an in-CLI `/clear` or
+Titling runs in **two stages against one agent run**. `builtin.session-titler-initial` fires on
+`turn_started` and names the pane from the request the user just submitted; `builtin.session-titler`
+fires on `turn_ended` and replaces that provisional label once, from the completed turn. Nothing
+replaces a settled title, so the paid full-transcript call stays at one per run while a freshly
+spawned pane stops sitting nameless until its first turn finishes — which is exactly when you have
+just opened several and need to tell them apart.
+
+The provisional stage reads the user's prompt (captured from the hook ingress, bounded, and cleared
+on rollover), never the transcript. That is deliberate: it is the one observer input that needs
+neither a transcript on disk nor semantic observation, so it also survives the degraded-observation
+states that used to make titling fail outright rather than degrade. Backends with no prompt hook
+(Codex) simply have nothing to title from until their first turn ends, and fall through to the
+settled stage. Its action declares `minimum_capability = "telemetry"`; every other observer keeps
+the `semantic` default.
+
+The eventual continuous titler (`../../development/CONTROL_PLANE_ROADMAP.md` §6.11) replaces the
+settled stage's input with the scan timeline where enabled (falling back to bounded transcript
+slices otherwise), keying on the user's actual asks and the agent's salient responses rather than
+interim tool activity, and recomputing only on a material shift (novelty spike, work-phase or
+target change, new user request) with debounce and hysteresis so the title neither flickers nor
+costs a call every turn. That half still lags the doc; the two-stage behavior above ships today. A conversation rollover (an in-CLI `/clear` or
 `/new` — `backends.md`) always retitles: it is the strongest material shift there is, since the
 existing title describes work the conversation no longer contains. It is also what made the
 still-shipping one-shot titler visibly wrong — its reserve is per `agent_run_id`, and before the
