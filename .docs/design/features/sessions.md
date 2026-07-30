@@ -176,8 +176,21 @@ and reattachable browser viewports.
   conversation named by its own mux id, so the rightful owner's own corruption cannot hide
   the conflict. `agent_lifecycle_id` only ever moves on CLI-confirmed rollovers (never on a
   heuristic switch), which is what makes it a trustworthy heal target.
+- **A rollover onto a conversation a live sibling owns is refused outright.** The collision is
+  prevented rather than repaired, because repair does not work here: a rollover moves
+  `agent_lifecycle_id`, so a pane that followed an in-CLI `/resume` onto a sibling's live
+  conversation would then satisfy the ownership test itself, and the sweep — seeing two
+  rightful owners — heals neither. Verified live: pane B resumed pane A's conversation from the
+  `/resume` picker, `identity_collision_detected` fired in 1.1 s, and both panes then reported
+  A's conversation and its tokens indefinitely. The refusal keeps the pane's own identity
+  intact, emits `conversation_rollover_refused`, and fails the pane's observation closed
+  (`observation_stale_since`) — its CLI genuinely is writing elsewhere, so the pane's status is
+  no longer trustworthy even though its identity is. A sibling only counts as the owner when
+  its own claim is supported by identity evidence, so deferring to a *misattributed* sibling
+  cannot freeze corruption in place.
 - **One live session per conversation, continuously enforced.** The state watchdog runs an
-  identity sweep each pass: any two live agent sessions claiming one `(backend, native_id)`
+  identity sweep each pass as the backstop for corruption that predates the refusal above: any
+  two live agent sessions claiming one `(backend, native_id)`
   are logged and emitted as `identity_collision_detected`, and a Claude member whose claim is
   unsupported by identity evidence (its own mux id, its CLI-confirmed lifecycle anchor, or an
   unrolled resume's spawn id) is healed back to its strongest anchor — observer rebound to the

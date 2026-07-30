@@ -127,6 +127,56 @@ async def test_codex_watcher_still_uses_the_switch_heuristic(
         observe_task.cancel()
 
 
+async def test_a_rollover_onto_a_live_siblings_conversation_is_refused(
+    tmp_path: Path,
+) -> None:
+    """An in-CLI `/resume` must not move a pane onto a conversation somebody is on.
+
+    Verified live before this guard: pane B resumed pane A's live conversation from
+    the `/resume` picker, the SessionStart hook reported it as an ordinary rollover,
+    and B rekeyed onto A's conversation. `identity_collision_detected` fired in 1.1s
+    — but the rollover had also moved B's `agent_lifecycle_id` onto the disputed
+    conversation, so `_claude_owns_conversation` then reported *both* panes as
+    rightful owners, the sweep healed neither, and both reported A's conversation and
+    its tokens indefinitely.
+
+    Refusing keeps B's identity intact and leaves the sweep able to act. B's CLI is
+    genuinely elsewhere now, so its observation fails closed.
+    """
+    owner = real_session(agent_record(OWN, cwd=str(tmp_path)), tmp_path)
+    owner.agent_lifecycle_id = OWN
+    intruder = real_session(agent_record(STOLEN, cwd=str(tmp_path)), tmp_path)
+    manager = fake_manager()
+    manager.sessions = {OWN: owner, STOLEN: intruder}
+    manager.adapters = {"claude": intruder.adapter}
+    manager._await_registration = AsyncMock()
+    manager.discard_hook_spool = lambda sid: None
+
+    rolled = await SessionManager._apply_conversation_rollover(
+        manager,
+        intruder,
+        native_id=OWN,
+        transcript=tmp_path / f"{OWN}.jsonl",
+        reason="conversation_rolled",
+        source="resume",
+    )
+
+    assert rolled is False
+    assert intruder.record.native_session_id == STOLEN
+    assert intruder.agent_lifecycle_id != OWN
+    assert intruder.record.observation_stale_since is not None
+    assert owner.record.native_session_id == OWN
+    refusals = [
+        call for call in manager.events.emit.await_args_list
+        if call.args and call.args[0] == "conversation_rollover_refused"
+    ]
+    assert refusals, "the refusal must be observable"
+
+    # The sweep can now act, because the intruder's claim is unsupported.
+    intruder.record.native_session_id = OWN  # as legacy corruption would leave it
+    assert SessionManager._claude_owns_conversation(manager, intruder, OWN) is False
+
+
 def test_a_codex_placeholder_id_counts_as_unbound() -> None:
     """The mux session id Codex carries until discovery is not a binding.
 

@@ -2360,6 +2360,40 @@ class SessionManager:
             return False
         if session.agent_lifecycle_id == native_id:
             return False
+        owner = self._live_conversation_owner(session, backend, native_id)
+        if owner is not None:
+            # An in-CLI `/resume` onto a conversation a live sibling owns. Following
+            # it would put two panes on one conversation and — because a rollover
+            # moves `agent_lifecycle_id` — would make this pane look like a rightful
+            # owner to the identity sweep, which then heals neither and leaves the
+            # collision standing. Verified live: two panes both reported the same
+            # conversation, and its tokens, indefinitely.
+            #
+            # Refusing keeps this pane's identity intact, but its CLI really is
+            # writing somewhere else now, so our view of it is no longer true:
+            # fail closed the same way an unfollowable rollover does.
+            record.observation_stale_since = time.time()
+            record.parser_diagnostic = (
+                f"the CLI moved to conversation {native_id}, which live session "
+                f"{owner.record.id} owns; refusing to follow it"
+            )
+            log.warning(
+                "session %s tried to roll onto conversation %s owned by live session %s",
+                record.id,
+                native_id,
+                owner.record.id,
+            )
+            await self.events.emit(
+                "conversation_rollover_refused",
+                session_id=record.id,
+                source="daemon",
+                backend=backend,
+                native_session_id=native_id,
+                owner_session_id=owner.record.id,
+                reason="claimed_by_live_sibling",
+            )
+            session.publish_update()
+            return False
         await self._await_registration(session)
         previous_run_id = record.agent_run_id
         previous_native_id = record.native_session_id
@@ -2814,6 +2848,32 @@ class SessionManager:
             or session.agent_lifecycle_id == native_id
             or (record.agent_run_seq == 0 and record.spawn_native_session_id == native_id)
         )
+
+    def _live_conversation_owner(
+        self, session: Session, backend: str, native_id: str
+    ) -> Session | None:
+        """The live session that legitimately holds `native_id`, if any.
+
+        Used to refuse a rollover onto a conversation somebody else is already on.
+        A sibling only counts as the owner when its own claim is supported by
+        identity evidence; deferring to a sibling that is itself misattributed
+        would freeze the corruption in place instead of letting the sweep heal it.
+        """
+        for other in self.sessions.values():
+            if other is session:
+                continue
+            record = other.record
+            if (
+                record.backend != backend
+                or record.state in TERMINAL_STATES
+                or other.stopping
+                or record.native_session_id != native_id
+            ):
+                continue
+            if backend == "claude" and not self._claude_owns_conversation(other, native_id):
+                continue
+            return other
+        return None
 
     async def _reconcile_identity_collisions(self) -> None:
         """Enforce that no two live sessions claim one conversation.
