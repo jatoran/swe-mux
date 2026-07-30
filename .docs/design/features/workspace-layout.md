@@ -22,7 +22,9 @@ PaneLeaf = terminal | note | preview | history | queue
   `history` identifies the searchable archive; `note` resource IDs encode Project note,
   session note, and individual file editors; `queue` identifies a session's prompt-queue tab
   (`features/prompt-queue.md`), its id `queue:<session_id>` so it can never collide with the
-  target's own terminal leaf in focus tracking.
+  target's own terminal leaf in focus tracking. The prompt queue's home is the utility
+  drawer; the `queue` leaf is now only the explicit pop-out (the `↗` in the panel header) and
+  what a layout saved before the move resolves to, so nothing creates one implicitly.
 - Leaf IDs are globally unique inside a Project layout. Server validation caps layouts at 64
   leaves, nesting depth 24, and split ratios from 0.1 through 0.9.
 - Layout versions 1–6 migrate on read. A visible legacy resource dock becomes an adjacent pane;

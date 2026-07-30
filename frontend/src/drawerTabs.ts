@@ -7,14 +7,20 @@
 // you opened it to work with.
 //
 // Tab order groups by what a tab acts on. First the surfaces that *inject into the
-// focused session* (clipboard, session commands, prompt templates). Then the
-// *navigators* (files, notes): project-scoped indexes that open a document into a
+// focused session* (clipboard, session commands, prompt templates, the prompt queue).
+// Then the *navigators* (files, notes): project-scoped indexes that open a document into a
 // pane rather than injecting text — narrow-column surfaces that used to cost a
 // permanent workspace tab each. Git closes the Project-scoped block: it reads the
 // repository behind the Project rather than opening anything, so it is not a navigator,
 // but it acts on the same thing they do. Notifications is neither, and stays last.
+//
+// Queue closes the injection block, which is where it belongs and why it is here rather
+// than in a workspace tab or a modal: deciding whether to send is a judgement about the
+// agent's live state, and that state is only legible in the terminal. A pane leaf replaces
+// the terminal, a modal covers it; the docked column is the one placement that keeps the
+// target and the control on screen together.
 
-export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'files' | 'notes' | 'git' | 'notifications'
+export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'queue' | 'files' | 'notes' | 'git' | 'notifications'
 
 /** What a tab acts on: the focused terminal, the active Project, or the app itself. */
 export type DrawerTabScope = 'session' | 'project' | 'app'
@@ -35,6 +41,7 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'clipboard', label: 'Clipboard', title: 'Clipboard history — insert a recent copy', scope: 'session' },
   { id: 'commands', label: 'Commands', title: 'Commands — keys, skills, and slash commands not on the rail', scope: 'session' },
   { id: 'prompts', label: 'Prompts', title: 'Prompts — insert a saved template into the focused terminal', scope: 'session' },
+  { id: 'queue', label: 'Queue', title: 'Queue — messages staged for this agent, and the mailbox', scope: 'session' },
   { id: 'files', label: 'Files', title: 'Files — browse or search this Project, then open into a pane', scope: 'project' },
   { id: 'notes', label: 'Notes', title: 'Notes — Project and session notes, opened into a pane', scope: 'project' },
   { id: 'git', label: 'Git', title: 'Git — branches and worktrees of this Project’s repository', scope: 'project' },

@@ -1498,12 +1498,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .utility-rail button:hover,.utility-rail button:focus-visible{border-color:var(--accent);color:var(--text)}
 .utility-rail button.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel2));color:var(--text);box-shadow:inset -2px 0 var(--accent)}
 .drawer-badge{position:absolute;top:-4px;right:-4px;min-width:14px;height:14px;padding:0 3px;display:grid;place-items:center;border-radius:7px;background:var(--amber);color:#12140c;font:600 8px 'Cascadia Mono',Consolas,monospace;font-style:normal}
-.drawer-tabs{flex:none;display:flex;align-items:stretch;border-bottom:1px solid var(--line);background:var(--panel2);overflow-x:auto;scrollbar-width:none}
+.drawer-tabs{flex:none;display:flex;flex-wrap:wrap;align-items:stretch;border-bottom:1px solid var(--line);background:var(--panel2);overflow-x:auto;scrollbar-width:none}
 .drawer-tabs::-webkit-scrollbar{display:none}
 /* Icon-only tabs. They share the strip evenly but are capped, because a 17px mark centred in
    a 100px cell at the drawer's 620px maximum reads as an accident rather than a control. The
    cap leaves slack, which the close button takes by sitting at the far end. */
-.drawer-tabs button{position:relative;min-height:34px;flex:1 1 0;min-width:36px;max-width:58px;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;white-space:nowrap;cursor:pointer}
+/* `min-width` is set against the *narrowest* the strip can be, not against taste: eight tabs
+   plus the 30px close button must fit DRAWER_MIN_WIDTH (300px), or the last tab is parked
+   off-screen in a scrollbar-less scroller. 8 × 32 + 30 = 286. `flex-wrap` is the backstop —
+   a ninth tab wraps to a second row rather than disappearing. */
+.drawer-tabs button{position:relative;min-height:34px;flex:1 1 0;min-width:32px;max-width:58px;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;white-space:nowrap;cursor:pointer}
 .drawer-tabs button svg{width:17px;height:17px;display:block}
 .drawer-tabs button:hover{color:var(--text)}
 .drawer-tabs button.active{border-bottom-color:var(--accent);color:var(--text);background:var(--panel)}
@@ -1584,8 +1588,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .utility-rail{display:none}
   .git-row-actions button{min-height:36px;padding:0 12px}
   .drawer-fields button.git-add-toggle{min-height:36px}
-  /* No rail on touch, so the strip is the only tab control: taller, wider, bigger marks. */
-  .drawer-tabs button{min-height:44px;min-width:44px;max-width:none}
+  /* No rail on touch, so the strip is the only tab control: taller, wider, bigger marks.
+     Width is the constrained axis, not height — the overlay is `min(430px, 92vw)`, so a
+     360px phone gives the strip 331px and eight 44px tabs plus the close button need 382.
+     36px keeps all eight on one row down to a 360px phone (8 × 36 + 30 = 318); the 44px
+     height is the touch target that actually matters, and `flex-wrap` above catches any
+     narrower device by wrapping rather than hiding a tab. */
+  .drawer-tabs button{min-height:44px;min-width:36px;max-width:none}
   .drawer-tabs button svg{width:19px;height:19px}
   .drawer-grid button{min-height:46px}
   .drawer-fields input{min-height:38px;font-size:16px}
@@ -1593,9 +1602,17 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 }
 @media(prefers-reduced-motion:reduce){.utility-drawer.overlay{animation:none}}
 
-/* ---- Prompt queue (Phase 4): the Queue workspace tab and pane chip ---- */
-.queue-pane{display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;background:var(--bg);color:var(--text)}
+/* ---- Prompt queue: the drawer's Queue tab, its pop-out pane, and the pane chip ----
+   One stylesheet for both renderings. Everything here has to survive the drawer's
+   300–620px column, which is the narrower of the two and the one it is normally in. */
+.queue-pane{display:flex;flex-direction:column;min-width:0;min-height:0;flex:1 1 auto;height:100%;background:var(--bg);color:var(--text)}
+/* Three scopes, three words: a segmented control rather than the icon strip the drawer's
+   own tabs use, because "this session" has no mark that would read at 17px. */
+.queue-scope{display:flex;gap:4px;padding:5px 10px;border-bottom:1px solid var(--line)}
+.queue-scope button{flex:1 1 0;min-width:0;min-height:26px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.queue-scope button.active{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .queue-pane-header{display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 10px;border-bottom:1px solid var(--line)}
+.queue-pane-header .queue-popout{min-height:22px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;cursor:pointer}
 .queue-pane-header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .queue-pane-header .queue-pane-status{margin-left:auto;color:var(--muted);white-space:nowrap}
 .queue-pane-error{margin:0;padding:6px 10px;border-bottom:1px solid var(--line);color:var(--red)}
@@ -1611,13 +1628,20 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-state-sent,.queue-state-cancelled{opacity:.65}
 .queue-next-marker{color:var(--accent)}
 .queue-item-reasons{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
-.queue-item-body{margin:0;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:inherit;line-height:1.4}
+.queue-item-body{margin:0;max-height:150px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:inherit;line-height:1.4}
 .queue-item-sent{text-decoration:line-through;opacity:.55}
 .queue-item-cancelled .queue-item-body,.queue-item-failed .queue-item-body{opacity:.55}
 .queue-item-actions{display:flex;flex-wrap:wrap;gap:5px}
 .queue-item-actions button,.queue-item-actions select{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .queue-item-actions .queue-send{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .queue-item-actions .queue-send-confirm{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
+/* The overflow toggle sits hard right so the two acts that matter (send, arm) stay left-
+   aligned across every row, and its tray opens under the row rather than floating. */
+.queue-item-actions .queue-item-menu{margin-left:auto;min-width:28px;color:var(--muted)}
+.queue-item-actions .queue-item-menu.open{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+.queue-item-more{padding-top:6px;border-top:1px dashed var(--line)}
+/* Terminal-state items are audit, not work: one line until asked for. */
+.queue-done button{width:100%;text-align:left;min-height:26px;padding:0 8px;border:1px dashed var(--line);background:transparent;color:var(--muted);font:inherit;cursor:pointer}
 .queue-item-edit{display:grid;gap:6px}
 .queue-item-edit textarea{min-height:80px;resize:vertical;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:6px}
 .queue-composer{display:grid;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
@@ -1627,30 +1651,29 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-composer-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .pane-tools .queue-chip.has-pending{color:var(--accent)}
 
-/* ---- Phase 5: auto-delivery strip, schedules, mailbox, spawn requests ---- */
-.queue-auto-strip{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:5px 10px;border-bottom:1px solid var(--line);color:var(--muted);font-size:9px}
+/* ---- Auto-delivery, schedules, the mailbox scopes, spawn requests ---- */
+/* One status line, disclosed. Two labelled checkboxes and a sentence cost three wrapped
+   lines of a 380px column, permanently, above the thing the panel was opened for. */
+.queue-auto-strip{display:flex;align-items:center;border-bottom:1px solid var(--line)}
+.queue-auto-summary{flex:1 1 auto;min-width:0;min-height:24px;padding:3px 10px;border:0;background:transparent;color:var(--muted);font:inherit;font-size:9px;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.queue-auto-detail{display:grid;gap:6px;padding:6px 10px;border-bottom:1px solid var(--line);color:var(--muted);font-size:9px}
 .queue-auto-toggle{display:flex;align-items:center;gap:5px;cursor:pointer}
-.queue-auto-state{margin-left:auto}
 .queue-auto-on{color:var(--accent)}
-.queue-auto-note{margin:0;padding:6px 10px;border-bottom:1px solid var(--line);color:var(--muted);line-height:1.45}
+.queue-auto-note{margin:0;color:var(--muted);line-height:1.45}
 .queue-item-sender{color:var(--accent)}
 .queue-item-schedule{color:var(--amber)}
+.queue-item-target{color:var(--text)}
+.queue-item-note{margin-left:auto}
 .queue-item-actions .queue-schedule-preset{color:var(--muted)}
-.mailbox-panel{max-width:900px}
-.mailbox-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:7px 12px;border-bottom:1px solid var(--line)}
-.mailbox-roles,.mailbox-auto{display:flex;gap:6px}
-.mailbox-auto{margin-left:auto}
-.mailbox-controls button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
-.mailbox-controls button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
-.mailbox-controls button.danger{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
-.mailbox-list{list-style:none;margin:0;padding:0}
-.mailbox-item{display:grid;gap:5px;padding:8px 12px;border-bottom:1px solid var(--line)}
-.mailbox-item-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:var(--muted);font-size:9px}
-.mailbox-item-note{margin-left:auto}
-.mailbox-item-body{margin:0;white-space:pre-wrap;word-break:break-word;line-height:1.4;max-height:120px;overflow:auto}
-.mailbox-item-actions{display:flex;gap:6px}
-.mailbox-item-actions button{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
-.mailbox-sent .mailbox-item-body{opacity:.6}
+/* The two install-wide controls, which the mailbox scopes carry because they must stay
+   one gesture from any device. */
+.queue-mailbox-controls{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line)}
+.queue-mailbox-controls button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.queue-mailbox-controls button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+.queue-mailbox-controls button.danger{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
+.queue-promotion{flex:1 1 100%;color:var(--muted);font-size:9px;line-height:1.4}
+/* Pending work is not an alert: the amber badge means "unread", this one means "staged". */
+.drawer-badge.queue-badge{background:var(--accent);color:var(--bg)}
 .observation-request{display:grid;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}
 .observation-request.done{opacity:.6}
 .observation-request-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:var(--muted);font-size:9px}
@@ -1661,4 +1684,4 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .observation-request-actions{display:flex;gap:6px;align-items:center}
 .observation-request-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .observation-request-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
-@media(max-width:760px){.queue-item-actions button,.queue-item-actions select{min-height:38px}.queue-composer-actions button{min-height:40px}.mailbox-controls button,.mailbox-item-actions button,.observation-request-actions button{min-height:40px}}
+@media(max-width:760px){.queue-item-actions button,.queue-item-actions select{min-height:38px}.queue-scope button,.queue-done button{min-height:38px}.queue-composer-actions button{min-height:40px}.queue-mailbox-controls button,.observation-request-actions button{min-height:40px}}

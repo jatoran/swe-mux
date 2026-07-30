@@ -381,17 +381,17 @@ responsive controls.
 - A terminal pane is three rows: the header bar, an optional read-aloud player strip, then the
   terminal surface (terminal + action rail). The rows are placed explicitly so the middle track
   collapses to nothing when no strip is rendered.
-- The pane tools row carries `note`, `queue[:N]` (agent sessions only — opens the session's
-  prompt-queue tab, the count is its pending items; `features/prompt-queue.md`), `proc`, and
-  the `⋯` session menu.
-- The Queue tab's auto-delivery strip is a status line as much as a control: the toggle, the
-  bounds actually in force (sends left, minutes left, quiet hours, why it is off), and the
-  separate "accept agent messages armed" switch. It is unavailable — with the reason shown —
-  when the install's master switch is off (`features/auto-delivery.md`).
-- The **Mailbox** overlay (app menu → Mailbox…) is app-level, not per-Project: messages
-  point at sessions across every Project, and it carries the two controls that must be one
-  gesture away on any device — pause all auto-delivery and report an unsafe delivery
-  (`features/agent-messaging.md`).
+- The pane tools row carries `note`, `queue[:N]` (agent sessions only — focuses that session
+  and opens the drawer's Queue tab on it, the count is its pending items;
+  `features/prompt-queue.md`), `proc`, and the `⋯` session menu.
+- The Queue tab's `auto:` line is a status as much as a control: on/off and the bounds
+  actually in force (sends left, minutes left, quiet hours, why it is off), disclosing the
+  toggle and the separate "accept agent messages armed" switch. It is unavailable — with the
+  reason shown — when the install's master switch is off (`features/auto-delivery.md`).
+- The **Mailbox** is the Queue tab's `inbox`/`outbox` scopes (app menu → Mailbox… lands
+  there), app-level rather than per-Project: messages point at sessions across every Project,
+  and those scopes carry the two controls that must be one gesture away on any device —
+  pause all auto-delivery and report an unsafe delivery (`features/agent-messaging.md`).
 - The pane header is `[status] [cwd] [voice] [tools]` and **must stay one row**. It is a grid
   with `grid-auto-flow:column`, which is what enforces that: without it, an item beyond the
   declared column count auto-places into a *second row*, and the voice group is a
@@ -490,21 +490,27 @@ responsive controls.
 
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they
   are one gesture (mobile) or one visible click (desktop) away instead of two menu levels deep.
-  Tabs, in order: **Clipboard**, **Commands** (the rail's long tail), **Prompts**, **Files**,
-  **Notes**, **Git**, **Alerts** (notifications). Order groups by what a tab acts on, and the
-  groups must stay contiguous so the rail reads as blocks rather than a list. The first three are
-  the same verb — text into the focused session. Files and Notes are the **navigators**:
+  Tabs, in order: **Clipboard**, **Commands** (the rail's long tail), **Prompts**, **Queue**,
+  **Files**, **Notes**, **Git**, **Alerts** (notifications). Order groups by what a tab acts on,
+  and the groups must stay contiguous so the rail reads as blocks rather than a list. The first
+  four are the same verb — text into the focused session. Files and Notes are the **navigators**:
   project-scoped indexes that open a document into a pane instead of typing into one. Git closes
   the Project-scoped block without joining them: it reads the repository behind the Project
   (branches, worktrees, dirty/upstream state) and opens nothing into a pane — see `git.md` for
   what it shows and the mutations it is allowed. Notifications is neither, and sits last. Session
   history, the process fleet, usage, and automation stay modal: they are wide, table-shaped
   surfaces that a ~380 px column serves badly.
-- The first three tabs share the verb but not the routing. Clipboard inserts land in the
+- The injection tabs share the verb but not the routing. Clipboard inserts land in the
   last-focused surface, editor or terminal. **Prompts** inserts are terminals-only and its rows
   additionally answer right-click / long-press with a target menu (a live agent session in this
   Project, or a new Claude/Codex one) — see `prompt-library.md`. Text meant for an agent must not
   be able to edit whichever note or file the user happened to open last.
+- **Queue** is the odd one of the four: it does not inject, it *stages* — text held for the
+  focused agent until a delivery is explicitly asked for (`features/prompt-queue.md`). It is
+  here rather than in a workspace tab or a modal because the decision it exists for ("is now a
+  safe moment to interrupt this agent") is read off the terminal, and only the docked column
+  leaves the terminal on screen. It also absorbs the former Mailbox modal as two extra scopes,
+  so one message store has one surface. Its rail icon badges the fleet-wide pending count.
 - **Files** is a navigator, not a peer of the terminals it opens files next to, so it costs a
   drawer tab rather than a permanent workspace tab. As a pane it forced the layout to route
   every placement rule around it (an unanchored open, a Files-focused open, and session-note
@@ -553,7 +559,9 @@ responsive controls.
   therefore indistinguishable from the drawer forgetting its tab, which is why the keybinding
   catalog's labels say outright which commands restore the last tab and which always force one.
 - Desktop additionally has an always-visible 40 px **icon rail** on the far right, one icon per tab,
-  with a badge for unread notifications. The rail is the part that actually fixes discoverability:
+  with badges for unread notifications (amber, "unread") and pending queue items (accent,
+  "staged" — a different colour because staged work is not an alert). The rail is the part that
+  actually fixes discoverability:
   the surfaces are visible without a menu, a chord, or any configuration. Mobile reaches the same
   tabs through the drawer's own tab strip.
 - Both surfaces are **icon-only**, drawing from one map (`DRAWER_TAB_ICONS` in `railIcons.tsx`)
@@ -561,15 +569,19 @@ responsive controls.
   used to carry glyph *and* label: six of them measured ~444 px, which overflowed a phone
   drawer (`min(430px, 92vw)`) into a scrollbar-less scroller and silently parked the last two
   tabs off-screen. Six icons were ~234 px. Adding Files and Notes is what pushed it over, and
-  the icon-only strip is what leaves room for a seventh (Git) without repeating that.
+  the icon-only strip is what leaves room for a seventh (Git) and an eighth (Queue) without
+  repeating that.
 - The marks are stroke SVG on a 24 viewBox, sized in CSS (17 px in the strip, 19 px on touch,
   16 px on the rail), never in `em`: these surfaces run a 9–12 px font. They replaced text
   glyphs for the same reason the command rail's did — a monospace font gives every glyph one
   advance width but wildly different ink, so `!` came out a hairline beside a heavy `⧉` with no
   way to normalize it. Two of the old glyphs were also simply wrong: `⌘` is the macOS Command
   key on a Windows-first app, and `❯` read as a shell prompt right next to the tab named
-  Commands. The set is now clipboard-with-clock, terminal, speech bubble, folder, page, commit
-  fork, bell — the two injection tabs and the two navigators each form a legible pair. Git's
+  Commands. The set is now clipboard-with-clock, terminal, speech bubble, ordered lines feeding
+  a chevron, folder, page, commit fork, bell — the injection tabs and the two navigators each
+  form a legible group. Queue is deliberately not an envelope: the queue is *ordered* and the
+  order is the whole point of it, and the chevron is what stops three lines reading as a
+  hamburger menu. Git's
   fork is deliberately close kin to the command rail's Branch mark: they never appear together
   (one is a terminal action, one a drawer tab), and the fork is the one mark that says
   "branches".

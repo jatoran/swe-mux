@@ -91,16 +91,34 @@ queue).
 
 ## UI
 
-- **Queue workspace tab** per target session (`queue` pane leaf, id `queue:<session_id>`),
-  opened from the pane header's `queue[:N]` chip. Ordinary mixed-view tab: split, move,
-  mobile projection. Shows the ordered queue with the head marked `next`, per-state
-  actions (arm/unarm, edit inline, move, cancel/skip, copy, send now / send anyway,
-  retarget for stranded), sent items crossed out in place, and a composer to stage
-  drafts/armed messages. Live-updates off `mux:queue-changed` (re-dispatched
-  `queue_updated`/`queue_delivery` events).
+- **The Queue tab of the utility drawer** (`QueuePane`, session-scoped, follows the focused
+  session like Clipboard/Commands/Prompts). The placement is the point: deciding whether to
+  interrupt an agent is a judgement about that agent's live state, and the terminal is the
+  only place that state is legible — a workspace tab replaces the terminal, a modal covers
+  it, and the docked column sits beside it. Opened by the pane header's `queue[:N]` chip
+  (which focuses that session first, so the panel and the click agree about the target),
+  by `queue.open`, or by the rail/tab strip; the rail icon carries a fleet-wide pending
+  badge. Live-updates off `mux:queue-changed` (re-dispatched `queue_updated`/
+  `queue_delivery` events).
+- **Three scopes in that one panel.** `this session` is the working view: the ordered queue
+  with the head marked `next`, per-state actions, and the composer. `inbox`/`outbox` are the
+  former Mailbox modal, folded in (`agent-messaging.md`) — one store had grown two surfaces
+  with two different action sets.
+- **Built for a 300–620px column.** Rows carry only `Send now` (head) and the arm toggle
+  inline; edit, move, cancel/skip, the schedule presets and copy live behind a per-row `⋯`
+  that opens a tray under the row rather than a floating menu. Terminal-state items
+  (sent/failed/cancelled) collapse behind a `N delivered or closed` disclosure instead of
+  rendering crossed out in place. The auto-delivery controls collapse to a one-line
+  `auto: …` status with a disclosure. `Ctrl+Enter` in the composer stages armed.
+- **The `queue:<session_id>` pane leaf survives as an explicit pop-out** (the `↗` in the
+  panel header) for wide review or two queues side by side, and is what a persisted layout
+  holding one resolves to. It renders the same component with its target pinned instead of
+  following focus. Nothing creates one implicitly any more: a Queue tab per session
+  inspected, each competing with the terminal for pane space, is why the queue moved into
+  the drawer.
 - **The send-to-agent dialog is a queue sender.** "Add to queue" stages armed without
   delivering. "Send" stages armed and immediately asks the queue to deliver: an occupied
-  queue answers `head_of_line_blocked` and the dialog closes into the Queue tab (the
+  queue answers `head_of_line_blocked` and the dialog closes into the Queue panel (the
   message waits in the one audited place); a not-safe target keeps the dialog open with
   the daemon's reasons and flips the button to "Send anyway" (`confirm: true`, delivering
   the *same* staged message — edited text is written through a revision-checked edit
@@ -114,7 +132,7 @@ queue).
   file editors (whole document), and the Files tree context menu ("Send to an agent
   session", same fetch/gating as the copy action) all open the same dialog. The prompt
   library's send flow routes through the queue the same way; a refusal there reports
-  "queued but blocked" and points at the Queue tab.
+  "queued but blocked" and points at the Queue tab beside it in the same drawer.
 - **New-session seeds** travel as `seed_text` on the spawn request; the daemon inlines
   short bodies into argv and stages long ones into `.swe-mux/seeds/` with a reader prompt
   (`stage_seed_argv`), removing the former 20,000-character client-side ceiling.
@@ -139,9 +157,12 @@ queue).
   retention loop, `seed_text` handling in `_spawn_from_body`.
 - `src/swe_mux/spawn_contract.py` — `SpawnRequest.seed_text`.
 - `frontend/src/queueApi.ts` — typed client + refusal mapping; `frontend/src/QueuePane.tsx`
-  — the Queue tab; `frontend/src/SendToAgentPicker.tsx` — queue sender + confirm flow;
-  `frontend/src/App.tsx` — `deliverToAgent`, `openQueueForSession`, pane chip, event
-  re-dispatch; `frontend/src/layout.ts` — `queue` leaf kind.
+  — the panel (three scopes, both renderings); `frontend/src/drawerTabs.ts` +
+  `railIcons.tsx` — the `queue` drawer tab and its mark; `frontend/src/UtilityDrawer.tsx` —
+  the drawer rendering; `frontend/src/SendToAgentPicker.tsx` — queue sender + confirm flow;
+  `frontend/src/App.tsx` — `deliverToAgent`, `openQueueForSession` (drawer) vs
+  `openQueueTab` (pop-out), pane chip, badge total, event re-dispatch;
+  `frontend/src/layout.ts` — `queue` leaf kind.
 - Tests: `tests/test_prompt_queue.py`, `frontend/test/queueApi.test.ts`.
 
 ## Relates to

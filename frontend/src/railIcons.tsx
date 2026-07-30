@@ -72,6 +72,17 @@ export const PromptsIcon = () => <svg {...stroke}>
   <line x1="8" y1="12" x2="14" y2="12" />
 </svg>
 
+/** A stack of lines feeding a chevron: things waiting in order, and the way out.
+ *
+ * Not an envelope, which would say "mail" — the queue is ordered and the order is the whole
+ * point of it. The chevron is what stops three lines reading as a hamburger menu. */
+export const QueueIcon = () => <svg {...stroke}>
+  <line x1="3" y1="6" x2="13" y2="6" />
+  <line x1="3" y1="12" x2="13" y2="12" />
+  <line x1="3" y1="18" x2="13" y2="18" />
+  <polyline points="17 8 21 12 17 16" />
+</svg>
+
 /** A folder. A folder *tree* is the truer picture but turns to mud at this size. */
 export const FilesIcon = () => <svg {...stroke}>
   <path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.7.9L11.5 8H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
@@ -111,6 +122,7 @@ export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   clipboard: ClipboardHistoryIcon,
   commands: CommandsIcon,
   prompts: PromptsIcon,
+  queue: QueueIcon,
   files: FilesIcon,
   notes: NotesIcon,
   git: GitIcon,

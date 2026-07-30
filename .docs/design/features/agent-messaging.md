@@ -90,9 +90,13 @@ reasoning recorded so it is not rediscovered:
 
 ## UI
 
-- **Mailbox** (app menu → Mailbox…, works on mobile): inbox/outbox, sender and target
-  labels, delivery state, per-item revoke, "open queue", pause-all auto-delivery, and
-  "report unsafe delivery". Not a transcript — it shows delivery state and provenance only.
+- **Mailbox** — the `inbox`/`outbox` scopes of the drawer's Queue tab (app menu → Mailbox…
+  and `mailbox.open` land there; works on mobile): sender and target labels, delivery state,
+  per-item revoke, "open queue" (retargets the panel's session scope), pause-all
+  auto-delivery, and "report unsafe delivery". Not a transcript — it shows delivery state
+  and provenance only. It was a separate app-level modal until the Queue moved into the
+  drawer; one message store had grown two surfaces with two different action sets over it,
+  and the modal's own "open queue" bounced you out of itself into a workspace tab.
 - **Queue rows** show `from <sender>` and the hop number for relayed messages.
 - **Observation inbox** renders `spawn_request` items with the prompt, the requesting
   session, and `approve & start session` / `dismiss`.
@@ -122,7 +126,8 @@ in `queue_auto_policy`.
 - `src/swe_mux/project_files.py` — typed inbox items (`kind`/`request`) and
   `update_observation_request`.
 - `src/swe_mux/server.py` — mailbox route, spawn-request decision handler.
-- `frontend/src/Mailbox.tsx`, `frontend/src/Observations.tsx`, `frontend/src/queueApi.ts`.
+- `frontend/src/QueuePane.tsx` (the `inbox`/`outbox` scopes), `frontend/src/Observations.tsx`,
+  `frontend/src/queueApi.ts`.
 - Tests: `tests/test_agent_messaging.py`, `tests/test_mcp.py`,
   `tests/test_frontend_phase5_contract.py`.
 

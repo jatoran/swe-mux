@@ -75,16 +75,18 @@ Quantitative, machine-checked, and visible rather than asserted:
 
 These gate *widening* the capability (defaulting it on, dropping the TTL or the consecutive
 cap) — they do not gate the opt-in itself, which is bounded by construction. Current values
-are on `GET /api/queue/auto` and in the mailbox's status line.
+are on `GET /api/queue/auto` and in the mailbox scopes' status line.
 
 ## UI
 
-- **Queue tab strip**: the per-session toggle, the live bounds (sends left, minutes left,
-  quiet hours, why it is off), and the `accept agent messages armed` toggle. The toggle is
-  unavailable when the install's master switch is off, with the reason stated.
-- **Per-item schedule**: `+5m` / `+15m` / `+1h` presets and `Clear schedule`; a scheduled
-  item shows its time in the row.
-- **Mailbox overlay** (app menu → Mailbox): pause-all / resume, `report unsafe delivery`,
+- **Queue panel, `auto:` strip**: a one-line status (on/off, sends left, minutes left, quiet
+  hours, why it is off) that discloses the per-session toggle and the `accept agent messages
+  armed` toggle. The toggle is unavailable when the install's master switch is off, with the
+  reason stated. Collapsed by default because it is carried permanently above the queue in a
+  narrow column; it used to cost three wrapped lines there.
+- **Per-item schedule**: `+5m` / `+15m` / `+1h` presets and `Clear schedule`, behind the
+  row's `⋯`; a scheduled item shows its time in the row.
+- **Queue panel, `inbox`/`outbox` scopes**: pause-all / resume, `report unsafe delivery`,
   and the proving-period counters — reachable in one gesture from desktop or phone.
 - **Settings → Agents → Prompt queue**: the install-wide master switch and the bounds every
   opt-in runs under (stability window, consecutive-send cap, opt-in expiry, refusal back-off,
@@ -118,8 +120,8 @@ config, so the emergency pause never waits on a config write.
 - `src/swe_mux/prompt_queue.py` — `queue_auto_policy` / `queue_auto_counters` tables,
   constraint enforcement in `send_next`, `normalize_constraints`, `schedule_status`.
 - `src/swe_mux/server.py` — the `/api/queue/auto*` handlers and lifecycle wiring.
-- `frontend/src/QueuePane.tsx` (strip + schedule), `frontend/src/Mailbox.tsx` (emergency
-  controls), `frontend/src/queueApi.ts` (typed client).
+- `frontend/src/QueuePane.tsx` (the `auto:` strip, the schedule presets, and the emergency
+  controls in the mailbox scopes), `frontend/src/queueApi.ts` (typed client).
 - Tests: `tests/test_auto_delivery.py`, `tests/test_delivery_readiness_promotion.py`,
   `tests/test_frontend_phase5_contract.py`.
 

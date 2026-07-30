@@ -174,7 +174,7 @@ def test_notes_tab_indexes_written_notes_without_hosting_an_editor() -> None:
     # The retired modal is gone, and its three entry points now open the drawer tab.
     assert not (ROOT / "frontend" / "src" / "SessionNotesBrowser.tsx").exists()
     assert "SessionNotesBrowser" not in app
-    assert "tab === 'notes'" in drawer
+    assert "case 'notes':" in drawer
     assert "openNotesBrowser" in app
     assert "id: 'notes.browse'" in app
     assert "runNamedCommand('notes.browse')" in app
@@ -203,7 +203,7 @@ def test_files_is_a_drawer_navigator_rather_than_a_workspace_tab() -> None:
     tabs = source("drawerTabs.ts")
 
     assert "'files'" in tabs and "'notes'" in tabs
-    assert "tab === 'files'" in drawer
+    assert "case 'files':" in drawer
     assert "resource={{ kind: 'files', id: project.id }}" in drawer
     # Opened, never toggled: a click that names a surface and switches Project must not
     # close the panel it was asking for.
@@ -238,11 +238,20 @@ def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
 
     # Bumped deliberately, not incidentally. Six *labelled* tabs measured ~444px, which
     # overflowed a phone drawer (`min(430px, 92vw)`) into a scrollbar-less scroller that
-    # silently parked the last two off-screen; icon-only tabs are ~39px each, so seven fit
-    # with room to spare. Adding a tab means re-checking that on a phone, which is what this
-    # assertion is for — it is a prompt, not a cap.
+    # silently parked the last two off-screen. Adding a tab means re-checking that on a
+    # phone, which is what this assertion is for — it is a prompt, not a cap.
+    #
+    # Re-checked at eight (Queue): the two `min-width` floors both had to come down, and
+    # the strip gained `flex-wrap`. Eight tabs plus the 30px close button need 286px at the
+    # desktop floor of 32px (DRAWER_MIN_WIDTH is 300) and 318px at the touch floor of 36px
+    # (a 360px phone gives the overlay 331px). Below that the strip now wraps to a second
+    # row instead of hiding the last tab, so a ninth costs vertical space rather than
+    # silently costing a surface.
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
-    assert len(ids) == 7, ids
+    assert len(ids) == 8, ids
+    assert "flex-wrap:wrap" in css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
+    assert ".drawer-tabs button{position:relative;min-height:34px;flex:1 1 0;min-width:32px" in css
+    assert ".drawer-tabs button{min-height:44px;min-width:36px;max-width:none}" in css
     icon_map = icons[icons.index("DRAWER_TAB_ICONS") :]
     for tab_id in ids:
         assert re.search(rf"^  {tab_id}: \w+Icon,$", icon_map, re.MULTILINE), tab_id
@@ -261,8 +270,9 @@ def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
     # Sized in CSS on both surfaces: these run a 9-12px font, so `1em` would be unreadable.
     assert ".drawer-tabs button svg{width:17px" in css
     assert ".utility-rail button svg{width:16px" in css
-    # Touch has no rail, so the strip is the only tab control and gets a 44px target.
-    assert ".drawer-tabs button{min-height:44px;min-width:44px" in css
+    # Touch has no rail, so the strip is the only tab control and gets a 44px target on the
+    # axis it can afford: height. Width is capped by the overlay (see the floors above).
+    assert ".drawer-tabs button{min-height:44px;" in css
 
 
 def test_drawer_tabs_are_user_arrangeable_and_the_order_persists() -> None:
