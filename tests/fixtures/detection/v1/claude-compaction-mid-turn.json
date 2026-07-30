@@ -20,6 +20,6 @@
     ],
     "parser": {"status": "ready", "recognized": 3, "unknown": 0, "unknown_signatures": {}},
     "delivery_state": "unknown",
-    "delivery_reason": "terminal_mode_unknown_or_stale"
+    "delivery_reason": "readiness_debounce_pending"
   }
 }

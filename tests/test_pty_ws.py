@@ -809,3 +809,59 @@ async def test_sitting_down_at_the_other_device_still_takes_input_with_one_click
         assert session.input_owner_device == "desktop"
         await phone.close()
         await desktop.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_mouse_reports_are_not_counted_as_typed_input() -> None:
+    """A pointer crossing a pane must not look like a half-typed prompt.
+
+    Once an agent CLI enables mouse tracking, xterm delivers every report on the
+    same channel as keystrokes. Counting those advanced `input_revision`, which
+    delivery readiness reads as "the operator has started typing into the
+    composer since the turn ended" — a session the pointer merely passed over
+    then reported `terminal_input_after_completion` until its next turn, forever.
+    One live session was accumulating ~170 of these every 20 seconds.
+    """
+    session, app, writes, _resizes = _arbitration_app()
+
+    async with TestClient(TestServer(app)) as client:
+        pane = await _attach(client, 80, 24)
+        assert (await _claim(pane, "gesture", "desktop"))["active"] is True
+
+        await pane.send_json({"type": "input", "data": "\x1b[<35;80;10M\x1b[<35;81;10M"})
+        await asyncio.sleep(0.01)
+        assert session.input_revision == 0
+        assert session.last_input_event_ts == 0.0
+        # Still delivered: the child asked for these reports and renders from them.
+        assert writes[-1] == "\x1b[<35;80;10M\x1b[<35;81;10M"
+
+        # A click is the human being here, but it puts no text in the composer.
+        await pane.send_json({"type": "input", "data": "\x1b[<0;80;10M"})
+        await asyncio.sleep(0.01)
+        assert session.input_revision == 0
+        assert session.last_input_event_ts > 0.0
+
+        await pane.send_json({"type": "input", "data": "h"})
+        await asyncio.sleep(0.01)
+        assert session.input_revision == 1
+        await pane.close()
+
+
+def test_pointer_report_classification() -> None:
+    from swe_mux.server import pointer_report_kind
+
+    assert pointer_report_kind("\x1b[<35;10;20M") == "motion"      # SGR motion
+    assert pointer_report_kind("\x1b[<32;10;20M") == "motion"      # SGR drag
+    assert pointer_report_kind("\x1b[<0;10;20M") == "button"       # SGR press
+    assert pointer_report_kind("\x1b[<0;10;20m") == "button"       # SGR release
+    assert pointer_report_kind("\x1b[<64;10;20M") == "button"      # wheel up
+    assert pointer_report_kind("\x1b[M\x20\x30\x30") == "button"   # X10 press
+    assert pointer_report_kind("\x1b[M\x43\x30\x30") == "motion"   # X10 motion (32+3)
+    assert pointer_report_kind("\x1b[35;10;20M") == "motion"       # urxvt motion
+    assert pointer_report_kind("\x1b[<35;10;20M\x1b[<0;10;20M") == "button"
+    # Anything that is not purely mouse reports is input, including a report that
+    # arrives glued to a keystroke — the keystroke is what matters.
+    assert pointer_report_kind("hello") is None
+    assert pointer_report_kind("\x1b[<35;10;20Mx") is None
+    assert pointer_report_kind("\x1b[A") is None
+    assert pointer_report_kind("") is None

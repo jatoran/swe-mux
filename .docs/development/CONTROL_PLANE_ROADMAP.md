@@ -196,8 +196,9 @@ after its most fragile input (it hooks *events*, not hooks — see §10).
 | **Enablement DAG** | The per-project opt-in dependency graph: a consumer cannot be enabled unless its substrate dependencies are enabled for that project (§8). |
 | **Automation layer** | Umbrella term for rules + observers when one word is needed. |
 | **Native hooks** | Reserved exclusively for the CLIs' own hook systems (Claude Code hooks, Codex `notify`). They are an event *source*, nothing more. |
-| **Agent run** (`agent_run_id`) | One continuous provider conversation on one PTY, and **the scope every control-plane record is keyed by** — Tier 0 facts, annotations, evidence sets, scan records, queue bindings. A session may have several runs in sequence; a run never spans two conversations. |
+| **Agent run** (`agent_run_id`) | One continuous provider conversation, and **the scope every control-plane record is keyed by** — Tier 0 facts, annotations, evidence sets, scan records, queue bindings. A session may have several runs in sequence; **a run never spans two conversations**, which is the invariant with teeth. It is usually also one PTY, but that is a consequence rather than a rule: a conversation the provider itself continues onto a new PTY (Claude `--resume`) is still one run. |
 | **Conversation rollover** | An in-CLI `/clear` (Claude) or `/new` (Codex): same PTY, same mux session, new provider conversation, therefore **a new agent run**. Signalled by `agent_conversation_rolled` on the event log. Consumers do not detect it themselves — they inherit the boundary from the run id (`ROADMAP.md` Phase 5.4). |
+| **Resume inheritance** | The mirror of a rollover: new PTY, new mux session, **same** provider conversation, therefore **the same agent run**. Claude's `--resume` appends to the transcript it resumed, so the pane inherits that run (`spawn_agent_run_id`) and its history entry instead of opening a second over one file — and the timeline, facts, annotations, and title continue rather than restarting blank. Codex resume mints a new rollout id, so it is a new conversation and a new run. See `design/features/history.md`. |
 | **Annotations** | Persisted observer/rule output attached to sessions (titles, summaries, verdicts, scan records). |
 | **Universal commands** | Input-side sibling of universal hooks: mux-level canned prompts injectable into any backend (see §17). |
 | **Rulepacks** | Shareable, parameterized bundles of rules + observers + scripts (see §15). |
@@ -244,9 +245,9 @@ both sit on top of everything else. A third, inverse arrow — the **return path
       │  │   cheap-model records;   │  │  distilled    │  │  GRAPH    │ │  │ normalized,  │
       │  │   the "why" + salient    │  │  architecture │  │ (Tier 0)  │ │  │ sequenced    │
       │  │   user/agent messages    │  └───────────────┘  └─────▲─────┘ │  └──────▲───────┘
-      │  └───────────▲──────────────┘  (continuous title also   │       │         │
-      │              │                  derives from the        │       │         │
-      │        ┌─────┴──────────────────timeline, §6.11)─────────┴───────┴─────────┴──────┐
+      │  └───────────▲──────────────┘  (a continuous title      │       │         │
+      │              │                   would have read this;  │       │         │
+      │        ┌─────┴───────────────────abandoned, §6.11)──────┴───────┴─────────┴──────┐
       └────────┤            TIER 0  — DETERMINISTIC FACTS (no model)                      │
                │  file hashes · git state · test pass/fail · exit codes · tool           │
                │  fingerprints · process tree · attach/input/focus telemetry             │
@@ -369,8 +370,9 @@ titles, summaries, and digests key off — what a session is *about* lives in th
 user's actual asks (and mid-session redirections) and the agent's salient
 responses and claims. The scan record must capture those as first-class, weighted
 above interim tool chatter: each new or changed user request, and each agent turn
-that states intent, makes a claim, or reports a result. This is what a continuous
-title (§6.11) and the absence digest (§6.8) consume; it is also the "read agent
+that states intent, makes a claim, or reports a result. This is what the absence
+digest (§6.8) consumes (a continuous title would have too, before §6.11 was
+abandoned); it is also the "read agent
 and user turns, skip the interim" instinct made concrete — the delta-strip already
 drops tool bodies, but the message spine is preserved and emphasized rather than
 averaged into the noise.
@@ -653,13 +655,29 @@ has memory. These require seeing *all agents, all time, one machine* at once:
   *work items* continuity across sessions and backends. The CLIs have sessions; the
   mux can have threads of work.
 
-### 6.11 Continuous session title  ← scan timeline (+ deterministic pin)
+### 6.11 Continuous session title  ← ABANDONED
 
-A modification to the existing built-in titler, replacing the earlier one-shot
-label. The title **adapts as the session progresses** — an evolving, at-a-glance
-answer to "what is this session about right now."
+**Not being built.** Retained as a record of why, because the idea is an easy one to
+have twice.
 
-How it stays efficient and safe:
+The premise was that a title should track the work. Field behaviour showed the
+opposite requirement: a title's job is to be a *handle* — the thing a user finds a
+tab by after not looking at it for an hour — and a handle that moves is not one. The
+shipped `turn_ended` stage was already a weak version of "adapt as the session
+progresses", and it was the source of the complaint that titles "gradually become
+something not clear": naming a run from its most recent turn produced `OK`,
+`FrozenClaude`, `Reply FROZENCODEX` for runs whose actual subject was stable and
+obvious from the opening request.
+
+What ships instead (`design/features/automation.md`): one title per `agent_run_id`,
+taken from the request the run opened with and pinned durably so retries and daemon
+restarts reproduce it; the `turn_ended` reading demoted to a fallback for runs whose
+request was never captured (Codex); background retry on provider failure. A rollover
+still retitles, since that mints a new run.
+
+The rest of this section is the abandoned design.
+
+How it would have stayed efficient and safe:
 
 - **Derive from the scan timeline, don't re-read transcripts.** The records already
   capture `user_ask`, `intent`, `claim`, `work_phase`, and `target` (§5.5). A title
@@ -687,23 +705,13 @@ How it stays efficient and safe:
 - **Compact task labels**, no backend or "terminal session" prefixes — the existing
   titling convention carries over.
 
-**Partly landed.** The nameless-window half shipped ahead of the scan timeline, because
-it never needed it: `builtin.session-titler-initial` fires on `turn_started` and titles
-the pane from the user's submitted prompt, and the existing `turn_ended` titler may
-replace that provisional label exactly once. The paid full-transcript call is still one
-per `agent_run_id`, so `test_builtin_titler_reserves_one_paid_call_per_agent_run` still
-holds as written.
-
-Two things this bought beyond the earlier plan. The prompt-derived stage needs neither a
-transcript nor semantic observation, which fixes titling in the degraded-observation
-states that were failing it outright in the field (5 of 6 observed failures were
-`observer requires semantic observation; current capability is inferred`). And splitting
-the stages establishes the provisional/settled distinction the continuous titler needs
-anyway.
-
-What still lags: the settled stage reads a transcript slice rather than the scan
-timeline, and recomputation is still once-per-run rather than material-shift gated with
-debounce and hysteresis. Those are the parts that genuinely depend on §5.5.
+**One piece was kept.** `builtin.session-titler-initial` fires on `turn_started` and
+titles the pane from the user's submitted prompt. It shipped as the "provisional" half of
+a two-stage scheme and is now the whole titler, because the request turned out to be a
+better title source than the completed turn rather than a placeholder for it. It also
+needs neither a transcript nor semantic observation, which fixed titling in the
+degraded-observation states that were failing it outright in the field (5 of 6 observed
+failures were `observer requires semantic observation; current capability is inferred`).
 
 ---
 
@@ -968,9 +976,11 @@ another agent can pick up mid-plan. Section links point to the design detail.
     deterministically destroying exactly the long test/build facts §6.3–6.4 need); capture
     failures are counted and surfaced at `GET /api/diagnostics/background`
   - [x] Ownership on every fact: `agent_run_id` + `project_id` resolved at capture time.
-    Per-run queries cannot be recovered from `session_id` across resume/promotion/branch
-    — and, from `ROADMAP.md` Phase 5.4, across an in-CLI `/clear` or `/new` as well, which
-    is the one run boundary the daemon used not to draw
+    Per-run queries cannot be recovered from `session_id` across promotion, branch, or a
+    Codex resume — and, from `ROADMAP.md` Phase 5.4, across an in-CLI `/clear` or `/new` as
+    well, which is the one run boundary the daemon used not to draw. A **Claude** resume is
+    the opposite case and draws no boundary: it continues one conversation onto a new PTY, so
+    the run (and everything keyed by it) carries across the new `session_id`
   - [x] `tool_result` facts classified per action (`command_result`, `file_read_result`, …)
     with the tool's target correlated forward from its `tool_use`; the exit class no longer
     collapses success and failure onto one fingerprint
@@ -1109,12 +1119,10 @@ another agent can pick up mid-plan. Section links point to the design detail.
 
 ### Known gaps and follow-ups
 
-- [ ] **Continuous title is documented but not coded.** `features/automation.md` describes
-  the adaptive, scan-derived, rename-suppressed titler; `automation.py` still reserves one
-  title call per run and `test_automation_phase6.py` asserts the old one-shot behavior. Both
-  must change for the doc to be true (§6.11). The per-run reserve is no longer *wrong* once
-  `ROADMAP.md` Phase 5.4 lands (a `/clear` now yields a new run and therefore a new title);
-  it is merely still one-shot within a run.
+- [x] **Continuous title, closed by abandoning it.** The doc/code divergence is gone because
+  the doc changed: one title per `agent_run_id` off the run's opening request is the intended
+  behaviour, not a shortfall (§6.11 records why). `features/automation.md` and
+  `test_automation_phase6.py` both describe that.
 - [x] **Opt-in UI.** Shipped with the deterministic consumers (see the toggle surface above);
   hand-editing `.swe-mux/config.toml` still works and remains the source of truth.
 - [x] **Preview-shot retention.** Swept at 7 days by the media-cleanup loop across registered
@@ -1481,8 +1489,6 @@ Universal hooks abstracts the CLIs' *signals*. The same move applies elsewhere:
 - Scan-record salient-message weighting: how strongly to privilege `user_ask` and
   agent `claim` over tool activity, and whether that weighting is a prompt concern
   or a pre-filter on the delta.
-- Continuous title cost gating: the exact material-shift threshold and debounce that
-  keep the title responsive without a call every turn.
 - The rehydration-rate target: instrument it first, then decide the confidence/
   coverage thresholds that trigger a Tier 2 source expansion.
 - Return-path retrieval precision: the scope/confidence thresholds below which MCP

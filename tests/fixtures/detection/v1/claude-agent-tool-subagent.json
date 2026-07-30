@@ -7,7 +7,7 @@
     {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "tool_use", "id": "child-1", "name": "Agent"}], "stop_reason": "tool_use"}}},
     {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": [{"type": "tool_result", "tool_use_id": "child-1", "content": "child done", "is_error": false}]}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
     {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "root done"}], "stop_reason": "end_turn"}}},
-    {"kind": "terminal", "mode": "normal"},
+    {"kind": "terminal", "mode": "alternate"},
     {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"}
   ],
   "expected": {

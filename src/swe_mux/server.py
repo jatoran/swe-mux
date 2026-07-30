@@ -205,6 +205,16 @@ _OSC_DEFAULT_COLOR_RESPONSE = re.compile(
     r"(?:\x07|\x1b\\))+",
     re.IGNORECASE,
 )
+# Mouse reports, in the three encodings a browser terminal can emit: SGR (1006,
+# what xterm.js sends and by far the common case), urxvt (1015), and X10, whose
+# three payload bytes are raw and so must not be constrained to digits.
+_MOUSE_REPORT_BODY = (
+    r"\x1b\[(?:<(\d{1,4});\d{1,5};\d{1,5}[Mm]"
+    r"|(\d{1,4});\d{1,5};\d{1,5}M"
+    r"|M([\x20-\xff]{3}))"
+)
+_MOUSE_REPORT = re.compile(_MOUSE_REPORT_BODY)
+_MOUSE_REPORT_ONLY = re.compile(f"(?:{_MOUSE_REPORT_BODY})+")
 
 
 def hook_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -230,6 +240,35 @@ def hook_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def _is_codex_default_color_response(backend: str, data: str) -> bool:
     """Reject late OSC 10/11 replies before Codex mistakes them for prompt input."""
     return backend == "codex" and _OSC_DEFAULT_COLOR_RESPONSE.fullmatch(data) is not None
+
+
+def pointer_report_kind(data: str) -> str | None:
+    """Classify a payload that consists only of mouse reports.
+
+    ``"motion"`` for a pointer that merely moved across the pane, ``"button"``
+    for a press, release, or wheel notch, and None for anything that is not
+    purely mouse reports.
+
+    This matters because these arrive on the same channel as typing. xterm hands
+    every mouse report to `onData` once the child enables tracking, so a pointer
+    crossing an agent's pane produced ~8 "keystrokes" a second — enough to keep
+    `input_revision` climbing forever, which delivery readiness reads as *the
+    operator has half-typed something into the composer*. A mouse report cannot
+    put text in a composer, so it must not advance that revision; a motion report
+    is not even presence, since the pointer can cross a pane on its way somewhere
+    else.
+    """
+    if not data or not _MOUSE_REPORT_ONLY.fullmatch(data):
+        return None
+    for match in _MOUSE_REPORT.finditer(data):
+        sgr, urxvt, x10 = match.groups()
+        # X10 offsets every field by 32 so the report stays printable.
+        button = int(sgr or urxvt) if sgr or urxvt else ord(x10[0]) - 32
+        # Bit 5 is the motion flag. Wheel notches set bit 6 instead, and those
+        # are a deliberate act, so they count as presence like a click does.
+        if not button & 32:
+            return "button"
+    return "motion"
 
 
 def json_response(data: Any, status: int = 200) -> web.Response:
@@ -4869,6 +4908,18 @@ async def history_transcript(request: web.Request) -> web.Response:
     )
 
 
+def _same_directory(left: str, right: str) -> bool:
+    """Whether two recorded paths name the same directory on this platform."""
+
+    def key(value: str) -> str:
+        try:
+            return os.path.normcase(str(Path(value).resolve()))
+        except OSError:
+            return os.path.normcase(value)
+
+    return key(left) == key(right)
+
+
 async def resume_history(request: web.Request) -> web.Response:
     row = await request.app["history"].history_entry(request.match_info["sid"])
     if not row:
@@ -4919,12 +4970,28 @@ async def resume_history(request: web.Request) -> web.Response:
             409,
         )
     owning_project = request.app["projects"].projects[target_project]
+    # Claude's `--resume` continues the same conversation in the same transcript
+    # file under the same id, so the resumed pane inherits that conversation's
+    # run instead of opening a second entry over one file. Codex mints a new
+    # rollout with a new id on resume, so there the new run is a genuinely new
+    # conversation and gets its own entry. Claude resolves transcripts by working
+    # directory, so a resume into a different root writes a different file and is
+    # likewise a new conversation.
+    adopts_run = str(row["backend"]) == "claude" and _same_directory(
+        str(row["cwd"]), owning_project.root
+    )
+    requested_name = str(body.get("name") or "")
     session = await request.app["sessions"].spawn(
         backend=str(row["backend"]),
-        name=body.get("name") or f"{row['name']} resumed",
+        # The conversation keeps its name. A suffix here compounded on every
+        # resume ("… resumed resumed") and, for Claude, retitled an entry the
+        # resumed pane now shares rather than replaces.
+        name=requested_name or str(row["name"]),
         cwd=owning_project.root,
         project_id=target_project,
         resume_native_id=str(row["native_id"]),
+        adopt_run_id=str(row["id"]) if adopts_run else None,
+        auto_named=None if requested_name else bool(row.get("auto_named")),
         project_label=owning_project.name,
     )
     next_layout = attach_terminal(
@@ -4943,12 +5010,17 @@ async def resume_history(request: web.Request) -> web.Response:
         await request.app["sessions"].stop(session.record.id)
         request.app["sessions"].sessions.pop(session.record.id, None)
         raise
-    await request.app["automation_store"].add_lineage(
-        str(row["id"]),
-        session.record.agent_run_id or session.record.id,
-        "resume",
-        {"backend": row["backend"], "project_id": target_project},
-    )
+    child_run_id = session.record.agent_run_id or session.record.id
+    # An inherited run is the same run, not a descendant of one: recording an
+    # edge from a conversation to itself would make every consumer that walks
+    # lineage see a cycle where nothing was forked.
+    if child_run_id != str(row["id"]):
+        await request.app["automation_store"].add_lineage(
+            str(row["id"]),
+            child_run_id,
+            "resume",
+            {"backend": row["backend"], "project_id": target_project},
+        )
     return json_response(session.record.snapshot(), 201)
 
 
@@ -6650,13 +6722,19 @@ async def _handle_terminal_input(
         return
     session.pty.write(data)
     now = time.monotonic()
-    if not is_terminal_response:
+    pointer = pointer_report_kind(data)
+    if not is_terminal_response and pointer is None:
         session.input_revision += 1
         session.last_input_event_ts = now
         # Typing is the strongest evidence of where the human is; it renews this
         # connection's protection from a background pane's passive re-claim.
         session.note_owner_input(now)
-    if not is_terminal_response and now - session.last_input_report_ts >= 2:
+    elif pointer == "button":
+        # A click or a wheel notch is the human being here, but it puts no text in
+        # the composer, so it moves the presence clock and not the input revision.
+        session.last_input_event_ts = now
+        session.note_owner_input(now)
+    if not is_terminal_response and pointer is None and now - session.last_input_report_ts >= 2:
         session.last_input_report_ts = now
         request.app["events"].emit_background(
             "terminal_input",

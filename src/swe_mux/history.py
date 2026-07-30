@@ -454,46 +454,106 @@ class HistoryIndex:
 
         await self._run(op)
 
+    def _insert_session_row(
+        self, session: SessionRecord, transcript: str | None, row_id: str
+    ) -> None:
+        self._db.execute(
+            "INSERT OR REPLACE INTO history"
+            "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,"
+            "tokens_in,tokens_out,transcript_path,executable,argv_json,"
+            "pinned_attention,shell_profile_id,agent_visible,repository_id,project_label,"
+            "project_root,context_window,final_context_pct,peak_context_pct,model,"
+            "measurement_source,project_scope_id,repo_group_id,auto_named) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                row_id,
+                session.native_session_id,
+                session.backend,
+                session.name,
+                session.cwd,
+                session.project_id,
+                session.id,
+                session.created_at,
+                session.tokens_in,
+                session.tokens_out,
+                transcript,
+                session.exe,
+                json.dumps(session.args),
+                int(session.pinned_attention),
+                session.shell_profile_id,
+                int(session.backend in {"claude", "codex"}),
+                session.repository_id,
+                session.project_label,
+                session.project_root,
+                session.context_window or None,
+                session.context_pct if session.context_window else None,
+                session.context_peak_pct if session.context_window else None,
+                session.model,
+                session.measurement_source,
+                session.project_scope_id or session.repository_id,
+                session.repo_group_id,
+                int(session.auto_named),
+            ),
+        )
+
     async def session_started(self, session: SessionRecord, transcript: str | None) -> None:
         def op() -> None:
-            self._db.execute(
-                "INSERT OR REPLACE INTO history"
-                "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,"
-                "tokens_in,tokens_out,transcript_path,executable,argv_json,"
-                "pinned_attention,shell_profile_id,agent_visible,repository_id,project_label,"
-                "project_root,context_window,final_context_pct,peak_context_pct,model,"
-                "measurement_source,project_scope_id,repo_group_id,auto_named) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    session.id,
-                    session.native_session_id,
-                    session.backend,
-                    session.name,
-                    session.cwd,
-                    session.project_id,
-                    session.id,
-                    session.created_at,
-                    session.tokens_in,
-                    session.tokens_out,
-                    transcript,
-                    session.exe,
-                    json.dumps(session.args),
-                    int(session.pinned_attention),
-                    session.shell_profile_id,
-                    int(session.backend in {"claude", "codex"}),
-                    session.repository_id,
-                    session.project_label,
-                    session.project_root,
-                    session.context_window or None,
-                    session.context_pct if session.context_window else None,
-                    session.context_peak_pct if session.context_window else None,
-                    session.model,
-                    session.measurement_source,
-                    session.project_scope_id or session.repository_id,
-                    session.repo_group_id,
-                    int(session.auto_named),
-                ),
-            )
+            self._insert_session_row(session, transcript, session.id)
+            self._db.commit()
+
+        await self._run(op)
+
+    async def resume_agent_run(self, session: SessionRecord, transcript: str | None) -> None:
+        """Reopen the row of a conversation a freshly spawned pane resumed.
+
+        Claude's ``--resume`` appends to the same transcript under the same
+        conversation id, so the pane continues an agent run that already has a
+        row. Opening a second one would index one file twice, show one
+        conversation as two entries, and leave the first entry's totals moving
+        after its own pane exited. What the conversation owns — its start, its
+        note, its totals, its transcript watermark — is therefore preserved, and
+        only what the new PTY genuinely changes is refreshed.
+        """
+        run_id = session.agent_run_id or session.id
+
+        def op() -> None:
+            row = self._db.execute(
+                "SELECT agent_visible FROM history WHERE id=?", (run_id,)
+            ).fetchone()
+            if row is None:
+                # The row was deleted between the resume request and this write.
+                # Every later write for this pane keys on the run id, so open one
+                # there rather than leaving the pane unable to record anything.
+                self._insert_session_row(session, transcript, run_id)
+            elif row["agent_visible"]:
+                self._db.execute(
+                    "UPDATE history SET exited_at=NULL,exit_reason=NULL,final_state=NULL,"
+                    "name=?,cwd=?,project_id=?,executable=?,argv_json=?,pinned_attention=?,"
+                    "shell_profile_id=?,auto_named=?,"
+                    "transcript_path=COALESCE(?,transcript_path),repository_id=?,"
+                    "project_label=?,project_root=?,project_scope_id=?,repo_group_id=? "
+                    "WHERE id=?",
+                    (
+                        session.name,
+                        session.run_cwd or session.cwd,
+                        session.project_id,
+                        session.exe,
+                        json.dumps(session.args),
+                        int(session.pinned_attention),
+                        session.shell_profile_id,
+                        int(session.auto_named),
+                        transcript,
+                        session.repository_id,
+                        session.project_label,
+                        session.project_root,
+                        session.project_scope_id or session.repository_id,
+                        session.repo_group_id,
+                        run_id,
+                    ),
+                )
+            # A quarantined row is an audit record of misattribution. Resuming
+            # does not resurrect it, and overwriting it would destroy the
+            # evidence it exists to keep.
             self._db.commit()
 
         await self._run(op)

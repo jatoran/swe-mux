@@ -49,7 +49,9 @@ def _ready_session() -> tuple[ReplaySession, DeliveryReadinessTracker, VirtualCl
     session = ReplaySession("claude", clock)
     tracker = DeliveryReadinessTracker(clock=clock.monotonic)
     session.record.parser_status = "ready"
-    session.terminal_mode = "normal"
+    # Claude Code draws its prompt on the alternate screen and never leaves it,
+    # so this is what a healthy claude session reports (`delivery-readiness.md`).
+    session.terminal_mode = "alternate"
     session.terminal_mode_updated_at = clock.monotonic()
     tracker.observe(_event("turn_started"), session)
     tracker.observe(_event("turn_ended", outcome="completed"), session)

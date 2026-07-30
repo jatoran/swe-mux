@@ -6,7 +6,7 @@
   "steps": [
     {"kind": "session", "record": {"state": "working"}},
     {"kind": "catchup", "open_turn": true, "historical_seen": 5, "age_seconds": 120, "expect_state": "idle"},
-    {"kind": "terminal", "mode": "normal", "expect_state": "idle"}
+    {"kind": "terminal", "mode": "alternate", "expect_state": "idle"}
   ],
   "expected": {
     "events": [],
