@@ -48,7 +48,7 @@ import {
   type ClaimReason,
   type OwnershipView,
 } from './inputOwnership'
-import { deviceIsFocused } from './devicePresence'
+import { deviceIsFocused, PRESENCE_REPORTED_EVENT } from './devicePresence'
 import { localPreviewUrl } from './previewLinks'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness, type ConnectionPhase } from './liveness'
 import {
@@ -645,6 +645,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // When this pane last asked for input back on its own. Bounds the re-claim so no
     // frame the daemon sends can put a pane into a claim loop.
     let lastReclaimAt: number | null = null
+    // One retry per socket, once the daemon has been told which device this is. See
+    // onPresenceReported: the pane's claim usually beats the presence heartbeat on a
+    // cold load, and is judged against a stale idea of where the user is.
+    let presenceRetried = false
     const noteOwnership = (next: OwnershipView) => {
       ownership = next
       ownsInput = next.owns
@@ -675,6 +679,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     claimInputRef.current = (reason: ClaimReason) => { lastInteractionAt = Date.now(); claimInput(reason) }
     const claimOnFocus = () => claimInput(claimReasonForFocus(lastInteractionAt, Date.now()))
+    // The events socket and this one race on a cold load, and this one usually wins,
+    // so the daemon judges the attach claim without yet knowing which device asked.
+    // Ask once more the moment it does. Once per socket: after that the refusal is a
+    // real answer and the take-over strip is the honest response to it.
+    const onPresenceReported = () => {
+      if (presenceRetried || ownsInput || ownership.denied === null) return
+      presenceRetried = true
+      claimInput('passive')
+    }
     const clearHandshakeWatchdog=()=>{
       if(handshakeTimer===undefined)return
       window.clearTimeout(handshakeTimer)
@@ -804,6 +817,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       nextAttemptAt=null
       clearHandshakeWatchdog()
       reconnectReplay=reconnecting
+      presenceRetried=false
       setConnectionState(reconnecting?'reconnecting':'connecting')
       attemptStartedAt=Date.now()
       let next:WebSocket
@@ -1206,8 +1220,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     })
     window.visualViewport?.addEventListener('resize',scheduleFit)
     loadLatestReply()
+    window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{} }
+    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput])
 
   const copy = async () => {

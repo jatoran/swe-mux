@@ -448,7 +448,10 @@ background window on every passive claim it made. The reply is
 same frame with `reason:"claimed_elsewhere"`, and every remaining client gets
 `{type:"input_owner_released", epoch}` when the owner detaches. `epoch` increments on each
 transfer (not on an owner renewing its own claim) so a client can discard an ownership
-frame that lost a race with a newer one.
+frame that lost a race with a newer one. A refusal is *not* a displacement: clients must
+not re-claim on one, and the daemon leaves a connection's repeated passive claims
+unanswered for a second after refusing one, because answering each is what turns a
+refusal into a claim loop — one live session logged 7566 refused claims that way.
 
 Input from a connection that is not the owner is refused, not dropped:
 `{type:"input_rejected", epoch, owner_device, data, broadcast, retry}` echoes the payload

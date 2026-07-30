@@ -21,6 +21,9 @@ export interface PresenceFrame {
   interaction_age: number | null
 }
 
+/** Fired after this device tells the daemon where its user is. */
+export const PRESENCE_REPORTED_EVENT = 'mux:presence-reported'
+
 /** Heartbeat period. The daemon treats presence older than 90s as gone. */
 export const PRESENCE_INTERVAL_MS = 30_000
 /** Floor between interaction-triggered reports, so typing is not a frame per key. */
@@ -111,6 +114,12 @@ export function watchDevicePresence(
       now: lastReportAt,
       lastInteractionAt,
     }))
+    // A terminal pane can attach and claim before the daemon has heard from this
+    // device at all — the sockets race, and on a cold load the pane usually wins. The
+    // claim is then judged against a stale idea of where the user is, which is why
+    // opening the app on a phone could still greet you with "take over". Panes listen
+    // for this and ask once more, now that the daemon knows.
+    window.dispatchEvent(new CustomEvent(PRESENCE_REPORTED_EVENT))
   }
   const interacted = () => {
     lastInteractionAt = now()
