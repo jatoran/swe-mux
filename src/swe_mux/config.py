@@ -317,6 +317,10 @@ class Config:
     note_line_height: float = 0.0
     note_command_rail: str = "auto"
     note_rail_button_size_px: int = 0
+    # Vertical rules at each enclosing indent level. Continuity ships this off so that
+    # upgrading it changes no embedder's appearance; on is the right default here because
+    # notes are mostly nested lists, and it matches Continuity's own desktop application.
+    note_indent_guides: bool = True
     # Chord → command overlay on the editor's built-in shortcut table, checked
     # before the policy filter. The empty string carries the library's `null`
     # (release the chord to the browser) because TOML has no null; the browser

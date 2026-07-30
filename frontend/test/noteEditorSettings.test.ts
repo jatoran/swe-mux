@@ -14,6 +14,7 @@ const config = (overrides: Record<string, unknown> = {}): Record<string, unknown
   note_tab_behavior: 'indent',
   note_shortcut_policy: 'browser-safe',
   note_command_rail: 'auto',
+  note_indent_guides: true,
   note_font_family: '',
   note_font_size_px: 0,
   note_line_height: 0,
@@ -40,6 +41,15 @@ test('element settings follow the config', () => {
   assert.equal(settings.tabBehavior, 'focus')
   assert.equal(settings.shortcutPolicy, 'editor-first')
   assert.equal(settings.commandRail, 'on')
+})
+
+test('indent guides are on unless the config says otherwise', () => {
+  assert.equal(noteEditorSettingsFrom(config()).indentGuides, 'on')
+  assert.equal(noteEditorSettingsFrom(config({ note_indent_guides: false })).indentGuides, 'off')
+  // Only an explicit false turns them off: a daemon too old to know the key, or a junk
+  // value, must not silently land on Continuity's own off-by-default.
+  assert.equal(noteEditorSettingsFrom(config({ note_indent_guides: undefined })).indentGuides, 'on')
+  assert.equal(noteEditorSettingsFrom(config({ note_indent_guides: 'no' })).indentGuides, 'on')
 })
 
 test('an out-of-range or unknown value falls back instead of reaching the editor', () => {

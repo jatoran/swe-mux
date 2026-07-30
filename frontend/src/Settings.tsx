@@ -44,6 +44,7 @@ type Config = {
   note_tab_behavior:'indent'|'focus';note_shortcut_policy:ShortcutPolicy
   note_font_family:string;note_font_size_px:number;note_line_height:number
   note_command_rail:'auto'|'on'|'off';note_rail_button_size_px:number
+  note_indent_guides:boolean
   note_shortcut_overrides:Record<string,string>
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
   ccusage_claude_command:string[]; ccusage_codex_command:string[]
@@ -728,6 +729,8 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <section><h3>Note editor</h3>
             <label class="check"><span>Spellcheck</span><input type="checkbox" checked={draft.note_spellcheck} onChange={e=>change('note_spellcheck',e.currentTarget.checked)}/></label>
             <p>The browser's own spellchecker, on the editor's text input. Notes are prose, so it is worth more here than in a terminal — but it also underlines code, paths, and identifiers.</p>
+            <label class="check"><span>Indent guides</span><input type="checkbox" checked={draft.note_indent_guides} onChange={e=>change('note_indent_guides',e.currentTarget.checked)}/></label>
+            <p>Vertical rules marking each enclosing indent level, the way the standalone Continuity app draws them. A guide marks where a parent list item's content starts, so the outermost level shows none, and the level the caret sits in is drawn brighter.</p>
             <label>Markdown<select value={draft.note_syntax} onChange={e=>change('note_syntax',e.currentTarget.value as Config['note_syntax'])}><option value="markdown">Render Markdown</option><option value="plain">Show raw text</option></select></label>
             <p>Raw text keeps every editing feature — undo, multi-cursor, list continuation, autosave — and only stops the Markdown projection, so headings, emphasis, links, and task markers stay as the characters you typed.</p>
             <label>Tab key<select value={draft.note_tab_behavior} onChange={e=>change('note_tab_behavior',e.currentTarget.value as Config['note_tab_behavior'])}><option value="indent">Indent and outdent lines</option><option value="focus">Move focus out of the editor</option></select></label>

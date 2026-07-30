@@ -24,6 +24,9 @@ export type NoteEditorSettings = {
   shortcutPolicy: ShortcutPolicy
   /** `auto` shows the rail on touch-primary devices, which is Continuity's own default. */
   commandRail: 'auto' | 'on' | 'off'
+  /** Vertical rules at each enclosing indent level. Continuity defaults this off so an
+   *  upgrade changes no host's appearance; we default it on, matching its desktop app. */
+  indentGuides: 'on' | 'off'
   /** Chord → command, or null to release the chord to the browser (the library's unbind). */
   shortcutBindings: Readonly<Record<string, string | null>>
 }
@@ -40,6 +43,7 @@ export const DEFAULT_NOTE_EDITOR_SETTINGS: NoteEditorSettings = {
   tabBehavior: 'indent',
   shortcutPolicy: 'browser-safe',
   commandRail: 'auto',
+  indentGuides: 'on',
   shortcutBindings: { ...DEFAULT_NOTE_SHORTCUT_OVERRIDES },
 }
 
@@ -76,6 +80,9 @@ export function noteEditorSettingsFrom(config: Record<string, unknown>): NoteEdi
       'browser-safe',
     ),
     commandRail: pick(config.note_command_rail, ['auto', 'on', 'off'] as const, 'auto'),
+    // Absent means a daemon older than this build, which should still show the guides
+    // rather than silently landing on Continuity's off-by-default.
+    indentGuides: config.note_indent_guides === false ? 'off' : 'on',
     shortcutBindings: noteShortcutBindings(config.note_shortcut_overrides),
   }
 }

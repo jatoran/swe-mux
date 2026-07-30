@@ -264,6 +264,8 @@ def test_note_editor_settings_are_hot_reloadable_and_validated(tmp_path: Path) -
     assert config.note_tab_behavior == "indent"
     assert config.note_shortcut_policy == "browser-safe"
     assert config.note_command_rail == "auto"
+    # Continuity defaults its guides off so an upgrade changes no embedder; we turn them on.
+    assert config.note_indent_guides is True
     # Zero/blank means "keep the editor's own default" rather than pinning one here.
     assert config.note_font_family == ""
     assert config.note_font_size_px == 0
@@ -278,6 +280,7 @@ def test_note_editor_settings_are_hot_reloadable_and_validated(tmp_path: Path) -
             "note_tab_behavior": "focus",
             "note_shortcut_policy": "editor-first",
             "note_command_rail": "on",
+            "note_indent_guides": False,
             "note_font_family": "Iosevka",
             "note_font_size_px": 18,
             "note_line_height": 1.8,
@@ -292,12 +295,14 @@ def test_note_editor_settings_are_hot_reloadable_and_validated(tmp_path: Path) -
         "note_tab_behavior",
         "note_shortcut_policy",
         "note_command_rail",
+        "note_indent_guides",
         "note_font_family",
         "note_font_size_px",
         "note_line_height",
         "note_rail_button_size_px",
     }
     reloaded = load_config(path)
+    assert reloaded.note_indent_guides is False
     assert reloaded.note_syntax == "plain"
     assert reloaded.note_font_family == "Iosevka"
     assert reloaded.note_line_height == 1.8

@@ -2202,6 +2202,15 @@ export function App() {
     { id: 'processes.all', label: 'Open unified process viewer', category: 'view', available: true, run: () => openProcessViewer() },
     { id: 'processes.project', label: 'Inspect selected project’s processes', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => openProcessViewer(null,commandProject?.id||null) },
     { id: 'terminal.find', label: 'Find in focused terminal', category: 'terminal', available: !!active, disabledReason: 'No focused terminal', run: () => window.dispatchEvent(new CustomEvent('mux:terminal-find', { detail: activeId })) },
+    // Which note is focused is not App state — it is whatever Continuity editor reported
+    // focus last — so this cannot be answered by an `available` flag computed at render.
+    // The resource holding that editor claims the event by cancelling it, and an unclaimed
+    // event is what "no note is focused" looks like.
+    { id: 'note.find', label: 'Find in focused note', category: 'view', available: true, run: () => {
+      const claim = new CustomEvent('mux:note-find', { cancelable: true })
+      window.dispatchEvent(claim)
+      if (!claim.defaultPrevented) setError('No focused note to search. Click into a note first.')
+    } },
     // The ⌨ read/select toggle used to exist only as a rail button, so it could
     // not be bound to a gesture or reached from the palette — on touch it is one
     // of the most-used controls, so it is a first-class command.

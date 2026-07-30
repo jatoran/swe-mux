@@ -78,6 +78,10 @@ KEYBINDING_COMMANDS = (
     ("stack.dissolve", "Dissolve focused tab stack", "pane"),
     ("broadcast.toggle", "Toggle broadcast input", "input"),
     ("terminal.find", "Find in focused terminal", "terminal"),
+    # Ctrl+F already reaches the focused note from inside the editor itself, so this is
+    # here for the palette, a gesture, and anyone who wants a different chord — not
+    # because the feature needs a binding to be usable.
+    ("note.find", "Find in focused note", "view"),
     ("terminal.copy", "Copy from focused terminal", "terminal"),
     ("terminal.paste", "Paste into focused terminal", "terminal"),
     ("terminal.selectAll", "Select all in focused terminal", "terminal"),

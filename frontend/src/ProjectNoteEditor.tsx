@@ -3,6 +3,7 @@ import type {
   ContinuityChangeDetail,
   ContinuityEditorElement,
   ContinuityRequestDetail,
+  HistoryState,
   RailAction,
   ScrollState,
 } from '@continuity-editor/editor'
@@ -21,6 +22,52 @@ import {
 // last-seen scroll per resource outside the component (like fileDrafts/browserStates) and
 // re-apply it when the same resource mounts again.
 const scrollStates = new Map<string, ScrollState>()
+
+/**
+ * Undo history across that same unmount. The engine is destroyed with the element, and its
+ * history used to go with it: you could undo while editing a note, but not after leaving it
+ * and coming back. Continuity 0.2.17 makes the history portable, so it is stashed here
+ * beside the scroll state and re-imported on the way back in.
+ *
+ * Bounded on both axes, because a history is far larger than a `ScrollState` and a long
+ * session touches many notes: `maxGroups` caps one note's stack, and the map keeps only the
+ * most recently stashed notes.
+ */
+const HISTORY_GROUP_LIMIT = 250
+const HISTORY_NOTE_LIMIT = 12
+const historyStates = new Map<string, HistoryState>()
+
+function stashHistory(key: string, element: ContinuityEditorElement): void {
+  let history: HistoryState
+  try {
+    history = element.exportHistory({ maxGroups: HISTORY_GROUP_LIMIT })
+  } catch {
+    return
+  }
+  // Delete before setting so re-insertion moves this key to the newest end of the
+  // iteration order, which is what makes the eviction below least-recently-stashed.
+  historyStates.delete(key)
+  historyStates.set(key, history)
+  for (const oldest of historyStates.keys()) {
+    if (historyStates.size <= HISTORY_NOTE_LIMIT) break
+    historyStates.delete(oldest)
+  }
+}
+
+/**
+ * Import refuses a history captured from different content, which is exactly what a note
+ * rewritten out of band (an agent edit, a conflict resolved from disk) produces. That
+ * history describes bytes this note no longer has, so it is dropped rather than retried.
+ */
+function restoreHistory(key: string, element: ContinuityEditorElement): void {
+  const history = historyStates.get(key)
+  if (!history) return
+  try {
+    element.importHistory(history)
+  } catch {
+    historyStates.delete(key)
+  }
+}
 
 type Props = {
   projectId: string
@@ -167,6 +214,7 @@ export function ContinuityMarkdownEditor({
     if (!element && elementRef.current) {
       if (scrollKeyRef.current) {
         scrollStates.set(scrollKeyRef.current, elementRef.current.getScrollState())
+        stashHistory(scrollKeyRef.current, elementRef.current)
       }
       // Detached editors must not keep winning the insert routing.
       forgetEditorFocus(elementRef.current)
@@ -203,6 +251,7 @@ export function ContinuityMarkdownEditor({
       tabBehavior={settings.tabBehavior}
       shortcutPolicy={settings.shortcutPolicy}
       shortcutBindings={settings.shortcutBindings}
+      indentGuides={settings.indentGuides}
       // Attribute rather than an adapter prop; `auto` is Continuity's own
       // touch-only default, so it is passed as undefined to leave it alone.
       command-rail={settings.commandRail === 'auto' ? undefined : settings.commandRail}
@@ -213,8 +262,13 @@ export function ContinuityMarkdownEditor({
         if (detail.source !== 'hostReplacement') onCommit(detail.snapshot.text)
       }}
       onReady={() => {
+        const element = elementRef.current
+        if (!element) return
+        // History first: it is checked against the seeded text, and restoring the viewport
+        // is unaffected either way.
+        if (scrollKeyRef.current) restoreHistory(scrollKeyRef.current, element)
         const saved = scrollKeyRef.current && scrollStates.get(scrollKeyRef.current)
-        if (saved) elementRef.current?.restoreScrollState(saved)
+        if (saved) element.restoreScrollState(saved)
       }}
       onRequest={detail => {
         if (detail.kind === 'pasteText') {

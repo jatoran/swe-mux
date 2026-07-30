@@ -619,15 +619,19 @@ body {
 .palette button:disabled { cursor:not-allowed;opacity:.45 }
 .palette button>span { min-width:0;display:flex;align-items:center;gap:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
 .palette button>span small { color:var(--muted);text-transform:uppercase }
-.terminal-find {
+/* One find bar, two hosts: the terminal's (xterm's search addon) and a note's (Continuity
+   decorations). They are the same control and stay the same shape; only the offset differs,
+   because a resource pane has a taller header than a terminal. */
+.terminal-find,.note-find {
   position:absolute;right:8px;top:38px;z-index:12;display:flex;align-items:center;
   min-height:31px;border:1px solid var(--line);background:var(--panel);box-shadow:4px 5px 0 #0008
 }
-.terminal-find input { width:min(240px,40vw);height:29px;border:0;border-right:1px solid var(--line);padding:0 7px;background:var(--bg);color:var(--text) }
-.terminal-find button { min-width:30px;height:29px;border:0;border-right:1px solid var(--line);padding:0 6px;background:transparent;color:var(--muted);cursor:pointer }
-.terminal-find button:hover,.terminal-find button.active { background:var(--panel2);color:var(--text) }
-.terminal-find span { min-width:54px;padding:0 7px;color:var(--muted) }
-.terminal-find span.missing { color:var(--red) }
+.note-find { top:46px }
+.terminal-find input,.note-find input { width:min(240px,40vw);height:29px;border:0;border-right:1px solid var(--line);padding:0 7px;background:var(--bg);color:var(--text) }
+.terminal-find button,.note-find button { min-width:30px;height:29px;border:0;border-right:1px solid var(--line);padding:0 6px;background:transparent;color:var(--muted);cursor:pointer }
+.terminal-find button:hover,.terminal-find button.active,.note-find button:hover,.note-find button.active { background:var(--panel2);color:var(--text) }
+.terminal-find span,.note-find span { min-width:54px;padding:0 7px;color:var(--muted) }
+.terminal-find span.missing,.note-find span.missing { color:var(--red) }
 @media(max-width:760px) {
   .pane-split { display:contents }
   .pane-divider { display:none }
@@ -637,7 +641,8 @@ body {
   .note-pane.mobile-active { display:grid }
   .note-pane-back { display:block }
   .terminal-find { left:5px;right:5px;top:37px }
-  .terminal-find input { width:auto;min-width:0;flex:1 }
+  .note-find { left:5px;right:5px }
+  .terminal-find input,.note-find input { width:auto;min-width:0;flex:1 }
 }
 
 /* Phase 4 owned-process inspection and preview leaves. */
@@ -1343,7 +1348,16 @@ body {
 .resource-copy-fallback button{min-height:26px;padding:0 9px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .resource-copy-fallback textarea{grid-column:1/-1;height:auto!important;min-height:76px;max-height:34vh;padding:8px!important;border:1px solid var(--line)!important;font-size:11px!important;user-select:text;-webkit-user-select:text}
 @media(max-width:760px),(pointer:coarse){.resource-copy-fallback button{min-height:44px}.resource-copy-fallback textarea{font-size:16px!important}}
-continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hidden;background:var(--bg);--continuity-background:var(--bg);--continuity-foreground:var(--text);--continuity-muted:var(--muted);--continuity-accent:var(--green);--continuity-selection:#8ee69a3d;--continuity-border:var(--line)}
+continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hidden;background:var(--bg);--continuity-background:var(--bg);--continuity-foreground:var(--text);--continuity-muted:var(--muted);--continuity-accent:var(--green);--continuity-selection:#8ee69a3d;--continuity-border:var(--line);
+  /* Indent guides and host decorations (0.2.17). Continuity ships defaults for both, but
+     they are its own palette rather than the active theme's, so they are mapped here with
+     the colour variables above. Find matches use the app's attention colour; the current
+     match is the same hue at roughly double the strength, which reads as "this one" without
+     needing a second hue. */
+  --continuity-indent-guide:color-mix(in srgb,var(--line) 85%,transparent);
+  --continuity-indent-guide-active:color-mix(in srgb,var(--accent) 55%,transparent);
+  --continuity-decoration:color-mix(in srgb,var(--amber) 34%,transparent);
+  --continuity-decoration-active:color-mix(in srgb,var(--amber) 68%,transparent)}
 .note-conflict{position:absolute;left:0;right:0;top:42px;z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 18px #0009}.note-conflict-actions{display:flex;gap:6px}.note-conflict-actions button{min-height:26px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;padding:0 8px;cursor:pointer}
 /* The session-notes listing lives in the drawer's Notes tab. It kept its own class
    names through the move: the row, group heading, and empty states are unchanged,

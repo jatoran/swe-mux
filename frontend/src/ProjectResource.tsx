@@ -8,10 +8,12 @@ import { absoluteProjectPath, copySummary, FILE_COPY_MAX_LINES, truncateForClipb
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { composeAgentMessage, selectionText } from './noteSelection'
 import type { EditorSnapshot } from './noteSelection'
+import { findMatches, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
 import { fileSaveTarget, noteQueueKey, noteSaveQueue, noteSaveTarget, type NoteSaveState, type ResourceSaveTarget } from './noteSaveQueue'
 import { loadExpandedFolders, saveExpandedFolders } from './deviceSettings'
+import { currentInsertTarget } from './insertTarget'
 import { REQUEST_TIMEOUT_MS, retryDelay, watchResume } from './liveness'
 import type { Project } from './types'
 
@@ -471,16 +473,148 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       message:composeAgentMessage(slice.text,{label:sourceLabel,scope}),
     })
   }
+  // Find in this note. Continuity paints the matches (0.2.17 `setDecorations`) but does not
+  // locate them, and the browser's own find cannot stand in: the projection realizes only
+  // the lines in the viewport, so an offscreen match is not in the DOM to be found.
+  //
+  // The ranges live in a ref rather than state. Only the count and the current index are
+  // rendered, and re-rendering the whole resource for every match of a broad query on every
+  // keystroke would be waste. `findIndexRef` shadows `findIndex` for the same reason the
+  // ranges do: the keyboard handlers need the current value synchronously.
+  const [findOpen,setFindOpen]=useState(false)
+  const [findQuery,setFindQuery]=useState('')
+  const [findCase,setFindCase]=useState(false)
+  const [findCount,setFindCount]=useState(0)
+  const [findIndex,setFindIndex]=useState(0)
+  const findRanges=useRef<readonly FindRange[]>([])
+  const findIndexRef=useRef(0)
+  const findInput=useRef<HTMLInputElement|null>(null)
+
+  /** Paint the set and the current match, and bring that one into view. `active` is
+   *  Continuity's own decoration id, so its stronger tint needs no theming from us. */
+  const showMatch=(index:number)=>{
+    findIndexRef.current=index
+    setFindIndex(index)
+    const element=editorElement.current
+    if(!element)return
+    const ranges=findRanges.current
+    element.setDecorations('find',ranges)
+    const current=ranges[index]
+    element.setDecorations('active',current?[current]:[])
+    if(current)element.revealRange(current,{align:'nearest'})
+  }
+  const stepFind=(backwards:boolean)=>{
+    if(!findRanges.current.length)return
+    showMatch(stepMatchIndex(findRanges.current.length,findIndexRef.current,backwards))
+  }
+  const openFind=()=>{
+    setFindOpen(true)
+    requestAnimationFrame(()=>{findInput.current?.focus();findInput.current?.select()})
+  }
+  /** Leaving the bar selects the match the user stopped on, so the next edit happens where
+   *  they were looking rather than wherever the caret sat before the search started. */
+  const closeFind=()=>{
+    const element=editorElement.current
+    const current=findRanges.current[findIndexRef.current]
+    findRanges.current=[]
+    findIndexRef.current=0
+    setFindOpen(false)
+    setFindCount(0)
+    setFindIndex(0)
+    if(!element)return
+    element.clearDecorations('find')
+    element.clearDecorations('active')
+    if(current){
+      // A range can go stale if the note changed between the last recompute and this
+      // click; landing the caret is a convenience, never worth an error.
+      try{element.setSelections([{anchor:current.start,head:current.end,kind:'caret'}],{reveal:true})}catch{/* ignored */}
+    }
+    element.focus()
+  }
+  const findRef=useRef(openFind)
+  findRef.current=openFind
+
+  // Recompute on every input, and on every edit to the note itself: decorations are
+  // positions rather than anchors, so an edit underneath a live set would leave it marking
+  // the wrong bytes. Re-running on `continuity-change` is what keeps them honest.
+  useEffect(()=>{
+    const element=editorElement.current
+    if(!findOpen||!element)return
+    const recompute=(anchorToCaret:boolean)=>{
+      let snapshot:EditorSnapshot|null=null
+      try{snapshot=element.snapshot()}catch{snapshot=null}
+      const ranges=snapshot?findMatches(snapshot.text,findQuery,{matchCase:findCase}):[]
+      findRanges.current=ranges
+      setFindCount(ranges.length)
+      showMatch(anchorToCaret
+        ?matchIndexAfter(ranges,snapshot?.selections[0]?.head??null)
+        :Math.min(findIndexRef.current,Math.max(ranges.length-1,0)))
+    }
+    // Opening (or retyping) resumes from the caret; an edit keeps the user's place.
+    recompute(true)
+    const onChange=()=>recompute(false)
+    element.addEventListener('continuity-change',onChange)
+    return()=>element.removeEventListener('continuity-change',onChange)
+  },[findOpen,findQuery,findCase])
+
+  // The command dispatches to every mounted resource at once; the one holding the focused
+  // editor claims it by cancelling, which is also how the command learns whether any note
+  // was focused at all.
+  useEffect(()=>{
+    if(!autosaved)return
+    const onFind=(event:Event)=>{
+      const element=editorElement.current
+      const target=currentInsertTarget()
+      if(!element||target?.kind!=='editor'||target.editor!==element)return
+      event.preventDefault()
+      openFind()
+    }
+    window.addEventListener('mux:note-find',onFind)
+    return()=>window.removeEventListener('mux:note-find',onFind)
+  },[autosaved])
+
+  // A tab pointed at a different note keeps this component, so the bar and its ranges have
+  // to go with the old document rather than describing it over the new one.
+  useEffect(()=>{
+    findRanges.current=[]
+    findIndexRef.current=0
+    setFindOpen(false)
+    setFindQuery('')
+    setFindCount(0)
+    setFindIndex(0)
+  },[project.id,resource.kind,resource.id])
+
+  /**
+   * Ctrl+F is handled here rather than through the app's global keybindings on purpose. The
+   * ask is "the currently focused note", and a global chord would have to swallow the
+   * browser's own find everywhere else in the app to get it. Continuity's `browser-safe`
+   * policy leaves the chord alone, so it reaches this handler from inside the editor.
+   */
+  const handleFindKey=(event:KeyboardEvent&{currentTarget:HTMLElement})=>{
+    if(!autosaved||!editable)return
+    if(event.key!=='f'&&event.key!=='F')return
+    if(!(event.ctrlKey||event.metaKey)||event.altKey)return
+    event.preventDefault()
+    event.stopPropagation()
+    openFind()
+  }
+
   // Assigning `railActions` replaces Continuity's whole host set, so the array is built once
-  // (stable identity) and the button reads the current handler through a ref.
+  // (stable identity) and each button reads its current handler through a ref.
   const sendRef=useRef(requestSendToAgent)
   sendRef.current=requestSendToAgent
-  const railActions=useMemo<RailAction[]>(()=>onSendToAgent?[{
-    id:'mux:send-to-agent',
-    label:'Send to an agent session',
-    glyph:'→',
-    run:()=>sendRef.current(),
-  }]:[],[!!onSendToAgent])
+  const railActions=useMemo<RailAction[]>(()=>{
+    const actions:RailAction[]=[]
+    if(onSendToAgent)actions.push({
+      id:'mux:send-to-agent',
+      label:'Send to an agent session',
+      glyph:'→',
+      run:()=>sendRef.current(),
+    })
+    // On touch there is no Ctrl+F and no menu bar, so the rail is the only way in.
+    actions.push({id:'mux:find',label:'Find in this note',glyph:'⌕',run:()=>findRef.current()})
+    return actions
+  },[!!onSendToAgent])
 
   const editable=status==='ready'||status==='missing'
   // Notes and markdown files persist through the resource-scoped save queue (outside this
@@ -666,7 +800,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     requestAnimationFrame(()=>editor.setSelectionRange(result.caret,result.caret))
   }
   const stateLabel=autosaved?(noteSave.status==='idle'?status:noteSave.status):(saveState==='idle'?status:saveState)
-  return <section class="project-resource file-editor">
+  return <section class="project-resource file-editor" onKeyDown={handleFindKey}>
     <header><div>{!isNote&&<strong>{resource.id}</strong>}<span>{project.name} · {stateLabel}</span></div>{onSendToAgent||(resource.kind==='file'&&!isMarkdownFile)?<div class="resource-actions">
       {/* Continuity-backed views send the live selection (or the document); a plain-text
           editor owns no selection engine, so its send is always the whole document. */}
@@ -674,6 +808,22 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       {resource.kind==='file'&&!isMarkdownFile&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}
     </div>:null}</header>
     {errorLine}
+    {findOpen&&<div class="note-find" role="search">
+      <input ref={findInput} value={findQuery} spellcheck={false} placeholder="find in note" aria-label="Find in note"
+        onInput={event=>setFindQuery(event.currentTarget.value)}
+        onKeyDown={event=>{
+          // Escape is stopped here rather than left to bubble: the app's global handler
+          // treats it as "close every overlay", which would shut the whole pane's menus
+          // when the user only meant to leave the find bar.
+          if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeFind()}
+          if(event.key==='Enter'){event.preventDefault();stepFind(event.shiftKey)}
+        }}/>
+      <button title="Previous match" aria-label="Previous match" onClick={()=>stepFind(true)}>↑</button>
+      <button title="Next match" aria-label="Next match" onClick={()=>stepFind(false)}>↓</button>
+      <button class={findCase?'active':''} title="Match case" aria-pressed={findCase} onClick={()=>setFindCase(value=>!value)}>Aa</button>
+      <span class={findQuery&&!findCount?'missing':''} aria-live="polite">{!findQuery?'':findCount?`${findIndex+1}/${findCount}`:'no match'}</span>
+      <button title="Close find" aria-label="Close find" onClick={closeFind}>×</button>
+    </div>}
     {autosaved&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
     {editable?(autosaved?<ProjectNoteEditor key={`${project.id}:${resource.kind}:${resource.id}:${loadGeneration}`} projectId={project.id} resourceId={`${resource.kind}:${resource.id}`} initialText={text} label={isNote?noteLabel:resource.id} railActions={railActions} elementRef={editorElement}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>)
       :<div class="resource-unavailable">{status==='binary'?'Binary files cannot be edited here.'

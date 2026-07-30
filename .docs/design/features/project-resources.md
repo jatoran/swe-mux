@@ -81,6 +81,15 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
 - The editor is remounted whenever a different document loads so a new engine cannot leak text
   between documents. Ordinary edits do not remount it, so cursor and undo history survive. A
   host replacement is an echo of pushed text and is never committed back.
+- A tab switch *does* remount it — only the active child of a stack renders — which used to
+  end undo history at the pane boundary: you could undo while editing a note, but not after
+  leaving it and coming back. The history is now exported on the way out and re-imported on the
+  way in, beside the scroll state that was already carried across the same unmount. It is
+  bounded on both axes (newest groups per note, most-recently-left notes overall) because a
+  history is much larger than a viewport offset. An import into text that changed underneath is
+  refused by the editor and dropped here, since that history describes bytes the note no longer
+  has — an agent rewrite or a conflict resolved from disk starts a fresh history rather than
+  replaying edits against the wrong content.
 - A Markdown file's change event carries no storage revision, so the browser cannot tell its own
   echoed write from an external one. It therefore does not auto-reload an open Markdown file on a
   file-change event; a genuine out-of-band edit surfaces as a 409 conflict banner on the next
@@ -101,9 +110,14 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
   and autosave and only stops the rendering), what `Tab` does, typography, the touch command
   rail, and the editor's own keyboard shortcuts.
 - The knobs are exactly what the vendored editor exposes: element properties/attributes
-  (`spellcheck`, `syntax`, `tab-behavior`, `shortcut-policy`, `command-rail`) and its
-  `--continuity-*` custom properties. Nothing is emulated on top, so a setting either maps to
-  the editor or is not offered.
+  (`spellcheck`, `syntax`, `tab-behavior`, `shortcut-policy`, `command-rail`, `indent-guides`)
+  and its `--continuity-*` custom properties. Nothing is emulated on top, so a setting either
+  maps to the editor or is not offered.
+- Indent guides are the one place we deliberately differ from the editor's own default. It
+  ships them off so that upgrading it changes no embedder's appearance; notes here are mostly
+  nested lists, so they are on unless the config says otherwise — and *only* an explicit
+  `false` turns them off, so a daemon too old to know the key does not silently land on the
+  editor's default instead of ours.
 - Colours are deliberately not among them. The theme already maps the app palette onto the
   editor's colour variables, and a second source for them would fight the theme.
 - A blank/zero typography value means *keep the editor's default* rather than pinning today's
@@ -121,6 +135,31 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
 - The rail's *arrangement* — which buttons, in what order — stays owned by the editor, which
   persists it per device from its own gear panel. Settings only offers a reset, which therefore
   applies immediately and is not part of the Save/Cancel draft.
+
+### Finding text in a note
+
+- Every Continuity-backed view carries a find bar with the same shape as the terminal's:
+  query, previous/next, match case, an `n/total` readout, and Escape to leave.
+- Locating matches is the app's job, not the editor's. The editor has no find, and the
+  browser's cannot stand in for one: the projection realizes only the lines in the viewport, so
+  an offscreen match is not in the DOM to be found. Matching runs over the engine snapshot and
+  the resulting ranges are handed back for painting through the editor's host decoration API
+  (two sets: every match, and the current one in a stronger tint).
+- Matching is plain substring, never a regular expression: the query is typed over prose, so an
+  unescaped `(` would either throw or quietly match something else. A query spanning a line
+  break never matches, because editor ranges are line-scoped.
+- Decorations are positions rather than anchors, so an edit underneath a live set would leave
+  it marking the wrong bytes. The set is therefore recomputed on every commit while the bar is
+  open, not only when the query changes.
+- Three ways in, matching the three places a user is: `Ctrl+F` while the editor has focus, a
+  `mux:find` button on the touch rail, and a `note.find` command for the palette, a gesture, or
+  a chord of the user's own. `Ctrl+F` is deliberately *not* a global app binding — the ask is
+  for the focused note, and a global chord would have to swallow the browser's own find
+  everywhere else to get it. The command instead dispatches a cancelable event that the
+  resource holding the focused editor claims; an unclaimed event is how "no note is focused"
+  is detected, since which editor has focus is not app state.
+- Leaving the bar selects the match the user stopped on, so the next edit happens where they
+  were looking rather than where the caret sat before the search.
 
 ### Sending a selection to an agent
 

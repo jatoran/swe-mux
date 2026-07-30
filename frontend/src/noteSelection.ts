@@ -49,6 +49,30 @@ export function utf16IndexForByte(line: string, byteInLine: number): number {
   return line.length
 }
 
+/**
+ * The UTF-8 byte offset inside `line` reached by `index` UTF-16 units — the inverse of
+ * `utf16IndexForByte`.
+ *
+ * Needed in the other direction by anything that locates text with JavaScript's own string
+ * search and then has to describe it to the engine: `String.indexOf` answers in UTF-16
+ * units, and every Continuity position is a byte offset.
+ *
+ * An index landing between the halves of a surrogate pair counts the whole character
+ * rather than half of it, matching the forward direction's clamp.
+ */
+export function byteForUtf16Index(line: string, index: number): number {
+  if (index <= 0) return 0
+  let bytes = 0
+  let cursor = 0
+  while (cursor < line.length && cursor < index) {
+    const codePoint = line.codePointAt(cursor)
+    if (codePoint === undefined) break
+    bytes += utf8Size(codePoint)
+    cursor += codePoint > 0xffff ? 2 : 1
+  }
+  return bytes
+}
+
 /** Document order for two selection ends (a selection may be anchored after its head). */
 export function comparePositions(a: SelectionPosition, b: SelectionPosition): number {
   return a.line !== b.line ? a.line - b.line : a.byteInLine - b.byteInLine
