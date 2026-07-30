@@ -26,6 +26,9 @@ responsive controls.
 - The bracket is drawn per branch and stops at the first and last session rows' centres. A
   cluster-height spine would dangle past the last session row whenever that session also has a
   note or preview row beneath it.
+- The bracket is the only marker of tab membership. Rows carried a per-row glyph saying the
+  same thing, which repeated on every row of a group the bracket already encloses and competed
+  with the backend glyph and broadcast flag for the name's line.
 - Agent attention edges (`viewing`, `unread`) sit on the row's right and are inset vertically.
   On the left they shared a gutter with the tree's connector lines, so a row marker read as a
   branch, and consecutive marked rows merged into one long rule that looked like a stray spine.
@@ -203,6 +206,10 @@ responsive controls.
   intentionally restrained; volume, per-event enablement and sound selection, quiet hours, and
   test playback are device preferences. A custom upload joins the same previewable library and
   does not replace existing event assignments.
+- Agents carries the auto-delivery master switch and its bounds (`auto-delivery.md`). It is a
+  bounds editor, not a schedule: the switch only makes the per-session opt-in available, and
+  the runtime state it governs — the emergency pause and the opt-ins themselves — stays in
+  SQLite behind the queue pane, outside the draft/Save cycle.
 - General exposes **Reset & run tutorial**. Starting it shares the ordinary Settings
   Save/Discard guard, so replay never silently loses a dirty draft.
 
@@ -342,6 +349,18 @@ responsive controls.
   constantly — the soft keyboard fires `visualViewport` resizes throughout its open animation,
   and every one refits the pane. The retry needs no timer and no frame wait: the first call's
   `onScroll` is what makes `_sync()` republish the real range, so the next one lands.
+- Reaching the tail also means the *application's* viewport, not only xterm's. Two scroll
+  positions are stacked in a pane, and a TUI that keeps its own moves that one instead, so a
+  purely local scroll lands on a view nobody was looking at and the chip reads as dead. Claude
+  keeps such a viewport; Codex does not (it enables no mouse mode at all), which is exactly why
+  the same chip worked in a Codex session and not in a Claude one on a phone — while the rail's
+  `^End` worked in both, because it happens to send the key on its way past the local scroll.
+  `appOwnsTail` is the rule: any backend but `shell`, when it is Claude or has taken the mouse
+  — the same signal `mobileDragTarget` already uses to decide who receives a phone's drag. A
+  shell is excluded because it owns no viewport and the bytes would land in a half-typed
+  command line. The key is sent off the broadcast path: a viewport gesture belongs to the pane
+  that was tapped, and it is dropped rather than queued during replay, since a jump that
+  arrives seconds late moves the user somewhere they stopped asking for.
 - Every in-flow child of `.terminal-surface` names `grid-column:1`, and the surface declares a
   single explicit column. Overlays that share the terminal's cell must stack, never displace:
   auto-placement refuses to put an auto-column item into an occupied cell, so while the column
