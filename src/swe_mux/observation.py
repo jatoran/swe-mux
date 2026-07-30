@@ -1202,11 +1202,16 @@ MAX_REMEMBERED_PROMPT_CHARS = 4000
 
 
 def _remember_user_prompt(session: Session, payload: dict[str, Any]) -> None:
-    """Keep this pane's latest root request for the initial titler.
+    """Keep this pane's first and latest root requests for the titler.
 
     Bounded rather than stored whole: a long prompt is no more informative for a
     2-3 word tab label, and the observer input budget would reject it anyway. Only
     root prompts count — a subagent's instructions are not what the tab is about.
+
+    The first prompt is pinned and never overwritten for the life of the run. It is
+    what the session is about; every later prompt is a step within that, so titling
+    from one produces a name that describes the last few minutes rather than the
+    work. A rollover retires the pin along with the conversation.
     """
     if hook_event_scope("UserPromptSubmit", payload) != "root":
         return
@@ -1216,6 +1221,8 @@ def _remember_user_prompt(session: Session, payload: dict[str, Any]) -> None:
     text = prompt.strip()
     if text:
         session.last_user_prompt = text[:MAX_REMEMBERED_PROMPT_CHARS]
+        if session.first_user_prompt is None:
+            session.first_user_prompt = session.last_user_prompt
 
 
 async def _bind_native_id_from_hook(

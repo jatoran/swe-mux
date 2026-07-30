@@ -49,6 +49,12 @@ PaneLeaf = terminal | note | preview | history | queue
   rearranges the pane tree except an explicit split, drag, or move.
 - Every pane has its own tab strip and active tab. There is no global tab strip, dock/pop-out
   mode, detached layout, or separate resource workspace.
+- A terminal tab is labelled by the **same rule as the sidebar**: `agentTargetName` — the
+  generated title while the session is auto-named, the explicit name once a human renames it.
+  Every session-naming surface delegates to that one function rather than re-deriving it.
+  The workspace tab strip and the mobile projection each read `session.name` directly at one
+  point, which is exactly the surface the title exists for: a strip of `claude-15036b`,
+  `claude-77eaca`, `claude-34cebf` is unreadable while the sidebar beside it reads fine.
 - The active tab carries an accent outline, a thick accent underline, and a tinted fill. A bare
   background swap is not enough: the previous treatment moved only `--panel` to `--bg`, a few
   RGB points that vanish on a phone screen in daylight and is easy to miss on desktop too. The

@@ -837,11 +837,16 @@ class Session:
         # adapter later discovers and records a different native transcript id.
         # Demotion must match this token so Codex can return to its parent shell.
         self.agent_lifecycle_id: str | None = None
-        # The most recent root prompt this pane's user submitted, bounded. Captured
-        # from the hook ingress so a session can be titled from the user's actual
-        # request before any turn has completed — the tab needs a name at the moment
-        # you spawn three panes, not a minute later. Belongs to the conversation, so
-        # a rollover clears it.
+        # Root prompts this pane's user submitted, bounded and captured from the hook
+        # ingress, so a session can be titled from the user's actual request before any
+        # turn has completed — the tab needs a name at the moment you spawn three panes,
+        # not a minute later. Both belong to the conversation, so a rollover clears them.
+        #
+        # `first_user_prompt` is what the titler reads, and it is deliberately not the
+        # latest one: a title attempt that fails (a provider rate limit is the usual
+        # cause) is retried on a later turn, and titling that retry from the newest
+        # prompt is what made tab names drift away from what the session is about.
+        self.first_user_prompt: str | None = None
         self.last_user_prompt: str | None = None
         # Detection is a fallback for agents launched without the mux shim. Once a
         # native run has explicitly exited, its still-recent transcript must not
@@ -2425,7 +2430,8 @@ class SessionManager:
         if confirmed or backend != "claude":
             session.agent_lifecycle_id = native_id
         session.transcript_path = transcript
-        # The retired conversation's last prompt must not title the new one.
+        # The retired conversation's prompts must not title the new one.
+        session.first_user_prompt = None
         session.last_user_prompt = None
         record.observation_stale_since = None
         record.tokens_in = 0

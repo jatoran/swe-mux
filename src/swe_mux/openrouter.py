@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +13,17 @@ from .secret_store import SecretStore
 
 OPENROUTER_ORIGIN = "https://openrouter.ai/api/v1"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+RETRY_STATUSES = {408, 409, 429, 500, 502, 503, 504}
+# A rate limit is the common failure here, not a transient network blip: several
+# panes each fire an observer at the same turn boundary, so 429 arrives in bursts.
+# The old 0.25s/0.5s pair was shorter than the burst it was meant to ride out and
+# effectively made 429 fatal — measured 20 of 70 titler calls lost in a day. Four
+# retries with equal-jitter exponential backoff cover a multi-second burst while
+# still bounding a single call: 0.5 + 1 + 2 + 4 is 7.5s of sleep worst case, well
+# inside the caller's tolerance for a background observer.
+RETRY_ATTEMPTS = 5
+RETRY_BASE_SECONDS = 0.5
+MAX_RETRY_SLEEP_SECONDS = 8.0
 
 
 class OpenRouterError(RuntimeError):
@@ -39,9 +51,11 @@ class OpenRouterClient:
         *,
         timeout_seconds: float = 30,
         session: aiohttp.ClientSession | None = None,
+        retry_base_seconds: float = RETRY_BASE_SECONDS,
     ) -> None:
         self.secrets = secrets
         self.timeout_seconds = timeout_seconds
+        self.retry_base_seconds = retry_base_seconds
         self._session = session
         self._owned_session = False
 
@@ -72,7 +86,8 @@ class OpenRouterClient:
             raise OpenRouterError("OpenRouter key is not configured")
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         client = await self._client()
-        for attempt in range(3):
+        last_attempt = RETRY_ATTEMPTS - 1
+        for attempt in range(RETRY_ATTEMPTS):
             try:
                 async with client.request(
                     method,
@@ -87,8 +102,10 @@ class OpenRouterClient:
                         body.extend(chunk)
                         if len(body) > MAX_RESPONSE_BYTES:
                             raise OpenRouterError("OpenRouter response exceeded the size limit")
-                    if response.status in {429, 500, 502, 503, 504} and attempt < 2:
-                        await asyncio.sleep(0.25 * (2**attempt))
+                    if response.status in RETRY_STATUSES and attempt < last_attempt:
+                        await asyncio.sleep(
+                            self._retry_delay(attempt, _retry_after(response))
+                        )
                         continue
                     if response.status >= 400:
                         raise OpenRouterError(
@@ -102,11 +119,23 @@ class OpenRouterClient:
                         raise OpenRouterError("OpenRouter returned an invalid response envelope")
                     return value
             except (aiohttp.ClientError, TimeoutError) as exc:
-                if attempt < 2:
-                    await asyncio.sleep(0.25 * (2**attempt))
+                if attempt < last_attempt:
+                    await asyncio.sleep(self._retry_delay(attempt, None))
                     continue
                 raise OpenRouterError("OpenRouter request failed") from exc
         raise OpenRouterError("OpenRouter request failed")
+
+    def _retry_delay(self, attempt: int, retry_after: float | None) -> float:
+        """Equal-jitter exponential backoff, with the server's own hint preferred.
+
+        Jitter matters more than the curve here: the calls that collide are the ones
+        a shared turn boundary released together, so an unjittered backoff retries
+        them together too and reproduces the burst that caused the 429.
+        """
+        if retry_after is not None:
+            return min(retry_after, MAX_RETRY_SLEEP_SECONDS)
+        ceiling = min(self.retry_base_seconds * (2**attempt), MAX_RETRY_SLEEP_SECONDS)
+        return float(ceiling * (0.5 + random.random() * 0.5))
 
     async def test_key(self, candidate: str | None = None) -> dict[str, Any]:
         payload = await self._request("GET", "/models", key=candidate)
@@ -190,6 +219,23 @@ class OpenRouterClient:
         payload = await self._request("GET", "/generation", params={"id": generation_id})
         data = payload.get("data") or {}
         return _number(data.get("total_cost") or data.get("usage"))
+
+
+def _retry_after(response: Any) -> float | None:
+    """Seconds from a ``Retry-After`` header, when it is a usable delay.
+
+    Only the delta-seconds form is honoured. The HTTP-date form is legal but is
+    never what a rate limiter sends here, and parsing it would mean trusting the
+    provider's clock against ours.
+    """
+    raw = (getattr(response, "headers", None) or {}).get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        seconds = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return seconds if 0 <= seconds else None
 
 
 def _number(value: Any) -> float | None:

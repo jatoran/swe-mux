@@ -16,6 +16,7 @@ from swe_mux.observation import (
     _claude,
     _codex,
     _record_parser_observation,
+    _remember_user_prompt,
     apply_hook_observation,
     classify_transcript_event,
     observe_transcript,
@@ -36,6 +37,23 @@ def drain(queue: asyncio.Queue[Any]) -> list[Any]:
     while not queue.empty():
         emitted.append(queue.get_nowait())
     return emitted
+
+
+def test_first_root_prompt_is_pinned_and_later_ones_only_update_the_latest() -> None:
+    """The title is what the run is for, so it reads the opening request, not the newest.
+
+    Later prompts are steps inside that job. Titling from one — which is what a
+    retried or restarted title attempt used to do — renames the tab after a detour.
+    Subagent prompts are not the user's request at all and count for neither slot.
+    """
+    session = cast(Session, SimpleNamespace(first_user_prompt=None, last_user_prompt=None))
+
+    _remember_user_prompt(session, {"prompt": "  fix the flaky login test  "})
+    _remember_user_prompt(session, {"prompt": "now check the deploy logs"})
+    _remember_user_prompt(session, {"prompt": "summarize this file", "isSidechain": True})
+
+    assert session.first_user_prompt == "fix the flaky login test"
+    assert session.last_user_prompt == "now check the deploy logs"
 
 
 async def test_claude_parser_tracks_tools_completion_and_current_context() -> None:

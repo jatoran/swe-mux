@@ -1143,11 +1143,10 @@ two unrelated conversations as one session's history.
   than inferred from a gap.
 - [ ] Instrument the rehydration rate from the first commit — it is the measurement that
   decides whether a Tier 2 source expansion is ever justified.
-- [ ] Dead-end / negative-result memory (CP §6.2) and the continuous session title
-  (CP §6.11) as the first two consumers of the timeline. The continuous titler replaces the
-  current one-shot title call and its stale test assertions (CP §9 known gaps). A rollover is
-  a first-class retitle trigger — the old title describes work the conversation no longer
-  contains — and an explicit user rename still wins permanently, across rollovers included.
+- [ ] Dead-end / negative-result memory (CP §6.2) as the first consumer of the timeline.
+  The continuous session title that was to be the second (CP §6.11) is **abandoned** — a
+  title that moves stops being a handle the user can find a tab by, which is the whole job.
+  Titling is one call per run off the opening request; see `design/features/automation.md`.
 - [ ] Dead-end capture must not read a rollover as an abandonment. `/clear` says the human
   reset the context, not that the approach failed; only an approach that was tried and
   dropped *within* a run is evidence of a dead end (CP §6.2).
