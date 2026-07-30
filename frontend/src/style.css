@@ -168,7 +168,10 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .toolbar-quota.quota-reset-unread{border-color:#a855f7;background:#6b21a833}
 .toolbar-quota.quota-reset-unread>strong{color:#d8b4fe}
 .account-switcher.compact{display:flex;align-items:center;gap:4px}
-@media(max-width:760px){.account-switcher.compact{position:static;justify-self:end;border:0}.sidebar-status{display:none}.account-add{grid-template-columns:1fr}.account-list article{grid-template-columns:72px minmax(0,1fr);gap:6px}.account-list article>small,.account-quota,.account-actions{grid-column:2}.account-actions{flex-wrap:wrap}}
+/* The sidebar's status block stays on mobile too. The toolbar chips answer "how much is
+   left"; this answers "on which account, and what is the machine doing" — and both open the
+   same popover, so the drawer is a second way in rather than a different feature. */
+@media(max-width:760px){.account-switcher.compact{position:static;justify-self:end;border:0}.account-add{grid-template-columns:1fr}.account-list article{grid-template-columns:72px minmax(0,1fr);gap:6px}.account-list article>small,.account-quota,.account-actions{grid-column:2}.account-actions{flex-wrap:wrap}}
 
 /* Semantic themes and the Phase 1 terminal-style Settings surface. */
 :root[data-theme="dark"] { color-scheme:dark;--bg:#090a0c;--panel:#0d0f12;--panel2:#13161a;--line:#2a2e34;--muted:#848b94;--text:#d9dde2;--green:#8bd450;--green2:#72b94c;--amber:#e7c768;--red:#f07178;--blue:#72a7ff }
@@ -1227,6 +1230,11 @@ body {
   .prepared-clipboard{top:5px;grid-template-columns:minmax(0,1fr) auto auto}.prepared-clipboard button{min-height:44px}.prepared-clipboard textarea{display:block;min-height:96px;padding:10px;font-size:16px;line-height:1.4;user-select:text;-webkit-user-select:text;touch-action:auto}
   .terminal-action-rail{min-height:52px;gap:7px;padding:4px max(7px,env(safe-area-inset-right)) max(4px,env(safe-area-inset-bottom)) max(7px,env(safe-area-inset-left))}.terminal-action-rail button{min-width:96px;height:44px;font-size:11px}.terminal-action-rail .term-key,.terminal-action-rail .rail-icon{min-width:44px;padding:0 8px}.terminal-action-rail .rail-icon svg{width:19px;height:19px}.terminal-action-rail span{font-size:9px}.manual-terminal-paste{bottom:58px}.manual-terminal-paste textarea{min-height:92px}
   .context-menu{z-index:49}
+  /* Status rows are taps here, not hover targets, so they take the 44px floor the rest of
+     the mobile chrome uses. The drawer is 285px at most and these rows already ellipsize,
+     so the only thing to buy is height. */
+  .sidebar-status>.account-switcher .account-summary>button{min-height:46px}
+  .sidebar-status .resource-usage-summary{min-height:46px}
   .sidebar-footer{height:auto;min-height:54px;padding:5px 6px}
   .sidebar-footer button.menu-trigger{display:flex;min-height:44px;align-items:center;justify-content:center}
   .sidebar-footer .notes-shelf-trigger{height:44px;min-height:44px}

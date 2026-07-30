@@ -63,6 +63,25 @@ def test_sidebar_account_status_uses_separate_terminal_icon_rows_at_the_bottom()
     assert ".sidebar-status{min-width:0;flex:none;margin-top:auto" in css
 
 
+def test_sidebar_account_status_survives_the_mobile_breakpoint() -> None:
+    """The drawer carries the same status block as desktop.
+
+    Mobile used to hide it outright, leaving the toolbar chips as the only quota
+    surface: they show a weekly percentage per provider but not which account is
+    selected, its 5h window, or owned-process usage — and the drawer is where a
+    phone user goes looking for exactly that.
+    """
+    css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert ".sidebar-status{display:none}" not in css
+    # Rows become taps rather than hover targets, so they take the mobile touch floor.
+    assert (
+        ".sidebar-status>.account-switcher .account-summary>button{min-height:46px}"
+        in css
+    )
+    assert ".sidebar-status .resource-usage-summary{min-height:46px}" in css
+
+
 def test_account_and_resource_switchers_escape_sidebar_as_viewport_popovers() -> None:
     accounts = (ROOT / "frontend" / "src" / "ProviderAccounts.tsx").read_text(
         encoding="utf-8"

@@ -42,6 +42,13 @@ responsive controls.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
   Account/resource popovers render through the viewport overlay layer, so a narrow or collapsed
   sidebar cannot clip them.
+- That status block is pinned in the mobile drawer too, at touch height. The toolbar's quota
+  chips answer "how much is left" in a glance a drawer cannot give; the drawer rows answer
+  "on which account, and what is this machine doing" — the selected account per provider, its
+  5-hour and weekly windows, and owned CPU/RSS. Both open the same popover, so the drawer is a
+  second door to account switching and quota management rather than a separate feature. Mobile
+  previously hid the block, which left the phone with no way to see or change the active
+  account outside Settings.
 - Collapsing the desktop sidebar leaves a rail rather than a dead strip. Every visible Project
   retains a scrollable chip: hyphenated names use the first character plus the first character
   after the first hyphen; other names use their first two alphanumeric characters. The chip edge
