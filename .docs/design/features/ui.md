@@ -26,6 +26,9 @@ responsive controls.
 - The bracket is drawn per branch and stops at the first and last session rows' centres. A
   cluster-height spine would dangle past the last session row whenever that session also has a
   note or preview row beneath it.
+- The bracket is the only marker of tab membership. Rows carried a per-row glyph saying the
+  same thing, which repeated on every row of a group the bracket already encloses and competed
+  with the backend glyph and broadcast flag for the name's line.
 - Agent attention edges (`viewing`, `unread`) sit on the row's right and are inset vertically.
   On the left they shared a gutter with the tree's connector lines, so a row marker read as a
   branch, and consecutive marked rows merged into one long rule that looked like a stray spine.

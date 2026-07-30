@@ -2798,7 +2798,7 @@ export function App() {
     <button key={`server-${server.port}`} class="sidebar-note-row preview-row" title={`${server.url} · detected server · open it as a tab`} onClick={event=>{event.stopPropagation();void openDetectedServer(server,session);setSidebarOpen(false)}}>
       <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>server :{server.port}</strong></span>
     </button>
-  const sessionRow=(session:Session,relation?:'tab')=>{
+  const sessionRow=(session:Session)=>{
     const spawnedPreviews=Object.values(previews).filter(item=>item.session_id===session.id)
     // Only servers earn a sidebar row. A session's other children are bookkeeping
     // noise and stay in the process inspector. Ones already open as a preview are
@@ -2817,26 +2817,26 @@ export function App() {
       :isUnread(session,seenActivity)?'unread':'read'
     return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){beginLongPress(event,(x,y)=>openSessionMenu(session,x,y,'sidebar'));beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       <span class={stateDotClass(session.state)} />
-      <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={session.backend}>{providerGlyph(session.backend as ProviderName)}</span>}{sessionName(session)}{relation==='tab'&&<span class="layout-affinity tab" title="Shares one pane region with the other bracketed sessions">▤</span>}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
+      <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={session.backend}>{providerGlyph(session.backend as ProviderName)}</span>}{sessionName(session)}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
     </button>{showSessionNote&&sidebarNoteRow(sessionNoteId,session.project_id)}{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}{spawnedServers.map(server=>sidebarServerRow(server,session))}</div>
   }
-  const sidebarNode=(node:PaneNode|PaneLeaf|null|undefined,relation?:'tab'):ComponentChildren=>{
+  const sidebarNode=(node:PaneNode|PaneLeaf|null|undefined):ComponentChildren=>{
     if(!node)return null
     if(node.type==='leaf'){
       if(node.kind!=='terminal')return null
       const session=sessions.find(item=>item.id===node.id)
-      return session?sessionRow(session,relation):null
+      return session?sessionRow(session):null
     }
     const nodeLayout:PaneLayout={...emptyLayout(),root:node}
     const ids=terminalIds(nodeLayout)
     const branches=(node.type==='stack'?node.children:[node.first,node.second]).filter(child=>child.type==='leaf'?child.kind==='terminal':terminalIds({...emptyLayout(),root:child}).length>0)
     if(branches.length===0)return null
-    if(branches.length===1)return sidebarNode(branches[0],relation)
+    if(branches.length===1)return sidebarNode(branches[0])
     const label=node.type==='stack'?'Sessions sharing one tabbed pane':`${node.direction} split branches`
     const owner=sessions.find(item=>ids.includes(item.id))
     return <section data-sidebar-stack-id={node.type==='stack'?node.id:undefined} data-sidebar-project-id={node.type==='stack'?owner?.project_id:undefined} class={`layout-cluster ${node.type} ${node.type==='split'?node.direction:''}`} role="group" aria-label={label}>
-      {branches.map((child,index)=><div class={`layout-branch ${index===0?'first':''} ${index===branches.length-1?'last':''}`} key={child.id}>{sidebarNode(child,node.type==='stack'?'tab':undefined)}</div>)}
+      {branches.map((child,index)=><div class={`layout-branch ${index===0?'first':''} ${index===branches.length-1?'last':''}`} key={child.id}>{sidebarNode(child)}</div>)}
     </section>
   }
 
