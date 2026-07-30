@@ -39,6 +39,8 @@
 - Fleet attention and intelligence: `features/fleet-intelligence.md`
 - Git awareness and worktrees: `features/git.md`
 - Sessions: `features/sessions.md`
+- Multi-device terminal input and shared geometry: `features/terminal-input.md`
+- Device presence (which device the human is at): `features/device-presence.md`
 - Project registry and Groups: `features/projects.md`
 - Project/session notes, files, ignores, and watches: `features/project-resources.md`
 - Trusted task discovery and the Project Run menu: `features/project-actions.md`
@@ -82,6 +84,10 @@
   durable Project state, while the one-pane mobile workspace is only a projection. Closing a
   resource viewport never implies process or file deletion; closing a terminal requires an
   explicit inline kill confirmation.
+- One session may be attached from several devices, but exactly one connection may write to
+  its PTY and one arbitrated size applies to all of them. Which device the human is at is a
+  property of the whole app, decided once from presence, never per session or per
+  subscription. Every presence path fails open to absent.
 - Automation observers cannot type, approve, spawn, execute scripts, or mutate projects.
 - Control-plane automations are per-project opt-in via a dependency graph: substrate is inert
   (captures, never acts/spends) and gates its consumers; nothing runs on a project that did not

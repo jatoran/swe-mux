@@ -15,9 +15,12 @@
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
   `design/features/ui.md`, `technical/frontend/packages.md`
 - Changing terminal input ownership across devices, the PTY WebSocket frames, or how a
-  shared PTY is sized: `design/interfaces.md`, `design/features/sessions.md`,
-  `design/features/ui.md`, `technical/backend/packages.md`,
-  `technical/frontend/packages.md`
+  shared PTY is sized: `design/features/terminal-input.md`, `design/interfaces.md`,
+  `design/features/sessions.md`, `design/features/ui.md`,
+  `technical/backend/packages.md`, `technical/frontend/packages.md`
+- Changing device presence (what counts as "in use", the heartbeat, the leading device):
+  `design/features/device-presence.md`, `design/interfaces.md`,
+  `design/features/notifications.md`, `design/features/terminal-input.md`
 - Changing the utility drawer (tabs, desktop dock/icon rail), command-rail placement, or where
   inserted text lands: `design/features/ui.md`, `technical/frontend/packages.md`
 - Changing clipboard capture, the clipboard-history ring/panel, or where inserted text lands:
@@ -44,8 +47,8 @@
   `design/interfaces.md`, `design/data-model.md`
 - Changing root-session or quota-reset sounds: `design/features/notifications.md`,
   `design/features/voice.md`
-- Changing web push, which device a notification reaches, device presence, or the
-  notification preference shape: `design/features/notifications.md`,
+- Changing web push, which device a notification reaches, or the notification preference
+  shape: `design/features/notifications.md`, `design/features/device-presence.md`,
   `design/interfaces.md`, `technical/backend/packages.md`,
   `technical/frontend/packages.md`
 - Changing Claude/Codex account capture, switching, or quota polling:

@@ -311,14 +311,14 @@ responsive controls.
   `mobile_gesture_swipe_away_close` config bool (default on, checkbox in Settings → Input →
   touch gestures).
 - A pane that loses terminal input it was holding says so, instead of silently swallowing
-  keystrokes: a strip names the device with the keyboard and offers a one-click "Take over"
-  (a gesture claim, which always wins). It appears for exactly two things — input this pane
-  held moved to another device, or a keystroke was actually refused. It says nothing about a
-  session the user merely opened. Opening is not a request to type, output needs no ownership,
-  and the first real keystroke claims input by itself and lands with it, so a refused attach
-  costs nothing and reporting it asks the user to fix what is not broken. Showing it there is
-  what made a phone demand "take over" on every session opened, which is a UI defect whatever
-  the arbitration underneath is doing. While the
+  keystrokes: a strip names the device with the keyboard and offers a one-click "Take over".
+  It appears for exactly two things — input this pane held moved to another device, or a
+  keystroke was actually refused. It says nothing about a session the user merely opened:
+  opening is not a request to type, output needs no ownership, and the first real keystroke
+  claims input by itself and lands with it, so a refused attach costs nothing and reporting
+  it asks the user to fix what is not broken. Showing it there made a phone demand "take
+  over" on every session opened, which is a UI defect whatever the arbitration underneath is
+  doing. Arbitration itself: `features/terminal-input.md`. While the
   arbitrated size is another device's, the pane letterboxes: it renders that grid at a reduced
   font size rather than re-fitting, since re-fitting is what pushed two devices into resizing
   each other in a loop.

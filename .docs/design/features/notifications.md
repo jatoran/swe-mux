@@ -36,15 +36,10 @@ is watching happen at their desk. It replaces an earlier `suppressWhenFocused` b
 migrates: an explicit `false` becomes `never`; the never-chosen default `true` becomes the
 profile's new default.
 
-"The user is at that device" is a stricter test than window focus, because a desktop left
-focused while its owner walks away looks identical to one being typed into — and treating
-that as presence silences the device they took with them. A device counts as active only
-while its heartbeat is fresh, its window is visible **and** focused, and it has had a real
-interaction within two minutes. Every staleness path fails open: an unknown, expired or
-half-reported device is absent, because a redundant buzz is a far cheaper mistake than a
-missed approval. Presence is reported over the `/events` socket (`design/interfaces.md`),
-not the push-presence endpoint, because the Windows desktop shell is a WebView that cannot
-subscribe to push and so reported nothing at all through that path.
+What counts as "at that device" is defined once, in `features/device-presence.md`: fresh
+heartbeat, visible, focused, and interacted with inside the activity window — deliberately
+stricter than focus, and failing open to absent. Push consumes that verdict; it does not
+define it.
 
 Being active elsewhere *defers* the alerts worth chasing (`attention`, `waiting`) rather than
 dropping them. Plain suppression assumes the user stays put; they don't — they get up
@@ -79,7 +74,13 @@ from the SPA fallback so preview clicks receive audio rather than `index.html`.
 - `frontend/src/sessionSounds.ts`
 - `frontend/src/NotificationSoundSettings.tsx`
 - `frontend/src/NotificationPushSettings.tsx`, `frontend/src/notificationPrefs.ts`
-- `frontend/src/push.ts`, `frontend/src/devicePresence.ts`
+- `frontend/src/push.ts` (subscription lifecycle; presence itself lives in
+  `features/device-presence.md`)
 - `frontend/src/ProviderAccounts.tsx`
 - `frontend/public/notification-sounds/`
-- `src/swe_mux/push.py`, `src/swe_mux/device_presence.py`, `src/swe_mux/settings_store.py`
+- `src/swe_mux/push.py`, `src/swe_mux/settings_store.py`
+
+## Relates to
+
+- `features/device-presence.md` — supplies "is the user somewhere else", and the
+  "did they touch it since" question a deferred push turns on.
