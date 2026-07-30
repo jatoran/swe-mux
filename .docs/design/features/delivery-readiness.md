@@ -95,6 +95,19 @@ evidence rather than a prerequisite:
   resting state that any new activity (a turn start, an approval, operator input) would
   itself contradict through a path this tracker already watches.
 
+**Corrected 2026-07-30 (second pass) — readiness did not survive a daemon restart.** The
+tracker's lifecycle memory lives in the daemon process, and the observer deliberately
+suppresses replayed history, so a session that was already idle when the daemon restarted
+had no record that its last root turn finished — and `parser_status` only reaches `ready`
+off a *live* transcript record, which such a session cannot produce until its next turn (no
+hook fires while it waits). Both gaps closed at once: when the observer's catch-up settles
+(`catchup:settled`) it emits `root_turn_settled` carrying the number of records it read.
+The tracker takes that as a completed root turn *only when it has no lifecycle evidence of
+its own* — it fills a gap, it never overrules — and a non-zero record count as proof of
+observation capability, since reading and interpreting this session's own transcript is
+exactly what that check asks. It is deliberately not a synthetic `turn_ended`: that would
+fire read-aloud, notifications, and turn observers for a turn that ended before the restart.
+
 What carries the safety argument after those four is the composer-collision guard:
 `partial_input_absent` compares the input revision against its value when the root turn
 completed, so anything the operator typed since — including opening a pager, which takes

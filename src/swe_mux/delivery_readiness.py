@@ -38,6 +38,10 @@ class ReadinessMemory:
     phase_since: float = 0.0
     input_revision_at_completion: int | None = None
     screen_at_completion: str | None = None
+    # Set when this session's own transcript has been read and interpreted, which
+    # a live parser status cannot show for a session that has been idle since
+    # before the daemon started.
+    observation_proven: bool = False
     transition_count: int = 0
     subagent_events: int = 0
     transitions: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=32))
@@ -169,6 +173,22 @@ class DeliveryReadinessTracker:
             self._transition(
                 memory, phase="aborted", reason=f"root_turn_{outcome}", event=event
             )
+        elif event.type == "root_turn_settled":
+            # Transcript catch-up concluded that this session's tail holds no live
+            # root turn. Only ever fills a gap: with any lifecycle evidence already
+            # in hand, this adds nothing and must not overrule it. It keeps its own
+            # reason because the provenance is weaker than a completion record —
+            # "nothing is running here" rather than "this turn ended".
+            if memory.phase == "unknown":
+                memory.observation_proven = bool(event.payload.get("records"))
+                self._transition(
+                    memory,
+                    phase="ready",
+                    reason="root_turn_settled_after_catchup",
+                    event=event,
+                    input_revision=int(getattr(session, "input_revision", 0)),
+                    screen=getattr(getattr(session, "screen", None), "mode", None),
+                )
         elif event.type == "turn_ended":
             outcome = str(event.payload.get("outcome") or "completed")
             if outcome == "completed":
@@ -267,6 +287,13 @@ class DeliveryReadinessTracker:
         # A native hook is positive lifecycle evidence even while transcript discovery is
         # pending. PTY-only or daemon-only inference is insufficient.
         if memory.source == "hook":
+            return True
+        # So is having read this session's own transcript: `parser_status` only
+        # reaches "ready" off a *live* record, which a session idle since before
+        # the daemon started will not produce until its next turn, and no hook
+        # fires while it waits. The observer's catch-up over real records proves
+        # the same capability.
+        if memory.observation_proven:
             return True
         return None
 

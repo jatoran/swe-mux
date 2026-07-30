@@ -9,12 +9,14 @@
     {"kind": "terminal", "mode": "alternate", "expect_state": "idle"}
   ],
   "expected": {
-    "events": [],
+    "events": [
+      {"type": "root_turn_settled", "source": "transcript", "scope": "root"}
+    ],
     "states": [
       {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
     ],
     "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
     "delivery_state": "unknown",
-    "delivery_reason": "no_root_lifecycle_evidence"
+    "delivery_reason": "readiness_debounce_pending"
   }
 }

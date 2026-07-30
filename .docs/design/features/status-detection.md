@@ -25,7 +25,7 @@ Three axes stay separate and are never collapsed:
 | `running` | daemon | Shell lifecycle (spawn or demotion back to shell). |
 | `working` | transcript, hook | A root turn began or root tool activity: user prompt / assistant / tool records in order, or `UserPromptSubmit`/`PreToolUse`/`PostToolUse` while the transcript is not authoritative. The PTY may never invent work. |
 | `awaiting` | transcript, hook | An explicit block: approval request, `request_user_input` (question), elicitation dialog, or rate limit — always with a typed `awaiting_reason`. |
-| `idle` | transcript, hook, pty, watchdog, watchdog-pty, daemon | A proven turn boundary (`turn_duration`, `end_turn`+text, `task_complete`, Stop hook, `idle_prompt`, interrupt marker, catch-up settle) — or a bounded inferred recovery (startup-quiet fallback, watchdog paths below). |
+| `idle` | transcript, hook, pty, watchdog, watchdog-pty, daemon | A proven turn boundary (`turn_duration`, `end_turn`+text, `task_complete`, Stop hook, `idle_prompt`, interrupt marker, catch-up settle) — or a bounded inferred recovery (startup-quiet fallback, watchdog paths below). A catch-up settle over a session already idle also emits `root_turn_settled`, which changes no state but is the only way delivery readiness can learn that a session left running across a daemon restart is at its prompt (`delivery-readiness.md`). |
 | `exited` / `crashed` | pty, daemon | Process ground truth: the exit code through `terminal_exit_outcome`. |
 
 Ambiguous or absent evidence resolves to the conservative prior, never a guessed active

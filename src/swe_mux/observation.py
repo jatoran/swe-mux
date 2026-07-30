@@ -754,6 +754,29 @@ async def _finish_transcript_catchup(
         await _transition(
             session, events, "idle", source="transcript", evidence="catchup:settled"
         )
+        if session.record.state == "idle":
+            # Delivery readiness keeps its lifecycle memory in the daemon process,
+            # so a restart left an already-idle session with no record that its
+            # last root turn had finished, and every queued message to it then
+            # needed the operator's override. Settling *is* that evidence, read
+            # from the transcript — but it is published under its own type rather
+            # than as a synthetic `turn_ended`, which would fire read-aloud,
+            # notifications, and turn observers for a turn that ended before the
+            # restart. The state guard is what keeps it from contradicting a hook
+            # that has already put this session somewhere other than idle.
+            await events.emit(
+                "root_turn_settled",
+                session_id=session.record.id,
+                source="transcript",
+                scope="root",
+                evidence="catchup:settled",
+                # How many of this session's own transcript records the observer
+                # read to reach that conclusion. Non-zero is itself proof the
+                # transcript was found, owned, parsed, and understood — which is
+                # what readiness asks of `parser_or_hook_supported`, and which an
+                # idle session otherwise cannot demonstrate until its next turn.
+                records=historical_seen,
+            )
     _publish_update(session)
 
 

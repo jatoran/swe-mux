@@ -198,6 +198,58 @@ def test_a_working_session_still_goes_stale() -> None:
     assert evaluation["delivery_state"] == "blocked"
 
 
+def test_catchup_restores_readiness_for_a_session_idle_since_before_the_restart() -> None:
+    """The tracker's memory dies with the daemon; the transcript does not.
+
+    Readiness is held in process, so after a restart a session that was already
+    idle had no record that its last root turn finished and no live record to
+    prove its parser works — and could not produce either without a new turn. So
+    every queued message to a session left running over a restart wanted the
+    operator's override, which is the same failure as the four above wearing a
+    different hat.
+    """
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+    session.screen.feed(b"\x1b[?1049h")
+
+    tracker.observe(_event("root_turn_settled", scope="root", records=5), session)
+    clock.advance(5.0)
+
+    evaluation = tracker.evaluate(session)
+    assert evaluation["delivery_state"] == "safe"
+    assert evaluation["evidence"]["root_reason"] == "root_turn_settled_after_catchup"
+
+
+def test_a_catchup_over_nothing_proves_nothing() -> None:
+    """An empty transcript replacement is not evidence the parser works."""
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+
+    tracker.observe(_event("root_turn_settled", scope="root", records=0), session)
+    clock.advance(5.0)
+
+    evaluation = tracker.evaluate(session)
+    assert evaluation["delivery_state"] == "unknown"
+    assert "observation_capability_unknown" in evaluation["reasons"]
+
+
+def test_catchup_never_overrules_evidence_the_tracker_already_has() -> None:
+    """It fills a gap. A live turn is not a gap."""
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+    session.record.parser_status = "ready"
+    tracker.observe(_event("turn_started"), session)
+    tracker.observe(_event("root_turn_settled", scope="root", records=5), session)
+    clock.advance(5.0)
+
+    evaluation = tracker.evaluate(session)
+    assert evaluation["delivery_state"] == "blocked"
+    assert "root_agent_working" in evaluation["reasons"]
+
+
 def test_text_typed_after_completion_still_blocks() -> None:
     """The composer-collision guard is what the loosened checks now rest on."""
     session, tracker, clock = _idle_agent()

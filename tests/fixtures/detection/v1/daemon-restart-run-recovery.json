@@ -1,13 +1,15 @@
 {
   "schema_version": 1,
   "backend": "claude",
-  "description": "Daemon restart forgets volatile completion evidence and requires a fresh root lifecycle boundary.",
+  "description": "Daemon restart forgets volatile completion evidence; the observer's transcript catch-up restores it for a session that was already idle, and a live turn still overrides it.",
   "steps": [
     {"kind": "hook", "event": "UserPromptSubmit"},
     {"kind": "hook", "event": "Stop"},
     {"kind": "terminal", "mode": "alternate"},
     {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"},
     {"kind": "restart", "expect_delivery": "unknown", "oracle_safe": false, "expect_state": "idle"},
+    {"kind": "catchup", "historical_seen": 5, "age_seconds": 900, "expect_delivery": "unknown", "oracle_safe": false, "expect_state": "idle"},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"},
     {"kind": "hook", "event": "UserPromptSubmit", "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
     {"kind": "hook", "event": "Stop"},
     {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"}
@@ -16,6 +18,7 @@
     "events": [
       {"type": "turn_started", "source": "hook", "scope": "root"},
       {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"},
+      {"type": "root_turn_settled", "source": "transcript", "scope": "root"},
       {"type": "turn_started", "source": "hook", "scope": "root"},
       {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"}
     ],
