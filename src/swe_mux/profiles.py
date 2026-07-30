@@ -144,6 +144,48 @@ def _wsl_cwd(executable: str, args: list[str], cwd: Path) -> str:
     raise ValueError(f"cannot translate cwd for WSL: {cwd}")
 
 
+_POWERSHELL_NAMES = {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
+# -Command/-File hand PowerShell a script instead of an interactive prompt. There is no
+# prompt to instrument and a second -Command would replace the profile's own, so a shell
+# carrying either cannot be wrapped at all.
+_POWERSHELL_SCRIPT_ARGS = {"-command", "-c", "-file", "-f"}
+
+
+def _powershell_bootstrap(*, osc7: bool) -> str:
+    """The ``-Command`` block an interactive PowerShell session runs after ``$PROFILE``.
+
+    Restoring the agent-shim directory is unconditional, because losing it is silent and
+    total: ``$PROFILE`` scripts commonly rebuild PATH from the registry
+    (``$env:PATH = [Environment]::GetEnvironmentVariable('Path','Machine') + ...``), which
+    discards everything the daemon prepended. ``claude`` in that session then resolves to
+    the real CLI instead of ``~/.mux/bin/claude.cmd``, so the launch never promotes the
+    pane, never receives ``--session-id`` or the per-session hook settings, and the pane
+    stays an unnamed shell for the rest of its life. The block runs after the profile, so
+    it re-asserts the shim directory at the *front* of PATH rather than trusting whatever
+    the profile left behind — presence alone is not enough when the profile prepends
+    directories of its own.
+
+    OSC 7 cwd reporting is the opt-in half (``cwd_integration``) and only wraps ``prompt``.
+    """
+    # Rebuilt rather than tested-and-prepended so the invariant matches what
+    # `launchers.create_agent_shims` establishes at spawn: exactly one shim dir, in front.
+    restore = (
+        "if($env:MUX_SHIM_DIR){$env:PATH=(@($env:MUX_SHIM_DIR)+"
+        "(($env:PATH -split ';')|Where-Object{$_ -and $_ -ne $env:MUX_SHIM_DIR}))"
+        " -join ';'};"
+    )
+    if not osc7:
+        return restore
+    return restore + (
+        "$global:__swe_mux_prompt=$function:prompt;"
+        "function global:prompt {"
+        "try {$u=[System.Uri]::new((Get-Location).ProviderPath).AbsoluteUri;"
+        '[Console]::Write("$([char]27)]7;$u$([char]7)")} catch {};'
+        "if($global:__swe_mux_prompt){& $global:__swe_mux_prompt}"
+        'else {"PS $($executionContext.SessionState.Path.CurrentLocation)> "}}'
+    )
+
+
 def resolve_profile(
     config: Config, profile_id: str, cwd: Path, *, interactive: bool = True
 ) -> ResolvedProfile:
@@ -162,38 +204,25 @@ def resolve_profile(
     argv = list(profile.args)
     capabilities = list(profile.capabilities)
     executable_name = Path(executable).name.casefold()
-    if (
-        interactive
-        and profile.cwd_integration
-        and executable_name
-        in {
-            "powershell",
-            "powershell.exe",
-            "pwsh",
-            "pwsh.exe",
-        }
-    ):
-        if any(item.casefold() in {"-command", "-c", "-file", "-f"} for item in argv):
-            raise ValueError(
-                {"profile_id": "cwd integration cannot wrap a profile with Command/File arguments"}
-            )
-        script = (
-            # $PROFILE scripts commonly rebuild PATH from the registry, which
-            # silently drops the mux agent-shim directory the daemon prepended.
-            # This -Command block runs after the profile, so restore it here.
-            "if($env:MUX_SHIM_DIR -and -not (($env:PATH -split ';') -contains $env:MUX_SHIM_DIR))"
-            '{$env:PATH="$($env:MUX_SHIM_DIR);$env:PATH"};'
-            "$global:__swe_mux_prompt=$function:prompt;"
-            "function global:prompt {"
-            "try {$u=[System.Uri]::new((Get-Location).ProviderPath).AbsoluteUri;"
-            '[Console]::Write("$([char]27)]7;$u$([char]7)")} catch {};'
-            "if($global:__swe_mux_prompt){& $global:__swe_mux_prompt}"
-            'else {"PS $($executionContext.SessionState.Path.CurrentLocation)> "}}'
-        )
-        if not any(item.casefold() == "-noexit" for item in argv):
-            argv.append("-NoExit")
-        argv.extend(["-Command", script])
-        capabilities.append("cwd-osc7")
+    if interactive and executable_name in _POWERSHELL_NAMES:
+        if any(item.casefold() in _POWERSHELL_SCRIPT_ARGS for item in argv):
+            # Only the explicitly requested feature earns a hard failure. The shim-path
+            # guard is implicit and applies to every PowerShell profile, so it degrades
+            # silently instead of making a previously working profile unspawnable.
+            if profile.cwd_integration:
+                raise ValueError(
+                    {
+                        "profile_id": (
+                            "cwd integration cannot wrap a profile with Command/File arguments"
+                        )
+                    }
+                )
+        else:
+            if not any(item.casefold() == "-noexit" for item in argv):
+                argv.append("-NoExit")
+            argv.extend(["-Command", _powershell_bootstrap(osc7=profile.cwd_integration)])
+            if profile.cwd_integration:
+                capabilities.append("cwd-osc7")
     if profile.cwd_strategy == "wsl":
         argv.extend(["--cd", _wsl_cwd(executable, argv, cwd)])
     return ResolvedProfile(

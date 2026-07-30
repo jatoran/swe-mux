@@ -54,7 +54,10 @@ def test_resolve_profile_preserves_profile_owned_argv_and_environment(
     resolved = resolve_profile(config, "pwsh", tmp_path)
 
     assert resolved.executable == str(executable)
-    assert resolved.argv == ("-NoLogo",)
+    # The profile's own argv leads; the shim-path bootstrap is appended after it.
+    assert resolved.argv[:2] == ("-NoLogo", "-NoExit")
+    assert resolved.argv[2] == "-Command"
+    assert "MUX_SHIM_DIR" in resolved.argv[3]
     assert resolved.env == {"PROFILE_TEST": "yes"}
 
 
@@ -148,7 +151,7 @@ async def test_spawn_api_keeps_agent_and_profile_paths_distinct(tmp_path: Path) 
     )
 
     assert captured[0]["shell_profile_id"] == "pwsh"
-    assert captured[0]["args"] == ["-NoLogo"]
+    assert captured[0]["args"][:1] == ["-NoLogo"]
     assert captured[1]["shell_profile_id"] is None
     assert captured[1]["backend"] == "claude"
     assert captured[2]["shell_profile_id"] is None
