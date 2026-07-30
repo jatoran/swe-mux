@@ -26,6 +26,17 @@ The shared attention-observer setting also enables the 30-minute unread-attentio
 - Same trusted project scope + Git branch warns about concurrent work.
 - Owned listeners and registered previews expose port collisions.
 - Owned loopback connections reveal one session consuming another session's dev server.
+- An interlock is a **condition, announced once per appearance**, not a repeating event. The
+  5s sweep refreshes the fingerprint it already holds and re-arms it only after the condition
+  has been absent for the clear window (300s), so a legitimately shared server costs one
+  record rather than twelve an hour for the life of both sessions. Anything still true is not
+  news.
+- Not every interlock is a fault. `port_collision` (two sessions bound to the same port) is
+  one and becomes an attention record; `cross_session_dev_server` is **evidence only** — it
+  reaches the event bus, automation rules, and the absence report, but never the inbox,
+  because driving another session's loopback server is how a second daemon, a preview, or a
+  test harness is meant to be exercised. A detector that fires on the documented workflow
+  trains the user to ignore the surface it fires into.
 - Resume, handoff, continuation, and review lineage link atomic agent runs without merging
   their history or confusing canonical Projects with derived Git scopes.
 - Workload telemetry groups observed turn/stall/approval rates, duration, context,

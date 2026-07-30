@@ -1537,6 +1537,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .utility-drawer .notification-list strong{font-weight:400}
 .utility-drawer .notification-list span,.utility-drawer .notification-list small{color:var(--muted);font-size:8px}
 .utility-drawer .notification-list button{grid-column:2;justify-self:start;min-height:27px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+/* Row actions share a line: two buttons each claiming column 2 stack into implicit
+   rows and make every record twice as tall as the text it carries. */
+.utility-drawer .notification-list .notification-row-actions{grid-column:2;display:flex;flex-wrap:wrap;gap:6px}
+.utility-drawer .notification-list .notification-row-actions button{grid-column:auto}
+.utility-drawer .notification-list button:disabled{opacity:.45;cursor:not-allowed}
+/* Dismissed records are history, not attention: readable when asked for, quiet otherwise. */
+.utility-drawer .notification-list article.dismissed{opacity:.55}
 .utility-drawer .notification-empty{margin:0;padding:22px 12px;color:var(--muted);text-align:center;line-height:1.45}
 /* Git tab: two lists over one repository — the branches checked out in it (with live
    dirty/upstream state wherever a session is attached) and the worktrees themselves.

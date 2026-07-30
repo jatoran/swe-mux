@@ -10,7 +10,7 @@ from typing import Any
 from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config
 from swe_mux.event_bus import EventBus
-from swe_mux.fleet_intelligence import FleetIntelligence
+from swe_mux.fleet_intelligence import INTERLOCK_CLEAR_SECONDS, FleetIntelligence
 from swe_mux.models import SessionRecord
 from swe_mux.processes import OwnedProcess
 
@@ -150,8 +150,10 @@ async def test_cross_session_dev_server_interlock_uses_owned_connections(
     interlock = next(item for item in emitted if item.type == "environment_interlock")
     assert interlock.payload["kind"] == "cross_session_dev_server"
     assert interlock.payload["sessions"] == ["consumer", "provider"]
-    notifications = await store.notifications()
-    assert notifications[0]["kind"] == "environment_interlock"
+    # Evidence, not an attention record: driving another session's loopback server is
+    # the documented way to exercise a second daemon or a preview, so it stays on the
+    # bus (rules, event stream, absence report) and out of the human's inbox.
+    assert await store.notifications() == []
     store.close()
 
 
@@ -205,6 +207,42 @@ async def test_port_collision_interlock_is_explainable(
     notifications = await store.notifications()
     assert notifications[0]["title"] == "Port collision"
     assert "127.0.0.1:5173" in notifications[0]["message"]
+    store.close()
+
+
+async def test_held_interlock_is_announced_once_and_rearms_only_after_it_clears(
+    tmp_path: Path,
+) -> None:
+    first = session("a", scope="scope-a", branch="main")
+    second = session("b", scope="scope-a", branch="main")
+    intelligence, _, store, processes = fleet(tmp_path, {"a": first, "b": second})
+    listener = [{"host": "127.0.0.1", "port": 5173}]
+    collision = {
+        (10, 1.0): OwnedProcess(10, None, "a", "node", "vite", 1.0, None, 0, 1, listener, []),
+        (20, 2.0): OwnedProcess(20, None, "b", "node", "vite", 2.0, None, 0, 1, listener, []),
+    }
+    processes.owned = collision
+    start = time.time()
+
+    # The condition holds across four sweeps. It is one fact, so it is one record —
+    # the 5s inspection loop used to re-announce it every repeat window forever.
+    for tick in range(4):
+        await intelligence._interlocks(start + tick * 5)
+    assert len(await store.notifications()) == 1
+
+    # Resolved, but not yet for the full clear window: coming back is not news.
+    processes.owned = {}
+    await intelligence._interlocks(start + 60)
+    processes.owned = collision
+    await intelligence._interlocks(start + 90)
+    assert len(await store.notifications()) == 1
+
+    # Gone for longer than the clear window, then back: that is a new occurrence.
+    processes.owned = {}
+    await intelligence._interlocks(start + 120)
+    processes.owned = collision
+    await intelligence._interlocks(start + 120 + INTERLOCK_CLEAR_SECONDS)
+    assert len(await store.notifications()) == 2
     store.close()
 
 

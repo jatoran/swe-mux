@@ -21,7 +21,13 @@ from .transcript_view import parse_transcript_cached
 STALL_SECONDS = 300
 UNATTENDED_SECONDS = 15
 RUNAWAY_BYTES_PER_MINUTE = 4 * 1024 * 1024
-INTERLOCK_REPEAT_SECONDS = 300
+# An interlock is a *condition*, not an event: it is announced once when it appears
+# and re-armed only once it has been absent for this long. It used to re-announce on
+# this same interval for as long as the condition held, which turned one true fact
+# (two sessions sharing a dev server) into twelve identical records an hour for the
+# life of both sessions. The window is a clear window, not a repeat window: it
+# absorbs a sweep that misses a still-live connection instead of re-notifying.
+INTERLOCK_CLEAR_SECONDS = 300
 DIGEST_SECONDS = 30 * 60
 
 FLEET_INSPECT_LOOP = "fleet-intelligence"
@@ -51,12 +57,15 @@ class FleetIntelligence:
         self._claim_checks: set[asyncio.Task[None]] = set()
         self._queue: asyncio.Queue[MuxEvent] | None = None
         self._seen: dict[str, float] = {}
+        # Interlock fingerprints whose condition is currently held, with the last
+        # sweep that observed them. Presence here is what suppresses a re-announce.
+        self._interlocks_active: dict[str, float] = {}
         self._failures: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
         self._last_turn: dict[str, float] = {}
         self._turn_started: dict[str, float] = {}
         self._last_test: dict[str, float] = {}
-        # _seen keys contributed per session, so a session's emit_once keys and
-        # interlock fingerprints can be dropped from _seen when it exits.
+        # Emit keys contributed per session, so a session's emit_once keys and held
+        # interlock fingerprints can be dropped from both maps when it exits.
         self._emit_keys_by_session: dict[str, set[str]] = defaultdict(set)
         self._last_user_activity = time.time()
         self._last_digest = time.time()
@@ -114,6 +123,7 @@ class FleetIntelligence:
             self._last_test.pop(sid, None)
             for key in self._emit_keys_by_session.pop(sid, ()):
                 self._seen.pop(key, None)
+                self._interlocks_active.pop(key, None)
             # The readiness tracker and the automation engine's source probes key
             # on the same sessions; without this their per-session memory grows
             # for the daemon's lifetime and skews the metrics read off them.
@@ -384,6 +394,9 @@ class FleetIntelligence:
     ) -> None:
         if index is None:
             index = self._index_processes()
+        # Re-arm before evaluating, never after: a condition that has been gone for
+        # the clear window is forgotten here, so finding it again below is news.
+        self._rearm_interlocks(now)
         live = [
             item
             for item in self.sessions.sessions.values()
@@ -449,6 +462,10 @@ class FleetIntelligence:
                     for provider_session in providers_by_port.get(remote_port, set()):
                         if provider_session == item.session_id:
                             continue
+                        # Evidence only, deliberately. One session driving another's
+                        # loopback server is how a second daemon, a preview, or a test
+                        # harness is *supposed* to be exercised, so it is a fact worth
+                        # recording on the bus and not a fault worth an attention record.
                         await self._emit_interlock(
                             "cross_session_dev_server",
                             sorted([provider_session, item.session_id]),
@@ -463,12 +480,18 @@ class FleetIntelligence:
                                 },
                             ],
                             now,
-                            title="Shared dev server",
-                            message=(
-                                f"{self._label(item.session_id)} is talking to the dev server "
-                                f"{self._label(provider_session)} owns on port {remote_port}."
-                            ),
                         )
+
+    def _rearm_interlocks(self, now: float) -> None:
+        """Forget held interlocks whose condition has been gone for the clear window.
+
+        Only a fingerprint that leaves this map can be announced again, so the clear
+        window is exactly how long a condition must stay resolved before its return
+        counts as news. Every sweep that still sees the condition refreshes its entry.
+        """
+        for fingerprint, last_seen in list(self._interlocks_active.items()):
+            if now - last_seen >= INTERLOCK_CLEAR_SECONDS:
+                self._interlocks_active.pop(fingerprint, None)
 
     def _label(self, session_id: str) -> str:
         session = self.sessions.sessions.get(session_id)
@@ -484,15 +507,23 @@ class FleetIntelligence:
         evidence: list[dict[str, Any]],
         now: float,
         *,
-        title: str,
-        message: str,
+        title: str | None = None,
+        message: str | None = None,
     ) -> None:
+        """Announce an interlock once per appearance of its condition.
+
+        A kind called without `title`/`message` is evidence only: it reaches the event
+        bus — and so automation rules, the event stream, and the absence report — but
+        never becomes an attention record. That is the difference between a fault and
+        a fact, and only faults are worth interrupting a human for.
+        """
         fingerprint = hashlib.sha256(
             json.dumps([kind, session_ids, evidence], sort_keys=True).encode()
         ).hexdigest()[:20]
-        if now - self._seen.get(fingerprint, 0) < INTERLOCK_REPEAT_SECONDS:
+        held = fingerprint in self._interlocks_active
+        self._interlocks_active[fingerprint] = now
+        if held:
             return
-        self._seen[fingerprint] = now
         for sid in session_ids:
             self._emit_keys_by_session[sid].add(fingerprint)
         await self.events.emit(
@@ -504,6 +535,8 @@ class FleetIntelligence:
             evidence=evidence,
             confidence=1.0,
         )
+        if title is None or message is None:
+            return
         # The emit above suspends, and the server pops sessions concurrently: a
         # bare index here is a live KeyError that used to kill the whole loop.
         owner = self.sessions.sessions.get(session_ids[0])

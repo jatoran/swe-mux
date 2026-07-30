@@ -65,6 +65,13 @@ and the declared minimum observation capability.
   context observers share the `phase7_observers_enabled` attention setting.
 - `Run notes` is the user-facing label for persisted annotations. `Attention` contains
   notification records that may require user action.
+- Attention records are **dismissible from every surface that lists them** — the drawer's
+  Alerts tab as well as the dashboard inbox — individually (`PATCH
+  /api/automation/notifications/{id}`) or all at once (`PATCH /api/automation/notifications`,
+  which returns how many open records it closed). Dismissing sets `read_at`; it deletes
+  nothing, so the history stays readable and retention still owns removal. Records survive
+  90 days (`automation_retention_days`), which is far longer than a surface with no clear
+  can stay useful.
 - Diagnostics is demoted out of the primary tab row to a header action: provider traces, event
   dry-run, queue state, firings/observer-call traces, and research-only injection evidence are
   developer-grade and sit beside daily surfaces no longer.
