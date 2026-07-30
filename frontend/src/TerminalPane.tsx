@@ -1362,6 +1362,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const sendKey=(sequence:string)=>{
     termRef.current?.input(sequence,true)
     scrollTerminalToTail(termRef.current)
+    // The rail's own `^End` reaches the same place the chip does, so it takes the chip down
+    // with it. Only this one sequence: typing does not move an application's viewport.
+    if(sequence===APP_TAIL_KEY&&appOffTailRef.current){appOffTailRef.current=false;setAppOffTail(false)}
     if(!keyboardOffRef.current)focusTerminalInputRef.current()
   }
   // Jump-to-latest, for both viewports rather than only xterm's (see `appOwnsTail`). Scrolling
