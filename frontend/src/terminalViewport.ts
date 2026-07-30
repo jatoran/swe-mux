@@ -27,6 +27,30 @@ type TerminalTail = {
 // exists so a terminal that somehow never settles costs a few calls instead of spinning.
 const TAIL_SCROLL_ATTEMPTS = 4
 
+// Ctrl+End, the same bytes the command rail's `^End` key sends.
+export const APP_TAIL_KEY = '\x1b[1;5F'
+
+/**
+ * Whether reaching the newest output has to be asked of the *application* as well as of xterm.
+ *
+ * There are two viewports stacked here, and only one of them is xterm's. A TUI that keeps its
+ * own scroll position moves that one instead, so scrolling the terminal alone lands on a
+ * viewport nobody was looking at and the button reads as dead. Claude keeps such a viewport;
+ * Codex does not — its binary carries no mouse-mode enables at all, so every scroll it is part
+ * of is xterm's own — which is exactly why jump-to-latest has always worked in a Codex session
+ * and not in a Claude one on a phone. The rail's `^End` worked in both because it happens to do
+ * both halves; this is the same pair of moves, behind the chip.
+ *
+ * Mouse tracking generalises the rule: an application that has taken the mouse is the thing
+ * receiving scroll gestures, and `mobileDragTarget` already routes phone drags on that signal.
+ * A shell is excluded outright — it owns no viewport, so the bytes would only land in whatever
+ * command line the user was halfway through typing.
+ */
+export function appOwnsTail(backend: string, mouseTracking: boolean): boolean {
+  if (backend === 'shell') return false
+  return backend === 'claude' || mouseTracking
+}
+
 /**
  * Put a terminal back on its newest line, and keep at it until it actually lands.
  *

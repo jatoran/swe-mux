@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  APP_TAIL_KEY,
+  appOwnsTail,
   redrawVisibleTerminal,
   refitVisibleTerminal,
   scrollTerminalToTail,
@@ -77,4 +79,17 @@ test('jump-to-latest is a no-op on the tail and gives up rather than spinning', 
   assert.equal(stuck.calls, 1)
 
   assert.equal(scrollTerminalToTail(null), false)
+})
+
+// The half that made the chip dead on a phone: Claude keeps its own viewport, so scrolling
+// xterm's moves a view the user was not looking at. Codex keeps none, which is why the same
+// button has always worked there — and why it must not start typing at one that does not.
+test('jump-to-latest asks the application too, but only one that owns a viewport', () => {
+  assert.equal(appOwnsTail('claude', false), true)
+  assert.equal(appOwnsTail('codex', false), false)
+  // Whatever the backend, an application holding the mouse is the thing receiving scrolls.
+  assert.equal(appOwnsTail('codex', true), true)
+  // A shell owns no viewport, so the bytes would only land in a half-typed command line.
+  assert.equal(appOwnsTail('shell', true), false)
+  assert.equal(APP_TAIL_KEY, '\x1b[1;5F')
 })
