@@ -27,6 +27,10 @@ class CodexAdapter:
     # Codex has no session-start hook, so a `/new` under a live PTY is only
     # discoverable from the filesystem; the transcript-switch heuristic stays on.
     reports_conversation_rollover = False
+    # Codex mints its own thread id, so a fresh session carries the mux session id
+    # as a placeholder until its rollout file is discovered. Its transcript can
+    # only ever be bound by elimination, never by an exact id match.
+    assigns_conversation_id = False
 
     def __init__(
         self,

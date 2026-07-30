@@ -55,6 +55,9 @@ class ClaudeAdapter:
     # the CLI itself via the SessionStart ingress. Rollovers are hook-driven;
     # the transcript-switch heuristic must never move a Claude session.
     reports_conversation_rollover = True
+    # mux spawns with `--session-id <mux id>`, so the CLI writes exactly that
+    # conversation and native_session_id is authoritative from the first moment.
+    assigns_conversation_id = True
 
     def __init__(
         self,

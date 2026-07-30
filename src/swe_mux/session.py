@@ -1606,21 +1606,29 @@ class SessionManager:
         rekeys native_session_id, rebinds the history row, and renders the
         outsider's status and tokens under this session's identity.
 
-        Two independent gates:
+        Three independent gates:
 
-        - When the CLI was told which conversation to write (claude's injected
+        - When mux dictated the conversation id at spawn (claude's injected
           `--session-id`), that id is authoritative. Nothing else is ours, so the
-          fallback is refused outright rather than guessing.
-        - Otherwise the file must have been *created* after this agent run began.
-          A conversation that already existed cannot have been started by it.
+          fallback is refused outright rather than guessing. This asks the adapter,
+          not the *shape* of the id: Codex mints its own thread id and carries the
+          mux session id as a placeholder until discovery, which is also a UUID, so
+          a shape test refuses every Codex session forever and the session is then
+          never observed at all — no turn states, no tokens, no transcript.
+        - The file must have been *created* after this agent run began. A
+          conversation that already existed cannot have been started by it.
+        - This PTY must have been producing output while the file appeared. An
+          outsider CLI writing into the same cwd leaves our PTY silent, so this is
+          what keeps the id-less backends from adopting a stranger's conversation.
         """
-        record = session.record
-        if _CLAUDE_NATIVE_ID.fullmatch(record.native_session_id or ""):
+        if session.adapter.assigns_conversation_id:
             return False
         created = file_created_at(candidate)
         if created is None:
             return False
-        return created >= started - _TRANSCRIPT_CREATION_SLACK_SECONDS
+        if created < started - _TRANSCRIPT_CREATION_SLACK_SECONDS:
+            return False
+        return SessionManager._session_could_have_written(session, candidate)
 
     def _adoption_transcript_claims(
         self,

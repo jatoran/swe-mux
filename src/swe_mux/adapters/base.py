@@ -36,6 +36,15 @@ class BackendAdapter(Protocol):
     # strictly stronger evidence, and the heuristic is the one mechanism that can
     # latch a session onto a sibling's conversation in a shared cwd.
     reports_conversation_rollover: bool
+    # True when mux dictates the conversation id at spawn, so
+    # ``record.native_session_id`` is authoritative from the first moment and only
+    # an exact id match may bind a transcript (Claude's injected ``--session-id``).
+    # False for backends that mint their own conversation id: they carry the mux
+    # session id as a placeholder until discovery, so binding has to go through
+    # corroborated elimination instead. Do not infer this from the *shape* of the
+    # id — both kinds are UUIDs, and treating a placeholder as authoritative leaves
+    # the session permanently unobserved.
+    assigns_conversation_id: bool
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec: ...
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec: ...
