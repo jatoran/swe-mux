@@ -101,12 +101,21 @@ suppresses replayed history, so a session that was already idle when the daemon 
 had no record that its last root turn finished — and `parser_status` only reaches `ready`
 off a *live* transcript record, which such a session cannot produce until its next turn (no
 hook fires while it waits). Both gaps closed at once: when the observer's catch-up settles
-(`catchup:settled`) it emits `root_turn_settled` carrying the number of records it read.
-The tracker takes that as a completed root turn *only when it has no lifecycle evidence of
-its own* — it fills a gap, it never overrules — and a non-zero record count as proof of
-observation capability, since reading and interpreting this session's own transcript is
-exactly what that check asks. It is deliberately not a synthetic `turn_ended`: that would
-fire read-aloud, notifications, and turn observers for a turn that ended before the restart.
+(`catchup:settled`) it leaves `observation_state["catchup_settled"]` on the session, holding
+the number of records it read plus the input revision and screen mode *at that instant*, so
+the composer-collision guard still measures from when the conclusion was true. The tracker
+picks it up on its next evaluation and takes it as a completed root turn *only when it has
+no lifecycle evidence of its own* — it fills a gap, it never overrules — and a non-zero
+record count as proof of observation capability, since reading and interpreting this
+session's own transcript is exactly what that check asks.
+
+It is left on the session rather than only announced because ordering had already eaten the
+announcement: adoption catches observers up hundreds of lines of startup before
+`fleet.start()` subscribes to the bus, so on a live fleet the one session whose observer
+settled during startup emitted `root_turn_settled` to no subscriber at all. The event is
+still emitted for the audit trail and the live path — but never as a synthetic `turn_ended`,
+which would fire read-aloud, notifications, and turn observers for a turn that ended before
+the restart.
 
 What carries the safety argument after those four is the composer-collision guard:
 `partial_input_absent` compares the input revision against its value when the root turn

@@ -36,6 +36,15 @@ def _event(event_type: str, **payload: Any) -> MuxEvent:
     )
 
 
+def _settled(session: ReplaySession, *, records: int) -> None:
+    """What the observer leaves behind when its catch-up settles to idle."""
+    session.observation_state["catchup_settled"] = {
+        "records": records,
+        "input_revision": session.input_revision,
+        "screen": session.screen.mode,
+    }
+
+
 def _idle_agent(
     backend: str = "claude", *, screen: bytes = b""
 ) -> tuple[ReplaySession, DeliveryReadinessTracker, VirtualClock]:
@@ -212,13 +221,49 @@ def test_catchup_restores_readiness_for_a_session_idle_since_before_the_restart(
     session = ReplaySession("claude", clock)
     tracker = DeliveryReadinessTracker(clock=clock.monotonic)
     session.screen.feed(b"\x1b[?1049h")
+    _settled(session, records=5)
 
-    tracker.observe(_event("root_turn_settled", scope="root", records=5), session)
+    # Adopted at the first read, then held for the ordinary settle debounce.
+    assert tracker.evaluate(session)["reason"] == "readiness_debounce_pending"
     clock.advance(5.0)
-
     evaluation = tracker.evaluate(session)
     assert evaluation["delivery_state"] == "safe"
     assert evaluation["evidence"]["root_reason"] == "root_turn_settled_after_catchup"
+
+
+def test_the_settle_is_read_however_late_the_reader_arrives() -> None:
+    """Adoption catches observers up long before the fleet subscribes to the bus.
+
+    The conclusion is left on the session precisely so that ordering cannot lose
+    it, which an announcement did: the one live session whose observer settled
+    during startup emitted its event to no subscriber at all.
+    """
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    session.screen.feed(b"\x1b[?1049h")
+    _settled(session, records=5)
+    clock.advance(3600.0)
+    # A tracker that did not exist when any of that happened.
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+
+    tracker.evaluate(session)
+    clock.advance(5.0)
+    assert tracker.evaluate(session)["delivery_state"] == "safe"
+
+
+def test_the_settles_input_revision_is_the_one_from_when_it_settled() -> None:
+    """Text typed between the settle and the first read still blocks."""
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+    session.screen.feed(b"\x1b[?1049h")
+    _settled(session, records=5)
+    session.input_revision += 1
+    clock.advance(5.0)
+
+    evaluation = tracker.evaluate(session)
+    assert evaluation["delivery_state"] == "blocked"
+    assert "terminal_input_after_completion" in evaluation["reasons"]
 
 
 def test_a_catchup_over_nothing_proves_nothing() -> None:
@@ -226,13 +271,12 @@ def test_a_catchup_over_nothing_proves_nothing() -> None:
     clock = VirtualClock()
     session = ReplaySession("claude", clock)
     tracker = DeliveryReadinessTracker(clock=clock.monotonic)
-
-    tracker.observe(_event("root_turn_settled", scope="root", records=0), session)
+    _settled(session, records=0)
     clock.advance(5.0)
 
     evaluation = tracker.evaluate(session)
     assert evaluation["delivery_state"] == "unknown"
-    assert "observation_capability_unknown" in evaluation["reasons"]
+    assert "no_root_lifecycle_evidence" in evaluation["reasons"]
 
 
 def test_catchup_never_overrules_evidence_the_tracker_already_has() -> None:
@@ -242,7 +286,7 @@ def test_catchup_never_overrules_evidence_the_tracker_already_has() -> None:
     tracker = DeliveryReadinessTracker(clock=clock.monotonic)
     session.record.parser_status = "ready"
     tracker.observe(_event("turn_started"), session)
-    tracker.observe(_event("root_turn_settled", scope="root", records=5), session)
+    _settled(session, records=5)
     clock.advance(5.0)
 
     evaluation = tracker.evaluate(session)

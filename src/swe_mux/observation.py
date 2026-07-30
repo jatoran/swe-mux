@@ -759,22 +759,34 @@ async def _finish_transcript_catchup(
             # so a restart left an already-idle session with no record that its
             # last root turn had finished, and every queued message to it then
             # needed the operator's override. Settling *is* that evidence, read
-            # from the transcript — but it is published under its own type rather
-            # than as a synthetic `turn_ended`, which would fire read-aloud,
-            # notifications, and turn observers for a turn that ended before the
-            # restart. The state guard is what keeps it from contradicting a hook
-            # that has already put this session somewhere other than idle.
+            # from the transcript.
+            #
+            # It is left on the session rather than only announced, because
+            # adoption runs long before the fleet subscribes to the bus: the one
+            # session that most needs this is the one whose observer caught up
+            # during startup, and its event went out to nobody. A fact parked
+            # where the reader looks cannot be missed by being early. `records`
+            # is how many of this session's own transcript records were read to
+            # reach the conclusion; non-zero is itself proof the transcript was
+            # found, owned, parsed, and understood, which is what readiness asks
+            # of `parser_or_hook_supported` and which an idle session cannot
+            # otherwise demonstrate until its next turn. The revision and screen
+            # are captured here, not when the reader gets around to it, so the
+            # composer-collision guard still measures from this instant.
+            state["catchup_settled"] = {
+                "records": historical_seen,
+                "input_revision": int(getattr(session, "input_revision", 0)),
+                "screen": getattr(getattr(session, "screen", None), "mode", None),
+            }
+            # Announced as well, for the audit trail and the live path. Never as a
+            # synthetic `turn_ended`, which would fire read-aloud, notifications,
+            # and turn observers for a turn that ended before the restart.
             await events.emit(
                 "root_turn_settled",
                 session_id=session.record.id,
                 source="transcript",
                 scope="root",
                 evidence="catchup:settled",
-                # How many of this session's own transcript records the observer
-                # read to reach that conclusion. Non-zero is itself proof the
-                # transcript was found, owned, parsed, and understood — which is
-                # what readiness asks of `parser_or_hook_supported`, and which an
-                # idle session otherwise cannot demonstrate until its next turn.
                 records=historical_seen,
             )
     _publish_update(session)

@@ -17,6 +17,7 @@ LIFECYCLE_EVIDENCE_MAX_AGE_SECONDS = 5 * 60.0
 
 class ReadinessSession(Protocol):
     record: Any
+    observation_state: dict[str, Any]
     subscribers: set[Any]
     input_owner: str | None
     input_revision: int
@@ -173,22 +174,6 @@ class DeliveryReadinessTracker:
             self._transition(
                 memory, phase="aborted", reason=f"root_turn_{outcome}", event=event
             )
-        elif event.type == "root_turn_settled":
-            # Transcript catch-up concluded that this session's tail holds no live
-            # root turn. Only ever fills a gap: with any lifecycle evidence already
-            # in hand, this adds nothing and must not overrule it. It keeps its own
-            # reason because the provenance is weaker than a completion record —
-            # "nothing is running here" rather than "this turn ended".
-            if memory.phase == "unknown":
-                memory.observation_proven = bool(event.payload.get("records"))
-                self._transition(
-                    memory,
-                    phase="ready",
-                    reason="root_turn_settled_after_catchup",
-                    event=event,
-                    input_revision=int(getattr(session, "input_revision", 0)),
-                    screen=getattr(getattr(session, "screen", None), "mode", None),
-                )
         elif event.type == "turn_ended":
             outcome = str(event.payload.get("outcome") or "completed")
             if outcome == "completed":
@@ -211,6 +196,50 @@ class DeliveryReadinessTracker:
                 self._transition(
                     memory, phase="aborted", reason=f"root_turn_{outcome}", event=event
                 )
+
+    def _adopt_catchup_settle(
+        self, session: ReadinessSession, memory: ReadinessMemory
+    ) -> None:
+        """Take the observer's catch-up conclusion as this session's turn boundary.
+
+        Only ever fills a gap. With any lifecycle evidence of its own the tracker
+        ignores this, because "the transcript holds no live root turn" is weaker
+        provenance than a completion record and must never overrule one — hence
+        its own reason string, and the `idle` requirement on top.
+
+        Read here rather than handled as an event because the observer that has
+        it caught up during adoption, hundreds of lines of startup before the
+        fleet subscribed to the bus, so the announcement reached nobody. Sessions
+        left running across a restart are exactly the ones this is for.
+        """
+        if memory.phase != "unknown" or session.record.state != "idle":
+            return
+        observation_state = getattr(session, "observation_state", None)
+        settled = observation_state.get("catchup_settled") if observation_state else None
+        if not isinstance(settled, dict) or not settled.get("records"):
+            return
+        now = self.clock()
+        memory.phase = "ready"
+        memory.reason = "root_turn_settled_after_catchup"
+        memory.source = "transcript"
+        memory.observed_at = now
+        memory.phase_since = now
+        memory.transition_count += 1
+        memory.observation_proven = True
+        # Captured when the observer settled, not now: the composer-collision
+        # guard has to measure from the moment the conclusion was true.
+        memory.input_revision_at_completion = int(settled.get("input_revision") or 0)
+        screen = settled.get("screen")
+        memory.screen_at_completion = screen if isinstance(screen, str) else None
+        memory.transitions.append(
+            {
+                "phase": "ready",
+                "reason": "root_turn_settled_after_catchup",
+                "event": "catchup_settled",
+                "source": "transcript",
+                "scope": "root",
+            }
+        )
 
     @staticmethod
     def _screen_evidence(session: ReadinessSession, now: float) -> tuple[str | None, str]:
@@ -303,6 +332,7 @@ class DeliveryReadinessTracker:
         now = self.clock()
         memory = self._memory(session)
         record = session.record
+        self._adopt_catchup_settle(session, memory)
         lifecycle_age = max(0.0, now - memory.observed_at)
         terminal_mode = getattr(session, "terminal_mode", None)
         terminal_mode_updated_at = float(getattr(session, "terminal_mode_updated_at", 0.0))
