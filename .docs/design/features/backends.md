@@ -63,9 +63,21 @@
   the state is still `starting`, a one-second quiet period after live PTY output marks the
   interactive prompt ready at the lowest evidence tier. Any later hook/transcript evidence
   supersedes this startup-only fallback.
-- PowerShell cwd-integration re-prepends the mux shim directory to PATH after the user's
-  `$PROFILE` runs, so profiles that rebuild PATH (registry refresh, version managers) cannot
-  silently bypass shim promotion/demotion and hook injection.
+- **Every interactive PowerShell session re-asserts the shim directory at the front of PATH
+  after the user's `$PROFILE` runs**, so profiles that rebuild PATH (registry refresh,
+  version managers) cannot silently bypass shim promotion/demotion and hook injection. The
+  guard is unconditional and independent of cwd-integration, which is an opt-in telemetry
+  feature nobody would think to enable to keep agent detection working. Bundled with it, a
+  `$PROFILE` doing `$env:PATH = [Environment]::GetEnvironmentVariable('Path','Machine') + …`
+  cost the default profile every promotion, hook, status and title for the pane's whole life:
+  `claude` resolved to the real CLI, so no promote arrived, no `--session-id`/`--settings`
+  were injected, and the transcript fallback could not see a launch in a subdirectory either.
+  PATH is rebuilt front-first rather than tested for membership, matching the invariant
+  `create_agent_shims` establishes at spawn — one shim dir, in front. `-NoProfile` profiles
+  are unaffected (nothing clobbers PATH) and a profile carrying its own `-Command`/`-File`
+  cannot be wrapped, so it degrades silently; only explicitly requested cwd-integration still
+  refuses such a profile outright. cmd.exe runs no startup script and WSL cannot use Windows
+  `.cmd` shims at all (`agent-bridge-unavailable`), so neither carries the guard.
 - Transcript records that already existed when observation attaches (resume, promotion after
   first activity, retargeting) are historical: they still populate tokens/context/model and
   tool-name correlation but never emit events or drive state. After catch-up the session is

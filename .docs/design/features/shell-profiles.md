@@ -15,6 +15,12 @@
 - Detected PowerShell, PowerShell 7, CMD, and WSL profiles remain configurable. PowerShell
   launches use `-NoLogo`, not `-NoProfile`, so the selected edition's user profile still
   loads. Cwd integration is process-local and never edits profile files.
+- Because the user's `$PROFILE` does load, every interactive PowerShell profile is wrapped
+  in `-NoExit -Command <bootstrap>`, which runs after it and re-asserts `MUX_SHIM_DIR` at
+  the front of PATH. Cwd integration adds the OSC 7 `prompt` hook to that same bootstrap;
+  it does not gate it. A profile whose own args include `-Command`/`-File` has no prompt to
+  instrument and no room for a second script, so it is left alone — except with cwd
+  integration explicitly on, which still rejects it. Rationale: `backends.md`.
 - WSL translates the canonical Windows Project root through the selected distribution.
 
 ## API and CLI
