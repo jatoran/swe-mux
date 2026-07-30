@@ -40,17 +40,58 @@ def test_shell_profile_cwd_integration_is_explicit_and_process_local(tmp_path: P
     plain = ShellProfile("plain", "Plain", str(executable), ["-NoLogo"])
     integrated = ShellProfile("live", "Live", str(executable), ["-NoLogo"], cwd_integration=True)
     config = Config(shell_profiles=[plain, integrated], default_shell_profile=plain.id)
-    assert resolve_profile(config, plain.id, tmp_path).argv == ("-NoLogo",)
+    bare = resolve_profile(config, plain.id, tmp_path)
+    assert "cwd-osc7" not in bare.capabilities
+    assert "$([char]27)]7;" not in bare.argv[-1]
     wrapped = resolve_profile(config, integrated.id, tmp_path)
     assert "-Command" in wrapped.argv
     assert "cwd-osc7" in wrapped.capabilities
     script = wrapped.argv[-1]
     assert "$([char]27)]7;" in script
     assert "`e]7;" not in script
-    # Profiles that rebuild PATH from the registry must not lose the agent shims;
-    # the integration script restores the shim directory after $PROFILE ran.
-    assert "MUX_SHIM_DIR" in script
-    assert '$env:PATH="$($env:MUX_SHIM_DIR);$env:PATH"' in script
+
+
+def test_powershell_shim_path_guard_applies_without_cwd_integration(tmp_path: Path) -> None:
+    """Losing the shim directory costs promotion, hooks and titling, so the guard is
+    unconditional — a profile with cwd telemetry off is exactly where it was missing."""
+    executable = tmp_path / "pwsh.exe"
+    executable.write_bytes(b"fixture")
+    plain = ShellProfile("plain", "Plain", str(executable), ["-NoLogo"])
+    integrated = ShellProfile("live", "Live", str(executable), ["-NoLogo"], cwd_integration=True)
+    other = ShellProfile("cmd", "Cmd", str(tmp_path / "cmd.exe"), ["/Q"])
+    (tmp_path / "cmd.exe").write_bytes(b"fixture")
+    config = Config(shell_profiles=[plain, integrated, other], default_shell_profile=plain.id)
+    for profile_id in (plain.id, integrated.id):
+        resolved = resolve_profile(config, profile_id, tmp_path)
+        assert resolved.argv[-2] == "-Command", profile_id
+        assert "-NoExit" in resolved.argv, profile_id
+        # Rebuilt front-first rather than merely present: a $PROFILE that prepends
+        # its own directories after rebuilding PATH would otherwise outrank the shims.
+        assert resolved.argv[-1].startswith(
+            "if($env:MUX_SHIM_DIR){$env:PATH=(@($env:MUX_SHIM_DIR)+"
+        ), profile_id
+    # Only interactive PowerShell has a $PROFILE to defend against.
+    assert resolve_profile(config, other.id, tmp_path).argv == ("/Q",)
+    assert resolve_profile(config, plain.id, tmp_path, interactive=False).argv == ("-NoLogo",)
+
+
+def test_shell_profile_with_own_command_keeps_working_without_cwd_integration(
+    tmp_path: Path,
+) -> None:
+    """The guard is implicit, so an unwrappable profile degrades instead of failing.
+
+    Only cwd integration is explicitly requested, and only it still refuses.
+    """
+    executable = tmp_path / "pwsh.exe"
+    executable.write_bytes(b"fixture")
+    scripted = ShellProfile("scripted", "Scripted", str(executable), ["-Command", "Get-Date"])
+    demanding = ShellProfile(
+        "demanding", "Demanding", str(executable), ["-File", "run.ps1"], cwd_integration=True
+    )
+    config = Config(shell_profiles=[scripted, demanding], default_shell_profile=scripted.id)
+    assert resolve_profile(config, scripted.id, tmp_path).argv == ("-Command", "Get-Date")
+    with pytest.raises(ValueError):
+        resolve_profile(config, demanding.id, tmp_path)
 
 
 @pytest.mark.asyncio
