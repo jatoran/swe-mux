@@ -10,7 +10,7 @@ import time
 import tomllib
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -103,13 +103,29 @@ SLICE_KINDS = {
     "prompt_text",
 }
 TRANSCRIPT_FREE_SLICES = {"prompt_text", "summary_chain"}
-# Titling runs in two stages against one agent run: a provisional label from the
-# user's request the moment they submit it, then one settled label once a turn has
-# completed and there is something to read. The settled call is still capped at one
-# per run; the provisional one is what stops a fresh pane from sitting nameless.
-SETTLED_TITLE_RULE_ID = "builtin.session-titler"
-PROVISIONAL_TITLE_RULE_ID = "builtin.session-titler-initial"
-TITLE_RULE_IDS = {SETTLED_TITLE_RULE_ID, PROVISIONAL_TITLE_RULE_ID}
+# One title per agent run, taken from the request the user opened the run with.
+# `PROMPT_TITLE_RULE_ID` is the real titler; `FALLBACK_TITLE_RULE_ID` exists only for
+# runs that have no prompt to read — Codex has no prompt hook, and an agent adopted
+# mid-conversation was never seen being asked anything. The ids keep their original
+# strings so existing annotations, user rules, and settings keys still resolve; only
+# which one leads has changed.
+#
+# The fallback reads the completed turn, which is a much weaker signal for a name:
+# it describes what just happened rather than what the session is for, and it
+# produced titles like "OK" and "Reply FROZENCODEX" in practice. That is why it is
+# gated on the prompt being genuinely unavailable rather than merely not-yet-used.
+PROMPT_TITLE_RULE_ID = "builtin.session-titler-initial"
+FALLBACK_TITLE_RULE_ID = "builtin.session-titler"
+TITLE_RULE_IDS = {PROMPT_TITLE_RULE_ID, FALLBACK_TITLE_RULE_ID}
+# A title lost to a provider rate limit used to wait for the next turn boundary,
+# which on an idle pane never comes: sessions were observed sitting nameless for
+# 20+ minutes with the user waiting on nothing. Retry in the background instead,
+# on a curve long enough to outlast the burst that caused the 429.
+TITLE_RETRY_DELAYS_SECONDS = (30.0, 120.0, 300.0)
+# Checkpoint namespace for the pinned first prompt of a run. In the store rather
+# than only on the Session because the daemon restarts (every reload, every
+# redeploy) while its sessions keep running, and the in-memory pin dies with it.
+RUN_PROMPT_CHECKPOINT_PREFIX = "run-prompt:"
 CAPABILITY_RANK = {"telemetry": 1, "inferred": 1, "semantic": 2, "derived": 2, "trusted": 3}
 ADAPTER_CAPABILITIES: dict[str, dict[str, Any]] = {
     "claude": {
@@ -150,25 +166,25 @@ ADAPTER_CAPABILITIES: dict[str, dict[str, Any]] = {
 BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
     {
         "id": "builtin.session-titler-initial",
-        "name": "Session titler (initial)",
+        "name": "Session titler",
         "setting_key": "observer_titler_enabled",
         "setting_label": "Session titler",
         "trigger": "turn_started",
-        "input": "The user's request",
+        "input": "The request the run opened with",
         "model": "Cheap model",
-        "result": "Provisional session title, replaced once a turn completes",
-        "description": "Names a pane from the request the user just submitted.",
+        "result": "Run note used as the generated session title",
+        "description": "Names a pane once, from the request that started the run.",
     },
     {
         "id": "builtin.session-titler",
-        "name": "Session titler",
+        "name": "Session titler (no prompt)",
         "setting_key": "observer_titler_enabled",
         "setting_label": "Session titler",
         "trigger": "turn_ended",
         "input": "Last completed turn",
         "model": "Cheap model",
         "result": "Run note used as the generated session title",
-        "description": "Creates one compact task title for each agent run.",
+        "description": "Fallback for runs with no captured request, such as Codex.",
     },
     {
         "id": "builtin.turn-summarizer",
@@ -783,6 +799,12 @@ class AutomationEngine:
         # multiple workers, two evidence sources can otherwise both pass the DB
         # check before either paid call creates its annotation.
         self._unique_inflight: set[tuple[str, str]] = set()
+        # Instance-level so a test can drive the retry curve without sleeping it.
+        self._title_retry_delays: tuple[float, ...] = TITLE_RETRY_DELAYS_SECONDS
+        # Firings are unique on (event_seq, rule_id, rule_revision), so a retry of the
+        # same event needs a sequence of its own. Counting down from zero keeps retry
+        # firings distinguishable and can never collide with the event bus's own.
+        self._retry_seq = 0
         self._interval_next: dict[str, float] = {}
         self._source_probes: dict[str, dict[str, Any]] = {}
         # A dropped cost reconcile leaves the ledger under-counting that call, so
@@ -1088,10 +1110,53 @@ class AutomationEngine:
                 except Exception as exc:
                     await self.store.finish_firing(firing_id, "failed", str(exc)[:1000])
                     report["error"] = str(exc)
+                    if self._schedule_title_retry(rule, event, exc):
+                        report["retry_scheduled"] = True
             finally:
                 if unique_key:
                     self._unique_inflight.discard(unique_key)
         return reports
+
+    def _schedule_title_retry(
+        self, rule: Rule, event: NormalizedEvent, error: BaseException
+    ) -> bool:
+        """Re-attempt a title the provider refused, without waiting for a turn boundary.
+
+        A session that goes idle right after a rate-limited title has no next turn to
+        piggyback on, so the pane keeps the backend's placeholder name until the user
+        happens to type again. Retrying in the background is what closes that.
+
+        Only provider failures qualify. Everything else an observer raises — budget
+        exhausted, degraded observation, no prompt captured — is a decision that a
+        retry would reach again unchanged, so retrying it only spends calls.
+        """
+        if rule.id not in TITLE_RULE_IDS or not event.agent_run_id:
+            return False
+        if not isinstance(error, OpenRouterError):
+            return False
+        attempt = int(event.payload.get("title_retry") or 0)
+        if attempt >= len(self._title_retry_delays):
+            return False
+        delay = self._title_retry_delays[attempt]
+        self._retry_seq -= 1
+        retry_event = replace(
+            event,
+            seq=self._retry_seq,
+            ts=time.time(),
+            payload={**event.payload, "title_retry": attempt + 1},
+        )
+
+        async def later() -> None:
+            await asyncio.sleep(delay)
+            # Straight back through the guards: by now the run may have ended, been
+            # cleared, or been titled by the other stage, and each of those is a
+            # reason to stop that the guards already know how to state.
+            await self.evaluate(retry_event, rules=[rule], debounced=True)
+
+        task = asyncio.create_task(later(), name=f"automation-title-retry-{rule.id}")
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+        return True
 
     def _schedule_debounce(self, rule: Rule, event: NormalizedEvent, delay: float) -> None:
         key = (rule.id, event.agent_run_id or event.session_id or "global")
@@ -1236,15 +1301,19 @@ class AutomationEngine:
         # is enough), and the leaked key then blocked that run's title forever.
         unique_key: tuple[str, str] | None = None
         if rule.id in TITLE_RULE_IDS and event.agent_run_id:
-            existing = await self.store.recent_annotation(event.agent_run_id, "title", 0)
-            if existing is not None:
-                # The provisional title is derived from the user's request alone, so
-                # the settled titler is allowed to replace it once, when it finally
-                # has the completed turn to work from. Nothing may replace a settled
-                # title: that is still one paid full-transcript call per run.
-                provisional = str(existing.get("rule_id") or "") == PROVISIONAL_TITLE_RULE_ID
-                if rule.id == PROVISIONAL_TITLE_RULE_ID or not provisional:
-                    return False
+            # First title wins, whichever rule wrote it. Nothing replaces a title:
+            # a name that moves is worse than a name chosen from partial evidence,
+            # because the user has already learned to find the tab by it.
+            if await self.store.recent_annotation(event.agent_run_id, "title", 0) is not None:
+                return False
+            if (
+                rule.id == FALLBACK_TITLE_RULE_ID
+                and await self._run_prompt(event, pin=not dry_run) is not None
+            ):
+                # There is a prompt to title from, so the weaker last-turn reading is
+                # not needed — even if the prompt-driven call has not landed yet, or
+                # has failed and is still retrying.
+                return False
             unique_key = self._unique_guard_key(rule, event)
             if unique_key in self._unique_inflight:
                 return False
@@ -1280,6 +1349,36 @@ class AutomationEngine:
         if rule.id in TITLE_RULE_IDS and event.agent_run_id:
             return rule.id, event.agent_run_id
         return None
+
+    async def _run_prompt(self, event: NormalizedEvent, *, pin: bool = True) -> str | None:
+        """The request this agent run opened with, pinned for the life of the run.
+
+        Pinned in the store on first read rather than re-read from the session each
+        time, for two reasons. A daemon restart clears the live session's copy while
+        the run keeps going, and the retry that follows would otherwise have nothing
+        to title from; and once anything has been titled from a given text, every
+        later attempt has to agree with it or the name moves under the user.
+
+        ``pin=False`` for dry runs, which must observe without leaving state behind.
+        """
+        if not event.agent_run_id:
+            return None
+        key = f"{RUN_PROMPT_CHECKPOINT_PREFIX}{event.agent_run_id}"
+        pinned = await self.store.checkpoint(key)
+        text = str((pinned or {}).get("text") or "")
+        if text:
+            return text
+        session = self.sessions.sessions.get(event.session_id or "")
+        if not session or session.record.agent_run_id != event.agent_run_id:
+            # A rolled-over session's prompt belongs to the successor run, not this
+            # one, so a mismatched record is no prompt at all.
+            return None
+        live = getattr(session, "first_user_prompt", None)
+        if not isinstance(live, str) or not live:
+            return None
+        if pin:
+            await self.store.set_checkpoint(key, {"text": live, "pinned_at": time.time()})
+        return live
 
     async def _action(
         self,
@@ -1418,7 +1517,7 @@ class AutomationEngine:
         input_spec = action.get("input") or {}
         slice_kind = str(input_spec.get("slice") or "last_turn")
         if slice_kind == "prompt_text":
-            prompt_text = getattr(session, "last_user_prompt", None)
+            prompt_text = await self._run_prompt(event)
             if not prompt_text:
                 raise ValueError("no user prompt has been observed for this run")
             transcript = self.slices.from_prompt(prompt_text)
@@ -1679,8 +1778,8 @@ class AutomationEngine:
         if event.type == "turn_started" and self.config.observer_titler_enabled:
             raw.append(
                 {
-                    "id": PROVISIONAL_TITLE_RULE_ID,
-                    "name": "Session titler (initial)",
+                    "id": PROMPT_TITLE_RULE_ID,
+                    "name": "Session titler",
                     "enabled": True,
                     "shadow": False,
                     # Debounced past the hook/transcript race: whichever source opens
@@ -1697,7 +1796,8 @@ class AutomationEngine:
                             "minimum_capability": "telemetry",
                             "prompt": (
                                 "Create a compact task-oriented title for a terminal tab and "
-                                "sidebar, from the user's request alone. Prefer 2-3 words and "
+                                "sidebar, from the request the user opened this session with. "
+                                "Prefer 2-3 words and "
                                 "never exceed 4; the tab is narrow, so shorter wins whenever it "
                                 "stays accurate. Describe the concrete user goal or work topic, "
                                 "and drop filler words rather than the distinguishing one. "
@@ -1718,8 +1818,8 @@ class AutomationEngine:
         if event.type == "turn_ended" and self.config.observer_titler_enabled:
             raw.append(
                 {
-                    "id": "builtin.session-titler",
-                    "name": "Session titler",
+                    "id": FALLBACK_TITLE_RULE_ID,
+                    "name": "Session titler (no prompt)",
                     "enabled": True,
                     "shadow": False,
                     "on": {"trigger": "turn_ended", "debounce_s": 1.0},
@@ -1731,13 +1831,17 @@ class AutomationEngine:
                             "input": {"slice": "last_turn"},
                             "prompt": (
                                 "Create a compact task-oriented title for a terminal tab and "
-                                "sidebar. Prefer 2-3 words and never exceed 4; the tab is narrow, "
+                                "sidebar. Name what the user is trying to accomplish, not what "
+                                "the assistant just said or did — this turn is a step inside a "
+                                "longer session and the title has to survive the next ten. "
+                                "Prefer 2-3 words and never exceed 4; the tab is narrow, "
                                 "so shorter wins whenever it stays accurate. Describe the "
                                 "concrete user goal or work topic, and drop filler words rather "
                                 "than the distinguishing one. "
                                 "Never prefix with Terminal Session, Session, Claude, "
                                 "Codex, User, or Conversation. Do not label simple greetings as "
-                                "greetings. Return only the schema."
+                                "greetings, and never answer or acknowledge the conversation. "
+                                "Return only the schema."
                             ),
                             "schema": "title_v1",
                             "on_result": {

@@ -12,6 +12,7 @@ import { editQueueMessage, enqueueMessage, fetchQueueSummary, sendQueueMessage, 
 import { ContinuityBanner } from './ContinuityBanner'
 import { DirectoryPicker } from './DirectoryPicker'
 import { folderNameFromPath } from './pathNames'
+import { agentTargetName } from './agentTargets'
 import {
   defaultInitScriptSelection, emptyProjectCreateDraft, projectCreateFolder, projectCreateReady,
   projectCreateRoot, suggestFolderName, toggleInitScript,
@@ -71,6 +72,7 @@ import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, r
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import { reorderForHover, reorderTargetFromContainer, type DropSide, type ReorderAxis } from './dragReorder'
 import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from './pointerDragClaim'
+import { horizontalWheelDelta } from './wheelScroll'
 import {
   COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
   projectInitials, projectOpenWork, serializeCollapsedProjects, toggleCollapsed,
@@ -99,9 +101,26 @@ function isEndedSession(session: Session) {
   return session.state === 'exited' || session.state === 'crashed'
 }
 
-function sessionName(session:Session):string {
-  return session.auto_named!==false&&session.generated_title?session.generated_title:session.name
+/** Let a plain wheel scroll a tab strip that only overflows sideways.
+ *
+ * Shift+wheel is the browser's only native way in, which is not discoverable and
+ * needs a second hand. `preventDefault` is deliberate: without it an overflowing
+ * strip consumes the wheel *and* the page keeps whatever scroll chaining it would
+ * have done, so the same notch moves two things.
+ */
+function scrollStripByWheel(event:JSX.TargetedWheelEvent<HTMLDivElement>):void {
+  const strip=event.currentTarget
+  const delta=horizontalWheelDelta(event,strip)
+  if(!delta)return
+  event.preventDefault()
+  strip.scrollLeft+=delta
 }
+
+// One naming rule for every surface that shows a session: sidebar rows, workspace
+// tabs, menus, drag labels, the palette. Kept as a single delegation rather than a
+// re-implementation because the copies drifted — the workspace tab strip read
+// `session.name` directly and so was the one place a generated title never appeared.
+const sessionName=(session:Session):string=>agentTargetName(session)
 
 function workingCwd(session:Session):string {
   return session.runtime_cwd||session.spawn_cwd||session.cwd
@@ -1952,9 +1971,13 @@ export function App() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
+  // Resume targets the history entry of the conversation the pane was last on,
+  // which is its run rather than its session: a pane that rolled its
+  // conversation (/clear) or inherited one (a previous resume) owns a row keyed
+  // by the run id, and asking for the session id there finds nothing.
   const resumeSession = async (session: Session) => {
     try {
-      const resumed = await api<Session>('POST', `/api/history/${session.id}/resume`, { project_id: session.project_id })
+      const resumed = await api<Session>('POST', `/api/history/${session.agent_run_id || session.id}/resume`, { project_id: session.project_id })
       setSessions(items => [...items, resumed])
       setActiveId(resumed.id)
       setContextMenu(null)
@@ -2596,7 +2619,7 @@ export function App() {
           void updateLayout(projectId,removeLeaf(latest,child.kind,child.id))
         }}>{confirming?'✓':'×'}</button>
       }
-      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={()=>setFocusedViewId(activeChild.id)}><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Workspace tabs">
+      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={()=>setFocusedViewId(activeChild.id)}><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Workspace tabs" onWheel={scrollStripByWheel}>
         {node.children.map(child=>{
           const activate=()=>{if(suppressDragClickRef.current===`tab:${child.id}`){suppressDragClickRef.current=null;return}setFocusedViewId(child.id);if(child.kind==='terminal')setActiveId(child.id);if(child.id!==activeChild.id)void updateLayout(projectId,activateStackChild(activeLayout,node.id,child.id))}
           const dragClass=dragStackTab?.overId===child.id&&dragStackTab.side?`drag-over drop-${dragStackTab.side}`:''
@@ -2619,7 +2642,10 @@ export function App() {
             return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} queue tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">⇥</span>{label}</button>{closeTab(child,label)}</div>
           }
           const session=sessions.find(item=>item.id===child.id)
-          const label=session?.name||child.id
+          // sessionName, not session.name: the generated title is the whole point of
+          // titling, and a tab strip showing `claude-15036b` while the sidebar shows
+          // the real name is the surface where you actually need to tell panes apart.
+          const label=session?sessionName(session):child.id
           return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session?.state)}/>{label}</button>{closeTab(child,label,session)}</div>
         })}
       </div><div class="stack-active">{renderPaneNode(activeChild,`${path}t`,true)}</div></section>
@@ -2907,7 +2933,7 @@ export function App() {
     const selected=leaf.id===mobileProjection.selected?.id
     const session=leaf.kind==='terminal'?sessions.find(item=>item.id===leaf.id):undefined
     const preview=leaf.kind==='preview'?previews[leaf.id]:undefined
-    const label=leaf.kind==='terminal'?session?.name||leaf.id:leaf.kind==='preview'?preview?.url||leaf.id:leaf.kind==='history'?'History':leaf.kind==='queue'?queueTabLabel(leaf.id):noteTabLabel(leaf.id)
+    const label=leaf.kind==='terminal'?(session?sessionName(session):leaf.id):leaf.kind==='preview'?preview?.url||leaf.id:leaf.kind==='history'?'History':leaf.kind==='queue'?queueTabLabel(leaf.id):noteTabLabel(leaf.id)
     const visibleLabel=mobileTabLabel(leaf)
     const glyph=leaf.kind==='terminal'?<span class={stateDotClass(session?.state)}/>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':'◇'}</span>
     // Mobile tabs carry no close button: it ate label width and was a mis-tap
@@ -2926,7 +2952,7 @@ export function App() {
   // With no new-tab button left in the rail, an empty projection would render a
   // bare strip; drop the row entirely and let the empty stage own the section.
   const mobileUnifiedWorkspace=<section data-tutorial="workspace-pane" class={`pane-stack mobile-unified-workspace ${mobileProjection.tabs.length?'':'no-tabs'}`}>
-    {mobileProjection.tabs.length>0&&<div data-tutorial="tab-strip" class="stack-tabs mobile-unified-tabs" role="tablist" aria-label="All Project tabs">
+    {mobileProjection.tabs.length>0&&<div data-tutorial="tab-strip" class="stack-tabs mobile-unified-tabs" role="tablist" aria-label="All Project tabs" onWheel={scrollStripByWheel}>
       {mobileProjection.tabs.map(mobileTab)}
     </div>}
     <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open the Project note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>}</div>

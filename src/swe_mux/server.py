@@ -4908,6 +4908,18 @@ async def history_transcript(request: web.Request) -> web.Response:
     )
 
 
+def _same_directory(left: str, right: str) -> bool:
+    """Whether two recorded paths name the same directory on this platform."""
+
+    def key(value: str) -> str:
+        try:
+            return os.path.normcase(str(Path(value).resolve()))
+        except OSError:
+            return os.path.normcase(value)
+
+    return key(left) == key(right)
+
+
 async def resume_history(request: web.Request) -> web.Response:
     row = await request.app["history"].history_entry(request.match_info["sid"])
     if not row:
@@ -4958,12 +4970,28 @@ async def resume_history(request: web.Request) -> web.Response:
             409,
         )
     owning_project = request.app["projects"].projects[target_project]
+    # Claude's `--resume` continues the same conversation in the same transcript
+    # file under the same id, so the resumed pane inherits that conversation's
+    # run instead of opening a second entry over one file. Codex mints a new
+    # rollout with a new id on resume, so there the new run is a genuinely new
+    # conversation and gets its own entry. Claude resolves transcripts by working
+    # directory, so a resume into a different root writes a different file and is
+    # likewise a new conversation.
+    adopts_run = str(row["backend"]) == "claude" and _same_directory(
+        str(row["cwd"]), owning_project.root
+    )
+    requested_name = str(body.get("name") or "")
     session = await request.app["sessions"].spawn(
         backend=str(row["backend"]),
-        name=body.get("name") or f"{row['name']} resumed",
+        # The conversation keeps its name. A suffix here compounded on every
+        # resume ("… resumed resumed") and, for Claude, retitled an entry the
+        # resumed pane now shares rather than replaces.
+        name=requested_name or str(row["name"]),
         cwd=owning_project.root,
         project_id=target_project,
         resume_native_id=str(row["native_id"]),
+        adopt_run_id=str(row["id"]) if adopts_run else None,
+        auto_named=None if requested_name else bool(row.get("auto_named")),
         project_label=owning_project.name,
     )
     next_layout = attach_terminal(
@@ -4982,12 +5010,17 @@ async def resume_history(request: web.Request) -> web.Response:
         await request.app["sessions"].stop(session.record.id)
         request.app["sessions"].sessions.pop(session.record.id, None)
         raise
-    await request.app["automation_store"].add_lineage(
-        str(row["id"]),
-        session.record.agent_run_id or session.record.id,
-        "resume",
-        {"backend": row["backend"], "project_id": target_project},
-    )
+    child_run_id = session.record.agent_run_id or session.record.id
+    # An inherited run is the same run, not a descendant of one: recording an
+    # edge from a conversation to itself would make every consumer that walks
+    # lineage see a cycle where nothing was forked.
+    if child_run_id != str(row["id"]):
+        await request.app["automation_store"].add_lineage(
+            str(row["id"]),
+            child_run_id,
+            "resume",
+            {"backend": row["backend"], "project_id": target_project},
+        )
     return json_response(session.record.snapshot(), 201)
 
 

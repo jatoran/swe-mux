@@ -522,7 +522,9 @@ class InstantTitleProvider(FakeProvider):
         )
 
 
-def _titler_engine(tmp_path: Path, session: Any, store: AutomationStore) -> AutomationEngine:
+def _titler_engine(
+    tmp_path: Path, session: Any, store: AutomationStore, provider: Any = None
+) -> AutomationEngine:
     return AutomationEngine(
         tmp_path / "rules.toml",
         EventBus(),
@@ -534,24 +536,24 @@ def _titler_engine(tmp_path: Path, session: Any, store: AutomationStore) -> Auto
             observer_titler_enabled=True,
             openrouter_cheap_model="vendor/cheap",
         ),
-        InstantTitleProvider(),  # type: ignore[arg-type]
+        provider or InstantTitleProvider(),  # type: ignore[arg-type]
     )
 
 
 @pytest.mark.asyncio
-async def test_initial_titler_names_a_pane_from_the_prompt_with_no_transcript(
+async def test_titler_names_a_pane_from_the_prompt_with_no_transcript(
     tmp_path: Path,
 ) -> None:
     """A pane must get a name when the user asks, not a turn later.
 
-    The provisional titler reads the submitted request, so it needs neither a
-    transcript on disk nor semantic observation — the two things that were failing
-    live. Measured before this existed: every title waited for `turn_ended`, and 5 of
-    6 observed failures were `observer requires semantic observation`.
+    The titler reads the submitted request, so it needs neither a transcript on disk
+    nor semantic observation — the two things that were failing live. Measured before
+    this existed: every title waited for `turn_ended`, and 5 of 6 observed failures
+    were `observer requires semantic observation`.
     """
     item = record(tmp_path)
     session = SimpleNamespace(
-        record=item, transcript_path=None, last_user_prompt="fix the flaky login test"
+        record=item, transcript_path=None, first_user_prompt="fix the flaky login test"
     )
     store = AutomationStore(tmp_path / "mux.db")
     engine = _titler_engine(tmp_path, session, store)
@@ -568,14 +570,13 @@ async def test_initial_titler_names_a_pane_from_the_prompt_with_no_transcript(
 
 
 @pytest.mark.asyncio
-async def test_settled_titler_upgrades_a_provisional_title_exactly_once(
-    tmp_path: Path,
-) -> None:
-    """The request-derived label is a placeholder; the completed turn is the truth.
+async def test_completed_turns_never_retitle_a_named_run(tmp_path: Path) -> None:
+    """The opening request is the title; a completed turn is not allowed to move it.
 
-    So `turn_ended` may replace a provisional title once, and nothing may replace a
-    settled one. That keeps the paid full-transcript call at one per agent run while
-    removing the nameless window.
+    Titling from the last turn is what made names drift into the work of the last few
+    minutes — observed live: "Fix flaky login test" became "OK" one turn later. So the
+    turn_ended stage stands down whenever the run has a request to read, and nothing
+    replaces a title once it exists.
     """
     transcript = tmp_path / "claude.jsonl"
     transcript.write_text(
@@ -585,28 +586,48 @@ async def test_settled_titler_upgrades_a_provisional_title_exactly_once(
     )
     item = record(tmp_path)
     session = SimpleNamespace(
-        record=item, transcript_path=transcript, last_user_prompt="fix the flaky login test"
+        record=item, transcript_path=transcript, first_user_prompt="fix the flaky login test"
     )
     store = AutomationStore(tmp_path / "mux.db")
     engine = _titler_engine(tmp_path, session, store)
 
     await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
-    await engine.evaluate(normalized_event(item, 11, source="native_hook"))
-    settled = await store.annotations(agent_run_id="run-1", tag="title")
-    assert [row["rule_id"] for row in settled][0] == "builtin.session-titler"
-
-    # A second completed turn must not buy another paid call, and a later prompt
-    # must not drop the settled title back to a provisional one.
-    after_turn = await engine.evaluate(normalized_event(item, 12, source="native_hook"))
-    after_prompt = await engine.evaluate(
-        normalized_event(item, 13, event_type="turn_started")
-    )
+    after_turn = await engine.evaluate(normalized_event(item, 11, source="native_hook"))
+    after_prompt = await engine.evaluate(normalized_event(item, 12, event_type="turn_started"))
 
     assert after_turn[0]["guarded"] is True
     assert after_prompt[0]["guarded"] is True
     rows = await store.annotations(agent_run_id="run-1", tag="title")
-    assert len(rows) == 2
-    assert rows[0]["rule_id"] == "builtin.session-titler"
+    assert len(rows) == 1
+    assert rows[0]["rule_id"] == "builtin.session-titler-initial"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_ended_titles_a_run_whose_request_was_never_captured(
+    tmp_path: Path,
+) -> None:
+    """Codex has no prompt hook, so the completed turn is all its tab can be named from.
+
+    This is the only case the weaker last-turn reading is for; with a request on hand
+    it stands down (see `test_completed_turns_never_retitle_a_named_run`).
+    """
+    transcript = tmp_path / "claude.jsonl"
+    transcript.write_text(
+        '{"type":"user","message":{"content":"hello"}}\n'
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n',
+        encoding="utf-8",
+    )
+    item = record(tmp_path)
+    session = SimpleNamespace(record=item, transcript_path=transcript, first_user_prompt=None)
+    store = AutomationStore(tmp_path / "mux.db")
+    engine = _titler_engine(tmp_path, session, store)
+
+    reports = await engine.evaluate(normalized_event(item, 10, source="native_hook"))
+
+    assert reports and reports[0]["matched"] is True
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["rule_id"] for row in rows] == ["builtin.session-titler"]
     store.close()
 
 
@@ -616,7 +637,7 @@ async def test_initial_titler_is_skipped_when_no_prompt_was_observed(
 ) -> None:
     """Codex has no prompt hook, so it has nothing to title from until a turn ends."""
     item = record(tmp_path)
-    session = SimpleNamespace(record=item, transcript_path=None, last_user_prompt=None)
+    session = SimpleNamespace(record=item, transcript_path=None, first_user_prompt=None)
     store = AutomationStore(tmp_path / "mux.db")
     engine = _titler_engine(tmp_path, session, store)
 
@@ -624,6 +645,122 @@ async def test_initial_titler_is_skipped_when_no_prompt_was_observed(
 
     assert not await store.annotations(agent_run_id="run-1", tag="title")
     assert reports and reports[0].get("error")
+    store.close()
+
+
+class RateLimitedThenTitleProvider(FakeProvider):
+    """Fails the first N calls the way a provider rate limit does, then succeeds."""
+
+    def __init__(self, failures: int) -> None:
+        self.remaining_failures = failures
+        self.prompts: list[str] = []
+
+    async def complete_json(self, **values: Any) -> OpenRouterResult:
+        self.prompts.append(str(values["messages"][-1]["content"]))
+        if self.remaining_failures > 0:
+            self.remaining_failures -= 1
+            raise OpenRouterError("OpenRouter request failed with HTTP 429")
+        return OpenRouterResult(
+            "generation-title",
+            "vendor/cheap",
+            "vendor/cheap",
+            {"title": "Login Test Fix", "confidence": 0.95},
+            40,
+            8,
+            0.001,
+            10,
+        )
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_title_retries_in_the_background_off_the_first_request(
+    tmp_path: Path,
+) -> None:
+    """A 429 must not cost the run its name, and the retry must not rename the work.
+
+    Both halves were live defects. Titles were lost to bursts of 429 and the pane then
+    sat nameless until the user happened to type again — 20+ minutes, observed — and
+    the attempt that finally landed read whatever the newest prompt was, so the tab
+    ended up named after a detour rather than the job.
+    """
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item, transcript_path=None, first_user_prompt="fix the flaky login test"
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    provider = RateLimitedThenTitleProvider(failures=1)
+    engine = _titler_engine(tmp_path, session, store, provider=provider)
+    engine._title_retry_delays = (0.0,)
+
+    reports = await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+    assert reports[0]["retry_scheduled"] is True
+    # The user moves on while the retry is pending; the pinned request must win anyway.
+    session.first_user_prompt = "never mind, check the deploy logs"
+    await asyncio.gather(*list(engine._background))
+
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["content"] for row in rows] == ["Login Test Fix"]
+    assert provider.prompts[0] == provider.prompts[1]
+    assert "flaky login test" in provider.prompts[1]
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_title_retries_stop_at_the_attempt_budget(tmp_path: Path) -> None:
+    """Retrying is bounded: a provider that is down must not become an infinite loop."""
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item, transcript_path=None, first_user_prompt="fix the flaky login test"
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    provider = RateLimitedThenTitleProvider(failures=99)
+    engine = _titler_engine(tmp_path, session, store, provider=provider)
+    engine._title_retry_delays = (0.0, 0.0)
+
+    await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+    while engine._background:
+        await asyncio.gather(*list(engine._background))
+
+    assert not await store.annotations(agent_run_id="run-1", tag="title")
+    assert len(provider.prompts) == 3
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_decision_failure_is_not_retried(tmp_path: Path) -> None:
+    """Only provider faults retry; a run with no request would fail identically."""
+    item = record(tmp_path)
+    session = SimpleNamespace(record=item, transcript_path=None, first_user_prompt=None)
+    store = AutomationStore(tmp_path / "mux.db")
+    engine = _titler_engine(tmp_path, session, store)
+
+    reports = await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+
+    assert reports[0].get("error")
+    assert "retry_scheduled" not in reports[0]
+    assert not engine._background
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_pinned_request_survives_a_daemon_restart(tmp_path: Path) -> None:
+    """The live pin dies with the daemon; every reload and redeploy restarts it.
+
+    Re-reading the session after a restart would title the run from whatever prompt
+    came next, so the first one is pinned in the store on first use instead.
+    """
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item, transcript_path=None, first_user_prompt="fix the flaky login test"
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    engine = _titler_engine(tmp_path, session, store)
+    event = normalized_event(item, 10, event_type="turn_started")
+
+    assert await engine._run_prompt(event) == "fix the flaky login test"
+    # Restart: the daemon rebuilds the session with no prompt memory at all.
+    session.first_user_prompt = None
+    assert await engine._run_prompt(event) == "fix the flaky login test"
     store.close()
 
 

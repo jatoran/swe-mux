@@ -838,11 +838,16 @@ class Session:
         # adapter later discovers and records a different native transcript id.
         # Demotion must match this token so Codex can return to its parent shell.
         self.agent_lifecycle_id: str | None = None
-        # The most recent root prompt this pane's user submitted, bounded. Captured
-        # from the hook ingress so a session can be titled from the user's actual
-        # request before any turn has completed — the tab needs a name at the moment
-        # you spawn three panes, not a minute later. Belongs to the conversation, so
-        # a rollover clears it.
+        # Root prompts this pane's user submitted, bounded and captured from the hook
+        # ingress, so a session can be titled from the user's actual request before any
+        # turn has completed — the tab needs a name at the moment you spawn three panes,
+        # not a minute later. Both belong to the conversation, so a rollover clears them.
+        #
+        # `first_user_prompt` is what the titler reads, and it is deliberately not the
+        # latest one: a title attempt that fails (a provider rate limit is the usual
+        # cause) is retried on a later turn, and titling that retry from the newest
+        # prompt is what made tab names drift away from what the session is about.
+        self.first_user_prompt: str | None = None
         self.last_user_prompt: str | None = None
         # Detection is a fallback for agents launched without the mux shim. Once a
         # native run has explicitly exited, its still-recent transcript must not
@@ -1210,6 +1215,8 @@ class SessionManager:
         exe: str | None = None,
         args: list[str] | None = None,
         resume_native_id: str | None = None,
+        adopt_run_id: str | None = None,
+        auto_named: bool | None = None,
         shell_profile_id: str | None = None,
         profile_env: dict[str, str] | None = None,
         extra_env: dict[str, str] | None = None,
@@ -1227,6 +1234,11 @@ class SessionManager:
             raise ValueError(f"unknown completion mode: {completion_mode}")
         if completion_mode == "one_shot" and backend != "shell":
             raise ValueError("one-shot completion is available only for shell sessions")
+        # Inheriting a run means claiming an existing conversation's history row,
+        # so it is only ever valid for the pane that is resuming that exact
+        # conversation. Anything else would point two conversations at one row.
+        if adopt_run_id and (backend not in AGENT_BACKENDS or not resume_native_id):
+            raise ValueError("adopting an agent run requires resuming its conversation")
         sid = str(uuid.uuid4())
         native_id = resume_native_id or sid
         resolved_cwd = Path(cwd or Path.cwd()).resolve()
@@ -1249,13 +1261,18 @@ class SessionManager:
             spawn_spec.executable,
             list(spawn_spec.argv),
             shell_profile_id=shell_profile_id,
-            auto_named=name is None,
+            # A resume carries the conversation's own name forward, so the pane is
+            # not user-named just because a name was supplied: the caller passes
+            # the flag the conversation already had, and a conversation nobody
+            # renamed stays auto-titleable.
+            auto_named=(name is None) if auto_named is None else auto_named,
             state="running" if backend == "shell" else "starting",
             startup_timing_ms=startup_timing_ms,
             completion_mode=completion_mode,
         )
         record.spawn_backend = backend
         record.spawn_native_session_id = native_id
+        record.spawn_agent_run_id = adopt_run_id
         record.spawn_env = dict(extra_env or {})
         if project is None:
             project_started_at = time.perf_counter()
@@ -1275,7 +1292,10 @@ class SessionManager:
         record.spawn_project_root = project.root
         record.runtime_cwd = str(resolved_cwd)
         if backend in {"claude", "codex"}:
-            record.agent_run_id = sid
+            record.agent_run_id = adopt_run_id or sid
+            # The run's start stays this PTY's own: it is the floor for spooled
+            # hook replay and transcript candidacy, and backdating it to the
+            # resumed conversation's start would re-admit a retired pane's events.
             record.agent_run_started_at = record.created_at
             record.run_cwd = str(resolved_cwd)
             record.run_project_scope_id = project.id
@@ -1442,7 +1462,10 @@ class SessionManager:
 
         try:
             await self.history.register_project_scope(project)
-            await self.history.session_started(session.record, transcript)
+            if session.record.spawn_agent_run_id:
+                await self.history.resume_agent_run(session.record, transcript)
+            else:
+                await self.history.session_started(session.record, transcript)
             await self.events.emit(
                 "session_spawned",
                 session_id=session.record.id,
@@ -1511,9 +1534,15 @@ class SessionManager:
         # Older direct-agent records already used the mux id as their durable
         # history owner. A promoted shell receives a separate run id — as does a
         # root agent that has rolled its conversation, which is what agent_run_seq
-        # distinguishes from the promoted case.
+        # distinguishes from the promoted case, and one that inherited the run of
+        # the conversation it resumed, which spawn_agent_run_id distinguishes.
         if record.backend in AGENT_BACKENDS and (
-            record.agent_run_id == record.id or record.agent_run_seq > 0
+            record.agent_run_id == record.id
+            or record.agent_run_seq > 0
+            or (
+                record.spawn_agent_run_id is not None
+                and record.agent_run_id == record.spawn_agent_run_id
+            )
         ):
             return record.backend
         return "shell"
@@ -1826,15 +1855,27 @@ class SessionManager:
         # this the first daemon restart after a `/clear` would "repair" the live run
         # away and quarantine its history row as misattributed.
         rolled = record.agent_run_seq > 0 and bool(record.agent_run_id)
+        # A resumed pane is the second legitimate exception, and the mirror of the
+        # first: it inherited the run of the conversation it resumed, so a run id
+        # that is not the session id is expected from its first moment. The
+        # evidence is immutable spawn metadata rather than a counter, and it
+        # lapses on its own — a later rollover mints a run of this pane's own,
+        # which stops matching.
+        adopted = (
+            record.agent_run_seq == 0
+            and record.spawn_agent_run_id is not None
+            and record.agent_run_id == record.spawn_agent_run_id
+        )
         # The exception does not extend to a rolled conversation that a sibling's
         # root identity claims: two panes cannot write one transcript, and the
         # sibling's claim is immutable spawn evidence while this record's rolled id
         # is mutable observer output. Blanket-trusting it is how a cross-attributed
         # identity survived every daemon restart. Treat the roll as corrupt and let
         # the repair below fall back to this pane's own spawn anchor.
-        if rolled and (backend, record.native_session_id) in claimed_ids:
+        if (rolled or adopted) and (backend, record.native_session_id) in claimed_ids:
             rolled = False
-        expected_run_id = record.agent_run_id if rolled else record.id
+            adopted = False
+        expected_run_id = record.agent_run_id if rolled or adopted else record.id
         changed = (
             record.backend != backend
             or current_claimed
@@ -1854,7 +1895,15 @@ class SessionManager:
             "native_session_id": record.native_session_id,
             "transcript_path": str(current_path) if current_path else "",
         }
-        bad_run_id = record.agent_run_id if record.agent_run_id != expected_run_id else None
+        # A repaired-away run id is normally this pane's own misattributed row, and
+        # quarantining it is how its copied messages stop surfacing. An inherited
+        # one is not the pane's: it is the resumed conversation's own row, holding
+        # that conversation's history, so it is dropped rather than quarantined.
+        bad_run_id = (
+            record.agent_run_id
+            if record.agent_run_id not in {expected_run_id, record.spawn_agent_run_id}
+            else None
+        )
         record.backend = backend
         fallback_native_id = (
             record.native_session_id
@@ -2437,7 +2486,8 @@ class SessionManager:
         if confirmed or backend != "claude":
             session.agent_lifecycle_id = native_id
         session.transcript_path = transcript
-        # The retired conversation's last prompt must not title the new one.
+        # The retired conversation's prompts must not title the new one.
+        session.first_user_prompt = None
         session.last_user_prompt = None
         record.observation_stale_since = None
         record.tokens_in = 0
@@ -2975,7 +3025,14 @@ class SessionManager:
         await self._stop_observer(session)
         bad_run_id: str | None = None
         if anchor == record.id:
-            if record.agent_run_id and record.agent_run_id != record.id:
+            # An inherited run row belongs to the conversation this pane resumed,
+            # not to this pane, so leaving it behind is all that is warranted:
+            # quarantining it would delete a conversation's real history over a
+            # dispute about which conversation this PTY is on.
+            if record.agent_run_id and record.agent_run_id not in {
+                record.id,
+                record.spawn_agent_run_id,
+            }:
                 bad_run_id = record.agent_run_id
             record.agent_run_id = record.id
             record.agent_run_started_at = record.created_at
