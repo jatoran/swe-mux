@@ -71,6 +71,7 @@ def real_session(record: SessionRecord, cwd: Path) -> Session:
     adapter = SimpleNamespace(
         name=record.backend,
         reports_conversation_rollover=record.backend == "claude",
+        assigns_conversation_id=record.backend == "claude",
         graceful_exit_keys=lambda: "exit\r",
         transcript_path=lambda native_id, _cwd: cwd / f"{native_id}.jsonl",
     )
@@ -124,6 +125,53 @@ async def test_codex_watcher_still_uses_the_switch_heuristic(
         assert switch == fresh
     finally:
         observe_task.cancel()
+
+
+def test_a_codex_placeholder_id_counts_as_unbound() -> None:
+    """The mux session id Codex carries until discovery is not a binding.
+
+    `conversation_unbound` must not be a shape test: mux session ids are UUIDs, so
+    asking whether the id merely looks like one reported every fresh Codex session as
+    already bound and refused the only evidence that could bind it.
+    """
+    from swe_mux.observation import conversation_unbound
+
+    codex = real_session(agent_record("codex-root", backend="codex"), Path("."))
+    codex.record.native_session_id = codex.record.id
+    assert conversation_unbound(codex) is True
+
+    codex.record.native_session_id = "019fb0bf-ccb8-7b03-93d6-834839791245"
+    assert conversation_unbound(codex) is False
+
+    claude = real_session(agent_record(OWN), Path("."))
+    assert conversation_unbound(claude) is False
+
+
+async def test_codex_binds_its_conversation_from_its_own_turn_notify() -> None:
+    """Codex's `agent-turn-complete` carries `thread-id` over the session's ingress.
+
+    That is the only unforgeable evidence of which conversation this PTY runs: an
+    outsider has no session secret with which to reach the ingress at all. Nothing on
+    the filesystem separates its rollout from an interactive outsider's in the same
+    cwd, so without this a Codex session can never be bound safely.
+    """
+    from swe_mux.observation import _bind_native_id_from_hook
+
+    thread = "019fb0bf-ccb8-7b03-93d6-834839791245"
+    session = real_session(agent_record("codex-root", backend="codex"), Path("."))
+    session.record.native_session_id = session.record.id
+    events = SimpleNamespace(emit=AsyncMock())
+
+    await _bind_native_id_from_hook(session, {"thread-id": thread}, cast(Any, events))
+
+    assert session.record.native_session_id == thread
+    assert session.agent_lifecycle_id == thread
+
+    # One-way only: a later hook naming something else must not rekey a bound session.
+    await _bind_native_id_from_hook(
+        session, {"thread-id": STOLEN}, cast(Any, events)
+    )
+    assert session.record.native_session_id == thread
 
 
 def test_codex_turn_notify_dates_the_staleness_evidence() -> None:

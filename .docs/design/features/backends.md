@@ -100,8 +100,8 @@
   enumerated on — `compact` and `startup` report the unchanged id and so never roll. This path
   is unaffected by sibling sessions, and it is Claude's *only* rollover path: adapters declare
   `reports_conversation_rollover` (and, separately, `assigns_conversation_id` — whether mux
-  named the conversation at spawn, which decides whether a transcript may be bound by
-  elimination or only by exact id match), and for backends that do, the transcript-switch heuristic is
+  named the conversation at spawn, which decides whether the transcript is *derived* from the
+  native id or has to be learned from the CLI's own authenticated hook), and for backends that do, the transcript-switch heuristic is
   never consulted (a guess from mtimes is the one mechanism that could latch onto a sibling's
   conversation in a shared cwd). **The transcript-switch watcher** exists for Codex, which has
   no session-start hook: a quiet observed transcript plus a freshly written, unclaimed,

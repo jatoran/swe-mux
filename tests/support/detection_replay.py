@@ -5,6 +5,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from swe_mux.delivery_readiness import DeliveryReadinessTracker
@@ -82,6 +83,14 @@ class ReplaySession:
             agent_run_id="run-1",
             parser_status="watching",
             parser_schema_version="2",
+        )
+        # The observer asks the adapter which conversation-identity rules apply
+        # (whether mux named the conversation at spawn). Replay uses the real
+        # per-backend values so the corpus cannot drift from production.
+        self.adapter = SimpleNamespace(
+            name=backend,
+            reports_conversation_rollover=backend == "claude",
+            assigns_conversation_id=backend == "claude",
         )
         self.state_source_priority = -1
         self.tool_names: dict[str, str] = {}

@@ -1598,37 +1598,35 @@ class SessionManager:
 
     @staticmethod
     def _may_adopt_sole_candidate(session: Session, candidate: Path, started: float) -> bool:
-        """Gate the single-unclaimed-candidate fallback.
+        """Never. A transcript is bound by identity evidence, not by elimination.
 
         The candidate pool is the backend's shared per-cwd transcript directory, so
         "the only unclaimed file" can easily be an unmanaged CLI's conversation (a
-        headless `claude -p` from a script, a plain-terminal run). Adopting it
-        rekeys native_session_id, rebinds the history row, and renders the
-        outsider's status and tokens under this session's identity.
+        headless `claude -p` from a script, a plain-terminal `codex`). Adopting it
+        rekeys native_session_id, rebinds the history row, and renders the outsider's
+        status and tokens under this session's identity.
 
-        Three independent gates:
+        Every filesystem gate that looked sufficient has been measured and is not:
 
-        - When mux dictated the conversation id at spawn (claude's injected
-          `--session-id`), that id is authoritative. Nothing else is ours, so the
-          fallback is refused outright rather than guessing. This asks the adapter,
-          not the *shape* of the id: Codex mints its own thread id and carries the
-          mux session id as a placeholder until discovery, which is also a UUID, so
-          a shape test refuses every Codex session forever and the session is then
-          never observed at all — no turn states, no tokens, no transcript.
-        - The file must have been *created* after this agent run began. A
-          conversation that already existed cannot have been started by it.
-        - This PTY must have been producing output while the file appeared. An
-          outsider CLI writing into the same cwd leaves our PTY silent, so this is
-          what keeps the id-less backends from adopting a stranger's conversation.
+        - Claude never needs the fallback at all: its transcript path is *derived*
+          from the native id mux injected as `--session-id`, so the exact-match route
+          always exists.
+        - For a backend that mints its own conversation id, "created after this run
+          began" plus "our PTY was producing output when it appeared" both pass for an
+          outsider, because an agent TUI repaints continuously — verified live: an
+          unbound Codex pane adopted the rollout of a `codex` run started outside mux
+          in the same cwd, rekeying itself to the stranger's thread.
+        - Nothing in Codex's `session_meta` separates them either. `originator`
+          distinguishes only the headless `codex exec` case (`codex_exec`/`exec`); an
+          interactive outsider reports `codex-tui`/`cli`, exactly like ours.
+
+        What an outsider cannot forge is a hook: it arrives over this session's own
+        loopback ingress authenticated with this session's own secret. Codex reports
+        its `thread-id` on `agent-turn-complete`, which is what binds it
+        (`_bind_native_id_from_hook`), so the guess is not needed here.
         """
-        if session.adapter.assigns_conversation_id:
-            return False
-        created = file_created_at(candidate)
-        if created is None:
-            return False
-        if created < started - _TRANSCRIPT_CREATION_SLACK_SECONDS:
-            return False
-        return SessionManager._session_could_have_written(session, candidate)
+        del session, candidate, started
+        return False
 
     def _adoption_transcript_claims(
         self,

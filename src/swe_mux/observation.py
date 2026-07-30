@@ -1177,6 +1177,27 @@ _HOOK_NATIVE_ID = re.compile(
 )
 
 
+def conversation_unbound(session: Session) -> bool:
+    """True while this session's conversation id is still a placeholder.
+
+    Not a shape test. A backend that mints its own conversation id (Codex) carries
+    the *mux session id* until it learns the real one, and mux session ids are UUIDs
+    too — so asking whether the id merely looks like a UUID reports every fresh Codex
+    session as already bound and refuses the only evidence that could bind it.
+    """
+    record = session.record
+    native = record.native_session_id or ""
+    if not native:
+        return True
+    # Defaults to the conservative side: a backend that has not declared itself is
+    # treated as having been given its conversation id, so a bound-looking id is
+    # left alone rather than re-bound from a hook.
+    adapter = getattr(session, "adapter", None)
+    if getattr(adapter, "assigns_conversation_id", True):
+        return not _HOOK_NATIVE_ID.fullmatch(native)
+    return native == record.id
+
+
 async def _bind_native_id_from_hook(
     session: Session, payload: dict[str, Any], events: EventBus
 ) -> None:
@@ -1189,15 +1210,31 @@ async def _bind_native_id_from_hook(
     it the strongest available proof of which conversation this PTY is running —
     stronger than the sole-unclaimed-candidate heuristic it replaces here.
 
+    This is also the *only* way a Codex session can be bound. Codex mints its own
+    thread id, so nothing on the filesystem separates its rollout from one written
+    by a `codex` started outside mux in the same cwd (measured: `originator` betrays
+    only the headless `codex exec`; an interactive outsider is identical). Codex
+    reports `thread-id` on its `agent-turn-complete` notify, over this same
+    authenticated ingress, and an outsider has no secret with which to reach it.
+
     Deliberately one-way: it only fills an *unknown* id and never overwrites one
     the daemon already established, so a hook cannot rekey a bound session.
     """
     if session.record.backend not in {"claude", "codex"}:
         return
-    if _HOOK_NATIVE_ID.fullmatch(session.record.native_session_id or ""):
+    if not conversation_unbound(session):
         return
-    native_id = str(payload.get("session_id") or payload.get("sessionId") or "")
+    native_id = str(
+        payload.get("session_id")
+        or payload.get("sessionId")
+        or payload.get("thread-id")
+        or payload.get("thread_id")
+        or ""
+    )
     if not _HOOK_NATIVE_ID.fullmatch(native_id):
+        return
+    if native_id == session.record.id:
+        # The placeholder echoed back is not evidence of anything.
         return
     session.record.native_session_id = native_id
     if not session.agent_lifecycle_id:
@@ -1372,6 +1409,10 @@ async def apply_hook_observation(
                 scope="root",
             )
     elif event_type in {"Stop", "turn_ended", "agent-turn-complete", "task_complete"}:
+        # Codex has no SessionStart, so its turn-end notify is the only authenticated
+        # place it ever names its own thread. Bind before closing the turn so the
+        # transcript can be exact-matched and catch-up replays the turn that just ran.
+        await _bind_native_id_from_hook(session, payload, events)
         await _finish_root_turn(session, events, source="hook", evidence=f"hook:{event_type}")
     elif event_type == "SessionEnd":
         await _finish_root_turn(

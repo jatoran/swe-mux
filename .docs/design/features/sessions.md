@@ -115,18 +115,27 @@ and reattachable browser viewports.
   gates keep another writer's conversation from being adopted (which would rekey
   `native_session_id`, rebind the history row, and stream the outsider's status and tokens
   under this session's identity):
-  - **Bind at first observe.** When mux dictated the conversation id at spawn (Claude's
-    injected `--session-id`), only that exact id is ours; the single-unclaimed-candidate
-    fallback is refused. Claude never needs it — its transcript path is *derived* from the
-    native id, so the exact-match route always exists. Adapters declare this as
-    `assigns_conversation_id`; it is deliberately **not** inferred from the shape of the id.
-    Codex mints its own thread id and carries the mux session id as a placeholder until its
-    rollout is discovered, and mux session ids are UUIDs too, so a shape test refuses every
-    Codex session forever and leaves it permanently unobserved — stuck `idle`, no tokens, no
-    transcript, no turn detection. Where no id was injected the fallback applies, but the
-    candidate must have been *created* after this agent run began **and** this session's own
-    PTY must have been producing output when it appeared; an outsider CLI writing into the
-    same cwd leaves our PTY silent, which is what distinguishes it.
+  - **Bind at first observe — by identity evidence, never by elimination.** The
+    single-unclaimed-candidate fallback is refused for every backend. Claude does not need
+    it: its transcript path is *derived* from the native id mux injected as `--session-id`,
+    so the exact-match route always exists. For a backend that mints its own conversation id
+    the fallback is not *safe*, and the gates that looked sufficient were measured and are
+    not — "created after this run began" and "our PTY produced output when it appeared" both
+    pass for an unmanaged CLI, because an agent TUI repaints continuously. Live: an unbound
+    Codex pane adopted the rollout of a `codex` started outside mux in the same cwd and
+    rekeyed itself onto the stranger's thread. Codex's `session_meta` does not separate them
+    either — `originator` betrays only the headless `codex exec` (`codex_exec`/`exec`); an
+    interactive outsider reports `codex-tui`/`cli`, exactly like ours.
+  - **Codex binds from its own turn notify.** What an outsider cannot forge is a hook: it
+    arrives over this session's own loopback ingress authenticated with this session's own
+    secret. Codex reports `thread-id` on `agent-turn-complete`, and that is what binds it
+    (`_bind_native_id_from_hook`, which also accepts Claude's `SessionStart` `session_id`).
+    Binding therefore lands at the end of the first turn, after which the transcript is
+    exact-matched and catch-up replays that turn's tokens and context. Whether the id was
+    dictated at spawn is an adapter declaration, `assigns_conversation_id`, and is
+    deliberately **not** inferred from the shape of the id: mux session ids are UUIDs too, so
+    a shape test treats every fresh Codex placeholder as already bound and refuses the only
+    evidence that could bind it.
   - **The CLI's own answer wins over any heuristic.** `claude --continue` / `-r <term>` let
     the CLI choose the conversation, so the shim cannot inject or read a `--session-id` and
     promotes with an empty native id (injecting one anyway is what the CLI rejects outright

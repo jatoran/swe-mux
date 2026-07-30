@@ -674,51 +674,24 @@ def test_sole_candidate_is_refused_when_the_spawn_named_the_conversation(
         )
 
 
-def test_sole_candidate_is_accepted_for_a_backend_that_mints_its_own_id(
-    tmp_path: Path,
-) -> None:
-    """Codex binding must survive a UUID-shaped mux session id.
+def test_no_backend_binds_a_transcript_by_elimination(tmp_path: Path) -> None:
+    """A fresh, unclaimed, PTY-corroborated candidate is still not evidence.
 
-    Regression: the gate used to ask whether native_session_id *looked* like a
-    UUID, meaning "claude injected it". Real mux session ids are UUIDs too, so
-    every Codex session — which carries the mux id as a placeholder until its
-    rollout is discovered — was refused forever and never observed at all: stuck
-    `idle`, no tokens, no transcript, no turn detection. Only the unit fixture's
-    non-UUID "mux-id" hid it.
+    Measured live: an unbound Codex pane adopted the rollout of a `codex` started
+    outside mux in the same cwd, rekeying itself onto the stranger's thread. Neither
+    "created after this run began" nor "our PTY was producing output when it
+    appeared" excludes an outsider, because an agent TUI repaints continuously — so
+    the fallback is refused for every backend and binding comes from the CLI's own
+    authenticated hook instead.
     """
-    own = tmp_path / "own.jsonl"
-    own.write_text("{}\n", encoding="utf-8")
-    session = fake_agent_session("codex", None, cwd=str(tmp_path))
-    session.record.id = "0a24af3b-ef3a-4ed4-a0c3-d1525ed684e0"
-    session.record.native_session_id = session.record.id
-    session.record.last_activity_ts = time.time()
-    assert SessionManager._may_adopt_sole_candidate(session, own, time.time() - 60) is True
-
-
-def test_sole_candidate_needs_output_from_this_pty(tmp_path: Path) -> None:
-    """An outsider `codex` in the same cwd leaves our PTY silent.
-
-    Without an injected id, PTY corroboration is the only thing standing between a
-    session and a stranger's conversation.
-    """
-    outsider = tmp_path / "outsider.jsonl"
-    outsider.write_text("{}\n", encoding="utf-8")
-    session = fake_agent_session("codex", None, cwd=str(tmp_path))
-    session.record.native_session_id = session.record.id
-    session.record.last_activity_ts = 0.0
-    assert (
-        SessionManager._may_adopt_sole_candidate(session, outsider, time.time() - 60) is False
-    )
-
-
-def test_sole_candidate_predating_the_run_is_refused(tmp_path: Path) -> None:
-    """A conversation that already existed cannot have been started by this run."""
-    older = tmp_path / "older.jsonl"
-    older.write_text("{}\n", encoding="utf-8")
-    session = fake_agent_session("codex", None, cwd=str(tmp_path))
-    session.record.native_session_id = session.record.id
-    session.record.last_activity_ts = time.time()
-    # Started an hour after the file was created.
-    assert (
-        SessionManager._may_adopt_sole_candidate(session, older, time.time() + 3600) is False
-    )
+    candidate = tmp_path / "fresh.jsonl"
+    candidate.write_text("{}\n", encoding="utf-8")
+    for backend in ("claude", "codex"):
+        session = fake_agent_session(backend, None, cwd=str(tmp_path))
+        session.record.id = "0a24af3b-ef3a-4ed4-a0c3-d1525ed684e0"
+        session.record.native_session_id = session.record.id
+        session.record.last_activity_ts = time.time()
+        assert (
+            SessionManager._may_adopt_sole_candidate(session, candidate, time.time() - 1)
+            is False
+        ), backend
