@@ -339,6 +339,17 @@ responsive controls.
 - A terminal scrolled off its newest line shows a jump-to-latest chip in the terminal's own
   grid cell, above the action rail. It is checked per render, not only on scroll, because
   output arriving while scrolled up moves the buffer base without moving the viewport.
+- That check reads xterm's buffer, which is silent about a whole class of sessions. An
+  application holding the mouse (Claude does; Codex enables no mouse mode at all) is handed
+  every scroll gesture — the wheel on a desktop, and the drag a phone forwards as one via
+  `mobileDragTarget` — and scrolls its own viewport, leaving xterm's pinned to its tail. So
+  `offTail` never fires there, and for as long as the chip depended on it alone the chip
+  simply never existed in a Claude session: the only jump-to-bottom on offer was Claude's own,
+  which a desktop can click and a phone cannot, because a tap's synthesized `mousedown` is
+  swallowed before xterm can forward it. The pane therefore also remembers forwarding a
+  scroll *back* through the history, and raises the chip on that. Only on a drag back:
+  arriving at the newest line again is something only the application knows, so the chip
+  stays up until the jump is taken rather than guessing and vanishing early.
 - Reaching the tail — from the chip or from a command-rail key — goes through
   `scrollTerminalToTail`, which re-issues xterm's scroll while it still makes progress. One
   call is not always enough: xterm applies scrolls through the DOM scroller in its `Viewport`
@@ -349,14 +360,10 @@ responsive controls.
   constantly — the soft keyboard fires `visualViewport` resizes throughout its open animation,
   and every one refits the pane. The retry needs no timer and no frame wait: the first call's
   `onScroll` is what makes `_sync()` republish the real range, so the next one lands.
-- Reaching the tail also means the *application's* viewport, not only xterm's. Two scroll
-  positions are stacked in a pane, and a TUI that keeps its own moves that one instead, so a
-  purely local scroll lands on a view nobody was looking at and the chip reads as dead. Claude
-  keeps such a viewport; Codex does not (it enables no mouse mode at all), which is exactly why
-  the same chip worked in a Codex session and not in a Claude one on a phone — while the rail's
-  `^End` worked in both, because it happens to send the key on its way past the local scroll.
-  `appOwnsTail` is the rule: any backend but `shell`, when it is Claude or has taken the mouse
-  — the same signal `mobileDragTarget` already uses to decide who receives a phone's drag. A
+- Reaching the tail likewise means the *application's* viewport, not only xterm's: scrolling
+  the terminal alone lands on a view nobody was looking at, which is what the rail's `^End`
+  has always avoided by sending the key on its way past the local scroll. `appOwnsTail` is the
+  rule: any backend but `shell`, when it is Claude or is being handed this pane's scrolls. A
   shell is excluded because it owns no viewport and the bytes would land in a half-typed
   command line. The key is sent off the broadcast path: a viewport gesture belongs to the pane
   that was tapped, and it is dropped rather than queued during replay, since a jump that

@@ -87,7 +87,7 @@ test('jump-to-latest is a no-op on the tail and gives up rather than spinning', 
 test('jump-to-latest asks the application too, but only one that owns a viewport', () => {
   assert.equal(appOwnsTail('claude', false), true)
   assert.equal(appOwnsTail('codex', false), false)
-  // Whatever the backend, an application holding the mouse is the thing receiving scrolls.
+  // Whatever the backend, whoever is receiving this pane's scrolls is who has to undo them.
   assert.equal(appOwnsTail('codex', true), true)
   // A shell owns no viewport, so the bytes would only land in a half-typed command line.
   assert.equal(appOwnsTail('shell', true), false)
