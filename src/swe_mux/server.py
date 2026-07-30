@@ -4102,12 +4102,22 @@ _NORMALIZED_HOOK_EVENT_TYPES = {
 # the first live pass, and zero true ones). Also excludes `SessionStart`/`SessionEnd`
 # (lifecycle, not turn content) and the subagent hooks, whose records go to sidechain
 # files rather than the root transcript.
+#
+# `agent-turn-complete` is Codex's raw turn-end notify and MUST be here. Codex is the
+# only backend that needs this evidence at all -- it has no session-start hook, so a
+# `/new` behind a sibling that cannot be ruled out is invisible -- and this set is
+# tested against the *raw* event type, so omitting it made
+# `_note_transcript_staleness` unreachable for the one backend it was written for.
+# Verified live: a Codex pane rolled by `/new` kept reporting the abandoned
+# conversation as live, with its retired token counts, for 200s while
+# `last_turn_hook_ts` stayed unset.
 _TRANSCRIPT_BACKED_HOOK_EVENTS = {
     "UserPromptSubmit",
     "PreToolUse",
     "PostToolUse",
     "PostToolUseFailure",
     "Stop",
+    "agent-turn-complete",
     "turn_started",
     "turn_ended",
     "task_started",

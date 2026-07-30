@@ -118,6 +118,13 @@
   moving), delivery hard-blocks on `transcript_stale`, observers refuse to read it, and the
   session is marked in the UI and the state log. Cleared by the next record read on any followed
   transcript, or by a rollover.
+- The set is matched against the **raw** hook event type, so it must name Codex's turn notify
+  (`agent-turn-complete`) and not only Claude's `Stop` or the normalized `turn_ended`. Codex is
+  the *only* backend this rule protects — Claude reports its own rollovers, so its observation
+  never needs to be inferred stale — and while `agent-turn-complete` was missing from the set,
+  `last_turn_hook_ts` was never dated and the fail-closed path was unreachable for it. Verified
+  live: a Codex pane rolled by `/new` behind a busy same-cwd sibling kept reporting the
+  abandoned conversation, with its retired token counts, as live and `idle` for 200 s.
 - Which hooks count is the whole correctness of that rule, and "any hook" is wrong.
   `Notification:idle_prompt` fires roughly a minute *after* a turn ends to report that the agent
   is waiting, so it is guaranteed to arrive with no accompanying transcript activity — the exact

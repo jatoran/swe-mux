@@ -126,6 +126,68 @@ async def test_codex_watcher_still_uses_the_switch_heuristic(
         observe_task.cancel()
 
 
+def test_codex_turn_notify_dates_the_staleness_evidence() -> None:
+    """Codex's only turn hook must count as transcript-backed evidence.
+
+    `_note_transcript_staleness` is the fail-closed path for a Codex `/new` behind a
+    sibling that cannot be ruled out — the one rollover with no session-start hook to
+    fall back on. The ingress tests the **raw** event type, and Codex's notify arrives
+    as `agent-turn-complete`, so leaving it out of this set left `last_turn_hook_ts`
+    permanently unset and made the path unreachable for the only backend that needs
+    it. Verified live: the rolled pane reported the abandoned conversation as live,
+    with its retired token counts, for 200s.
+    """
+    from swe_mux.server import _HOOK_EVENT_TYPES, _TRANSCRIPT_BACKED_HOOK_EVENTS
+
+    assert "agent-turn-complete" in _HOOK_EVENT_TYPES
+    assert "agent-turn-complete" in _TRANSCRIPT_BACKED_HOOK_EVENTS
+
+
+async def test_codex_observation_fails_closed_when_a_turn_ran_off_the_file(
+    tmp_path: Path,
+) -> None:
+    """A turn hook after the followed file died proves we are on a retired thread."""
+    import os
+
+    record = agent_record("codex-root", backend="codex", cwd=str(tmp_path))
+    session = real_session(record, tmp_path)
+    manager = fake_manager()
+    current = tmp_path / "old.jsonl"
+    current.write_text("{}\n", encoding="utf-8")
+    dead = time.time() - 600
+    os.utime(current, (dead, dead))
+    # The CLI completed a turn long after the file we follow stopped changing.
+    session.last_turn_hook_ts = time.time()
+
+    await SessionManager._note_transcript_staleness(manager, session, current)
+
+    assert record.observation_stale_since is not None
+    assert "may have been replaced" in (record.parser_diagnostic or "")
+
+
+async def test_a_quiet_codex_session_is_not_marked_stale(tmp_path: Path) -> None:
+    """Silence is not evidence: an idle agent's transcript is quiet too.
+
+    Guards the false-positive direction of the fix above — an idle session must not
+    be declared stale just because nothing has been written for a while.
+    """
+    import os
+
+    record = agent_record("codex-root", backend="codex", cwd=str(tmp_path))
+    session = real_session(record, tmp_path)
+    manager = fake_manager()
+    current = tmp_path / "old.jsonl"
+    current.write_text("{}\n", encoding="utf-8")
+    quiet = time.time() - 600
+    os.utime(current, (quiet, quiet))
+    # No turn since the file went quiet: the last turn ended when it was written.
+    session.last_turn_hook_ts = quiet
+
+    await SessionManager._note_transcript_staleness(manager, session, current)
+
+    assert record.observation_stale_since is None
+
+
 async def test_an_unconfirmed_rollover_keeps_the_claude_lifecycle_anchor(
     tmp_path: Path,
 ) -> None:
