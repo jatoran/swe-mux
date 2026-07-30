@@ -426,8 +426,8 @@ export function QueuePane({ sessionId, sessions, onSelectSession }: Props) {
       )}
       {auto && !auto.master_enabled && (
         <p class="queue-auto-note">
-          Auto-delivery is off for this install. Turn on <code>auto_delivery_enabled</code> in
-          Settings to make the per-session opt-in available.
+          Auto-delivery is off for this install. Turn on “Allow auto-delivery” under Settings →
+          Agents → Prompt queue to make this per-session opt-in available.
         </p>
       )}
       {error && (

@@ -206,6 +206,10 @@ responsive controls.
   intentionally restrained; volume, per-event enablement and sound selection, quiet hours, and
   test playback are device preferences. A custom upload joins the same previewable library and
   does not replace existing event assignments.
+- Agents carries the auto-delivery master switch and its bounds (`auto-delivery.md`). It is a
+  bounds editor, not a schedule: the switch only makes the per-session opt-in available, and
+  the runtime state it governs — the emergency pause and the opt-ins themselves — stays in
+  SQLite behind the queue pane, outside the draft/Save cycle.
 - General exposes **Reset & run tutorial**. Starting it shares the ordinary Settings
   Save/Discard guard, so replay never silently loses a dirty draft.
 
