@@ -433,6 +433,7 @@ def create_app(
             web.post("/api/automation/provider/key", automation_provider_key),
             web.post("/api/automation/provider/models/refresh", refresh_automation_models),
             web.get("/api/automation/notifications", automation_notifications),
+            web.patch("/api/automation/notifications", patch_automation_notifications),
             web.patch(
                 "/api/automation/notifications/{notification_id}",
                 patch_automation_notification,
@@ -2034,6 +2035,15 @@ async def patch_automation_notification(request: web.Request) -> web.Response:
     if not changed:
         raise KeyError(request.match_info["notification_id"])
     return json_response({"ok": True})
+
+
+async def patch_automation_notifications(request: web.Request) -> web.Response:
+    """Bulk read/unread over the whole attention inbox (the drawer's "clear all")."""
+    body = await request.json()
+    changed = await request.app["automation_store"].mark_all_notifications(
+        bool(body.get("read", True))
+    )
+    return json_response({"ok": True, "changed": changed})
 
 
 async def list_lineage(request: web.Request) -> web.Response:

@@ -504,6 +504,13 @@ responsive controls.
   ordinary placement rule. This replaced the session-notes modal and its three
   scattered entry points (project context menu, app menu, `notes.browse`), all of which now open
   this tab.
+- **Alerts** shows open attention records first and dismissed ones only on request. Each row
+  dismisses (or restores) and the footer clears the lot; both write `read_at` server-side, so
+  the state follows the user to every device and to the dashboard inbox rather than being a
+  per-browser hide. The tab lists what the daemon retains for 90 days, which made it
+  append-only from the one surface a human actually reads: a single detector firing on a
+  normal workflow buried every record that mattered. Dismissing deletes nothing — see
+  `automation.md`.
 - A note tab that appears and disappears with focus was considered and rejected: the desktop icon
   rail earns its keep by having fixed positions, a vanishing tab has no affordance for *creating*
   a note (the pane `note` chip already owns empty/written/open), and a Notes tab that followed

@@ -745,6 +745,29 @@ class AutomationStore:
 
         return await self._run(op)
 
+    async def mark_all_notifications(self, read: bool) -> int:
+        """Read/unread every notification at once, returning how many changed.
+
+        The attention inbox is otherwise append-only until the retention window ages
+        a row out, so a run of records the user has judged irrelevant can only be
+        cleared one click at a time. This is that clear.
+        """
+
+        def op() -> int:
+            if read:
+                cursor = self._db.execute(
+                    "UPDATE automation_notifications SET read_at=? WHERE read_at IS NULL",
+                    (time.time(),),
+                )
+            else:
+                cursor = self._db.execute(
+                    "UPDATE automation_notifications SET read_at=NULL WHERE read_at IS NOT NULL"
+                )
+            self._db.commit()
+            return int(cursor.rowcount)
+
+        return await self._run(op)
+
     async def firings(
         self, *, rule_id: str | None = None, limit: int = 200
     ) -> list[dict[str, Any]]:

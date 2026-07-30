@@ -3057,6 +3057,7 @@ export function App() {
         project={activeProject}
         backend={active?.backend}
         notifications={notificationData}
+        onNotificationsChanged={()=>void loadNotifications()}
         unread={notificationUnread}
         onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('That session is no longer live.');return}void selectSession(session)}}
         onOpenSettings={section=>{if(mobileWorkspace)setClipboardOpen(false);openSettings(section)}}

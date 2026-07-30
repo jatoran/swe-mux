@@ -33,6 +33,8 @@ type Props = {
   project?: Project
   backend?: ProjectBackend
   notifications: NotificationData
+  /** Re-read the inbox after a dismiss/restore, which writes read state server-side. */
+  onNotificationsChanged: () => void
   unread: number
   onInsert: (text: string) => 'terminal' | 'editor' | 'none'
   /** Prompt inserts are terminals-only: a template dropped into the note or file the
@@ -111,7 +113,7 @@ export function UtilityDrawer(props: Props) {
             />
             : tab === 'git'
               ? <GitTab project={project} sessions={props.sessions} />
-              : <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} />
+              : <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} onChanged={props.onNotificationsChanged} />
 
   return <>
     {mobile && <button class="utility-drawer-scrim" aria-label="Close panel" onClick={onClose} />}

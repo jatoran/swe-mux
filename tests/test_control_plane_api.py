@@ -13,12 +13,15 @@ from swe_mux.automation_store import AutomationStore
 from swe_mux.config import Config
 from swe_mux.models import SessionRecord
 from swe_mux.server import (
+    automation_notifications,
     create_observer_batch,
     delete_session,
     error_middleware,
     export_handoff,
     get_automation_status,
     list_lineage,
+    patch_automation_notification,
+    patch_automation_notifications,
     relaunch_session,
     second_opinion,
 )
@@ -392,3 +395,45 @@ async def test_batch_observer_requires_ended_transcripts_and_explicit_confirmati
     assert preview["estimate"]["repository_mutation"] is False
     assert unreviewed_response.status == 400
     assert live_response.status == 400
+
+
+async def test_attention_records_dismiss_individually_and_in_bulk(tmp_path: Path) -> None:
+    """The inbox is append-only until retention ages a row out; dismissal is the only
+    way a human can clear a detector that fired on something they judged normal."""
+    store = AutomationStore(tmp_path / "mux.db")
+    created = [
+        await store.notify(
+            agent_run_id=None,
+            session_id=None,
+            rule_id=None,
+            kind="environment_interlock",
+            title=f"Record {index}",
+            message="noise",
+            severity="warning",
+        )
+        for index in range(3)
+    ]
+    app = web.Application(middlewares=[error_middleware])
+    app["automation_store"] = store
+    app.router.add_get("/notifications", automation_notifications)
+    app.router.add_patch("/notifications", patch_automation_notifications)
+    app.router.add_patch("/notifications/{notification_id}", patch_automation_notification)
+
+    async with TestClient(TestServer(app)) as client:
+        one = await client.patch(f"/notifications/{created[0]['id']}", json={"read": True})
+        after_one = await (await client.get("/notifications?unread=1")).json()
+        bulk = await (await client.patch("/notifications", json={"read": True})).json()
+        after_bulk = await (await client.get("/notifications?unread=1")).json()
+        restored = await client.patch(f"/notifications/{created[0]['id']}", json={"read": False})
+        after_restore = await (await client.get("/notifications?unread=1")).json()
+
+    assert one.status == 200
+    assert len(after_one["items"]) == 2
+    # Only the still-open records are touched, so the count is what the button cleared.
+    assert bulk["changed"] == 2
+    assert after_bulk["items"] == []
+    # Dismissing is not deleting: every record is still readable afterwards.
+    assert restored.status == 200
+    assert [item["title"] for item in after_restore["items"]] == ["Record 0"]
+    assert len(await store.notifications()) == 3
+    store.close()
