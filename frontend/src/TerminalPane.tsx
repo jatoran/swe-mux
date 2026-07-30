@@ -164,6 +164,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // per-render tail check can bail without touching component state.
   const [offTail,setOffTail]=useState(false)
   const offTailRef=useRef(false)
+  // The same question about the *application's* viewport, which xterm cannot answer. A TUI
+  // holding the mouse (Claude) receives a phone's drags as wheel events and scrolls itself,
+  // so xterm's buffer never leaves its tail and `offTail` above stays false forever — which
+  // is why the chip has only ever appeared in Codex sessions. Nothing reports that scroll
+  // back to us, so the pane remembers having forwarded one, and the jump clears it.
+  const [appOffTail,setAppOffTail]=useState(false)
+  const appOffTailRef=useRef(false)
   // Which device may type into this session. Mirrored out of the mount effect so the
   // pane can say "input is on your phone" instead of silently swallowing keystrokes.
   const [inputOwnership,setInputOwnership]=useState<OwnershipView>(UNOWNED)
@@ -197,6 +204,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setKillArmed(false)
     setInputOwnership(UNOWNED)
     setLetterboxed(false)
+    appOffTailRef.current=false
+    setAppOffTail(false)
   },[session.id])
   useEffect(()=>{
     const on=(event:Event)=>setKillArmed((event as CustomEvent<string|null>).detail===session.id)
@@ -1117,6 +1126,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         term.scrollLines(terminalScrollLines(delta,rowHeight))
         return
       }
+      // This scroll belongs to the application, so nothing in xterm's buffer will ever record
+      // it. A drag back through the history is the pane's only evidence that the user is no
+      // longer looking at the newest output, and it is what raises the chip. Only a drag
+      // back: reaching the newest line again is a thing only the application knows, so the
+      // chip stays up until the jump is taken, rather than guessing and vanishing early.
+      if(delta<0&&!appOffTailRef.current){appOffTailRef.current=true;setAppOffTail(true)}
       term.element?.dispatchEvent(new WheelEvent('wheel',{
         bubbles:true,cancelable:true,clientX:event.clientX,clientY:event.clientY,
         deltaY:delta,deltaMode:WheelEvent.DOM_DELTA_PIXEL,
@@ -1354,8 +1369,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // `^End` — which happens to send the same key on its way past — kept working.
   const jumpToLatest=()=>{
     const term=termRef.current
-    if(term&&appOwnsTail(session.backend,term.modes.mouseTrackingMode!=='none'))sendViewKeyRef.current(APP_TAIL_KEY)
+    // A pane that has been forwarding drags counts as much as a live mouse mode: whatever the
+    // application has since done with the mouse, it is the thing that scrolled.
+    const appReceivesScroll=appOffTailRef.current||term?.modes.mouseTrackingMode!=='none'
+    if(term&&appOwnsTail(session.backend,appReceivesScroll))sendViewKeyRef.current(APP_TAIL_KEY)
     scrollTerminalToTail(term)
+    appOffTailRef.current=false
+    setAppOffTail(false)
     if(!keyboardOffRef.current)focusTerminalInputRef.current()
   }
   const toggleKeyboard=()=>{
@@ -1463,7 +1483,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   }
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
-  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)} onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{railItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{offTail&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={jumpToLatest}>↓ latest</button>}{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)} onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{railItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={jumpToLatest}>↓ latest</button>}{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }

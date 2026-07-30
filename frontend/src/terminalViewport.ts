@@ -41,14 +41,15 @@ export const APP_TAIL_KEY = '\x1b[1;5F'
  * and not in a Claude one on a phone. The rail's `^End` worked in both because it happens to do
  * both halves; this is the same pair of moves, behind the chip.
  *
- * Mouse tracking generalises the rule: an application that has taken the mouse is the thing
- * receiving scroll gestures, and `mobileDragTarget` already routes phone drags on that signal.
- * A shell is excluded outright — it owns no viewport, so the bytes would only land in whatever
- * command line the user was halfway through typing.
+ * `appReceivesScroll` generalises the rule: whoever is being handed this pane's scroll gestures
+ * is who has to be asked to undo them. That is an application holding the mouse — the signal
+ * `mobileDragTarget` already routes phone drags on — or one the pane has been forwarding drags
+ * to whatever its mouse mode says now. A shell is excluded outright: it owns no viewport, so
+ * the bytes would only land in whatever command line the user was halfway through typing.
  */
-export function appOwnsTail(backend: string, mouseTracking: boolean): boolean {
+export function appOwnsTail(backend: string, appReceivesScroll: boolean): boolean {
   if (backend === 'shell') return false
-  return backend === 'claude' || mouseTracking
+  return backend === 'claude' || appReceivesScroll
 }
 
 /**
