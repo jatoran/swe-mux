@@ -1952,9 +1952,13 @@ export function App() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
+  // Resume targets the history entry of the conversation the pane was last on,
+  // which is its run rather than its session: a pane that rolled its
+  // conversation (/clear) or inherited one (a previous resume) owns a row keyed
+  // by the run id, and asking for the session id there finds nothing.
   const resumeSession = async (session: Session) => {
     try {
-      const resumed = await api<Session>('POST', `/api/history/${session.id}/resume`, { project_id: session.project_id })
+      const resumed = await api<Session>('POST', `/api/history/${session.agent_run_id || session.id}/resume`, { project_id: session.project_id })
       setSessions(items => [...items, resumed])
       setActiveId(resumed.id)
       setContextMenu(null)

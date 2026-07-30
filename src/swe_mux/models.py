@@ -87,6 +87,15 @@ class SessionRecord:
     # adoptable; SessionManager reconstructs them from the retained spawn argv.
     spawn_backend: str | None = None
     spawn_native_session_id: str | None = None
+    # Set only when this PTY was spawned to continue a conversation that already
+    # owns a history row: Claude's ``--resume`` appends to the same transcript
+    # under the same conversation id, so the pane inherits that run instead of
+    # opening a second row over one file. Immutable spawn evidence, which is what
+    # lets the adoption path tell a legitimately inherited ``agent_run_id`` from
+    # the misattribution it repairs — the role ``agent_run_seq`` plays for a
+    # rollover. It never moves; a later rollover mints a run of the pane's own
+    # and the inheritance simply stops matching.
+    spawn_agent_run_id: str | None = None
     runtime_cwd: str | None = None
     runtime_cwd_live: bool = False
     runtime_cwd_source: str = "spawn"

@@ -43,6 +43,25 @@
   the owning session): resuming it would put two live sessions on one conversation — the
   cross-attribution the identity invariant forbids. Branch is the flow for forking a live
   conversation; rows whose pane has since rolled onward resume fine.
+- **Resuming a conversation continues its entry; it does not fork one.** A resumed pane is a
+  new process and a new session record, but for a Claude row resumed at its recorded root it
+  inherits the conversation's `agent_run_id` (`spawn_agent_run_id`) and reopens that row rather
+  than opening a second. Claude's `--resume` appends to the same transcript under the same
+  conversation id, so a second row indexed one file twice, showed one conversation as two
+  entries, and left the first entry's totals still moving after its own pane exited. The row's
+  start, note, totals and transcript watermark are the conversation's and are preserved; only
+  what the new PTY changes (argv, cwd, Project, name) is refreshed, and the exit markers are
+  cleared. Because every control-plane record keys on the run, the scan timeline, Tier 0 facts,
+  annotations and the settled title continue across the resume instead of restarting blank.
+  Two cases are genuinely new conversations and keep their own row: a **Codex** resume (which
+  mints a new rollout with a new id) and a **Claude resume into a different root** (Claude
+  resolves transcripts by working directory, so that writes a different file). Only those
+  record a `resume` lineage edge — an inherited run is the same run, and an edge to itself
+  would read as a fork that never happened.
+- **A resumed pane carries the conversation's name, unsuffixed.** The old `"<name> resumed"`
+  compounded over repeated resumes (`… resumed resumed`) and, for an inherited run, renamed an
+  entry the pane shares rather than replaces. The row's `auto_named` flag carries over too, so
+  a conversation nobody renamed stays auto-titleable and a renamed one stays pinned.
 - Index deletion never deletes or edits the native transcript.
 - When session adoption proves that a lifecycle bug indexed another live session's transcript,
   the false run is quarantined (`agent_visible=0`), its rebuildable message/index cursor is
