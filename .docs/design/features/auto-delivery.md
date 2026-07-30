@@ -86,6 +86,10 @@ are on `GET /api/queue/auto` and in the mailbox's status line.
   item shows its time in the row.
 - **Mailbox overlay** (app menu → Mailbox): pause-all / resume, `report unsafe delivery`,
   and the proving-period counters — reachable in one gesture from desktop or phone.
+- **Settings → Agents → Prompt queue**: the install-wide master switch and the bounds every
+  opt-in runs under (stability window, consecutive-send cap, opt-in expiry, refusal back-off,
+  quiet hours). The queue strip's "off for this install" note names that control, so the two
+  halves of the double opt-in point at each other rather than at a config key.
 
 ## API surface
 
@@ -103,8 +107,9 @@ PATCH /api/queue/messages/{id}             {constraints}     schedule / clear
 `auto_delivery_enabled`, `auto_delivery_stable_seconds`, `auto_delivery_max_consecutive`,
 `auto_delivery_session_ttl_minutes`, `auto_delivery_quiet_start`, `auto_delivery_quiet_end`,
 `auto_delivery_refusal_backoff_seconds` (`config.py`, validated with lower bounds — a
-zero-length stability window would defeat the gate it exists to be). Runtime state (pause,
-per-session opt-ins, counters) lives in SQLite, not config.
+zero-length stability window would defeat the gate it exists to be), all editable in
+Settings → Agents. Runtime state (pause, per-session opt-ins, counters) lives in SQLite, not
+config, so the emergency pause never waits on a config write.
 
 ## Key files
 
