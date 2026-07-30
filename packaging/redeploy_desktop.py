@@ -90,6 +90,44 @@ SWAP_RETRY_SECONDS = 20.0
 APP_HEALTH_TIMEOUT_SECONDS = 300.0
 
 
+# The branch parallel agent work lands onto. A build reads the working tree, so if the
+# trunk holds commits this checkout does not, the bundle ships without them — silently,
+# which has already happened once: an agent landed four fixes, the fast-forward of master
+# was blocked, and the redeploy shipped none of them.
+AGENT_TRUNK = os.environ.get("WT_TRUNK") or "integration"
+
+
+def unmerged_trunk_commits() -> list[str]:
+    """Commits on the agent trunk that this checkout's HEAD does not contain.
+
+    Empty when the trunk does not exist, this is not a git repo, or git is unavailable:
+    the guard exists to catch a known-stale build, not to make packaging depend on git.
+    """
+    try:
+        found = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{AGENT_TRUNK}"],
+            cwd=ROOT,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        if found.returncode:
+            return []
+        result = subprocess.run(
+            ["git", "log", "--oneline", f"HEAD..refs/heads/{AGENT_TRUNK}"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode:
+        return []
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
 def log(message: str) -> None:
     print(f"[redeploy] {message}", flush=True)
 
@@ -265,10 +303,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="proceed even when live sessions would be killed (no usable supervisor)",
     )
+    parser.add_argument(
+        "--allow-stale",
+        action="store_true",
+        help="build even when the agent trunk holds commits this checkout does not",
+    )
     args = parser.parse_args(argv)
     config = load_config(args.config)
 
     # -- preflight ---------------------------------------------------------
+    if (stale := unmerged_trunk_commits()) and not args.allow_stale:
+        log(f"ABORT: '{AGENT_TRUNK}' has {len(stale)} commit(s) this checkout does not have.")
+        log("A build takes its source from the working tree, so shipping now would omit them:")
+        for line in stale[:10]:
+            log(f"  {line}")
+        if len(stale) > 10:
+            log(f"  ... and {len(stale) - 10} more")
+        log("Run `gwt promote` to fast-forward, or re-run with --allow-stale to ship without.")
+        return 2
+
+    supervisor = supervisor_process(config)
     supervisor = supervisor_process(config)
     if supervisor is None:
         message = (
