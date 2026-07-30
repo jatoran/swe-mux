@@ -317,8 +317,14 @@ class DetectionReplay:
                 self.events,
             )
         elif kind == "terminal":
+            # The browser's report of xterm's active buffer. Diagnostic only: it
+            # describes the buffer that pane's replayed copy of the stream landed
+            # in, which is not always the one the child selected.
             self.session.terminal_mode = str(step["mode"])
             self.session.terminal_mode_updated_at = self.clock.monotonic()
+        elif kind == "pty":
+            # Raw child output, which is where the daemon reads the screen switch.
+            self.session.screen.feed(str(step["data"]).encode("utf-8", "surrogateescape"))
         elif kind == "input":
             self.session.input_revision += 1
             self.session.last_input_event_ts = self.clock.monotonic()

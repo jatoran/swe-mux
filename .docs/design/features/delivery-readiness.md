@@ -53,9 +53,12 @@ off the PTY stream itself (`screen_mode.py`), so it holds this fact for every se
 not only for one somebody is watching; an adopted session replays its retained scrollback
 through the same parser, because the switch is written once at startup and never repeated.
 The browser also reports xterm's active `normal|alternate` buffer after input ownership, on
-buffer changes, and periodically — that report is corroboration, used only when the daemon
-never saw a switch, and it expires after ten seconds because the pane it comes from can
-detach at any moment. Terminal protocol responses and mouse reports are labeled separately
+buffer changes, and periodically, but that report is diagnostic and can never block. It is
+not the same kind of fact: xterm reports the buffer *its own replayed copy* of the stream
+selected, so a pane that attached after the child's `?1049h` scrolled out of the retained
+scrollback reports `normal` for a child that has been on the alternate screen since startup
+— measured on a live Claude session right after a daemon restart. A derived state that is
+wrong exactly when the daemon's own reading is missing cannot stand in for it. Terminal protocol responses and mouse reports are labeled separately
 and do not count as human input; keystrokes and bracketed paste advance an in-memory input
 revision. The daemon evaluates these facts synchronously without an await boundary. It
 stores bounded reasons/transitions only—never terminal bytes or prompt bodies.

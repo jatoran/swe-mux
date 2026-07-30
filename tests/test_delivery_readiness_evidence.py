@@ -133,7 +133,7 @@ def test_a_screen_change_after_the_turn_completed_is_blocked() -> None:
     assert "screen_not_at_agent_prompt" in evaluation["reasons"]
 
 
-def test_the_daemons_screen_reading_outranks_a_stale_browser_report() -> None:
+def test_the_daemons_screen_reading_outranks_a_browser_report() -> None:
     """A pane that detached mid-pager must not keep vouching for the screen."""
     session, tracker, clock = _idle_agent()
     session.screen.feed(b"\x1b[?1049l")
@@ -145,14 +145,22 @@ def test_the_daemons_screen_reading_outranks_a_stale_browser_report() -> None:
     assert evaluation["delivery_state"] == "blocked"
 
 
-def test_a_browser_report_is_used_when_the_daemon_never_saw_a_switch() -> None:
-    """Sessions older than the retained scrollback still have the pane's word."""
+def test_a_browser_report_alone_never_blocks() -> None:
+    """xterm reports the buffer *its own replay* selected, not the child's.
+
+    Measured on a live Claude session after a daemon restart: the child had been
+    on the alternate screen since startup, but its `?1049h` had long scrolled out
+    of the retained scrollback, so the reattached pane replayed a stream that
+    never entered it and reported `normal`. Blocking on that would strand exactly
+    the long-running sessions this whole correction is for.
+    """
     session, tracker, clock = _idle_agent()
-    session.terminal_mode = "alternate"
+    session.terminal_mode = "normal"
     session.terminal_mode_updated_at = clock.monotonic()
 
     evaluation = tracker.evaluate(session)
     assert evaluation["evidence"]["screen_source"] == "browser"
+    assert evaluation["evidence"]["screen_mode"] == "normal"
     assert evaluation["delivery_state"] == "safe"
 
 

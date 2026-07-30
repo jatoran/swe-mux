@@ -180,7 +180,8 @@ class DeliveryReadinessTracker:
                     input_revision=int(getattr(session, "input_revision", 0)),
                     # The screen the CLI was drawing its prompt on the moment it
                     # finished: the baseline a later takeover is measured against.
-                    screen=self._screen_evidence(session, self.clock())[0],
+                    # Daemon-observed only, for the same reason the check is.
+                    screen=getattr(getattr(session, "screen", None), "mode", None),
                 )
             elif outcome == "rate_limited":
                 self._transition(
@@ -197,10 +198,16 @@ class DeliveryReadinessTracker:
 
         The daemon's own reading wins and never expires: a child stays in the
         buffer it selected until it selects another, and the daemon sees that
-        switch on the PTY whether or not anyone is watching the pane. The
-        browser's report is a fallback for a session whose screen switch predates
-        the retained scrollback, and it *does* expire, because the pane it comes
-        from can detach at any moment.
+        switch on the PTY whether or not anyone is watching the pane.
+
+        The browser's report is reported alongside it but is deliberately not
+        allowed to block (`_screen_check`). It is not the same kind of fact: xterm
+        reports the buffer *its own* replayed copy of the stream put it in, so a
+        pane that attached after the child's `?1049h` scrolled out of the retained
+        scrollback reports `normal` for a child that has been on the alternate
+        screen since startup. Measured on a live Claude session immediately after
+        a daemon restart. A derived state that is wrong exactly when the daemon's
+        own reading is missing cannot be the fallback for it.
         """
         parser = getattr(session, "screen", None)
         daemon_mode = getattr(parser, "mode", None)
@@ -232,17 +239,21 @@ class DeliveryReadinessTracker:
         return ADAPTER_DELIVERY_ETIQUETTE.get(str(record.backend), {}).get("screen")
 
     @classmethod
-    def _screen_check(cls, record: Any, memory: ReadinessMemory, mode: str | None) -> bool:
-        """False only when the screen positively contradicts the agent's prompt.
+    def _screen_check(
+        cls, record: Any, memory: ReadinessMemory, mode: str | None, source: str
+    ) -> bool:
+        """False only when the daemon watched the child leave its prompt's screen.
 
-        A veto, not a prerequisite. Absence of screen evidence is not evidence of
-        danger, and requiring it made `safe` unreachable for every session nobody
-        happened to be watching — which is the entire population the queue exists
-        to serve. What remains blocked is the case this can actually see: the
-        child is drawing somewhere other than where that CLI's prompt lives.
+        A veto, not a prerequisite, and only on the daemon's own reading. Absence
+        of screen evidence is not evidence of danger — requiring it made `safe`
+        unreachable for every session nobody happened to be watching, which is
+        the entire population the queue exists to serve — and a browser's report
+        is not strong enough to block on, because it describes the buffer that
+        pane's replayed copy of the stream selected rather than the one the child
+        did.
         """
         expected = cls._expected_screen(record, memory)
-        if mode is None or expected is None:
+        if source != "daemon" or mode is None or expected is None:
             return True
         return mode == expected
 
@@ -278,7 +289,7 @@ class DeliveryReadinessTracker:
             else None
         )
         screen_mode, screen_source = self._screen_evidence(session, now)
-        screen_at_agent_prompt = self._screen_check(record, memory, screen_mode)
+        screen_at_agent_prompt = self._screen_check(record, memory, screen_mode, screen_source)
 
         root_ready = record.state == "idle" and memory.phase == "ready"
         # An agent parked at its prompt does not decay. Freshness guards against
