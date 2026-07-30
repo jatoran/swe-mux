@@ -783,6 +783,14 @@ async def test_a_desktop_pane_left_open_does_not_take_sessions_back_from_the_pho
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(desktop.receive_json(), timeout=0.1)
         assert session.input_owner_device == "mobile"
+
+        # Every decision is recorded with what the daemon knew at the time. Ownership
+        # disputes are otherwise visible only as a counter going up, which says a
+        # claim was refused but not which device asked or what it reported.
+        verdicts = [(entry["device"], entry["verdict"]) for entry in session.claim_log]
+        assert ("mobile", "granted_device_in_use") in verdicts
+        assert ("desktop", "denied_device_in_use") in verdicts
+        assert all(entry["leader"] == "mobile" for entry in session.claim_log)
         await phone.close()
         await desktop.close()
 

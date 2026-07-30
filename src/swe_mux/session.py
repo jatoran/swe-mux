@@ -126,6 +126,9 @@ STATE_TRANSITION_LOG_LIMIT = 64
 # detail updates ("working · Read" → "working · Bash"), which would otherwise
 # evict the transitions that actually explain how a session reached its state.
 STATE_CHANGE_LOG_LIMIT = 64
+# Terminal-input claims, for diagnosing which device ended up owning a session and
+# why. Small: only the last few decisions matter, and they are read by hand.
+CLAIM_LOG_LIMIT = 24
 
 # Status contract: which observation sources may set each user-visible state.
 # Positive evidence only — ambiguity resolves to the conservative prior, never a
@@ -786,6 +789,11 @@ class Session:
         # Last refusal per connection, so a client that re-claims on its own refusal
         # stops being answered instead of looping. Cleared when the connection ends.
         self.claim_refusals: dict[str, float] = {}
+        # Recent claim decisions, newest last. Ownership disputes are otherwise only
+        # visible as a counter going up, which says a claim was refused but never
+        # which device asked, what it reported about itself, or what the daemon
+        # believed at the time — the three things any diagnosis actually needs.
+        self.claim_log: deque[dict[str, Any]] = deque(maxlen=CLAIM_LOG_LIMIT)
         # Per-connection fitted terminal size for every attached client that reports
         # itself visible. Hidden panes deregister, so a minimized window can no longer
         # reshape ConPTY for the device a human is actually using.

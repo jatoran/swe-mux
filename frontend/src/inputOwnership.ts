@@ -132,8 +132,22 @@ export function shouldReplayRejectedInput(frame: RejectedFrame): boolean {
   return frame.retry !== true && typeof frame.data === 'string' && frame.data.length > 0
 }
 
-/** Text for the strip a non-owning pane shows instead of pretending to accept input. */
+/** Refusals that cost the user something and are therefore worth showing. */
+const VISIBLE_REFUSALS = new Set(['claimed_elsewhere', 'input_rejected'])
+
+/** Text for the strip a non-owning pane shows instead of pretending to accept input.
+ *
+ * Deliberately silent about a refused *attach*. Opening a session is not a request to
+ * type into it, and the pane needs no permission to show output; the daemon refusing
+ * that claim costs the user nothing, because the first real keystroke sends a gesture
+ * claim which always wins and lands the keystroke with it.
+ *
+ * Announcing those refusals is what made a phone demand "take over" on every session
+ * the user opened — a prompt to fix something that was not broken, in the one moment
+ * they had asked for nothing. What is worth saying is that input this pane *held* went
+ * somewhere else, or that a keystroke was actually refused. */
 export function inputOwnerNotice(view: OwnershipView): string | null {
   if (view.owns || !view.ownerDevice) return null
+  if (view.denied === null || !VISIBLE_REFUSALS.has(view.denied)) return null
   return `Input active on ${view.ownerDevice}`
 }

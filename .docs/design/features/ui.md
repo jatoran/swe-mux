@@ -310,13 +310,15 @@ responsive controls.
   recognition and dispatch (`resolveGestureCommand`), toggled by the hot-reloadable
   `mobile_gesture_swipe_away_close` config bool (default on, checkbox in Settings → Input →
   touch gestures).
-- A pane that does not own terminal input says so, instead of silently swallowing keystrokes:
-  a strip names the device holding the keyboard and offers a one-click "Take over" (a gesture
-  claim, which always wins). It appears only after the daemon has actually refused this pane —
-  a displacement or a rejected keystroke — never on a session nobody is typing into. It is
-  meant to be rare: the device the user is actually on takes input for a session by attaching
-  to it, so the strip signals a genuine conflict rather than being the normal way to start
-  typing. Needing it on every session is the symptom of a presence problem, not of this UI. While the
+- A pane that loses terminal input it was holding says so, instead of silently swallowing
+  keystrokes: a strip names the device with the keyboard and offers a one-click "Take over"
+  (a gesture claim, which always wins). It appears for exactly two things — input this pane
+  held moved to another device, or a keystroke was actually refused. It says nothing about a
+  session the user merely opened. Opening is not a request to type, output needs no ownership,
+  and the first real keystroke claims input by itself and lands with it, so a refused attach
+  costs nothing and reporting it asks the user to fix what is not broken. Showing it there is
+  what made a phone demand "take over" on every session opened, which is a UI defect whatever
+  the arbitration underneath is doing. While the
   arbitrated size is another device's, the pane letterboxes: it renders that grid at a reduced
   font size rather than re-fitting, since re-fitting is what pushed two devices into resizing
   each other in a loop.

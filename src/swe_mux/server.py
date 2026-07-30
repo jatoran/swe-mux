@@ -3493,6 +3493,7 @@ async def get_session_state_log(request: web.Request) -> web.Response:
                 "geometry": list(session.geometry) if session.geometry else None,
                 "input_rejections": session.input_rejections,
                 "claim_denials": session.input_claim_denials,
+                "claims": list(session.claim_log),
             },
             # Real state changes are kept separately: a busy turn emits dozens
             # of same-state tool detail updates that would otherwise evict the
@@ -6546,6 +6547,18 @@ async def _claim_terminal_input(
             other_device_in_use=leader is not None and leader != device,
             this_device_in_use=leader == device,
         ),
+    )
+    session.claim_log.append(
+        {
+            "ts": time.time(),
+            "device": device,
+            "ask": reason,
+            "focused": frame.get("focused") is not False,
+            "leader": leader,
+            "owner_device": session.input_owner_device,
+            "verdict": decision.reason,
+            "granted": decision.granted,
+        }
     )
     if not decision.granted:
         session.input_claim_denials += 1

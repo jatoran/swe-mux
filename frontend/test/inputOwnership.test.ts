@@ -93,11 +93,25 @@ test('rejected keystrokes are replayed once and never in a loop', () => {
   assert.equal(shouldReplayRejectedInput({}), false)
 })
 
-test('a non-owning pane says which device holds the keyboard', () => {
+test('a pane says nothing about a session it merely opened', () => {
+  // Opening a session is not a request to type into it. Announcing that the daemon
+  // refused the attach claim asked the user to fix something that was not broken —
+  // on every session they opened — when their first keystroke would have claimed
+  // input by itself and landed.
   assert.equal(inputOwnerNotice(UNOWNED), null)
   assert.equal(inputOwnerNotice({ owns: true, epoch: 1, ownerDevice: 'desktop', denied: null }), null)
+  for (const denied of ['denied_active_owner', 'denied_device_in_use', 'denied_unfocused']) {
+    assert.equal(inputOwnerNotice({ owns: false, epoch: 1, ownerDevice: 'desktop', denied }), null)
+  }
+})
+
+test('a pane does say when input it held went elsewhere, or a keystroke was refused', () => {
   assert.equal(
-    inputOwnerNotice({ owns: false, epoch: 1, ownerDevice: 'mobile', denied: 'denied_active_owner' }),
+    inputOwnerNotice({ owns: false, epoch: 1, ownerDevice: 'mobile', denied: 'claimed_elsewhere' }),
+    'Input active on mobile',
+  )
+  assert.equal(
+    inputOwnerNotice({ owns: false, epoch: 1, ownerDevice: 'mobile', denied: 'input_rejected' }),
     'Input active on mobile',
   )
 })

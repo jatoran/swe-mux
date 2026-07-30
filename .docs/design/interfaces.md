@@ -458,7 +458,10 @@ Input from a connection that is not the owner is refused, not dropped:
 back so the client can claim and resend it once (`retry:true`, which is never echoed into
 a second retry). Refused xterm device replies are discarded instead — a late one is worse
 than none. Refusals are counted per session and surface in `GET /api/sessions/{id}/state-log`
-as `input_arbitration`, alongside the refused-claim count and the current geometry.
+as `input_arbitration`, alongside the refused-claim count, the current geometry, the
+leading device, and `claims`: the last two dozen decisions with the asking device, what it
+reported about itself, what the daemon believed, and the verdict. A counter says a claim was
+refused; only that log says which device asked and why it lost.
 
 `GET /api/sessions/{id}/state-log` also reports the conversation identity behind the state:
 `agent_run_id`, `agent_run_seq`, `native_session_id`, `agent_lifecycle_id`, and
