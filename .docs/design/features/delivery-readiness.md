@@ -117,6 +117,26 @@ still emitted for the audit trail and the live path — but never as a synthetic
 which would fire read-aloud, notifications, and turn observers for a turn that ended before
 the restart.
 
+**Corrected 2026-07-30 (third pass) — a new session could not send its first prompt.** Every
+signal above is about a turn *ending*, which a session nobody has used yet cannot produce, so
+the first message to a fresh agent was refused as `no_root_lifecycle_evidence` on the one
+session where nothing can possibly be in flight. The CLI's own `SessionStart` hook is the
+positive evidence that was being ignored: it now sets `observation_state["session_start_seen"]`
+and readiness takes it as `agent_started_awaiting_first_prompt` once a settle has passed —
+but only for a session with `input_revision == 0`, because keystrokes mean a composer whose
+contents this cannot see.
+
+The settle is `AGENT_FIRST_PROMPT_SETTLE_SECONDS` (8s from the spawn the tracker observed,
+plus the ordinary debounce), and it is a timer on purpose. Measured against Claude Code
+v2.1.220: the session reports idle at spawn+1.02s but a submitted line is **silently
+swallowed** until spawn+~4.5s — the paste lands in the composer and only the CR is dropped,
+so the message sits there looking delivered, which is exactly the false-safe this contract
+exists to prevent. A submit at idle+3.0s failed and at idle+3.5s succeeded, 3/3 each way. The
+PTY offers nothing better to key on: output goes quiet from spawn+1.0s to spawn+3.4s and only
+*then* paints the composer, so "the terminal settled" fires inside the swallow window — which
+is also why the status layer's own one-second startup fallback calls this idle, and why only
+the CLI's hook counts here.
+
 What carries the safety argument after those four is the composer-collision guard:
 `partial_input_absent` compares the input revision against its value when the root turn
 completed, so anything the operator typed since — including opening a pager, which takes

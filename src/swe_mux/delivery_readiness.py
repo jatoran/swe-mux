@@ -13,6 +13,23 @@ DeliveryState = Literal["safe", "blocked", "unknown"]
 READINESS_DEBOUNCE_SECONDS = 2.0
 TERMINAL_EVIDENCE_MAX_AGE_SECONDS = 10.0
 LIFECYCLE_EVIDENCE_MAX_AGE_SECONDS = 5 * 60.0
+# How long a freshly started agent CLI is given before its first prompt may be
+# delivered. Measured 2026-07-30 against Claude Code v2.1.220 on this machine:
+# the session reports idle at spawn+1.02s (consistently, 9 runs) but a submitted
+# line is *silently swallowed* until spawn+~4.5s — the paste lands in the
+# composer and only the CR is dropped, so the message sits there looking sent.
+# A submit at idle+3.0s failed and at idle+3.5s succeeded, 3/3 either way.
+#
+# It is a timer because the PTY offers nothing better: output goes quiet from
+# spawn+1.0s to spawn+3.4s and only *then* paints the composer (3.4s-4.25s), so
+# "the terminal settled" fires inside the swallow window. That deceptive gap is
+# also why the status layer's own 1-second startup fallback calls this idle.
+#
+# The value is ~2.3x the measured boundary and is spent from the tracker's first
+# sight of the session, with the ordinary readiness debounce on top. Being early
+# means a message the operator believes was delivered was not; being late costs
+# a few seconds of "send anyway" on a session nobody has typed in yet.
+AGENT_FIRST_PROMPT_SETTLE_SECONDS = 8.0
 
 
 class ReadinessSession(Protocol):
@@ -241,6 +258,60 @@ class DeliveryReadinessTracker:
             }
         )
 
+    def _adopt_first_prompt_ready(
+        self, session: ReadinessSession, memory: ReadinessMemory
+    ) -> None:
+        """Let a session that has never run a turn accept its first prompt.
+
+        Everything else here is evidence about a turn *ending*, which a session
+        nobody has used yet cannot produce — so the first message to a new agent
+        was refused as `no_root_lifecycle_evidence` and had to be sent with the
+        operator's override, on the one session where nothing can possibly be in
+        flight. The CLI's own `SessionStart` is the positive evidence that was
+        being ignored.
+
+        Deliberately narrow, because the hazard here is the reverse of the usual
+        one — see `AGENT_FIRST_PROMPT_SETTLE_SECONDS` for the measurement:
+
+        - the CLI must have announced its own start (a native hook, not the
+          status layer's inferred startup-quiet fallback, which fires *inside*
+          the window where a submit is swallowed);
+        - the settle must have elapsed since this session was first seen;
+        - nothing may ever have been typed into this PTY. A fresh session with
+          keystrokes in it has a composer this cannot see the contents of, and
+          that is the collision `partial_input_absent` exists to prevent.
+        """
+        if memory.phase != "unknown" or session.record.state != "idle":
+            return
+        if int(getattr(session, "input_revision", 0)) != 0:
+            return
+        observation_state = getattr(session, "observation_state", None)
+        if not observation_state or not observation_state.get("session_start_seen"):
+            return
+        now = self.clock()
+        if now - memory.phase_since < AGENT_FIRST_PROMPT_SETTLE_SECONDS:
+            return
+        memory.phase = "ready"
+        memory.reason = "agent_started_awaiting_first_prompt"
+        memory.source = "hook"
+        memory.observed_at = now
+        memory.phase_since = now
+        memory.transition_count += 1
+        # A native hook fired for this session, which is the same capability
+        # proof `_parser_check` accepts from any other hook.
+        memory.observation_proven = True
+        memory.input_revision_at_completion = 0
+        memory.screen_at_completion = getattr(getattr(session, "screen", None), "mode", None)
+        memory.transitions.append(
+            {
+                "phase": "ready",
+                "reason": "agent_started_awaiting_first_prompt",
+                "event": "session_start",
+                "source": "hook",
+                "scope": "root",
+            }
+        )
+
     @staticmethod
     def _screen_evidence(session: ReadinessSession, now: float) -> tuple[str | None, str]:
         """The screen buffer this PTY's child is drawing to, and where that came from.
@@ -333,6 +404,7 @@ class DeliveryReadinessTracker:
         memory = self._memory(session)
         record = session.record
         self._adopt_catchup_settle(session, memory)
+        self._adopt_first_prompt_ready(session, memory)
         lifecycle_age = max(0.0, now - memory.observed_at)
         terminal_mode = getattr(session, "terminal_mode", None)
         terminal_mode_updated_at = float(getattr(session, "terminal_mode_updated_at", 0.0))

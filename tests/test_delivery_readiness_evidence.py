@@ -1,7 +1,7 @@
 """What delivery readiness treats as evidence, and what it refuses to.
 
-These pin the 2026-07-30 correction. The gate had four preconditions that a real
-session could not satisfy, so `safe` was unreachable and every queued message
+These pin the 2026-07-30 correction. The gate demanded evidence that a real
+session could not produce, so `safe` was unreachable and every queued message
 had to be sent with the operator's explicit override — which trains the operator
 to click through the one prompt that is supposed to mean something:
 
@@ -11,7 +11,11 @@ to click through the one prompt that is supposed to mean something:
 - the alternate screen was treated as danger, but Claude Code draws its prompt
   there and never leaves;
 - lifecycle evidence expired after five minutes, so an agent parked at its
-  prompt — the most deliverable state there is — decayed to unknown.
+  prompt — the most deliverable state there is — decayed to unknown;
+- readiness died with the daemon, so a session left running across a restart
+  had no record its last turn ever finished;
+- and every signal was about a turn *ending*, so a brand-new session — where
+  nothing can possibly be in flight — could not send its first prompt.
 
 Each fix is a loosening, so each test below states what still blocks.
 """
@@ -21,7 +25,11 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from swe_mux.delivery_readiness import DeliveryReadinessTracker
+from swe_mux.delivery_readiness import (
+    AGENT_FIRST_PROMPT_SETTLE_SECONDS,
+    READINESS_DEBOUNCE_SECONDS,
+    DeliveryReadinessTracker,
+)
 from swe_mux.models import MuxEvent
 from tests.support.detection_replay import ReplaySession, VirtualClock
 
@@ -292,6 +300,84 @@ def test_catchup_never_overrules_evidence_the_tracker_already_has() -> None:
     evaluation = tracker.evaluate(session)
     assert evaluation["delivery_state"] == "blocked"
     assert "root_agent_working" in evaluation["reasons"]
+
+
+def _started(session: ReplaySession, tracker: DeliveryReadinessTracker) -> None:
+    """A session the daemon has just spawned, whose CLI announced its own start.
+
+    The spawn is what anchors the settle: the tracker sees `session_spawned` when
+    the daemon creates the session, so the window is spent from then and not from
+    whenever something first asks about readiness.
+    """
+    tracker.observe(_event("session_spawned", scope="root"), session)
+    session.observation_state["session_start_seen"] = True
+    session.record.state = "idle"
+
+
+def test_a_brand_new_session_accepts_its_first_prompt() -> None:
+    """Nothing can be in flight in a session nobody has used yet.
+
+    Every other signal here is about a turn *ending*, which a session that has
+    never run one cannot produce — so the first message to a new agent was
+    refused as `no_root_lifecycle_evidence` and needed the operator's override.
+    """
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+    session.screen.feed(b"\x1b[?1049h")
+    _started(session, tracker)
+
+    clock.advance(AGENT_FIRST_PROMPT_SETTLE_SECONDS + 1.0)
+    assert tracker.evaluate(session)["reason"] == "readiness_debounce_pending"
+    clock.advance(READINESS_DEBOUNCE_SECONDS + 0.1)
+    evaluation = tracker.evaluate(session)
+    assert evaluation["delivery_state"] == "safe"
+    assert evaluation["evidence"]["root_reason"] == "agent_started_awaiting_first_prompt"
+
+
+def test_the_first_prompt_waits_out_the_startup_swallow_window() -> None:
+    """Measured: a submit before this lands in the composer with its CR dropped.
+
+    The message then sits there looking delivered, which is the exact false-safe
+    this whole contract exists to prevent — so the window is not negotiable and
+    the session reads unknown until it has passed.
+    """
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+    _started(session, tracker)
+
+    clock.advance(AGENT_FIRST_PROMPT_SETTLE_SECONDS - 0.5)
+    evaluation = tracker.evaluate(session)
+    assert evaluation["delivery_state"] == "unknown"
+    assert "no_root_lifecycle_evidence" in evaluation["reasons"]
+
+
+def test_a_started_session_someone_has_typed_in_is_not_fresh() -> None:
+    """Keystrokes mean a composer this cannot read the contents of."""
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+    _started(session, tracker)
+    session.input_revision = 1
+
+    clock.advance(AGENT_FIRST_PROMPT_SETTLE_SECONDS + 5.0)
+    assert tracker.evaluate(session)["delivery_state"] == "unknown"
+
+
+def test_an_inferred_idle_is_not_a_started_session() -> None:
+    """The status layer's startup-quiet fallback fires inside the swallow window.
+
+    Only the CLI's own hook counts, which is why this keys on `session_start_seen`
+    rather than on the session merely reading idle.
+    """
+    clock = VirtualClock()
+    session = ReplaySession("claude", clock)
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+    session.record.state = "idle"
+
+    clock.advance(AGENT_FIRST_PROMPT_SETTLE_SECONDS + 5.0)
+    assert tracker.evaluate(session)["delivery_state"] == "unknown"
 
 
 def test_text_typed_after_completion_still_blocks() -> None:

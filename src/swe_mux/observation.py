@@ -1373,6 +1373,12 @@ async def apply_hook_observation(
     # live because they carry signals the transcript lacks or delivers later.
     if event_type == "SessionStart":
         await _bind_native_id_from_hook(session, payload, events)
+        # The CLI announcing its own start is the only positive evidence a session
+        # that has never run a turn can offer, and delivery readiness needs it:
+        # everything else it reads is about *completing* a turn. Recorded as a
+        # plain fact with no timestamp, because the settle it gates is measured
+        # against the tracker's own clock (`delivery_readiness.py`).
+        _observation_state(session)["session_start_seen"] = True
         await _transition(session, events, "idle", source="hook", evidence="hook:SessionStart")
     elif event_type in {"UserPromptSubmit", "turn_started", "task_started"}:
         # Capture the request itself before the authority check below, which returns
