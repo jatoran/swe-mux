@@ -49,6 +49,12 @@ PaneLeaf = terminal | note | preview | history | queue
   rearranges the pane tree except an explicit split, drag, or move.
 - Every pane has its own tab strip and active tab. There is no global tab strip, dock/pop-out
   mode, detached layout, or separate resource workspace.
+- A tab strip that outgrows its pane scrolls sideways, and a plain wheel over it scrolls it.
+  The strip only ever overflows on one axis, so a vertical wheel there has no other meaning;
+  requiring Shift (the browser's only native way into an x-overflowing box) made the strip's
+  own scrollbar the discoverable route and cost a second hand. Events already carrying
+  horizontal intent — Shift+wheel, trackpad swipes — are left to the browser rather than
+  applied twice, and a strip that fits keeps its wheel events instead of swallowing them.
 - The active tab carries an accent outline, a thick accent underline, and a tinted fill. A bare
   background swap is not enough: the previous treatment moved only `--panel` to `--bg`, a few
   RGB points that vanish on a phone screen in daylight and is easy to miss on desktop too. The
