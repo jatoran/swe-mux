@@ -28,6 +28,11 @@ a remote request.
 - **Stability, not a snapshot.** `delivery_state` must read `safe` continuously for
   `auto_delivery_stable_seconds` (default 8) for the *same* message revision. One safe
   sample is a race; a held window is evidence. Any flap resets the window.
+- **It does not require anyone to be watching.** Until 2026-07-30 the readiness gate demanded
+  an attached browser and an exclusive input owner, which made `safe` unreachable for every
+  session the operator was not looking at — so this controller could never fire for the
+  sessions it exists to serve, and the manual path always asked for an override. See the
+  correction in `delivery-readiness.md`.
 - **Only an armed head, and only an authorized sender.** A draft was never armed and a
   `blocked` item carries an unresolved refusal — both need a human act first. Messages from
   other agents are eligible only if the receiving session also opted in to

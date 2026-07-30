@@ -5,7 +5,7 @@
   "steps": [
     {"kind": "hook", "event": "UserPromptSubmit"},
     {"kind": "hook", "event": "Stop"},
-    {"kind": "terminal", "mode": "normal"},
+    {"kind": "terminal", "mode": "alternate"},
     {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"},
     {"kind": "restart", "expect_delivery": "unknown", "oracle_safe": false, "expect_state": "idle"},
     {"kind": "hook", "event": "UserPromptSubmit", "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},

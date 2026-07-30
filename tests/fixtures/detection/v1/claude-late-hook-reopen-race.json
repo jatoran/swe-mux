@@ -11,7 +11,7 @@
     {"kind": "hook", "event": "PreToolUse", "payload": {"tool_name": "Read"}, "expect_state": "idle"},
     {"kind": "hook", "event": "PostToolUse", "payload": {"tool_name": "Read"}, "expect_state": "idle"},
     {"kind": "hook", "event": "UserPromptSubmit", "payload": {}, "expect_state": "idle"},
-    {"kind": "terminal", "mode": "normal"},
+    {"kind": "terminal", "mode": "alternate"},
     {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"}
   ],
   "expected": {

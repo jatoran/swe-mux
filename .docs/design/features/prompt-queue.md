@@ -50,7 +50,8 @@ queue).
   `approval|question|elicitation` — text typed at an approval prompt can *answer* it) and
   target identity/liveness (those strand instead). Overridable-with-confirm mirrors what
   the send-to-agent dialog allowed before the queue owned delivery: working target,
-  operator recently typed, alternate screen, unknown evidence. `initiator` (`user` |
+  operator recently typed, a screen that is not the agent's own, unknown evidence.
+  `initiator` (`user` |
   `auto`) is recorded on every attempt, and a non-human initiator may never pass `confirm`
   (`confirm_requires_user`) — an override is a human act by construction.
 - **Delivery constraints belong to the item.** `constraints_json` carries `not_before` and

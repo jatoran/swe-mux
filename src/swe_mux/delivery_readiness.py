@@ -23,6 +23,9 @@ class ReadinessSession(Protocol):
     last_input_event_ts: float
     terminal_mode: str | None
     terminal_mode_updated_at: float
+    # Daemon-side screen tracking (`screen_mode.py`). Optional on the protocol so
+    # a stand-in without a PTY simply has no daemon evidence.
+    screen: Any
 
 
 @dataclass(slots=True)
@@ -34,14 +37,28 @@ class ReadinessMemory:
     observed_at: float = 0.0
     phase_since: float = 0.0
     input_revision_at_completion: int | None = None
+    screen_at_completion: str | None = None
     transition_count: int = 0
     subagent_events: int = 0
     transitions: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=32))
 
 
+# `screen` is the buffer each CLI draws its prompt in, so that "the screen is not
+# showing the agent's prompt" can be evidence at all. Claude Code enters the
+# alternate screen at startup and never leaves it; mux launches Codex with
+# `tui.alternate_screen="never"` for scrollback (`codex_tui.py`), so its prompt is
+# on the normal screen. Only a *contradiction* of this blocks — see `_screen_check`.
 ADAPTER_DELIVERY_ETIQUETTE: dict[str, dict[str, str]] = {
-    "claude": {"submission": "terminal_line", "root_completion": "stop_or_transcript"},
-    "codex": {"submission": "terminal_line", "root_completion": "task_complete"},
+    "claude": {
+        "submission": "terminal_line",
+        "root_completion": "stop_or_transcript",
+        "screen": "alternate",
+    },
+    "codex": {
+        "submission": "terminal_line",
+        "root_completion": "task_complete",
+        "screen": "normal",
+    },
 }
 
 
@@ -79,6 +96,7 @@ class DeliveryReadinessTracker:
         reason: str,
         event: MuxEvent,
         input_revision: int | None = None,
+        screen: str | None = None,
     ) -> None:
         now = self.clock()
         changed = memory.phase != phase or memory.reason != reason
@@ -91,8 +109,10 @@ class DeliveryReadinessTracker:
         memory.observed_at = now
         if input_revision is not None:
             memory.input_revision_at_completion = input_revision
+            memory.screen_at_completion = screen
         elif phase != "ready":
             memory.input_revision_at_completion = None
+            memory.screen_at_completion = None
         memory.transitions.append(
             {
                 "phase": phase,
@@ -158,6 +178,9 @@ class DeliveryReadinessTracker:
                     reason="root_turn_completed",
                     event=event,
                     input_revision=int(getattr(session, "input_revision", 0)),
+                    # The screen the CLI was drawing its prompt on the moment it
+                    # finished: the baseline a later takeover is measured against.
+                    screen=self._screen_evidence(session, self.clock())[0],
                 )
             elif outcome == "rate_limited":
                 self._transition(
@@ -167,6 +190,61 @@ class DeliveryReadinessTracker:
                 self._transition(
                     memory, phase="aborted", reason=f"root_turn_{outcome}", event=event
                 )
+
+    @staticmethod
+    def _screen_evidence(session: ReadinessSession, now: float) -> tuple[str | None, str]:
+        """The screen buffer this PTY's child is drawing to, and where that came from.
+
+        The daemon's own reading wins and never expires: a child stays in the
+        buffer it selected until it selects another, and the daemon sees that
+        switch on the PTY whether or not anyone is watching the pane. The
+        browser's report is a fallback for a session whose screen switch predates
+        the retained scrollback, and it *does* expire, because the pane it comes
+        from can detach at any moment.
+        """
+        parser = getattr(session, "screen", None)
+        daemon_mode = getattr(parser, "mode", None)
+        if isinstance(daemon_mode, str) and daemon_mode:
+            return daemon_mode, "daemon"
+        updated_at = float(getattr(session, "terminal_mode_updated_at", 0.0))
+        browser_mode = getattr(session, "terminal_mode", None)
+        if (
+            isinstance(browser_mode, str)
+            and browser_mode
+            and updated_at > 0
+            and now - updated_at <= TERMINAL_EVIDENCE_MAX_AGE_SECONDS
+        ):
+            return browser_mode, "browser"
+        return None, "none"
+
+    @staticmethod
+    def _expected_screen(record: Any, memory: ReadinessMemory) -> str | None:
+        """Where this session's agent prompt was, last time it was definitely there.
+
+        The screen observed at root completion is the best answer, because the CLI
+        had just finished rendering its prompt: it needs no per-version or
+        per-configuration knowledge, and it does not punish a Codex launched with
+        an explicit `tui.alternate_screen` override. The adapter's declaration is
+        the fallback for a session whose completion predates any screen evidence.
+        """
+        if memory.screen_at_completion:
+            return memory.screen_at_completion
+        return ADAPTER_DELIVERY_ETIQUETTE.get(str(record.backend), {}).get("screen")
+
+    @classmethod
+    def _screen_check(cls, record: Any, memory: ReadinessMemory, mode: str | None) -> bool:
+        """False only when the screen positively contradicts the agent's prompt.
+
+        A veto, not a prerequisite. Absence of screen evidence is not evidence of
+        danger, and requiring it made `safe` unreachable for every session nobody
+        happened to be watching — which is the entire population the queue exists
+        to serve. What remains blocked is the case this can actually see: the
+        child is drawing somewhere other than where that CLI's prompt lives.
+        """
+        expected = cls._expected_screen(record, memory)
+        if mode is None or expected is None:
+            return True
+        return mode == expected
 
     @staticmethod
     def _parser_check(session: ReadinessSession, memory: ReadinessMemory) -> bool | None:
@@ -199,15 +277,17 @@ class DeliveryReadinessTracker:
             if terminal_mode_updated_at > 0
             else None
         )
-        terminal_compatible: bool | None
-        if terminal_mode is None or terminal_age is None:
-            terminal_compatible = None
-        elif terminal_age > TERMINAL_EVIDENCE_MAX_AGE_SECONDS:
-            terminal_compatible = None
-        else:
-            terminal_compatible = terminal_mode == "normal"
+        screen_mode, screen_source = self._screen_evidence(session, now)
+        screen_at_agent_prompt = self._screen_check(record, memory, screen_mode)
 
         root_ready = record.state == "idle" and memory.phase == "ready"
+        # An agent parked at its prompt does not decay. Freshness guards against
+        # an observation pipeline that died mid-turn and left a claim nobody is
+        # updating; "the root turn completed and the session is still idle" is a
+        # resting state that any new activity would itself contradict — a turn
+        # start, an approval, or operator input all arrive through paths this
+        # tracker already watches. Every other phase keeps the age bound.
+        lifecycle_fresh = root_ready or lifecycle_age <= LIFECYCLE_EVIDENCE_MAX_AGE_SECONDS
         partial_input_absent: bool | None = None
         if memory.input_revision_at_completion is not None:
             partial_input_absent = input_revision == memory.input_revision_at_completion
@@ -219,13 +299,15 @@ class DeliveryReadinessTracker:
             "stable_run_identity": bool(memory.run_id and memory.run_id == record.agent_run_id),
             "root_prompt_ready": root_ready,
             "root_completion_observed": memory.phase == "ready",
-            "lifecycle_evidence_fresh": lifecycle_age <= LIFECYCLE_EVIDENCE_MAX_AGE_SECONDS,
+            "lifecycle_evidence_fresh": lifecycle_fresh,
             "parser_or_hook_supported": self._parser_check(session, memory),
             "operator_quiet": operator_quiet,
             "partial_input_absent": partial_input_absent,
-            "terminal_mode_compatible": terminal_compatible,
-            "terminal_observer_connected": terminal_observer_connected,
-            "exclusive_input_owner_present": exclusive_input_owner,
+            "screen_at_agent_prompt": screen_at_agent_prompt,
+            # An attached browser and an input owner are *not* preconditions for
+            # writing to a PTY: the daemon owns the PTY, and delivery is the same
+            # write whether or not a pane is rendering it. Both facts stay in the
+            # evidence below for diagnostics.
             # swe-mux currently has no application-level composer. Terminal draft input is
             # covered conservatively by input_revision after root completion.
             "application_composer_empty": True,
@@ -246,14 +328,12 @@ class DeliveryReadinessTracker:
             hard_block_reasons.append(memory.reason)
         if record.state in {"exited", "crashed"} or memory.phase == "ended":
             hard_block_reasons.append("session_ended")
-        if terminal_compatible is False:
-            hard_block_reasons.append("alternate_screen_active")
+        if not screen_at_agent_prompt:
+            hard_block_reasons.append("screen_not_at_agent_prompt")
         if partial_input_absent is False:
             hard_block_reasons.append("terminal_input_after_completion")
         if not operator_quiet:
             hard_block_reasons.append("operator_recently_typed")
-        if not terminal_observer_connected or not exclusive_input_owner:
-            hard_block_reasons.append("terminal_observer_disconnected")
         if getattr(record, "observation_stale_since", None):
             # The followed transcript is no longer the conversation this PTY runs
             # (an unfollowable in-CLI `/clear` or `/new`). Every positive readiness
@@ -268,8 +348,6 @@ class DeliveryReadinessTracker:
             unknown_reasons.append("no_root_lifecycle_evidence")
         if checks["parser_or_hook_supported"] is None:
             unknown_reasons.append("observation_capability_unknown")
-        if terminal_compatible is None:
-            unknown_reasons.append("terminal_mode_unknown_or_stale")
         if partial_input_absent is None:
             unknown_reasons.append("completion_input_boundary_unknown")
         if not checks["lifecycle_evidence_fresh"]:
@@ -308,8 +386,14 @@ class DeliveryReadinessTracker:
                 "root_reason": memory.reason,
                 "source": memory.source,
                 "age_s": round(lifecycle_age, 3),
+                "screen_mode": screen_mode or "unknown",
+                "screen_source": screen_source,
+                "expected_screen": self._expected_screen(record, memory),
+                "completion_screen": memory.screen_at_completion,
                 "terminal_mode": terminal_mode or "unknown",
                 "terminal_age_s": round(terminal_age, 3) if terminal_age is not None else None,
+                "terminal_observer_connected": terminal_observer_connected,
+                "exclusive_input_owner": exclusive_input_owner,
                 "input_revision": input_revision,
                 "completion_input_revision": memory.input_revision_at_completion,
                 "subagent_events_ignored": memory.subagent_events,

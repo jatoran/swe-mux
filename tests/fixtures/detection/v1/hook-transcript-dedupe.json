@@ -7,7 +7,7 @@
     {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "test"}}},
     {"kind": "hook", "event": "Stop", "payload": {}},
     {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}}},
-    {"kind": "terminal", "mode": "normal"},
+    {"kind": "terminal", "mode": "alternate"},
     {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"}
   ],
   "expected": {

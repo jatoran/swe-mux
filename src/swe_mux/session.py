@@ -29,6 +29,7 @@ from .history import HistoryIndex
 from .models import GitState, SessionRecord, SessionState
 from .pty_host import PtyHost, merge_environment
 from .runtime_cwd import Osc7Parser, local_directory_from_osc7
+from .screen_mode import ScreenModeParser
 from .scrollback import ScrollbackBuffer
 from .spawn_contract import infer_agent_executable_backend, scrub_claude_session_markers
 from .supervisor_client import RemotePtyHost, SupervisorClient, host_for_adoption
@@ -855,6 +856,12 @@ class Session:
         self.last_input_event_ts = 0.0
         self.last_input_report_ts = 0.0
         self.input_revision = 0
+        # Two sources for the same fact, deliberately kept apart. The daemon reads
+        # the child's own screen switch off the PTY and so has it for every
+        # session; the browser reports xterm's active buffer only while a pane is
+        # attached and owns input, which makes it corroboration rather than the
+        # source of record (`delivery-readiness.md`).
+        self.screen = ScreenModeParser()
         self.terminal_mode: str | None = None
         self.terminal_mode_updated_at = 0.0
         self.observation_state: dict[str, Any] = {
@@ -1959,6 +1966,11 @@ class SessionManager:
                 mcp_token=str(meta.get("mcp_token") or ""),
             )
             session.scrollback.seed(replay, int(response.get("position", len(replay))))
+            # The screen switch is written once, at startup, and never repeated.
+            # Replaying the retained bytes through the parser is what keeps an
+            # adopted session's screen mode known across a daemon restart; without
+            # it the fact would be lost for the whole remaining life of the PTY.
+            session.screen.feed(replay)
             session.transcript_path = transcript_path
             lifecycle = meta.get("agent_lifecycle_id")
             # The lifecycle anchor is what Branch forks from and what the exit
@@ -3307,6 +3319,7 @@ class SessionManager:
                 and session.record.last_activity_ts - session.output_window[0][0] > 60
             ):
                 session.output_window.popleft()
+            session.screen.feed(chunk)
             prompt_uris = session.osc7.feed(chunk)
             if prompt_uris and "first_prompt" not in session.record.startup_timing_ms:
                 session.record.startup_timing_ms["first_prompt"] = round(

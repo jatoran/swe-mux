@@ -488,7 +488,8 @@ def test_delivery_hard_blocks_on_a_stale_transcript() -> None:
     session = ReplaySession("claude", clock)
     tracker = DeliveryReadinessTracker(clock=clock.monotonic)
     session.record.parser_status = "ready"
-    session.terminal_mode = "normal"
+    # The screen Claude Code actually draws its prompt on (`delivery-readiness.md`).
+    session.terminal_mode = "alternate"
     session.terminal_mode_updated_at = clock.monotonic()
     tracker.observe(
         MuxEvent(time.time(), "replay-session", "transcript", "turn_started", {}), session

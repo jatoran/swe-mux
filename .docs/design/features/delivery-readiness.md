@@ -8,11 +8,11 @@ a PTY or authorize automation.
 
 `delivery_state` is separate from display state:
 
-- `safe` means every required root-lifecycle, run, parser/hook, terminal, ownership, and
-  human-input fact is positively known.
+- `safe` means every required root-lifecycle, run, parser/hook, and human-input fact is
+  positively known, and nothing contradicts the screen the agent draws its prompt on.
 - `blocked` means current evidence positively forbids delivery, such as working, approval,
-  elicitation, rate limit, alternate screen, recent/post-completion input, disconnect,
-  interrupted turn, demotion, exit, or a stale transcript.
+  elicitation, rate limit, a screen that is not the agent's own, recent/post-completion
+  input, interrupted turn, demotion, exit, or a stale transcript.
 - `transcript_stale` blocks rather than degrading to unknown. When the followed transcript is
   no longer this PTY's conversation (an unfollowable in-CLI `/clear`/`/new` — `backends.md`),
   every positive signal here is being read off a retired conversation, so the evidence is not
@@ -48,11 +48,54 @@ candidates remain unknown rather than being selected by recency. Adoption repair
 supervisor metadata before restarting observers, so sibling state, model, token, context, and
 delivery facts cannot become authoritative for the wrong session.
 
-The browser reports xterm's active `normal|alternate` buffer after input ownership, on buffer
-changes, and periodically. Terminal protocol responses are labeled separately and do not
-count as human input; keystrokes and bracketed paste advance an in-memory input revision.
-The daemon evaluates these facts synchronously without an await boundary. It stores bounded
-reasons/transitions only—never terminal bytes or prompt bodies.
+The daemon reads the screen switch (`\x1b[?1049h/l` and the older `?47`/`?1047` spellings)
+off the PTY stream itself (`screen_mode.py`), so it holds this fact for every session and
+not only for one somebody is watching; an adopted session replays its retained scrollback
+through the same parser, because the switch is written once at startup and never repeated.
+The browser also reports xterm's active `normal|alternate` buffer after input ownership, on
+buffer changes, and periodically — that report is corroboration, used only when the daemon
+never saw a switch, and it expires after ten seconds because the pane it comes from can
+detach at any moment. Terminal protocol responses and mouse reports are labeled separately
+and do not count as human input; keystrokes and bracketed paste advance an in-memory input
+revision. The daemon evaluates these facts synchronously without an await boundary. It
+stores bounded reasons/transitions only—never terminal bytes or prompt bodies.
+
+**Corrected 2026-07-30 — four preconditions no real session could satisfy.** `safe` was
+unreachable, so every queued message needed the operator's explicit override, which trains
+the operator to click through the one prompt that is meant to stop them. Each is now
+evidence rather than a prerequisite:
+
+- **An attached browser and an exclusive input owner were required** (`terminal_observer_
+  disconnected`). Delivery is the daemon writing to a PTY it owns; a rendering pane is not
+  part of that, and demanding one blocked every session the operator was not looking at —
+  the entire population a queue exists for. Both facts remain under `evidence`.
+- **The alternate screen was treated as danger.** Claude Code enters it at startup and never
+  leaves, so a *watched* Claude session was permanently `alternate_screen_active` while an
+  unwatched one was `terminal_observer_disconnected`: both branches blocked. What is checked
+  now is a *change* away from the screen the CLI was on when its root turn completed — the
+  moment it had definitely just rendered its prompt — which needs no per-version or
+  per-configuration knowledge and does not punish a Codex launched with an explicit
+  `tui.alternate_screen` override. `ADAPTER_DELIVERY_ETIQUETTE[…]["screen"]` (claude
+  `alternate`, codex `normal`, because mux launches Codex with `tui.alternate_screen="never"`
+  for scrollback) is the fallback when a completion predates any screen evidence. Absent
+  screen evidence is missing, not damning.
+- **Mouse reports counted as typing.** xterm delivers them on the same channel as
+  keystrokes once the child enables tracking, so a pointer crossing a pane advanced
+  `input_revision` (~170 per 20s on one live session) and readiness read that as a
+  half-typed prompt in the composer — `terminal_input_after_completion`, permanently, since
+  the completion snapshot only moves at the next turn. `pointer_report_kind` (`server.py`)
+  now classifies them: a click or wheel notch is presence and moves the operator-quiet
+  clock, pure motion is neither, and neither advances the revision.
+- **Lifecycle evidence expired after five minutes**, so an agent parked at its prompt — the
+  most deliverable state there is — decayed to `lifecycle_evidence_stale`. The bound now
+  applies to every phase except a completed root turn on a still-idle session, which is a
+  resting state that any new activity (a turn start, an approval, operator input) would
+  itself contradict through a path this tracker already watches.
+
+What carries the safety argument after those four is the composer-collision guard:
+`partial_input_absent` compares the input revision against its value when the root turn
+completed, so anything the operator typed since — including opening a pager, which takes
+typing — still blocks.
 
 **Closed 2026-07-28 (with Phase 4.5).** `POST /sessions/{id}/input` and broadcast fan-out
 previously wrote to the PTY without advancing `input_revision` / `last_input_event_ts`,
@@ -120,7 +163,9 @@ actuation is unauthorized.
 
 - `src/swe_mux/observation.py`
 - `src/swe_mux/delivery_readiness.py`
+- `src/swe_mux/screen_mode.py`
 - `src/swe_mux/event_bus.py`
+- `tests/test_delivery_readiness_evidence.py`, `tests/test_screen_mode.py`
 - `tests/support/detection_replay.py`
 - `tests/fixtures/detection/v1/`
 - `tests/test_detection_replay.py`

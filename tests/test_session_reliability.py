@@ -13,6 +13,7 @@ from swe_mux.adapters import ShellAdapter
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.models import SessionRecord
 from swe_mux.runtime_cwd import Osc7Parser
+from swe_mux.screen_mode import ScreenModeParser
 from swe_mux.server import session_startup_metrics
 from swe_mux.session import ScrollbackBuffer, Session, SessionManager
 
@@ -200,6 +201,7 @@ async def test_fanout_records_first_output_and_prompt_startup_milestones() -> No
         stopping=True,
         output_window=deque(),
         osc7=Osc7Parser(),
+        screen=ScreenModeParser(),
         scrollback=ScrollbackBuffer(1024),
         publish_output=output.append,
         publish_update=lambda: updates.append(dict(record.startup_timing_ms)),

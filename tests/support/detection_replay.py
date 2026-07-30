@@ -21,6 +21,7 @@ from swe_mux.observation import (
     classify_transcript_event,
     tail_turn_state,
 )
+from swe_mux.screen_mode import ScreenModeParser
 from swe_mux.session import (
     STATE_CHANGE_LOG_LIMIT,
     STATE_TRANSITION_LOG_LIMIT,
@@ -103,6 +104,10 @@ class ReplaySession:
         self.subscribers: set[str] = {"replay-browser"}
         self.input_revision = 0
         self.last_input_event_ts = 0.0
+        # The daemon's own screen reading, which a live session feeds from the PTY
+        # stream. A fixture that says nothing about the screen leaves it unknown,
+        # exactly as a session whose switch predates the retained scrollback does.
+        self.screen = ScreenModeParser()
         self.terminal_mode: str | None = None
         self.terminal_mode_updated_at = 0.0
         # The CLI screen this session's PTY would be showing; fixtures drive it

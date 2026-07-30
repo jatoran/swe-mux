@@ -7,7 +7,7 @@
     {"kind": "transcript_chunk", "data": "\"}}\n", "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
     {"kind": "transcript_chunk", "data": "not-json\n{\"type\":\"assistant\",\"isSidechain\":false,\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}],\"stop_reason\":\"end_turn\"}}\n", "expect_delivery": "unknown", "oracle_safe": false, "expect_state": "idle"},
     {"kind": "transcript_chunk", "truncate": true, "data": "{\"type\":\"system\",\"subtype\":\"turn_duration\",\"durationMs\":10}\n"},
-    {"kind": "terminal", "mode": "normal"},
+    {"kind": "terminal", "mode": "alternate"},
     {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"}
   ],
   "expected": {
