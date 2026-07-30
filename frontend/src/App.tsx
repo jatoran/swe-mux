@@ -7,7 +7,7 @@ import { windowsPtyCompatibility, type TerminalRendererPreference, type WindowsP
 import { ProjectResource } from './ProjectResource'
 import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentResult, type SendToAgentTarget } from './SendToAgentPicker'
 import { pastePayload } from './noteSelection'
-import { QueuePane } from './QueuePane'
+import { QueuePane, type QueueScope } from './QueuePane'
 import { editQueueMessage, enqueueMessage, fetchQueueSummary, sendQueueMessage, type QueueTargetSummary } from './queueApi'
 import { ContinuityBanner } from './ContinuityBanner'
 import { DirectoryPicker } from './DirectoryPicker'
@@ -24,7 +24,6 @@ import { ProjectsManager, type ProjectPatch, type ProjectsManagerTab } from './P
 import { MenuGroup } from './MenuGroup'
 import { detectedServers, type DetectedServer } from './sessionProcesses'
 import { PreviewPane } from './PreviewPane'
-import { Mailbox } from './Mailbox'
 import { Observations } from './Observations'
 import type { NotificationData, UiNotification } from './Notifications'
 import { UsageDashboard } from './UsageDashboard'
@@ -262,6 +261,9 @@ export function App() {
       setQueueSummary(Object.fromEntries(result.targets.map(target=>[target.target_session_id,target])))
     }catch{/* the daemon is briefly away; the next event retries */}
   }
+  // Fleet-wide pending count, for the drawer tab's badge: "is anything waiting anywhere",
+  // which is the question you have while looking at some other session.
+  const queuePendingTotal=useMemo(()=>Object.values(queueSummary).reduce((total,target)=>total+target.pending,0),[queueSummary])
   const refreshQueueSummary=()=>{
     if(queueSummaryTimer.current)return
     queueSummaryTimer.current=window.setTimeout(()=>{queueSummaryTimer.current=undefined;void loadQueueSummary()},300)
@@ -346,7 +348,10 @@ export function App() {
   // The inbox is per-Project, so it carries its Project rather than following the
   // active one — it opens from a Project's own context menu.
   const [observationsProject,setObservationsProject]=useState<Project|null>(null)
-  const [mailboxOpen,setMailboxOpen]=useState(false)
+  // The Queue drawer tab's "you were opened deliberately" signal: a counter (so clicking
+  // the same chip twice focuses the composer twice) plus the scope to land on. Switching
+  // to the tab by hand leaves the panel wherever it was.
+  const [queueOpen,setQueueOpen]=useState<{token:number;scope:QueueScope}>({token:0,scope:'session'})
   // The utility drawer: open state, which tab, and (desktop) the docked column's
   // width. All three are device-local UI preferences, like sidebar width, so the
   // drawer reopens where you left it on this device.
@@ -1800,8 +1805,23 @@ export function App() {
     await updateLayout(session.project_id,isPaned?activateContainingStack(current,session.id):openTab(current,focusedViewId,terminalLeaf(session.id)))
   }
 
-  /** Open (or focus) the Queue workspace tab attached to one target session. */
+  /** Show one session's prompt queue, which lives in the drawer's Queue tab.
+   *
+   *  Focuses the target first: the tab is session-scoped and follows focus, so a chip
+   *  clicked on an unfocused pane would otherwise open the queue of a different agent
+   *  than the one the click named. */
   const openQueueForSession = async (sessionId: string) => {
+    const session = sessionsRef.current.find(item => item.id === sessionId)
+    if (session) await selectSession(session)
+    openDrawerTab('queue')
+    setQueueOpen(current => ({ token: current.token + 1, scope: 'session' }))
+  }
+
+  /** Pop one target's queue out into a workspace tab: the wide-review escape hatch, and
+   *  what a persisted layout holding a `queue:` leaf resolves to. Nothing creates one
+   *  implicitly any more — a queue tab per session inspected was the reason the queue
+   *  moved into the drawer. */
+  const openQueueTab = async (sessionId: string) => {
     const session = sessionsRef.current.find(item => item.id === sessionId)
     const targetProject = session?.project_id || projectId
     if (!targetProject) return
@@ -1871,7 +1891,7 @@ export function App() {
         case 'expired':
         case 'revision_conflict':
         case 'error':
-          return { status: 'error', error: 'error' in outcome ? outcome.error : 'The message changed underneath this dialog; check the Queue tab.' }
+          return { status: 'error', error: 'error' in outcome ? outcome.error : 'The message changed underneath this dialog; check the Queue panel.' }
       }
     } catch (cause) {
       return { status: 'error', error: cause instanceof Error ? cause.message : String(cause) }
@@ -2155,9 +2175,11 @@ export function App() {
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
     { id:'observations.open',label:'Open selected project’s observation inbox',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setObservationsProject(commandProject||null);setMainMenuOpen(false);setProjectMenu(null)} },
-    // The mailbox spans every Project (messages toward any session) and carries
-    // the emergency auto-delivery controls, so it is an app-level overlay.
-    { id:'mailbox.open',label:'Open mailbox (queued messages, auto-delivery)',category:'input',available:true,run:()=>{setMailboxOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
+    // The mailbox is a scope of the Queue panel, not a modal of its own: "what is queued
+    // for this agent" and "what is queued anywhere" are one store, and were two surfaces
+    // with two different action sets over it.
+    { id:'mailbox.open',label:'Open mailbox (queued messages, auto-delivery)',category:'input',available:true,run:()=>{openDrawerTab('queue');setQueueOpen(current=>({token:current.token+1,scope:'inbox'}));setMainMenuOpen(false);setProjectMenu(null)} },
+    { id:'queue.open',label:'Open the prompt queue for the focused session',category:'input',available:!!active&&isAgent(active),disabledReason:'Focus a Claude or Codex session',run:()=>{if(active)void openQueueForSession(active.id)} },
     { id: 'session.spawnShell', label: 'New terminal in current project', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => void spawnTerminal() },
     { id: 'session.quickLaunch', label: 'New terminal custom…', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => openLauncher() },
     // `project.create` predates this and opens the registry; adding a Project is
@@ -2659,7 +2681,9 @@ export function App() {
     if(node.kind==='queue'){
       const targetSessionId=queueLeafSessionId(node.id)
       if(!targetSessionId)return <section class="workspace-leaf-placeholder"><strong>queue unavailable</strong><span>{node.id}</span></section>
-      return <QueuePane key={node.id} sessionId={targetSessionId} sessions={sessions} onSelectSession={sid=>{const owner=sessions.find(item=>item.id===sid);if(owner)void selectSession(owner)}}/>
+      // The pop-out rendering: target pinned to the leaf rather than following focus, and
+      // no pop-out button of its own. Everything else is the same panel the drawer shows.
+      return <QueuePane key={node.id} sessionId={targetSessionId} sessions={sessions} onSelectSession={sid=>{const owner=sessions.find(item=>item.id===sid);if(owner)void selectSession(owner)}} onFocusTarget={sid=>void openQueueForSession(sid)}/>
     }
     if (node.kind === 'preview') {
       const preview = previews[node.id]
@@ -3097,6 +3121,9 @@ export function App() {
         // onto a visible pane. On mobile it is an overlay with nothing to drop onto.
         onFileDragStart={mobileWorkspace?undefined:(path,event)=>beginFileTabDrag(event,path)}
         onSendToAgent={request=>{if(mobileWorkspace)setClipboardOpen(false);setSendToAgent(request)}}
+        queueOpenRequest={queueOpen.token?queueOpen:undefined}
+        onQueueOpenAsTab={sessionId=>void openQueueTab(sessionId)}
+        queuePending={queuePendingTotal}
         notesAllProjects={notesAllProjects}
         onNotesAllProjects={setNotesAllProjects}
         focusedNote={active?.note_exists?{projectId:active.project_id,noteId:active.note_id||active.id,label:sessionName(active)}:null}
@@ -3140,7 +3167,7 @@ export function App() {
               if(suppressDragClickRef.current===`drawer-tab:${tab.id}`){suppressDragClickRef.current=null;return}
               showDrawerTab(tab.id)
             }}
-          ><Icon/>{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}</button>
+          ><Icon/>{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}{tab.id==='queue'&&queuePendingTotal>0&&<i class="drawer-badge queue-badge">{queuePendingTotal>99?'99+':queuePendingTotal}</i>}</button>
         })}
       </nav>}
 
@@ -3399,7 +3426,6 @@ export function App() {
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={active?.backend} onClose={()=>setPromptLibraryOpen(false)} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}}))}/>}
 
     {observationsProject&&<Observations project={observationsProject} onClose={()=>setObservationsProject(null)} onInsertBatch={activeId?text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}})):undefined}/>}
-    {mailboxOpen&&<Mailbox onClose={()=>setMailboxOpen(false)} onOpenQueue={sessionId=>{setMailboxOpen(false);void openQueueForSession(sessionId)}}/>}
 
     {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}
     {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}

@@ -176,9 +176,9 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, sessi
     setBusy(false)
     if (result.status === 'error') { setNote(result.error); return }
     if (result.status === 'blocked') {
-      // The message is staged (blocked) in the target's queue; the Queue tab and the
+      // The message is staged (blocked) in the target's queue; the Queue panel and the
       // send dialog own the explicit confirmation flow.
-      setNote(`Queued but not delivered (${result.reasons.join(', ')}). Confirm from the target's Queue tab.`)
+      setNote(`Queued but not delivered (${result.reasons.join(', ')}). Confirm from the Queue tab of this panel.`)
       await recordUse(item)
       return
     }

@@ -3,6 +3,7 @@ import { ClipboardTab } from './ClipboardPanel'
 import { CommandsTab } from './CommandsTab'
 import { PromptsTab } from './PromptsTab'
 import { NotesTab } from './NotesTab'
+import { QueuePane, type QueueScope } from './QueuePane'
 import { GitTab } from './GitTab'
 import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
@@ -70,6 +71,15 @@ type Props = {
   draggingTab: DrawerTabId | null
   /** Template handed off by a command-rail prompt button that needs its fields filled. */
   promptPreselect?: { key: string }
+  /** Queue: set when the tab was opened by a deliberate act (the pane chip, a command)
+   *  rather than by tab-switching, which is what earns a scope and the composer's caret. */
+  queueOpenRequest?: { token: number; scope: QueueScope }
+  /** Queue: pop the focused target's queue out into a workspace tab. */
+  onQueueOpenAsTab: (sessionId: string) => void
+  /** Queue: pending items across every target, badged like the alerts count. Fleet-wide
+   *  rather than per-session on purpose — the badge answers "is anything waiting anywhere",
+   *  which is the question you have while looking at some other session. */
+  queuePending: number
   /** Desktop only: pointer-drag handle for the column width. Typed as the plain
    *  DOM event so this module needs no `JSX` import for it (which would shadow the
    *  global namespace the intrinsic elements below resolve through). */
@@ -84,36 +94,56 @@ export function UtilityDrawer(props: Props) {
   // second insert (or a second file) is the common next action.
   const onDone = () => { if (mobile) onClose() }
 
-  const body = tab === 'clipboard'
-    ? <ClipboardTab onInsert={props.onInsert} onDone={onDone} onOpenSettings={() => props.onOpenSettings('Input')} />
-    : tab === 'commands'
-      ? <CommandsTab session={session} onDone={onDone} onOpenSettings={() => props.onOpenSettings('Command rail')} />
-      : tab === 'prompts'
-        ? <PromptsTab project={project} backend={props.backend} onInsert={props.onInsertPrompt} onDone={onDone} onManage={props.onManagePrompts} preselect={props.promptPreselect} sessions={props.sessions} onSend={props.onSendPrompt} />
-        : tab === 'files'
-          ? (project
-            ? <ProjectResource
-              key={`drawer-files:${project.id}`}
-              project={project}
-              resource={{ kind: 'files', id: project.id }}
-              onOpenFile={path => { props.onOpenFile(path); onDone() }}
-              onFileDragStart={props.onFileDragStart}
-              onSendToAgent={props.onSendToAgent}
-            />
-            : <p class="drawer-empty">Select a Project to browse its files.</p>)
-          : tab === 'notes'
-            ? <NotesTab
-              project={project}
-              allProjects={props.notesAllProjects}
-              onAllProjects={props.onNotesAllProjects}
-              focusedNote={props.focusedNote}
-              onOpenProjectNote={props.onOpenProjectNote}
-              onOpenSessionNote={props.onOpenSessionNote}
-              onDone={onDone}
-            />
-            : tab === 'git'
-              ? <GitTab project={project} sessions={props.sessions} />
-              : <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} onChanged={props.onNotificationsChanged} />
+  // One body per tab. A flat dispatch rather than the nested ternary this grew out of:
+  // eight branches deep, every added surface reindented the ones below it.
+  const renderBody = () => {
+    switch (tab) {
+      case 'clipboard':
+        return <ClipboardTab onInsert={props.onInsert} onDone={onDone} onOpenSettings={() => props.onOpenSettings('Input')} />
+      case 'commands':
+        return <CommandsTab session={session} onDone={onDone} onOpenSettings={() => props.onOpenSettings('Command rail')} />
+      case 'prompts':
+        return <PromptsTab project={project} backend={props.backend} onInsert={props.onInsertPrompt} onDone={onDone} onManage={props.onManagePrompts} preselect={props.promptPreselect} sessions={props.sessions} onSend={props.onSendPrompt} />
+      case 'queue':
+        // Follows the focused session, like every other session-scoped tab. A delivery is
+        // the one act here that wants the terminal back, so it goes through `onDone`;
+        // opening another target's queue from a mailbox row deliberately does not.
+        return <QueuePane
+          sessionId={session?.id || ''}
+          sessions={props.sessions}
+          onSelectSession={sessionId => { props.onOpenSession(sessionId); onDone() }}
+          onFocusTarget={props.onOpenSession}
+          onOpenAsTab={sessionId => { props.onQueueOpenAsTab(sessionId); onDone() }}
+          openRequest={props.queueOpenRequest}
+        />
+      case 'files':
+        return project
+          ? <ProjectResource
+            key={`drawer-files:${project.id}`}
+            project={project}
+            resource={{ kind: 'files', id: project.id }}
+            onOpenFile={path => { props.onOpenFile(path); onDone() }}
+            onFileDragStart={props.onFileDragStart}
+            onSendToAgent={props.onSendToAgent}
+          />
+          : <p class="drawer-empty">Select a Project to browse its files.</p>
+      case 'notes':
+        return <NotesTab
+          project={project}
+          allProjects={props.notesAllProjects}
+          onAllProjects={props.onNotesAllProjects}
+          focusedNote={props.focusedNote}
+          onOpenProjectNote={props.onOpenProjectNote}
+          onOpenSessionNote={props.onOpenSessionNote}
+          onDone={onDone}
+        />
+      case 'git':
+        return <GitTab project={project} sessions={props.sessions} />
+      case 'notifications':
+        return <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} onChanged={props.onNotificationsChanged} />
+    }
+  }
+  const body = renderBody()
 
   return <>
     {mobile && <button class="utility-drawer-scrim" aria-label="Close panel" onClick={onClose} />}
@@ -159,6 +189,7 @@ export function UtilityDrawer(props: Props) {
           >
             <Icon />
             {item.id === 'notifications' && props.unread > 0 && <i class="drawer-badge">{props.unread > 99 ? '99+' : props.unread}</i>}
+            {item.id === 'queue' && props.queuePending > 0 && <i class="drawer-badge queue-badge">{props.queuePending > 99 ? '99+' : props.queuePending}</i>}
           </button>
         })}
         <button class="drawer-close" aria-label="Close panel" title="Close panel" onClick={onClose}>×</button>

@@ -16,7 +16,7 @@ test('the default order is the registry order', () => {
 })
 
 test('a stored arrangement round-trips and reports as custom', () => {
-  const custom: DrawerTabId[] = ['files', 'notes', 'git', 'clipboard', 'commands', 'prompts', 'notifications']
+  const custom: DrawerTabId[] = ['files', 'notes', 'git', 'clipboard', 'commands', 'prompts', 'queue', 'notifications']
   assert.deepEqual(normalizeDrawerTabOrder(custom), custom)
   assert.ok(!isDefaultDrawerTabOrder(custom))
   assert.deepEqual(orderedDrawerTabs(custom).map(tab => tab.id), custom)
@@ -47,13 +47,19 @@ test('a tab the stored order predates lands beside its default neighbour, not at
   const withoutPrompts = DEFAULT_DRAWER_TAB_ORDER.filter(id => id !== 'prompts')
   assert.deepEqual(normalizeDrawerTabOrder(withoutPrompts), DEFAULT_DRAWER_TAB_ORDER)
 
+  // The case this rule was written for, now that it has happened: an order saved before
+  // the prompt queue moved into the drawer gains Queue beside Prompts, in the injection
+  // block, rather than after Alerts.
+  const beforeQueue = DEFAULT_DRAWER_TAB_ORDER.filter(id => id !== 'queue')
+  assert.deepEqual(normalizeDrawerTabOrder(beforeQueue), DEFAULT_DRAWER_TAB_ORDER)
+
   // The merge is relative to where the predecessor sits in the *user's* arrangement, not
   // where it sat in the default one: `notes` rejoins `files` and `commands`/`prompts` rejoin
   // `clipboard`, wherever the user moved those to.
   const custom = ['notifications', 'files', 'clipboard']
   assert.deepEqual(
     normalizeDrawerTabOrder(custom),
-    ['notifications', 'files', 'notes', 'git', 'clipboard', 'commands', 'prompts'],
+    ['notifications', 'files', 'notes', 'git', 'clipboard', 'commands', 'prompts', 'queue'],
   )
 
   // A first tab the order predates goes to the front rather than after everything.
@@ -61,7 +67,7 @@ test('a tab the stored order predates lands beside its default neighbour, not at
 })
 
 test('keyboard cycling walks the arranged order, not the registry order', () => {
-  const custom: DrawerTabId[] = ['notes', 'files', 'git', 'clipboard', 'commands', 'prompts', 'notifications']
+  const custom: DrawerTabId[] = ['notes', 'files', 'git', 'clipboard', 'commands', 'prompts', 'queue', 'notifications']
   assert.equal(nextDrawerTab('notes', 1, custom), 'files')
   assert.equal(nextDrawerTab('notes', -1, custom), 'notifications')
   assert.equal(nextDrawerTab('notifications', 1, custom), 'notes')

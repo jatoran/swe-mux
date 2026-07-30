@@ -129,7 +129,7 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
       setError(
         result.protected
           ? `The queue refused delivery and this cannot be overridden (${result.reasons.join(', ')}). ` +
-            'The message stays queued; it can be sent from the Queue tab once the target is free.'
+            'The message stays queued; it can be sent from the Queue panel once the target is free.'
           : `The target is not safe right now (${result.reasons.join(', ')}).`,
       )
       return
