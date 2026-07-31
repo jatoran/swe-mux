@@ -26,8 +26,10 @@ responsive controls.
   click it ends with — the same resolution a Project row already uses for drag-versus-select, so
   there is one rule to learn rather than two.
 - That `⇅` covers both levels: flat items sort the Projects under this heading (Manual, Recently
-  active, Name A→Z / Z→A, Newest / Oldest first), and a `Sort sections` group sorts the sections
-  themselves (Manual, Recently active, Name A→Z / Z→A). One control because a header's `⇅`
+  active, Name A→Z / Z→A, Newest / Oldest first), and a `Sort Groups` group sorts the sections
+  themselves (Manual, Recently active, Name A→Z / Z→A). It is labelled for Groups because that
+  is the word the rest of the app uses; PROJECTS is ordered alongside them, which the item's
+  tooltip says outright since the label cannot. One control because a header's `⇅`
   already means "how is this list ordered" and the sidebar has no section-level header to hang a
   second one on; a `MenuGroup` because the common case should not pay for the rarer one. The
   button highlights while this section's Projects are sorted, and the submenu label carries the

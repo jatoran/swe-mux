@@ -3491,13 +3491,16 @@ export function App() {
           separate control on. Behind a MenuGroup so the common case stays flat, and
           carrying its current mode in the label since the section order has no
           always-visible indicator of its own. */}
-      <MenuGroup id="sections" label={`Sort sections · ${sectionSortLabel(sidebarOrder.sectionSort)}`} openId={menuGroup} onOpenChange={setMenuGroup} hint="Order the Groups and PROJECTS themselves">
+      <MenuGroup id="sections" label={`Sort Groups · ${sectionSortLabel(sidebarOrder.sectionSort)}`} openId={menuGroup} onOpenChange={setMenuGroup} hint="Order the Groups and PROJECTS themselves">
         {SECTION_SORT_OPTIONS.map(option=>{
           const active=sidebarOrder.sectionSort===option.id
           return <button key={option.id} title={option.hint} aria-checked={active} role="menuitemradio" onClick={()=>{setSidebarOrder({...sidebarOrder,sectionSort:option.id});setSortMenu(null)}}>{active?'✓ ':''}{option.label}</button>
         })}
       </MenuGroup>
-      <div class="context-note">Dragging a Project or a section header into place puts that level back on Manual order.</div>
+      {/* "a header" rather than "a Group header": the PROJECTS remainder drags and
+          sorts with the Groups but is not one, and naming only Groups would read as
+          excluding it. */}
+      <div class="context-note">Dragging a Project or a header into place puts that level back on Manual order.</div>
     </div>}
 
     {noteMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Resource view actions" style={{left:clampContextMenuLeft(noteMenu.x,innerWidth),top:Math.max(4,Math.min(noteMenu.y,innerHeight-220))}}>
