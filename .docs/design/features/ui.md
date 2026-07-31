@@ -261,6 +261,22 @@ responsive controls.
 - Terminals exposes `auto | webgl | dom` renderer selection. `auto` preserves accelerated WebGL
   on desktop with automatic DOM fallback; mobile and Codex terminals always use DOM regardless
   of the preference so their scrollback remains stable.
+- The WebGL addon is constructed with `preserveDrawingBuffer: true`, and that is load-bearing
+  rather than a tuning choice. `WebglRenderer._updateModel` skips any cell whose code, fg, bg
+  and ext match its model, so a frame re-uploads only what changed and every other pixel is
+  assumed to still be in the drawing buffer. Under the default `false` the browser may discard
+  that buffer as soon as the canvas stops being composited, which is what a warm pane behind
+  another tab is (`.pane-warm` is `display:none`). The pane then returns with only the changed
+  cells drawn, and dragging a selection over the gaps repaints them — the "it draws once I
+  highlight it" symptom. Nothing fires when a compositor drops a buffer, so an event-driven
+  repair cannot cover this and the assumption is what has to go.
+- Repaints are still repaired on the events that *are* observable (pane shown, intersection,
+  `visibilitychange`, `pageshow`, window focus, replay end, context loss), plus one confirmation
+  pass a settle later. The confirmation is surface-only — atlas clear and refresh, never a refit
+  — because a fit is `term.resize` plus a pseudoconsole resize plus a full CLI repaint, and none
+  of that is what a lost paint needs. xterm's `RenderService` fires `onRender` whether or not the
+  renderer drew anything, so a dropped paint is invisible to the app and is never retried by the
+  library; assuming a single redraw landed is what left panes half-drawn.
 - The daemon reports the host PTY to the browser as `pty_windows` in `/api/config`, and every
   terminal is constructed with it as xterm's `windowsPty`. A browser cannot detect ConPTY, and
   xterm needs it to know that lines are hard-wrapped without a wrap flag: below ConPTY build
@@ -768,6 +784,19 @@ Detailed UI behavior belongs with the owning feature:
 - Automation navigation and diagnostics: `automation.md`
 - Project task discovery and trust: `project-actions.md`
 
+## Diagnostics
+
+Terminal render faults are a production phenomenon — they happen on the frozen desktop app,
+which is a production build — so the instrumentation is not gated on `DEV` alone. Enable it on
+any client with `localStorage.setItem('mux:terminal-render-diagnostics', '1')` and reload, then
+read the last 100 entries from `window.__muxTerminalRenderDiagnostics` (each is `{at, sessionId,
+phase, detail}`); `mux:terminal-render-diagnostic` fires on every append. Phases: `pane_mounted`,
+`preconnect_fit`, `attach_ready_sent`, `full_redraw_requested`, `full_redraw_issued`,
+`full_redraw_rendered`, `surface_redraw_confirmed`, `webgl_context_lost`, `webgl_load_failed`,
+`webgl_render_error`. Note that `full_redraw_rendered` proves only that xterm's `RenderService`
+fired `onRender`, which it does whether or not the renderer painted — it is not evidence that
+pixels changed.
+
 ## Key files
 
 - `frontend/src/App.tsx`
@@ -780,4 +809,5 @@ Detailed UI behavior belongs with the owning feature:
 - `frontend/src/TerminalPane.tsx`
 - `frontend/src/ProjectRunMenu.tsx`
 - `frontend/src/DirectoryPicker.tsx`
+- `frontend/src/terminalRenderDiagnostics.ts`
 - `frontend/src/style.css`

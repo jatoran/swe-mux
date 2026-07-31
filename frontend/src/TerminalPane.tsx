@@ -34,7 +34,7 @@ import { railPayload, resolveRail, type RailBackend, type RailItem } from './com
 import { activatePromptRailItem } from './promptRail'
 import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { currentProfile, loadRailItems } from './deviceSettings'
-import { APP_TAIL_KEY, appOwnsTail, attachRegistersViewport, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
+import { APP_TAIL_KEY, VIEWPORT_SETTLE_MS, appOwnsTail, attachRegistersViewport, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
 import { geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
 import {
   applyOwnerFrame,
@@ -479,6 +479,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let exitWritten = false
     let fitFrame = 0
     let redrawFrame = 0
+    let surfaceFrame = 0
+    let surfaceConfirmTimer: number | undefined
     let invalidateAtlasOnRedraw = false
     let webgl: WebglAddon | null = null
     let activeRenderer: ActiveTerminalRenderer = 'dom'
@@ -666,8 +668,36 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
             })
           }
           redrawVisibleTerminal(term, host.current)
+          armSurfaceConfirmation(fullRedraw)
         })
       })
+    }
+    // Repaint the surface again, without touching geometry.
+    //
+    // Deliberately not another viewport pass: a fit is `term.resize` plus a pseudoconsole
+    // resize plus the CLI repainting everything it is showing (see EXPENSIVE_VIEWPORT_PASS_MS),
+    // and none of that is what needs repeating. Only the two calls that put pixels back do.
+    const runSurfaceRedraw = () => {
+      surfaceFrame = window.requestAnimationFrame(() => {
+        if (!terminalHostIsVisible(host.current)) return
+        webgl?.clearTextureAtlas()
+        redrawVisibleTerminal(term, host.current)
+        diagnoseRender?.('surface_redraw_confirmed', {
+          cols: term.cols,
+          rows: term.rows,
+          renderer: activeRenderer,
+        })
+      })
+    }
+    // A full redraw races the compositor: the frame it lands on may be one where this pane's
+    // canvas is not being presented at its final size yet, and the render is then simply lost
+    // — xterm's RenderService fires `onRender` whether or not the renderer drew anything, so
+    // nothing anywhere retries it. One confirmation after the burst has settled costs an atlas
+    // clear and covers that, and unlike the redraw itself it cannot be raced by layout.
+    const armSurfaceConfirmation = (issued: boolean) => {
+      if (!issued) return
+      window.clearTimeout(surfaceConfirmTimer)
+      surfaceConfirmTimer = window.setTimeout(runSurfaceRedraw, VIEWPORT_SETTLE_MS)
     }
     const viewportScheduler = createViewportScheduler(runViewportPass, {
       now: () => performance.now(),
@@ -717,7 +747,22 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // new sessions also start Codex in raw scrollback mode on the backend.
     if (shouldLoadWebgl(rendererPreference, mobileRenderer, session.backend)) {
       try {
-        const addon = new WebglAddon()
+        // `preserveDrawingBuffer: true`, and it is not optional here.
+        //
+        // WebglRenderer._updateModel skips any cell whose code, fg, bg and ext all match
+        // its model ("Nothing has changed, no updates needed"), so a frame re-uploads only
+        // what changed and every other pixel is expected to still be in the drawing buffer.
+        // With the default `false` the spec lets the browser discard that buffer once the
+        // canvas stops being composited — which is exactly what a warm pane behind another
+        // tab is, since `.pane-warm` is `display:none`. Coming back, the model still claims
+        // everything is drawn, so only genuinely-changed cells repaint and the rest stay
+        // blank. Dragging a selection over them changes their fg/bg, which fails that
+        // equality check and makes them reappear: the "it draws once I highlight it" report.
+        //
+        // The repair below still exists, because a lost context and a dimension change need
+        // it regardless. But no event fires when a compositor drops a drawing buffer, so a
+        // repair keyed on events cannot be complete and the assumption has to go instead.
+        const addon = new WebglAddon(true)
         webgl = addon
         addon.onContextLoss(() => {
           if (webgl !== addon) return
@@ -1364,7 +1409,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{} }
+    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput])
 
   const copy = async () => {
