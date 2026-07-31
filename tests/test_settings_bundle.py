@@ -23,6 +23,9 @@ class HistoryStub:
     async def project_scopes(self, include_hidden: bool = False) -> list[dict[str, Any]]:
         return []
 
+    async def project_last_activity(self) -> dict[str, float]:
+        return {}
+
 
 class SecretStoreStub:
     def status(self, name: str) -> dict[str, Any]:

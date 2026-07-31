@@ -549,6 +549,7 @@ def create_app(
             web.delete("/api/projects/{project_id}/watch/{watch_id}", delete_project_watch),
             web.get("/api/project-groups", list_project_groups),
             web.post("/api/project-groups", create_project_group),
+            web.put("/api/project-groups/order", reorder_project_groups),
             web.patch("/api/project-groups/{group_id}", patch_project_group),
             web.delete("/api/project-groups/{group_id}", delete_project_group),
             web.get("/api/git/projects", list_git_projects),
@@ -4359,8 +4360,9 @@ async def demote_session(request: web.Request) -> web.Response:
 
 async def _projects_payload(request: web.Request) -> list[dict[str, Any]]:
     manager: ProjectManager = request.app["projects"]
+    activity = await request.app["history"].project_last_activity()
     return await asyncio.gather(
-        *(_project_snapshot(request, item) for item in manager.ordered_projects())
+        *(_project_snapshot(request, item, activity) for item in manager.ordered_projects())
     )
 
 
@@ -4368,7 +4370,9 @@ async def list_projects(request: web.Request) -> web.Response:
     return json_response(await _projects_payload(request))
 
 
-async def _project_snapshot(request: web.Request, project) -> dict[str, Any]:  # type: ignore[no-untyped-def]
+async def _project_snapshot(  # type: ignore[no-untyped-def]
+    request: web.Request, project, activity: dict[str, float]
+) -> dict[str, Any]:
     identity = ProjectIdentity(project.id, project.name, project.root, "registered")
     portable = await read_project_config(project.root, project=identity)
     values = portable["values"] if portable["status"] in {"ready", "read-only"} else {}
@@ -4407,6 +4411,10 @@ async def _project_snapshot(request: web.Request, project) -> dict[str, Any]:  #
     snapshot.pop("resource_open_mode", None)
     return {
         **snapshot,
+        # Derived, not stored: history already dates every session a Project ever ran,
+        # so a second write path that could drift from it would buy nothing. 0 means a
+        # Project that has never run one, which the sidebar orders last.
+        "last_activity": activity.get(project.id, 0.0),
         "portable_options": public_values,
         "effective_options": effective,
         "option_sources": sources,
@@ -4427,7 +4435,8 @@ async def create_project(request: web.Request) -> web.Response:
     await request.app["events"].emit(
         "project_created", source="user", project_id=project.id, root=project.root
     )
-    return json_response(await _project_snapshot(request, project), 201)
+    activity = await request.app["history"].project_last_activity()
+    return json_response(await _project_snapshot(request, project, activity), 201)
 
 
 async def patch_project(request: web.Request) -> web.Response:
@@ -4445,7 +4454,8 @@ async def patch_project(request: web.Request) -> web.Response:
     }:
         raise ValueError({"default_profile_id": "unknown shell profile"})
     project = await request.app["projects"].update(request.match_info["project_id"], **body)
-    return json_response(await _project_snapshot(request, project))
+    activity = await request.app["history"].project_last_activity()
+    return json_response(await _project_snapshot(request, project, activity))
 
 
 async def reorder_projects(request: web.Request) -> web.Response:
@@ -4465,8 +4475,9 @@ async def reorder_projects(request: web.Request) -> web.Response:
             return json_response({"error": str(exc), "code": "order_conflict"}, 409)
         raise
     await request.app["events"].emit("projects_reordered", source="user", project_ids=ordered_ids)
+    activity = await request.app["history"].project_last_activity()
     return json_response(
-        await asyncio.gather(*(_project_snapshot(request, item) for item in projects))
+        await asyncio.gather(*(_project_snapshot(request, item, activity) for item in projects))
     )
 
 
@@ -4641,7 +4652,7 @@ async def run_project_init_scripts(request: web.Request) -> web.Response:
 
 async def list_project_groups(request: web.Request) -> web.Response:
     manager: ProjectManager = request.app["projects"]
-    return json_response([item.snapshot() for item in manager.groups.values()])
+    return json_response([item.snapshot() for item in manager.ordered_groups()])
 
 
 async def create_project_group(request: web.Request) -> web.Response:
@@ -4655,6 +4666,27 @@ async def patch_project_group(request: web.Request) -> web.Response:
         request.match_info["group_id"], **await request.json()
     )
     return json_response(group.snapshot())
+
+
+async def reorder_project_groups(request: web.Request) -> web.Response:
+    body = await request.json()
+    ordered_ids = body.get("group_ids")
+    expected_order = body.get("expected_order")
+    if not isinstance(ordered_ids, list) or not all(isinstance(item, str) for item in ordered_ids):
+        raise ValueError({"group_ids": "must be an array of group ids"})
+    if not isinstance(expected_order, list) or not all(
+        isinstance(item, str) for item in expected_order
+    ):
+        raise ValueError({"expected_order": "must be the last observed group order"})
+    try:
+        groups = await request.app["projects"].reorder_groups(
+            ordered_ids, expected_order=expected_order
+        )
+    except ValueError as exc:
+        if "order changed" in str(exc):
+            return json_response({"error": str(exc), "code": "order_conflict"}, 409)
+        raise
+    return json_response([item.snapshot() for item in groups])
 
 
 async def delete_project_group(request: web.Request) -> web.Response:

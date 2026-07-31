@@ -102,9 +102,15 @@ DELETE /projects/{project_id}
 
 GET    /project-groups
 POST   /project-groups              {name}
+PUT    /project-groups/order        {group_ids, expected_order}
 PATCH  /project-groups/{group_id}   {name?, position?}
 DELETE /project-groups/{group_id}
 ```
+
+Project payloads add `created_at` (registration, epoch seconds) and derived `last_activity`
+(latest session activity from history); both are `0` when unknown. Both order endpoints demand a
+complete permutation plus the `expected_order` the client last saw, answering `409` with
+`{"code": "order_conflict"}` when another device already moved something.
 
 Project creation rejects duplicate canonical roots and an empty root, and initializes
 `.swe-mux/`. `create_missing` makes exactly one folder: the parent must already exist, an

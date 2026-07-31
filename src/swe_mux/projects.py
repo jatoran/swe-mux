@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -67,6 +68,9 @@ class ProjectManager:
     def ordered_projects(self) -> list[ProjectRecord]:
         return sorted(self.projects.values(), key=lambda item: (item.position, item.name, item.id))
 
+    def ordered_groups(self) -> list[ProjectGroupRecord]:
+        return sorted(self.groups.values(), key=lambda item: (item.position, item.name, item.id))
+
     async def start(self) -> None:
         self.projects = {item.id: item for item in await self.history.list_projects()}
         self.groups = {item.id: item for item in await self.history.list_project_groups()}
@@ -81,6 +85,9 @@ class ProjectManager:
         ordered = self.ordered_projects()
         if [item.position for item in ordered] != list(range(len(ordered))):
             await self._apply_order([item.id for item in ordered])
+        groups = self.ordered_groups()
+        if [item.position for item in groups] != list(range(len(groups))):
+            await self._apply_group_order([item.id for item in groups])
 
     async def create(
         self,
@@ -113,6 +120,7 @@ class ProjectManager:
             position=max((item.position for item in self.projects.values()), default=-1) + 1,
             group_id=group_id,
             layout=normalize_layout(None),
+            created_at=time.time(),
         )
         self.projects[project.id] = project
         await self.history.upsert_project(project)
@@ -203,10 +211,40 @@ class ProjectManager:
         label = name.strip()
         if not label:
             raise ValueError("group name is required")
-        group = ProjectGroupRecord(str(uuid.uuid4()), label, len(self.groups))
+        # Past the highest position rather than at ``len(groups)``: after a delete the
+        # count no longer matches the occupied slots, and two groups sharing a position
+        # would make a reorder drag land somewhere the user did not aim for.
+        position = max((item.position for item in self.groups.values()), default=-1) + 1
+        group = ProjectGroupRecord(str(uuid.uuid4()), label, position)
         self.groups[group.id] = group
         await self.history.upsert_project_group(group)
         return group
+
+    async def _apply_group_order(self, ordered_ids: list[str]) -> None:
+        for position, group_id in enumerate(ordered_ids):
+            group = self.groups[group_id]
+            if group.position == position:
+                continue
+            group.position = position
+            await self.history.upsert_project_group(group)
+
+    async def reorder_groups(
+        self, ordered_ids: list[str], *, expected_order: list[str]
+    ) -> list[ProjectGroupRecord]:
+        """Rewrite every group position, guarded by the order the caller last saw.
+
+        Same optimistic contract as Project reordering: two devices dragging at once
+        would otherwise each write a full permutation and the loser would silently
+        win. The rejection tells the client to refresh instead.
+        """
+        async with self._order_lock:
+            current = [item.id for item in self.ordered_groups()]
+            if expected_order != current:
+                raise ValueError("group order changed; refresh and try again")
+            if len(ordered_ids) != len(current) or set(ordered_ids) != set(current):
+                raise ValueError("group order must contain every group once")
+            await self._apply_group_order(ordered_ids)
+            return self.ordered_groups()
 
     async def update_group(self, group_id: str, **changes: object) -> ProjectGroupRecord:
         group = self.groups[group_id]
@@ -226,3 +264,4 @@ class ProjectManager:
             if project.group_id == group_id:
                 project.group_id = None
         await self.history.delete_project_group(group_id)
+        await self._apply_group_order([item.id for item in self.ordered_groups()])

@@ -76,6 +76,11 @@ import {
   COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
   projectInitials, projectOpenWork, serializeCollapsedProjects, toggleCollapsed,
 } from './sidebarProjects'
+import {
+  PROJECT_SORT_OPTIONS, SIDEBAR_ORDER_KEY, UNGROUPED_BUCKET_ID, bucketSortMode, loadSidebarOrder,
+  mergeVisibleOrder, placeUngrouped, projectActivity, projectSortLabel, pruneSidebarOrder,
+  serializeSidebarOrder, setBucketSortMode, sortProjects, type ProjectSortMode,
+} from './projectSort'
 import { reconcileSeen, isUnread, projectRailStatus, type ProjectRailActivity, type SeenMap } from './sessionAttention'
 import { sessionStatus, stateDotClass } from './sessionStatus'
 import {
@@ -332,11 +337,23 @@ export function App() {
   const [automationOpen,setAutomationOpen]=useState(false)
   const [projectGroups,setProjectGroups]=useState<ProjectGroup[]>([])
   const dragSessionTargetRef=useRef<{sessionId?:string;stackId?:string;projectId:string}|null>(null)
-  type ProjectDrag={id:string;previewIds:string[];overId:string|null;side:DropSide|null}
+  type ProjectDrag={id:string;bucketId:string;previewIds:string[];overId:string|null;side:DropSide|null}
+  type BucketDrag={id:string;previewIds:string[]}
   type PaneDropZone='tabs'|'left'|'right'|'top'|'bottom'
   type StackTabDrag={stackId:string;childId:string;kind:PaneLeafKind;targetStackId:string;zone:PaneDropZone;previewIds:string[];overId:string|null;side:DropSide|null}
   const [dragProject,setDragProjectState]=useState<ProjectDrag|null>(null)
   const dragProjectRef=useRef<ProjectDrag|null>(null)
+  // Ref-only: the ghost and the drop indicator are the drag's feedback, so nothing
+  // about a bucket drag needs to re-render the tree it is reordering.
+  const dragBucketRef=useRef<BucketDrag|null>(null)
+  // Device-local sidebar ordering: the per-bucket sort mode, and the slot the
+  // ungrouped bucket takes among the Groups. Group order itself is server-side.
+  const [sidebarOrder,setSidebarOrderState]=useState(()=>loadSidebarOrder(localStorage.getItem(SIDEBAR_ORDER_KEY)))
+  const setSidebarOrder=(next:ReturnType<typeof loadSidebarOrder>)=>{
+    setSidebarOrderState(next)
+    localStorage.setItem(SIDEBAR_ORDER_KEY,serializeSidebarOrder(next))
+  }
+  const [sortMenu,setSortMenu]=useState<{bucketId:string;bucketName:string;x:number;y:number}|null>(null)
   const [dragStackTab,setDragStackTabState]=useState<StackTabDrag|null>(null)
   const dragStackTabRef=useRef<StackTabDrag|null>(null)
   const suppressDragClickRef=useRef<string|null>(null)
@@ -1019,6 +1036,33 @@ export function App() {
   const activeProject = projects.find(project => project.id === projectId)
   const orderedProjects = [...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)||a.id.localeCompare(b.id))
   const visibleProjects = orderedProjects.filter(project => project.sidebar_visible !== false)
+  const orderedGroups=[...projectGroups].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)||a.id.localeCompare(b.id))
+  // Every bucket the sidebar could show, in display order, empty ones included: a
+  // drag only ever permutes the rendered subset, and folding that back into the full
+  // list is what keeps an empty Group where its owner left it.
+  const bucketIds=placeUngrouped(orderedGroups.map(group=>group.id),sidebarOrder.ungroupedIndex)
+  const activityStamps=projectActivity(projects,sessions)
+  const allBuckets=bucketIds.map(bucketId=>{
+    const group=orderedGroups.find(item=>item.id===bucketId)
+    const items=bucketId===UNGROUPED_BUCKET_ID
+      ? visibleProjects.filter(project=>!project.group_id||!projectGroups.some(item=>item.id===project.group_id))
+      : visibleProjects.filter(project=>project.group_id===bucketId)
+    // `visibleProjects` is already in manual order, which sortProjects treats as the
+    // tie-break, so every mode falls back to what the user arranged by hand.
+    return {id:bucketId,name:group?group.name:'Projects',items:sortProjects(items,bucketSortMode(sidebarOrder,bucketId),activityStamps)}
+  })
+  const projectBuckets=allBuckets.filter(bucket=>bucket.items.length>0)
+  // Sidebar reading order across every bucket. The collapsed rail, the numbered
+  // Project commands, and the drag baseline all follow what is on screen rather
+  // than the stored positions, or a sorted sidebar would disagree with itself.
+  const displayProjects=projectBuckets.flatMap(bucket=>bucket.items)
+  const displayProjectIds=mergeVisibleOrder(orderedProjects.map(project=>project.id),displayProjects.map(project=>project.id))
+  // A deleted Group would otherwise leave its sort mode behind forever, and the
+  // stored blob is what a recreated bucket id would silently inherit.
+  useEffect(()=>{
+    const pruned=pruneSidebarOrder(sidebarOrder,bucketIds)
+    if(pruned!==sidebarOrder)setSidebarOrder(pruned)
+  },[projectGroups])
   const activeLayout = layoutMap[projectId] || emptyLayout()
   const paneIds = terminalIds(activeLayout).filter(id => sessions.some(session => session.id === id && !['exited', 'crashed'].includes(session.state)))
   const workspacePanes=paneStacks(activeLayout)
@@ -1159,9 +1203,24 @@ export function App() {
   // a full-screen interruption. Opening the tab is what marks them read.
   const openNotifications = () => { showDrawerTab('notifications');setNotificationUnread(0);void loadNotifications() }
 
-  const commitProjectOrder=async(nextIds:string[])=>{
+  // The sort button stops its own pointer-down so the header drag never starts under
+  // it, which also keeps that event from reaching the document's dismiss handler —
+  // so opening this menu has to close whatever else was open itself.
+  const openSortMenu=(bucketId:string,bucketName:string,x:number,y:number)=>{
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setMainMenuOpen(false)
+    setSortMenu({bucketId,bucketName,x,y})
+  }
+  const bucketIdFor=(project:Project)=>
+    project.group_id&&projectGroups.some(group=>group.id===project.group_id)?project.group_id:UNGROUPED_BUCKET_ID
+  /** Write a manual Project order. Placing a Project by hand is the statement that
+   *  this bucket is hand-arranged, so it drops the bucket's sort back to Manual and
+   *  freezes whatever was on screen into positions — otherwise the next render would
+   *  re-sort the move away and the drag would look broken. */
+  const commitProjectOrder=async(nextIds:string[],bucketId:string)=>{
+    if(nextIds.join('\0')===displayProjectIds.join('\0'))return
+    setSidebarOrder(setBucketSortMode(sidebarOrder,bucketId,'custom'))
+    // The daemon validates against its own position order, not the sorted view.
     const expected=orderedProjects.map(project=>project.id)
-    if(nextIds.join('\0')===expected.join('\0'))return
     const positions=new Map(nextIds.map((id,index)=>[id,index]))
     setProjects(items=>items.map(item=>({...item,position:positions.get(item.id)??item.position})))
     try{
@@ -1173,19 +1232,20 @@ export function App() {
     }
   }
   const moveProjectRelative=(project:Project,direction:-1|1)=>{
-    const peers=orderedProjects.filter(item=>(item.group_id||null)===(project.group_id||null))
+    const bucketId=bucketIdFor(project)
+    const peers=displayProjects.filter(item=>bucketIdFor(item)===bucketId)
     const index=peers.findIndex(item=>item.id===project.id)
     const other=peers[index+direction]
     if(!other)return
-    const ids=orderedProjects.map(item=>item.id)
+    const ids=[...displayProjectIds]
     const from=ids.indexOf(project.id),to=ids.indexOf(other.id)
     ;[ids[from],ids[to]]=[ids[to],ids[from]]
     setProjectMenu(null)
-    void commitProjectOrder(ids)
+    void commitProjectOrder(ids,bucketId)
   }
-  const beginProjectPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,project:Project,peerIds:string[])=>{
+  const beginProjectPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,project:Project,bucketId:string,peerIds:string[])=>{
     const bucket=event.currentTarget.closest<HTMLElement>('.sidebar-project-bucket')
-    const initial:ProjectDrag={id:project.id,previewIds:orderedProjects.map(item=>item.id),overId:null,side:null}
+    const initial:ProjectDrag={id:project.id,bucketId,previewIds:displayProjectIds,overId:null,side:null}
     beginPointerDrag(event,project.name,`project:${project.id}`,
       ()=>{cancelLongPress();dragProjectRef.current=initial},
       pointer=>{
@@ -1198,8 +1258,51 @@ export function App() {
         const targetElement=Array.from(bucket.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).find(item=>item.dataset.reorderId===target.id)||null
         showPointerDropIndicator(targetElement,`insert-${target.side}`)
       },
-      ()=>{const current=dragProjectRef.current;setDragProject(null);if(current)void commitProjectOrder(current.previewIds)},
+      ()=>{const current=dragProjectRef.current;setDragProject(null);if(current)void commitProjectOrder(current.previewIds,current.bucketId)},
       ()=>setDragProject(null),
+    )
+  }
+  /** Reorder the sidebar's sections. Group order is shared (it lives on the Group
+   *  record); the ungrouped remainder has no record, so its slot is remembered per
+   *  device instead of being pinned to the end for everyone. */
+  const commitBucketOrder=async(nextIds:string[])=>{
+    if(nextIds.join('\0')===bucketIds.join('\0'))return
+    const ungroupedIndex=nextIds.indexOf(UNGROUPED_BUCKET_ID)
+    const nextGroupIds=nextIds.filter(id=>id!==UNGROUPED_BUCKET_ID)
+    setSidebarOrder({...sidebarOrder,ungroupedIndex:ungroupedIndex<0?null:ungroupedIndex})
+    const expected=orderedGroups.map(group=>group.id)
+    if(nextGroupIds.join('\0')===expected.join('\0'))return
+    const positions=new Map(nextGroupIds.map((id,index)=>[id,index]))
+    setProjectGroups(items=>items.map(item=>({...item,position:positions.get(item.id)??item.position})))
+    try{
+      setProjectGroups(await api<ProjectGroup[]>('PUT','/api/project-groups/order',{group_ids:nextGroupIds,expected_order:expected}))
+    }catch(cause){
+      await refresh()
+      setError(cause instanceof Error?cause.message:String(cause))
+    }
+  }
+  const beginBucketPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,bucketId:string,label:string)=>{
+    const tree=event.currentTarget.closest<HTMLElement>('.project-tree')
+    // Only rendered buckets can be a drop target, so an empty Group never becomes
+    // one; folding the permutation back through the full list keeps it in place.
+    const rendered=projectBuckets.map(bucket=>bucket.id)
+    // Ref-only while the pointer is down, exactly like the Project drag: the ghost
+    // and the insertion line are the feedback, and re-rendering the tree mid-drag
+    // would move the very element holding the pointer capture.
+    beginPointerDrag(event,label,`bucket:${bucketId}`,
+      ()=>{cancelLongPress();dragBucketRef.current={id:bucketId,previewIds:bucketIds}},
+      pointer=>{
+        const current=dragBucketRef.current
+        if(!current||!tree){showPointerDropIndicator(null);return}
+        const target=reorderTargetFromContainer(tree,current.id,'vertical',pointer.clientY)
+        if(!target){showPointerDropIndicator(null);return}
+        const visible=reorderForHover(rendered,current.id,target.id,target.side)
+        dragBucketRef.current={...current,previewIds:mergeVisibleOrder(bucketIds,visible)}
+        const targetElement=Array.from(tree.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).find(item=>item.dataset.reorderId===target.id)||null
+        showPointerDropIndicator(targetElement,`insert-${target.side}`)
+      },
+      ()=>{const current=dragBucketRef.current;dragBucketRef.current=null;if(current)void commitBucketOrder(current.previewIds)},
+      ()=>{dragBucketRef.current=null},
     )
   }
   const beginSessionPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,session:Session)=>{
@@ -1243,7 +1346,7 @@ export function App() {
   useEffect(() => { if (!mainMenuOpen) setMenuGroup(null) }, [mainMenuOpen])
 
   useEffect(() => {
-    if (!contextMenu && !projectMenu && !sidebarMenu && !noteMenu && !tabMenu && !emptyMenu && !mainMenuOpen && !renameTarget) return
+    if (!contextMenu && !projectMenu && !sidebarMenu && !sortMenu && !noteMenu && !tabMenu && !emptyMenu && !mainMenuOpen && !renameTarget) return
     const dismissEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       event.preventDefault()
@@ -1251,6 +1354,7 @@ export function App() {
       setContextMenu(null)
       setProjectMenu(null)
       setSidebarMenu(null)
+      setSortMenu(null)
       setNoteMenu(null)
       setTabMenu(null)
       setEmptyMenu(null)
@@ -1259,10 +1363,10 @@ export function App() {
     }
     window.addEventListener('keydown', dismissEscape, true)
     return () => window.removeEventListener('keydown', dismissEscape, true)
-  }, [contextMenu, projectMenu, sidebarMenu, noteMenu, tabMenu, emptyMenu, mainMenuOpen, renameTarget])
+  }, [contextMenu, projectMenu, sidebarMenu, sortMenu, noteMenu, tabMenu, emptyMenu, mainMenuOpen, renameTarget])
 
   useEffect(() => {
-    if (!contextMenu && !projectMenu && !sidebarMenu && !noteMenu && !tabMenu && !emptyMenu && !mainMenuOpen) return
+    if (!contextMenu && !projectMenu && !sidebarMenu && !sortMenu && !noteMenu && !tabMenu && !emptyMenu && !mainMenuOpen) return
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     menuDismissedByPointer.current = false
     const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>('.context-menu button:not(:disabled)')?.focus())
@@ -1290,7 +1394,7 @@ export function App() {
       menuDismissedByPointer.current = false
       if (!claimed) previous?.focus()
     }
-  }, [contextMenu, projectMenu, sidebarMenu, noteMenu, tabMenu, emptyMenu, mainMenuOpen])
+  }, [contextMenu, projectMenu, sidebarMenu, sortMenu, noteMenu, tabMenu, emptyMenu, mainMenuOpen])
 
   useEffect(() => {
     if (!confirmKillId) return
@@ -2255,8 +2359,10 @@ export function App() {
     { id: 'project.newTerminalCustom', label: 'New custom terminal in selected project', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => { if (commandProject) openLauncher(commandProject.id); setProjectMenu(null) } },
     { id: 'project.reveal', label: 'Reveal selected project in Explorer', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => { if (commandProject) void api('POST', '/api/reveal', { path: commandProject.root }); setProjectMenu(null) } },
     { id: 'project.rename', label: 'Rename selected project', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => commandProject && openRename({ kind: 'project', project: commandProject }) },
-    { id:'project.moveUp',label:'Move selected Project up',category:'project',available:!!commandProject&&orderedProjects.filter(item=>(item.group_id||null)===(commandProject.group_id||null))[0]?.id!==commandProject.id,disabledReason:'Project is already first in its Group',run:()=>commandProject&&moveProjectRelative(commandProject,-1) },
-    { id:'project.moveDown',label:'Move selected Project down',category:'project',available:!!commandProject&&orderedProjects.filter(item=>(item.group_id||null)===(commandProject.group_id||null)).at(-1)?.id!==commandProject.id,disabledReason:'Project is already last in its Group',run:()=>commandProject&&moveProjectRelative(commandProject,1) },
+    // "First"/"last" against the sorted view, not the stored positions: with a sort
+    // active they disagree, and the enabled state has to describe what is on screen.
+    { id:'project.moveUp',label:'Move selected Project up',category:'project',available:!!commandProject&&displayProjects.filter(item=>bucketIdFor(item)===bucketIdFor(commandProject))[0]?.id!==commandProject.id,disabledReason:'Project is already first in its Group',run:()=>commandProject&&moveProjectRelative(commandProject,-1) },
+    { id:'project.moveDown',label:'Move selected Project down',category:'project',available:!!commandProject&&displayProjects.filter(item=>bucketIdFor(item)===bucketIdFor(commandProject)).at(-1)?.id!==commandProject.id,disabledReason:'Project is already last in its Group',run:()=>commandProject&&moveProjectRelative(commandProject,1) },
     { id: 'project.settings', label: 'Open selected project settings', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => commandProject && openProjectsManager({ project: commandProject, tab: 'settings' }) },
     { id: 'project.delete', label: 'Delete selected project…', category: 'project', available: !!commandProject&&!sessions.some(session=>session.project_id===commandProject.id), disabledReason: 'Remove this project’s sessions first', run: () => { if (commandProject) { setConfirmProjectDeleteId(commandProject.id); setProjectMenu(current => current || { project: commandProject, x: innerWidth / 2, y: innerHeight / 2 }) } } },
     ...unpanned.map((session): Command => ({
@@ -2275,7 +2381,7 @@ export function App() {
     { id: 'pane.next', label: 'Focus next pane', category: 'pane', available: workspacePanes.length > 1, disabledReason: 'Only one pane is open', run: () => focusRelativePane(1) },
     { id: 'pane.previous', label: 'Focus previous pane', category: 'pane', available: workspacePanes.length > 1, disabledReason: 'Only one pane is open', run: () => focusRelativePane(-1) },
     { id: 'broadcast.toggle', label: broadcast ? 'Stop broadcasting input' : 'Start broadcasting input', category: 'input', available: true, run: () => setBroadcast(value => !value) },
-    ...visibleProjects.slice(0, 9).map((project, index): Command => ({
+    ...displayProjects.slice(0, 9).map((project, index): Command => ({
       id: `project.activate(${index + 1})`, label: `Switch to project ${index + 1}: ${project.name}`,
       category: 'project', available: project.id !== projectId, disabledReason: 'Project is already active',
       run: () => { const layout=layoutMap[project.id]||emptyLayout();const first=leaves(layout)[0]||null;setProjectId(project.id);setFocusedViewId(first?.id||null);setActiveId(terminalIds(layout)[0]||null) },
@@ -2314,7 +2420,7 @@ export function App() {
       const command = keybindings[keyChord(event)]
       if (command && runNamedCommand(command)) event.preventDefault()
       if (event.key === 'Escape') {
-        setPaletteOpen(false); setLauncherOpen(false); setContextMenu(null); setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null); setEmptyMenu(null); setMainMenuOpen(false); setSidebarOpen(false); setRenameTarget(null); setProcessSession(null);setProcessViewerOpen(false); setSettingsOpen(false); setProjectsManagerOpen(false); setReviewState(null);setHandoffState(null);setClipboardOpen(false)
+        setPaletteOpen(false); setLauncherOpen(false); setContextMenu(null); setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setTabMenu(null); setEmptyMenu(null); setMainMenuOpen(false); setSidebarOpen(false); setRenameTarget(null); setProcessSession(null);setProcessViewerOpen(false); setSettingsOpen(false); setProjectsManagerOpen(false); setReviewState(null);setHandoffState(null);setClipboardOpen(false)
       }
     }
     const onPointerDown = (event: PointerEvent) => {
@@ -2322,12 +2428,13 @@ export function App() {
       // A `[data-menu-toggle]` trigger owns its own open/close: dismissing here
       // would close on pointer-down and let the trigger's click reopen, which is
       // indistinguishable from "the menu never closes".
-      if (target instanceof Element && target.closest('.context-menu,.menu-trigger,[data-menu-toggle]')) return
+      if (target instanceof Element && target.closest('.context-menu,.menu-trigger,[data-menu-toggle],.bucket-sort')) return
       // This pointer, not the menu, decides where focus goes next.
       menuDismissedByPointer.current = true
       setContextMenu(null)
       setProjectMenu(null)
       setSidebarMenu(null)
+      setSortMenu(null)
       setNoteMenu(null)
       setTabMenu(null)
       setEmptyMenu(null)
@@ -2908,11 +3015,7 @@ export function App() {
     }
     return identity?.id.split('/').pop()||'File'
   }
-  const projectPreviewIds=dragProject?.previewIds||orderedProjects.map(project=>project.id)
-  const projectBuckets=[
-    ...[...projectGroups].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)).map(group=>({id:group.id,name:group.name,items:visibleProjects.filter(project=>project.group_id===group.id)})),
-    {id:'ungrouped',name:'Projects',items:visibleProjects.filter(project=>!project.group_id||!projectGroups.some(group=>group.id===project.group_id))},
-  ].filter(bucket=>bucket.items.length>0)
+  const projectPreviewIds=dragProject?.previewIds||displayProjectIds
 
   const mobileProjection=mobileWorkspaceProjection(activeLayout,focusedViewId,activeId,mobileTabOrder[projectId])
   // Reordering stores the full displayed order for this project, so the saved
@@ -3037,10 +3140,18 @@ export function App() {
       <header class="app-topbar">
         <div class="app-identity"><strong>swe_mux</strong><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span>{activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
-      <aside class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
+      <aside class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         <div class="project-tree">
           {visibleProjects.length===0&&<button data-tutorial="empty-project" class="empty-project-cta" onClick={()=>openProjectsManager()}><strong>{projects.length?'No Projects shown':'Create your first Project'}</strong><small>{projects.length?'Open Projects to show or add an active Project.':'Open Projects to add a canonical folder.'}</small></button>}
-          {projectBuckets.map(bucket=>{const peerIds=bucket.items.map(item=>item.id);return <section class="sidebar-project-bucket" key={bucket.id}><header><span>{bucket.name}</span>{bucket.id!=='ungrouped'&&<><button title="Rename group" onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)setGroupEdit({id:group.id,name:group.name})}}>✎</button><button title="Remove group (projects become ungrouped)" onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)void deleteGroup(group)}}>×</button></>}</header>{bucket.items.map(project => {
+          {projectBuckets.map(bucket=>{
+            const peerIds=bucket.items.map(item=>item.id)
+            const sortMode=bucketSortMode(sidebarOrder,bucket.id)
+            return <section class="sidebar-project-bucket" key={bucket.id} data-reorder-id={bucket.id}>
+            {/* The header is the section's drag handle. Its buttons stop the pointer
+                so pressing one never starts a drag of the section under it. */}
+            <header title={`${bucket.name} — drag to reorder`} onPointerDown={event=>beginBucketPointerDrag(event,bucket.id,bucket.name)}><span>{bucket.name}</span>
+              <button class={`bucket-sort ${sortMode==='custom'?'':'active'}`} aria-haspopup="menu" aria-expanded={sortMenu?.bucketId===bucket.id} aria-label={`Sort projects in ${bucket.name}`} title={`Sort projects in ${bucket.name} — ${projectSortLabel(sortMode)}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();if(sortMenu?.bucketId===bucket.id){setSortMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openSortMenu(bucket.id,bucket.name,rect.left,rect.bottom+4)}}>⇅</button>
+              {bucket.id!==UNGROUPED_BUCKET_ID&&<><button title="Rename group" onPointerDown={event=>event.stopPropagation()} onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)setGroupEdit({id:group.id,name:group.name})}}>✎</button><button title="Remove group (projects become ungrouped)" onPointerDown={event=>event.stopPropagation()} onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)void deleteGroup(group)}}>×</button></>}</header>{bucket.items.map(project => {
             const children = sessions
               .filter(session => session.project_id === project.id)
               .sort((a,b)=>a.created_at-b.created_at||a.id.localeCompare(b.id))
@@ -3051,7 +3162,7 @@ export function App() {
             const collapsed=collapsedProjects.has(project.id)
             const liveCount=children.filter(session=>!session.pending&&!['exited','crashed'].includes(session.state)).length
             return <section key={project.id} data-reorder-id={project.id} style={{order:projectPreviewIds.indexOf(project.id)}} class={`project-group ${project.id === projectId ? 'active' : ''} ${collapsed?'collapsed':''} ${dropClass}`}>
-              <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title="Drag to reorder Project" onPointerDown={event=>{beginLongPress(event,(x,y)=>setProjectMenu({project,x,y}));beginProjectPointerDrag(event,project,peerIds)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setProjectMenu({ project, x: event.clientX, y: event.clientY }) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id)}}>
+              <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title="Drag to reorder Project" onPointerDown={event=>{beginLongPress(event,(x,y)=>setProjectMenu({project,x,y}));beginProjectPointerDrag(event,project,bucket.id,peerIds)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setProjectMenu({ project, x: event.clientX, y: event.clientY }) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id)}}>
                 <button class="project-chevron project-collapse-toggle" aria-expanded={!collapsed} aria-label={`${collapsed?'Expand':'Collapse'} ${project.name}`} title={collapsed?'Expand project':'Collapse project'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();toggleProjectCollapsed(project.id)}}>{collapsed?'▸':'▾'}</button><strong class="project-name-cell"><span class="project-name-text">{project.name}</span>{collapsed&&liveCount>0&&<span class="project-collapsed-badge" title={`${liveCount} active session${liveCount===1?'':'s'}`}>{liveCount}</span>}</strong><button data-tutorial="project-run" class="project-row-run" title={`Run in ${project.name}`} aria-label={`Run in ${project.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
               </div>
               {!collapsed&&<div data-tutorial="project-resources" class="project-note-list">{sidebarProjectResourceRow(project.id)}</div>}
@@ -3072,7 +3183,7 @@ export function App() {
           than forcing an expand round-trip for menu, projects, or status. */}
       {sidebarCollapsed&&<nav class="sidebar-rail" aria-label="Sidebar shortcuts">
         <div class="rail-projects" aria-label="Projects">
-          {visibleProjects.map(project=>{const status=projectRailStatus(sessions,project.id,seenActivity);const selected=project.id===projectId;const readLabel=status.agentCount?(status.unread?' · unread output':' · read'):'';const countLabel=status.liveCount?` · ${status.liveCount} live session${status.liveCount===1?'':'s'}`:'';return <button
+          {displayProjects.map(project=>{const status=projectRailStatus(sessions,project.id,seenActivity);const selected=project.id===projectId;const readLabel=status.agentCount?(status.unread?' · unread output':' · read'):'';const countLabel=status.liveCount?` · ${status.liveCount} live session${status.liveCount===1?'':'s'}`:'';return <button
             key={project.id}
             data-sidebar-project-id={project.id}
             class={`rail-project activity-${status.activity} ${status.unread?'unread':'read'} ${selected?'active':''}`}
@@ -3299,6 +3410,17 @@ export function App() {
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('settings.open')}}>All Settings…</button>
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('daemon.reload')}}>Reload daemon (keep sessions)</button>
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('app.redeploy')}}>Rebuild + redeploy app (keep sessions)</button>
+    </div>}
+
+    {/* Per bucket, not global: Groups are how unlike things get separated, so a
+        hand-arranged shortlist and an alphabetical pile can coexist. */}
+    {sortMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Sort projects in ${sortMenu.bucketName}`} style={{left:clampContextMenuLeft(sortMenu.x,innerWidth),top:Math.max(4,Math.min(sortMenu.y,innerHeight-330))}}>
+      <div class="context-title"><strong>SORT · {sortMenu.bucketName}</strong></div>
+      {PROJECT_SORT_OPTIONS.map(option=>{
+        const active=bucketSortMode(sidebarOrder,sortMenu.bucketId)===option.id
+        return <button key={option.id} title={option.hint} aria-checked={active} role="menuitemradio" onClick={()=>{setSidebarOrder(setBucketSortMode(sidebarOrder,sortMenu.bucketId,option.id));setSortMenu(null)}}>{active?'✓ ':''}{option.label}</button>
+      })}
+      <div class="context-note">Dragging a Project into place puts this section back on Manual order.</div>
     </div>}
 
     {noteMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Resource view actions" style={{left:clampContextMenuLeft(noteMenu.x,innerWidth),top:Math.max(4,Math.min(noteMenu.y,innerHeight-220))}}>

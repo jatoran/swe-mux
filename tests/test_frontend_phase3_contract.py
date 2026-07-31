@@ -118,7 +118,9 @@ def test_drag_reorder_keeps_native_source_mounted_and_commits_latest_preview() -
     assert (
         "reorderTargetFromContainer(tabStrip,current.childId,'horizontal',pointer.clientX)" in app
     )
-    assert "beginProjectPointerDrag(event,project,peerIds)" in app
+    # The bucket id rides along so a hand-placed Project can drop that section's
+    # sort back to Manual instead of being re-sorted away on the next render.
+    assert "beginProjectPointerDrag(event,project,bucket.id,peerIds)" in app
     assert "showPointerDropIndicator(targetElement,`insert-${target.side}`)" in app
     assert "data-reorder-id={project.id}" in app
     assert "data-reorder-id={child.id}" in app
@@ -132,6 +134,28 @@ def test_drag_reorder_keeps_native_source_mounted_and_commits_latest_preview() -
     assert ".drop-after:after" in css
     assert ".drop-zone-left" in css
     assert ".drop-zone-tabs" in css
+
+
+def test_sidebar_sections_carry_a_sort_control_and_reorder_by_their_header() -> None:
+    root = Path(__file__).parents[1] / "frontend" / "src"
+    app = (root / "App.tsx").read_text(encoding="utf-8")
+    css = (root / "style.css").read_text(encoding="utf-8")
+    sort = (root / "projectSort.ts").read_text(encoding="utf-8")
+
+    # Sort is per section, so a Group and the ungrouped remainder can differ.
+    assert "bucketSortMode(sidebarOrder,bucket.id)" in app
+    assert 'class={`bucket-sort ${sortMode===\'custom\'?\'\':\'active\'}`}' in app
+    assert "setSidebarOrder(setBucketSortMode(sidebarOrder,sortMenu.bucketId,option.id))" in app
+    # Placing a Project by hand is what returns its section to Manual order.
+    assert "setSidebarOrder(setBucketSortMode(sidebarOrder,bucketId,'custom'))" in app
+    # The header doubles as the section's drag handle; its buttons keep the pointer.
+    assert "beginBucketPointerDrag(event,bucket.id,bucket.name)" in app
+    assert "data-reorder-id={bucket.id}" in app
+    assert "'PUT','/api/project-groups/order'" in app
+    assert ".sidebar-project-bucket>header .bucket-sort" in css
+    assert '.sidebar-project-bucket[data-pointer-drop-indicator="insert-before"]' in css
+    for mode in ("custom", "activity", "name", "name-desc", "created-desc", "created"):
+        assert f"id: '{mode}'" in sort
 
 
 def test_pane_local_tab_rails_and_resizable_collapsible_sidebar_are_wired() -> None:

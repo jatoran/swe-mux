@@ -195,6 +195,10 @@ class ProjectRecord:
     default_profile_id: str | None = None
     resource_open_mode: Literal["dock", "popout"] | None = None
     sidebar_visible: bool = True
+    #: Registration time, epoch seconds. 0 means unknown: databases that predate the
+    #: column keep it when nothing in history dates the Project, and the sidebar's
+    #: date ordering sorts those last rather than inventing a day for them.
+    created_at: float = 0.0
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)
