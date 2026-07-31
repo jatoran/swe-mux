@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Session } from '../src/types.ts'
-import { reconcileSeen, isUnread, projectRailStatus, type SeenMap } from '../src/sessionAttention.ts'
+import { reconcileSeen, isUnread, projectRailStatus, projectSetRailStatus, type SeenMap } from '../src/sessionAttention.ts'
 
 const session = (
   id: string,
@@ -71,6 +71,26 @@ test('project rail activity keeps unread independent from the strongest live sta
   assert.deepEqual(projectRailStatus(sessions, 'p1', { working: 100, ready: 100, approval: 100 }), {
     activity: 'attention', unread: true, liveCount: 3, agentCount: 3,
   })
+})
+
+test('a collapsed section answers for every project it folded away', () => {
+  const sessions = [
+    session('calm', 'claude', 100, { project_id: 'p1', state: 'idle' }),
+    session('waiting', 'claude', 150, { project_id: 'p2', state: 'awaiting' }),
+    session('elsewhere', 'claude', 100, { project_id: 'p3', state: 'working' }),
+  ]
+  const seen: SeenMap = { calm: 100, waiting: 100, elsewhere: 100 }
+  // The approval lives in p2, so folding p1 and p2 together must still surface it —
+  // a section that reported only its first Project would hide the one thing that
+  // needs the user.
+  assert.deepEqual(projectSetRailStatus(sessions, ['p1', 'p2'], seen), {
+    activity: 'attention', unread: true, liveCount: 2, agentCount: 2,
+  })
+  // Projects outside the section never leak into its aggregate.
+  assert.equal(projectSetRailStatus(sessions, ['p1'], seen).activity, 'waiting')
+  assert.equal(projectSetRailStatus(sessions, [], seen).activity, 'inactive')
+  // A Set is accepted as-is, so the caller need not rebuild one per render.
+  assert.equal(projectSetRailStatus(sessions, new Set(['p3']), seen).activity, 'working')
 })
 
 test('project rail activity distinguishes working, ready, shell-only, and empty projects', () => {

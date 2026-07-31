@@ -63,7 +63,16 @@ export function isUnread(session: Session, seen: SeenMap): boolean {
  *  Project chip. Approval wins over work, work over ready/waiting, while unread
  *  remains a separate signal so unseen output is never hidden by activity. */
 export function projectRailStatus(sessions: Session[], projectId: string, seen: SeenMap): ProjectRailStatus {
-  const live = sessions.filter(session=>session.project_id===projectId&&!session.pending&&!DEAD.includes(session.state))
+  return projectSetRailStatus(sessions, [projectId], seen)
+}
+
+/** The same aggregate over several Projects at once, for a collapsed sidebar
+ *  section. Collapsing hides whichever Project holds the waiting agent, so the
+ *  section has to answer for all of them — with the same precedence, or a folded
+ *  Group would quietly outrank an expanded one showing the identical state. */
+export function projectSetRailStatus(sessions: Session[], projectIds: Iterable<string>, seen: SeenMap): ProjectRailStatus {
+  const scope = projectIds instanceof Set ? projectIds : new Set(projectIds)
+  const live = sessions.filter(session=>scope.has(session.project_id)&&!session.pending&&!DEAD.includes(session.state))
   const agents = live.filter(isAgentSession)
   const activity:ProjectRailActivity = agents.some(session=>session.state==='awaiting')?'attention'
     :agents.some(session=>session.state==='working')?'working'

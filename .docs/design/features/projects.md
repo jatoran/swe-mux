@@ -38,17 +38,34 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
 - Hiding a Project removes it from desktop/mobile navigation and numeric Project shortcuts. It
   preserves the registration, `.swe-mux/` content, layout, history, settings, and live sessions.
 - The sidebar renders only visible Projects, grouped into sections: one per Group, plus the
-  ungrouped remainder labelled `PROJECTS`. Sections are reordered by dragging their header;
-  Group order is shared (it is `ProjectGroup.position`), while the ungrouped remainder has no
-  record to hold a position and so remembers its slot per device, defaulting to last.
-- Each section header carries a sort control (`⇅`) over that section's Projects only: Manual
-  order, Recently active, Name A→Z / Z→A, Newest / Oldest first. Sorting is per section because
-  Groups are how unlike things are separated — a hand-arranged shortlist and a long alphabetical
-  pile are both legitimate, and one global mode cannot be both. The mode is device-local.
-- Manual order is the default and the tie-break for every other mode, so a sort never discards
-  the arrangement underneath it. Placing a Project by hand — whole-row pointer dragging or Move
-  up/down, both on the same persisted reorder contract — returns that section to Manual and
-  writes the order that was on screen, so the move survives instead of being re-sorted away.
+  ungrouped remainder labelled `PROJECTS`. The remainder is a section like any other — it
+  sorts, reorders, and folds on the same terms, and orders by its visible name.
+- Each section header carries a sort control (`⇅`) covering **two levels**. Flat, and acting on
+  that section's Projects: Manual order, Recently active, Name A→Z / Z→A, Newest / Oldest first.
+  Behind a `Sort sections` group, acting on the sections themselves: Manual order, Recently
+  active, Name A→Z / Z→A. Both live on the header because a header's `⇅` already means "how is
+  this list ordered" and the sidebar has no section-level header to hang a second control on;
+  the submenu keeps the common case one click deep and carries its current mode in its label,
+  since section order has no always-visible indicator of its own.
+- Project sorting is per section because Groups are how unlike things are separated — a
+  hand-arranged shortlist and a long alphabetical pile are both legitimate, and one global mode
+  cannot be both. Section sorting is necessarily one setting. Both are device-local.
+- Sections have no date modes: neither a Group record nor the synthetic remainder is dated, and
+  "newest Group first" does not earn a column. A section's "Recently active" is the latest
+  activity of any Project in it, so a Group ranks on the work inside it rather than its age; an
+  empty Group reads as unmeasured and sorts last.
+- Manual order is the default and the tie-break at both levels, so a sort never discards the
+  arrangement underneath it. Placing something by hand returns *that level* to Manual and writes
+  the order that was on screen, so the move survives instead of being re-sorted away: dragging a
+  Project row (or Move up/down, the same persisted reorder contract) for Projects, dragging a
+  section header for sections.
+- A section header is also its collapse toggle — press and move to reorder, press and release to
+  fold, disambiguated by the drag swallowing the click it ends with, exactly as a Project row
+  resolves drag-versus-select. Collapsing is presentation only: the folded Projects keep their
+  place in the collapsed rail, the numbered shortcuts, and every order.
+- A folded section reports both a live-session count and the strongest agent state inside it,
+  in the collapsed rail's colours. A count alone would let an agent waiting for approval
+  disappear behind the fold, which is the one thing collapsing must not hide.
 - A drag only ever permutes the rows on screen; hidden Projects and empty Groups keep the slots
   they already held rather than being reshuffled by a reorder the user could not see.
 - "Recently active" ranks on the latest session activity a Project has ever had, derived from

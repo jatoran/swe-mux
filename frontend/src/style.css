@@ -1347,7 +1347,23 @@ body {
    beside the label (`margin-right:auto` on it, not `flex:1` on the label) because it
    acts on the list under this heading; rename/remove act on the Group and stay at the
    far edge where destructive controls live everywhere else in the app. */
-.sidebar-project-bucket{position:relative;display:flex;flex-direction:column;margin:0 0 8px}.sidebar-project-bucket>header{order:-1;min-height:24px;display:flex;align-items:center;gap:3px;padding:0 7px;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em;cursor:grab;user-select:none}.sidebar-project-bucket>header:active{cursor:grabbing}.sidebar-project-bucket>header>span{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidebar-project-bucket>header button{flex:0 0 auto;width:20px;height:20px;border:0;background:transparent;color:var(--muted);cursor:pointer}.sidebar-project-bucket>header button:hover{color:var(--text);background:var(--panel2)}.sidebar-project-bucket>header .bucket-sort{margin-right:auto;font-size:11px;line-height:1}.sidebar-project-bucket>header .bucket-sort.active{color:var(--green)}
+.sidebar-project-bucket{position:relative;display:flex;flex-direction:column;margin:0 0 8px}.sidebar-project-bucket>header{order:-1;min-height:24px;display:flex;align-items:center;gap:3px;padding:0 7px;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em;cursor:grab;user-select:none}.sidebar-project-bucket>header:active{cursor:grabbing}.sidebar-project-bucket>header>span{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidebar-project-bucket>header button{flex:0 0 auto;width:20px;height:20px;border:0;background:transparent;color:var(--muted);cursor:pointer}.sidebar-project-bucket>header button:hover{color:var(--text);background:var(--panel2)}.sidebar-project-bucket>header .bucket-sort{margin-right:auto;font-size:11px;line-height:1}.sidebar-project-bucket>header .bucket-sort.active{color:var(--green)}.sidebar-project-bucket>header .bucket-chevron{flex:0 0 auto;width:9px;font-size:9px;line-height:1}
+/* A folded section still has to answer for what is inside it. The count mirrors a
+   collapsed Project's badge; the dot carries the strongest agent state, because a
+   count alone cannot say that something in here is waiting on you. Colours and
+   pulses are the collapsed rail's, so one folded thing never speaks a different
+   visual language from another. */
+.bucket-collapsed-badge{flex:none;height:15px;padding:0 5px 0 4px;display:inline-flex;align-items:center;gap:4px;border-radius:8px;background:color-mix(in srgb,var(--green) 18%,transparent);color:var(--green);font:600 8px 'JetBrains Mono';letter-spacing:0}
+.bucket-collapsed-badge>i{width:5px;height:5px;border-radius:50%;background:currentColor}
+.bucket-collapsed-badge.activity-attention{background:color-mix(in srgb,var(--amber) 20%,transparent);color:var(--amber)}
+.bucket-collapsed-badge.activity-attention>i{animation:attention-pulse 1.2s ease-in-out infinite}
+.bucket-collapsed-badge.activity-working{background:color-mix(in srgb,var(--blue) 20%,transparent);color:var(--blue)}
+.bucket-collapsed-badge.activity-working>i{animation:agent-pulse 1.4s steps(2,end) infinite}
+.bucket-collapsed-badge.activity-running{background:color-mix(in srgb,var(--muted) 22%,transparent);color:var(--muted)}
+.bucket-collapsed-badge.unread{box-shadow:0 0 0 1px currentColor}
+/* Folded sections sit tighter together: the 8px tail exists to separate a section's
+   Projects from the next heading, and with no Projects showing it reads as a gap. */
+.sidebar-project-bucket.collapsed{margin-bottom:2px}
 .sidebar-project-bucket[data-pointer-drop-indicator]:after{content:"";position:absolute;left:2px;right:2px;height:3px;z-index:30;pointer-events:none;background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 75%,transparent)}.sidebar-project-bucket[data-pointer-drop-indicator="insert-before"]:after{top:-3px}.sidebar-project-bucket[data-pointer-drop-indicator="insert-after"]:after{bottom:-3px}
 .empty-project-cta{width:100%;display:grid;gap:5px;padding:14px;border:1px dashed var(--line);background:transparent;color:var(--text);text-align:left;cursor:pointer}.empty-project-cta small{color:var(--muted)}
 .context-select{display:grid;grid-template-columns:auto minmax(110px,1fr);align-items:center;gap:9px;padding:6px 9px;color:var(--muted);font-size:9px}.context-select select{min-width:0;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}

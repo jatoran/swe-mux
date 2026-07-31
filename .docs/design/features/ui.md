@@ -19,15 +19,29 @@ responsive controls.
   pane tab, Files is the drawer's navigator tab — so each reads its active state from where its
   surface actually lives, and the Files chip selects that Project before opening the drawer,
   since the drawer's Files view follows the active Project.
-- Projects sit in sections: one per Group, plus the ungrouped remainder headed `PROJECTS`. A
-  section header is its own drag handle, and carries a `⇅` control that sorts the Projects under
-  that heading — Manual, Recently active, Name A→Z / Z→A, Newest / Oldest first — highlighted
-  while a sort is active so a non-manual order is never a mystery. Sort is per section, not
-  global: Groups exist to separate unlike things, so one may be a hand-arranged shortlist while
-  another is a long alphabetical pile. Dragging a Project into place puts its section back on
-  Manual, because a hand-placed row that the next render re-sorts away reads as a broken drag.
-  The mode, and the ungrouped section's slot among the Groups, are device-local; Group order
-  itself is shared. Behavior detail lives in `projects.md`.
+- Projects sit in sections: one per Group, plus the ungrouped remainder headed `PROJECTS`, which
+  behaves as a section in every respect rather than as a pinned leftover. A section header does
+  three jobs, and they compose rather than competing: press-and-move reorders it, press-and-
+  release folds it, and its `⇅` sorts. Drag-versus-click is settled by the drag swallowing the
+  click it ends with — the same resolution a Project row already uses for drag-versus-select, so
+  there is one rule to learn rather than two.
+- That `⇅` covers both levels: flat items sort the Projects under this heading (Manual, Recently
+  active, Name A→Z / Z→A, Newest / Oldest first), and a `Sort sections` group sorts the sections
+  themselves (Manual, Recently active, Name A→Z / Z→A). One control because a header's `⇅`
+  already means "how is this list ordered" and the sidebar has no section-level header to hang a
+  second one on; a `MenuGroup` because the common case should not pay for the rarer one. The
+  button highlights while this section's Projects are sorted, and the submenu label carries the
+  section mode, which otherwise has no always-visible cue.
+- Project sort is per section, not global: Groups exist to separate unlike things, so one may be
+  a hand-arranged shortlist while another is a long alphabetical pile. Placing anything by hand
+  puts that level back on Manual, because a hand-placed row that the next render re-sorts away
+  reads as a broken drag.
+- A folded section shows a live-session count and a state dot for the strongest agent state
+  inside it, in the collapsed rail's colours so one folded thing never speaks a different visual
+  language from another. The dot exists because a count alone would let an agent waiting on
+  approval vanish behind the fold.
+- Sort modes, fold state, and the ungrouped section's slot among the Groups are device-local;
+  Group order itself is shared. Behavior detail lives in `projects.md`.
 - Only a tabbed pane indents its sessions in the sidebar, and it does so because it draws the
   bracket that explains the indent. Split branches are siblings at the same depth: the sidebar is
   a session list, not a pane-geometry diagram, and indenting per split produced unexplained

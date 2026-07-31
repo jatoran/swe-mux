@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Project, Session } from '../src/types.ts'
 import {
-  EMPTY_SIDEBAR_ORDER, UNGROUPED_BUCKET_ID, bucketSortMode, loadSidebarOrder, mergeVisibleOrder,
-  placeUngrouped, projectActivity, projectSortLabel, pruneSidebarOrder, serializeSidebarOrder,
-  setBucketSortMode, sortProjects,
+  EMPTY_SIDEBAR_ORDER, UNGROUPED_BUCKET_ID, bucketActivity, bucketSortMode, isBucketCollapsed,
+  loadSidebarOrder, mergeVisibleOrder, placeUngrouped, projectActivity, projectSortLabel,
+  pruneSidebarOrder, sectionSortLabel, serializeSidebarOrder, setBucketSortMode, sortBuckets,
+  sortProjects, toggleBucketCollapsed,
 } from '../src/projectSort.ts'
 
 const project = (id: string, name: string, extra: Partial<Project> = {}) =>
@@ -13,23 +14,49 @@ const project = (id: string, name: string, extra: Partial<Project> = {}) =>
 const session = (id: string, project_id: string, extra: Partial<Session> = {}) =>
   ({ id, name: id, project_id, state: 'running', created_at: 0, last_activity_ts: 0, ...extra }) as unknown as Session
 
+const prefs = (extra: Partial<typeof EMPTY_SIDEBAR_ORDER> = {}) => ({ ...EMPTY_SIDEBAR_ORDER, ...extra })
+
 test('sidebar order load tolerates missing, malformed, and unknown modes', () => {
   assert.deepEqual(loadSidebarOrder(null), EMPTY_SIDEBAR_ORDER)
   assert.deepEqual(loadSidebarOrder('not json'), EMPTY_SIDEBAR_ORDER)
   assert.deepEqual(loadSidebarOrder('[1,2]'), EMPTY_SIDEBAR_ORDER)
   assert.deepEqual(loadSidebarOrder('{"sort":{"g1":"nonsense","g2":"name"},"ungroupedIndex":1}'), {
     sort: { g2: 'name' },
+    sectionSort: 'custom',
     ungroupedIndex: 1,
+    collapsed: [],
   })
   // A negative or fractional slot would splice somewhere nobody asked for.
   assert.equal(loadSidebarOrder('{"ungroupedIndex":-2}').ungroupedIndex, null)
   assert.equal(loadSidebarOrder('{"ungroupedIndex":1.5}').ungroupedIndex, null)
+  // Section modes are a narrower set than Project modes; a Project-only mode here
+  // would order the sections by a key they do not have.
+  assert.equal(loadSidebarOrder('{"sectionSort":"created-desc"}').sectionSort, 'custom')
+  assert.equal(loadSidebarOrder('{"sectionSort":"activity"}').sectionSort, 'activity')
+  assert.deepEqual(loadSidebarOrder('{"collapsed":["g1",7,"g2"]}').collapsed, ['g1', 'g2'])
+  // A blob written before sections could collapse must still load.
+  assert.deepEqual(loadSidebarOrder('{"sort":{"g1":"name"}}'), {
+    sort: { g1: 'name' }, sectionSort: 'custom', ungroupedIndex: null, collapsed: [],
+  })
 })
 
 test('sidebar order round-trips and never persists the custom default', () => {
-  const prefs = { sort: { g1: 'name' as const, g2: 'custom' as const }, ungroupedIndex: 0 }
-  const reloaded = loadSidebarOrder(serializeSidebarOrder(prefs))
-  assert.deepEqual(reloaded, { sort: { g1: 'name' }, ungroupedIndex: 0 })
+  const stored = prefs({
+    sort: { g1: 'name', g2: 'custom' }, sectionSort: 'activity', ungroupedIndex: 0,
+    collapsed: ['g2'],
+  })
+  assert.deepEqual(loadSidebarOrder(serializeSidebarOrder(stored)), {
+    sort: { g1: 'name' }, sectionSort: 'activity', ungroupedIndex: 0, collapsed: ['g2'],
+  })
+})
+
+test('collapsing a section toggles without mutating the input', () => {
+  const start = EMPTY_SIDEBAR_ORDER
+  const folded = toggleBucketCollapsed(start, 'g1')
+  assert.deepEqual(start.collapsed, [])
+  assert.equal(isBucketCollapsed(folded, 'g1'), true)
+  assert.equal(isBucketCollapsed(folded, 'g2'), false)
+  assert.deepEqual(toggleBucketCollapsed(folded, 'g1').collapsed, [])
 })
 
 test('bucket sort mode set/read, with custom clearing the entry', () => {
@@ -43,9 +70,13 @@ test('bucket sort mode set/read, with custom clearing the entry', () => {
 })
 
 test('pruneSidebarOrder drops buckets that no longer exist and keeps identity otherwise', () => {
-  const prefs = { sort: { g1: 'name' as const, gone: 'activity' as const }, ungroupedIndex: null }
-  assert.deepEqual(pruneSidebarOrder(prefs, ['g1', UNGROUPED_BUCKET_ID]).sort, { g1: 'name' })
-  assert.equal(pruneSidebarOrder(prefs, ['g1', 'gone']), prefs)
+  const stored = prefs({ sort: { g1: 'name', gone: 'activity' }, collapsed: ['g1', 'gone'] })
+  const pruned = pruneSidebarOrder(stored, ['g1', UNGROUPED_BUCKET_ID])
+  assert.deepEqual(pruned.sort, { g1: 'name' })
+  // Collapse is per bucket too: a deleted Group's fold would otherwise be inherited
+  // by whatever bucket id came back.
+  assert.deepEqual(pruned.collapsed, ['g1'])
+  assert.equal(pruneSidebarOrder(stored, ['g1', 'gone']), stored)
 })
 
 test('custom order is a pass-through of the manual order', () => {
@@ -97,6 +128,40 @@ test('projectActivity takes the later of the history stamp and live sessions', (
 test('projectActivity falls back to spawn time when a session has no activity stamp', () => {
   const activity = projectActivity([project('p1', 'One')], [session('s1', 'p1', { created_at: 600 })])
   assert.equal(activity.get('p1'), 600)
+})
+
+const bucket = (id: string, name: string, items: string[]) =>
+  ({ id, name, items: items.map(item => project(item, item)) })
+
+test('sections sort by name with the ungrouped remainder competing on its own label', () => {
+  const buckets = [bucket('g1', 'Tools', []), bucket(UNGROUPED_BUCKET_ID, 'Projects', []), bucket('g2', 'Clients', [])]
+  assert.deepEqual(sortBuckets(buckets, 'name', new Map()).map(item => item.id), ['g2', UNGROUPED_BUCKET_ID, 'g1'])
+  assert.deepEqual(sortBuckets(buckets, 'name-desc', new Map()).map(item => item.id), ['g1', UNGROUPED_BUCKET_ID, 'g2'])
+  // Manual order is a pass-through, so the caller's arrangement is untouched.
+  assert.equal(sortBuckets(buckets, 'custom', new Map()), buckets)
+})
+
+test('a section is as recent as the most recent Project in it; empty ones sort last', () => {
+  const activity = new Map([['a', 10], ['b', 900], ['c', 40]])
+  const buckets = [
+    bucket('quiet', 'Quiet', ['a']),
+    bucket('empty', 'Empty', []),
+    bucket('busy', 'Busy', ['b', 'c']),
+  ]
+  assert.equal(bucketActivity(buckets[2], activity), 900)
+  assert.equal(bucketActivity(buckets[1], activity), 0)
+  assert.deepEqual(sortBuckets(buckets, 'activity', activity).map(item => item.id), ['busy', 'quiet', 'empty'])
+})
+
+test('sections tie-break on the manual order they came in with', () => {
+  const buckets = [bucket('second', 'Second', []), bucket('first', 'First', [])]
+  // Both unmeasured, so neither may jump the arrangement underneath the sort.
+  assert.deepEqual(sortBuckets(buckets, 'activity', new Map()).map(item => item.id), ['second', 'first'])
+})
+
+test('every section mode has a label; an unknown one reads as manual', () => {
+  assert.equal(sectionSortLabel('activity'), 'Recently active')
+  assert.equal(sectionSortLabel('custom'), 'Manual order')
 })
 
 test('the ungrouped bucket lands in its slot, clamped, and last by default', () => {

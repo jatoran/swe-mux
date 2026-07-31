@@ -158,6 +158,31 @@ def test_sidebar_sections_carry_a_sort_control_and_reorder_by_their_header() -> 
         assert f"id: '{mode}'" in sort
 
 
+def test_sections_sort_and_collapse_from_the_same_header() -> None:
+    root = Path(__file__).parents[1] / "frontend" / "src"
+    app = (root / "App.tsx").read_text(encoding="utf-8")
+    css = (root / "style.css").read_text(encoding="utf-8")
+    sort = (root / "projectSort.ts").read_text(encoding="utf-8")
+
+    # Section ordering rides the same ⇅ control, one level up, behind a MenuGroup.
+    assert 'MenuGroup id="sections"' in app or "MenuGroup id='sections'" in app
+    assert "sortBuckets(allBuckets,sidebarOrder.sectionSort,activityStamps)" in app
+    assert "setSidebarOrder({...sidebarOrder,sectionSort:option.id})" in app
+    # Dragging a section header is what returns the sections to Manual order.
+    assert "sectionSort:'custom'" in app
+    # Click folds, drag reorders; the drag swallows the click it ends with.
+    assert "suppressDragClickRef.current===`bucket:${bucket.id}`" in app
+    assert "setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))" in app
+    assert "{!bucketCollapsed&&bucket.items.map(project =>" in app
+    # A folded section reports live count *and* the strongest agent state, or an
+    # approval waiting inside it would be invisible.
+    assert "projectSetRailStatus(sessions,peerIds,seenActivity)" in app
+    assert ".bucket-collapsed-badge.activity-attention" in css
+    assert ".sidebar-project-bucket>header .bucket-chevron" in css
+    # Sections deliberately carry no date modes: nothing dates a Group.
+    assert "created" not in sort.split("SECTION_SORT_OPTIONS")[1].split("]")[0]
+
+
 def test_pane_local_tab_rails_and_resizable_collapsible_sidebar_are_wired() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
     app = (root / "App.tsx").read_text(encoding="utf-8")
