@@ -53,7 +53,7 @@ export function VoicePlayer({ session, status, mode, onSession }: { session: Ses
     if (!clip || clip.status !== 'ready') return
     unlockPlayback()
     if (isCurrent && playback.playing) pausePlayback()
-    else void playClip(clip.id).catch(() => setError('Playback failed.'))
+    else void playClip(clip.id, session.id).catch(() => setError('Playback failed.'))
   }
   const generate = async () => {
     if (busy) return
@@ -61,7 +61,7 @@ export function VoicePlayer({ session, status, mode, onSession }: { session: Ses
     try {
       const created = await api<VoiceClip>('POST', `/api/sessions/${session.id}/voice/generate`)
       await load()
-      if (created?.id) { setSelectedId(created.id); void playClip(created.id).catch(() => {}) }
+      if (created?.id) { setSelectedId(created.id); void playClip(created.id, session.id).catch(() => {}) }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'generation failed')
     } finally { setBusy(false) }

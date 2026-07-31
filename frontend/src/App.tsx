@@ -49,7 +49,7 @@ import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
 import { VoicePlayer } from './VoicePlayer'
 import { ConversationControl } from './ConversationControl'
-import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, unlockPlayback } from './voice'
+import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { currentProfile, loadDrawerTabOrder, loadSettings, refreshSettings, saveDrawerTabOrder } from './deviceSettings'
 import { initPush } from './push'
@@ -67,6 +67,7 @@ import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from '
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
+import { dismissSoftKeyboard } from './mobileKeyboard'
 import { MOBILE_TAB_ORDER_KEY, moveMobileTab, parseMobileTabOrder, pruneMobileTabOrder, serializeMobileTabOrder, type MobileTabOrder } from './mobileTabOrder'
 import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
@@ -401,16 +402,21 @@ export function App() {
   // no workspace between them and bury one under the other's scrim, so opening either
   // closes the other. On desktop the sidebar is an in-flow column that the right-edge
   // panel never covers, so both stay open there.
+  // Opening either also lowers the soft keyboard, for the same reason: it is
+  // held up by a field now behind the scrim, and it covers up to half of the
+  // panel that just opened (see mobileKeyboard.ts). Both rules live in the
+  // setters rather than at each call site so every entry point — gesture,
+  // command, nav toggle, tutorial — inherits them.
   type OpenState=boolean|((value:boolean)=>boolean)
   const setSidebarOpen=(next:OpenState)=>{
     const open=typeof next==='function'?next(sidebarOpen):next
     setSidebarOpenState(open)
-    if(open&&mobileWorkspace)setClipboardOpenState(false)
+    if(open&&mobileWorkspace){setClipboardOpenState(false);dismissSoftKeyboard()}
   }
   const setClipboardOpen=(next:OpenState)=>{
     const open=typeof next==='function'?next(clipboardOpen):next
     setClipboardOpenState(open)
-    if(open&&mobileWorkspace)setSidebarOpenState(false)
+    if(open&&mobileWorkspace){setSidebarOpenState(false);dismissSoftKeyboard()}
   }
   /** Open the drawer on a specific tab (or toggle that tab shut if it is already showing). */
   const showDrawerTab=(tab:DrawerTabId)=>{
@@ -777,6 +783,11 @@ export function App() {
       .then(config=>applyConfig(config,includeTheme))
       .catch(()=>{})
 
+  // Read aloud turned off in Settings (here or on another device — `configuration_changed`
+  // refetches this status everywhere) silences whatever is mid-clip rather than letting it
+  // run out.
+  useEffect(() => { if (voiceStatus && !voiceStatus.enabled) stopAllPlayback() }, [voiceStatus?.enabled])
+
   useEffect(() => {
     void refresh()
     void loadConfig(true)
@@ -982,7 +993,11 @@ export function App() {
               trigger: event.payload?.trigger,
               streamId: event.payload?.stream_id,
             } }))
-            if (!isReplay && event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoplayEnabled()) enqueueAutoplay(clipId,String(event.payload?.stream_id||'')||null)
+            // The pane's mode is re-checked here as well as on the daemon: a clip
+            // generated just before the user hit "off" would otherwise land and start
+            // speaking after the switch was thrown.
+            const autoAllowed = eventSession ? eventSession.voice_mode !== 'off' : true
+            if (!isReplay && event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoAllowed && autoplayEnabled()) enqueueAutoplay(clipId,String(event.payload?.stream_id||'')||null,event.session_id||null)
           }
           if (event.type === 'settings_changed') refreshSettings()
           // Another device (or another tab) changed the ring; an open picker refetches.
@@ -2145,8 +2160,12 @@ export function App() {
     if (mode === 'off' || mode === 'on_demand' || mode === 'auto') return mode
     return voiceStatus?.enabled ? voiceStatus.default_mode : 'off'
   }
-  const setVoiceMode = (session: Session, mode: VoiceMode) =>
-    api<Session>('PATCH', `/api/sessions/${session.id}`, { voice_mode: mode }).then(updateSession).catch(cause => setError(cause instanceof Error ? cause.message : String(cause)))
+  const setVoiceMode = (session: Session, mode: VoiceMode) => {
+    // Cut this pane's audio on the click, not when the PATCH lands and not when the
+    // current clip happens to end: "off" has to be audible immediately.
+    if (mode === 'off') stopSessionPlayback(session.id)
+    return api<Session>('PATCH', `/api/sessions/${session.id}`, { voice_mode: mode }).then(updateSession).catch(cause => setError(cause instanceof Error ? cause.message : String(cause)))
+  }
   const cycleVoiceMode = (session: Session) => {
     const order: VoiceMode[] = ['off', 'on_demand', 'auto']
     void setVoiceMode(session, order[(order.indexOf(effectiveVoiceMode(session)) + 1) % order.length])
@@ -2156,7 +2175,7 @@ export function App() {
     unlockPlayback()
     try {
       const clip = await api<VoiceClip>('POST', `/api/sessions/${session.id}/voice/generate`)
-      if (clip?.id) void playClip(clip.id).catch(() => {})
+      if (clip?.id) void playClip(clip.id, session.id).catch(() => {})
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
