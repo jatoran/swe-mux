@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,160 @@ async def test_project_groups_only_organize_projects(tmp_path: Path) -> None:
     await projects.delete_group(group.id)
     assert projects.projects[project.id].group_id is None
     assert group.id not in projects.groups
+    history.close()
+
+
+async def test_group_order_survives_deletes_and_guards_concurrent_writers(
+    tmp_path: Path,
+) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+
+    first = await projects.create_group("First")
+    second = await projects.create_group("Second")
+    third = await projects.create_group("Third")
+    assert [item.id for item in projects.ordered_groups()] == [first.id, second.id, third.id]
+
+    reordered = await projects.reorder_groups(
+        [third.id, first.id, second.id], expected_order=[first.id, second.id, third.id]
+    )
+    assert [item.id for item in reordered] == [third.id, first.id, second.id]
+    assert [item.position for item in reordered] == [0, 1, 2]
+
+    # A second device still holding the pre-drag order must be told to refresh rather
+    # than silently overwriting the permutation that already landed.
+    with pytest.raises(ValueError, match="order changed"):
+        await projects.reorder_groups(
+            [first.id, second.id, third.id], expected_order=[first.id, second.id, third.id]
+        )
+    with pytest.raises(ValueError, match="every group once"):
+        await projects.reorder_groups(
+            [third.id, first.id], expected_order=[third.id, first.id, second.id]
+        )
+
+    # Deleting from the middle renumbers, so the next group created cannot collide
+    # with an occupied slot and land somewhere the user did not drop it.
+    await projects.delete_group(first.id)
+    assert [item.position for item in projects.ordered_groups()] == [0, 1]
+    fourth = await projects.create_group("Fourth")
+    assert [item.id for item in projects.ordered_groups()] == [third.id, second.id, fourth.id]
+    history.close()
+
+    reopened_history = HistoryIndex(tmp_path / "mux.db")
+    reopened = ProjectManager(reopened_history)
+    await reopened.start()
+    assert [item.id for item in reopened.ordered_groups()] == [third.id, second.id, fourth.id]
+    reopened_history.close()
+
+
+async def test_projects_are_dated_at_registration_and_backfilled_from_history(
+    tmp_path: Path,
+) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    before = time.time()
+    project = await projects.create("Main", str(root))
+    assert before <= project.created_at <= time.time()
+
+    # An unrelated update must not restamp the Project as newly created.
+    renamed = await projects.update(project.id, name="Renamed")
+    assert renamed.created_at == project.created_at
+    history.close()
+
+    reopened_history = HistoryIndex(tmp_path / "mux.db")
+    reopened = ProjectManager(reopened_history)
+    await reopened.start()
+    assert reopened.projects[project.id].created_at == project.created_at
+    reopened_history.close()
+
+
+async def test_created_at_migration_dates_older_projects_from_their_first_session(
+    tmp_path: Path,
+) -> None:
+    """A database written before the column exists must still order by date."""
+    path = tmp_path / "mux.db"
+    history = HistoryIndex(path)
+    projects = ProjectManager(history)
+    await projects.start()
+    dated = tmp_path / "dated"
+    dated.mkdir()
+    undated = tmp_path / "undated"
+    undated.mkdir()
+    with_history = await projects.create("Dated", str(dated))
+    without_history = await projects.create("Undated", str(undated))
+    await history.session_started(
+        SessionRecord(
+            "s1",
+            "agent",
+            with_history.id,
+            "claude",
+            "native-1",
+            str(dated),
+            "claude.exe",
+            [],
+            created_at=1_700_000_000.0,
+        ),
+        None,
+    )
+    # Drop the column to look like a database from before the migration.
+    history._db.execute("ALTER TABLE projects DROP COLUMN created_at")
+    history._db.commit()
+    history.close()
+
+    migrated = HistoryIndex(path)
+    records = {item.id: item for item in await migrated.list_projects()}
+    assert records[with_history.id].created_at == 1_700_000_000.0
+    # Nothing in the database dates this one, and inventing a day for it would put it
+    # in the middle of a date ordering; 0 is read as unknown and sorts last instead.
+    assert records[without_history.id].created_at == 0.0
+    migrated.close()
+
+
+async def test_project_last_activity_takes_the_latest_stamp_a_session_carries(
+    tmp_path: Path,
+) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    root = tmp_path / "repo"
+    root.mkdir()
+    project = await projects.create("Main", str(root))
+    record = SessionRecord(
+        "s1",
+        "agent",
+        project.id,
+        "claude",
+        "native-1",
+        str(root),
+        "claude.exe",
+        [],
+        created_at=1_000.0,
+    )
+    await history.session_started(record, None)
+    assert (await history.project_last_activity())[project.id] == 1_000.0
+
+    # A running session has no exit, so the transcript stamp is what keeps it ranked.
+    history._db.execute("UPDATE history SET last_message_at=4000 WHERE id=?", (record.id,))
+    history._db.commit()
+    assert (await history.project_last_activity())[project.id] == 4_000.0
+    # An exit later than every other stamp wins; an earlier one must not pull it back.
+    history._db.execute("UPDATE history SET exited_at=9000 WHERE id=?", (record.id,))
+    history._db.commit()
+    assert (await history.project_last_activity())[project.id] == 9_000.0
+    history._db.execute("UPDATE history SET exited_at=2000 WHERE id=?", (record.id,))
+    history._db.commit()
+    assert (await history.project_last_activity())[project.id] == 4_000.0
+
+    # A Project that never ran a session is absent, not zero-stamped in the map.
+    other = tmp_path / "other"
+    other.mkdir()
+    quiet = await projects.create("Quiet", str(other))
+    assert quiet.id not in await history.project_last_activity()
     history.close()
 
 

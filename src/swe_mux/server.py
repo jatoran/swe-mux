@@ -554,6 +554,7 @@ def create_app(
             web.delete("/api/projects/{project_id}/watch/{watch_id}", delete_project_watch),
             web.get("/api/project-groups", list_project_groups),
             web.post("/api/project-groups", create_project_group),
+            web.put("/api/project-groups/order", reorder_project_groups),
             web.patch("/api/project-groups/{group_id}", patch_project_group),
             web.delete("/api/project-groups/{group_id}", delete_project_group),
             web.get("/api/git/projects", list_git_projects),
@@ -651,6 +652,7 @@ def create_app(
             web.post("/api/hooks/{sid}", hook_ingress),
             web.post("/mcp", mcp_endpoint),
             web.get("/api/git/worktrees", list_worktrees),
+            web.get("/api/git/graph", git_graph),
             web.post("/api/git/worktrees", create_worktree),
             web.delete("/api/git/worktrees", remove_worktree),
             web.post("/api/reveal", reveal_path),
@@ -4373,8 +4375,9 @@ async def demote_session(request: web.Request) -> web.Response:
 
 async def _projects_payload(request: web.Request) -> list[dict[str, Any]]:
     manager: ProjectManager = request.app["projects"]
+    activity = await request.app["history"].project_last_activity()
     return await asyncio.gather(
-        *(_project_snapshot(request, item) for item in manager.ordered_projects())
+        *(_project_snapshot(request, item, activity) for item in manager.ordered_projects())
     )
 
 
@@ -4382,7 +4385,9 @@ async def list_projects(request: web.Request) -> web.Response:
     return json_response(await _projects_payload(request))
 
 
-async def _project_snapshot(request: web.Request, project) -> dict[str, Any]:  # type: ignore[no-untyped-def]
+async def _project_snapshot(  # type: ignore[no-untyped-def]
+    request: web.Request, project, activity: dict[str, float]
+) -> dict[str, Any]:
     identity = ProjectIdentity(project.id, project.name, project.root, "registered")
     portable = await read_project_config(project.root, project=identity)
     values = portable["values"] if portable["status"] in {"ready", "read-only"} else {}
@@ -4421,6 +4426,10 @@ async def _project_snapshot(request: web.Request, project) -> dict[str, Any]:  #
     snapshot.pop("resource_open_mode", None)
     return {
         **snapshot,
+        # Derived, not stored: history already dates every session a Project ever ran,
+        # so a second write path that could drift from it would buy nothing. 0 means a
+        # Project that has never run one, which the sidebar orders last.
+        "last_activity": activity.get(project.id, 0.0),
         "portable_options": public_values,
         "effective_options": effective,
         "option_sources": sources,
@@ -4441,7 +4450,8 @@ async def create_project(request: web.Request) -> web.Response:
     await request.app["events"].emit(
         "project_created", source="user", project_id=project.id, root=project.root
     )
-    return json_response(await _project_snapshot(request, project), 201)
+    activity = await request.app["history"].project_last_activity()
+    return json_response(await _project_snapshot(request, project, activity), 201)
 
 
 async def patch_project(request: web.Request) -> web.Response:
@@ -4459,7 +4469,8 @@ async def patch_project(request: web.Request) -> web.Response:
     }:
         raise ValueError({"default_profile_id": "unknown shell profile"})
     project = await request.app["projects"].update(request.match_info["project_id"], **body)
-    return json_response(await _project_snapshot(request, project))
+    activity = await request.app["history"].project_last_activity()
+    return json_response(await _project_snapshot(request, project, activity))
 
 
 async def reorder_projects(request: web.Request) -> web.Response:
@@ -4479,8 +4490,9 @@ async def reorder_projects(request: web.Request) -> web.Response:
             return json_response({"error": str(exc), "code": "order_conflict"}, 409)
         raise
     await request.app["events"].emit("projects_reordered", source="user", project_ids=ordered_ids)
+    activity = await request.app["history"].project_last_activity()
     return json_response(
-        await asyncio.gather(*(_project_snapshot(request, item) for item in projects))
+        await asyncio.gather(*(_project_snapshot(request, item, activity) for item in projects))
     )
 
 
@@ -4655,7 +4667,7 @@ async def run_project_init_scripts(request: web.Request) -> web.Response:
 
 async def list_project_groups(request: web.Request) -> web.Response:
     manager: ProjectManager = request.app["projects"]
-    return json_response([item.snapshot() for item in manager.groups.values()])
+    return json_response([item.snapshot() for item in manager.ordered_groups()])
 
 
 async def create_project_group(request: web.Request) -> web.Response:
@@ -4669,6 +4681,27 @@ async def patch_project_group(request: web.Request) -> web.Response:
         request.match_info["group_id"], **await request.json()
     )
     return json_response(group.snapshot())
+
+
+async def reorder_project_groups(request: web.Request) -> web.Response:
+    body = await request.json()
+    ordered_ids = body.get("group_ids")
+    expected_order = body.get("expected_order")
+    if not isinstance(ordered_ids, list) or not all(isinstance(item, str) for item in ordered_ids):
+        raise ValueError({"group_ids": "must be an array of group ids"})
+    if not isinstance(expected_order, list) or not all(
+        isinstance(item, str) for item in expected_order
+    ):
+        raise ValueError({"expected_order": "must be the last observed group order"})
+    try:
+        groups = await request.app["projects"].reorder_groups(
+            ordered_ids, expected_order=expected_order
+        )
+    except ValueError as exc:
+        if "order changed" in str(exc):
+            return json_response({"error": str(exc), "code": "order_conflict"}, 409)
+        raise
+    return json_response([item.snapshot() for item in groups])
 
 
 async def delete_project_group(request: web.Request) -> web.Response:
@@ -6225,6 +6258,9 @@ async def hook_ingress(request: web.Request) -> web.Response:
 # are measured against it so unlanded work is visible rather than something you have to
 # remember to go looking for. Overridable per request; see `gwt` in ~/.claude/CLAUDE.md.
 DEFAULT_AGENT_TRUNK = "integration"
+GIT_CHANGE_FILE_LIMIT = 200
+GIT_GRAPH_DEFAULT_LIMIT = 80
+GIT_GRAPH_MAX_LIMIT = 200
 
 # Git accepts far more than this in a ref name, but this is what we are willing to
 # interpolate into an argument vector from a query string.
@@ -6243,8 +6279,142 @@ async def list_worktrees(request: web.Request) -> web.Response:
             504 if code == 124 else 400,
         )
     items = _parse_worktrees(output)
-    await _annotate_unlanded(cwd, request.query.get("trunk") or DEFAULT_AGENT_TRUNK, items)
+    trunk = request.query.get("trunk") or DEFAULT_AGENT_TRUNK
+    await asyncio.gather(
+        _annotate_unlanded(cwd, trunk, items),
+        _annotate_worktree_changes(cwd, trunk, items),
+    )
     return json_response(items)
+
+
+def _bounded_change_summary(files: list[dict[str, str]]) -> dict[str, Any]:
+    return {
+        "total": len(files),
+        "files": files[:GIT_CHANGE_FILE_LIMIT],
+        "truncated": len(files) > GIT_CHANGE_FILE_LIMIT,
+    }
+
+
+def _parse_working_tree_changes(output: str) -> list[dict[str, str]]:
+    """Parse `git status --porcelain=v2 -z` without losing unusual path characters."""
+    tokens = output.split("\0")
+    files: list[dict[str, str]] = []
+    index = 0
+    while index < len(tokens):
+        record = tokens[index]
+        index += 1
+        if not record:
+            continue
+        kind = record[:1]
+        if kind == "?":
+            status, path = "??", record[2:]
+        elif kind == "1":
+            fields = record.split(" ", 8)
+            if len(fields) != 9:
+                continue
+            status, path = fields[1], fields[8]
+        elif kind == "2":
+            fields = record.split(" ", 9)
+            if len(fields) != 10:
+                continue
+            status, path = fields[1], fields[9]
+        elif kind == "u":
+            fields = record.split(" ", 10)
+            if len(fields) != 11:
+                continue
+            status, path = fields[1], fields[10]
+        else:
+            continue
+        if not path:
+            continue
+        item = {"status": status, "path": path}
+        # A v2 type-2 record puts the destination in the record and the source in a
+        # second NUL-delimited field.
+        if kind == "2" and index < len(tokens) and tokens[index]:
+            item["old_path"] = tokens[index]
+            index += 1
+        files.append(item)
+    return files
+
+
+def _parse_branch_changes(output: str) -> list[dict[str, str]]:
+    """Parse `git diff --name-status -z`, retaining rename/copy source paths."""
+    tokens = output.split("\0")
+    files: list[dict[str, str]] = []
+    index = 0
+    while index < len(tokens):
+        status = tokens[index]
+        index += 1
+        if not status or index >= len(tokens):
+            continue
+        path = tokens[index]
+        index += 1
+        if not path:
+            continue
+        item = {"status": status, "path": path}
+        if status[:1] in {"R", "C"} and index < len(tokens) and tokens[index]:
+            item["old_path"] = path
+            item["path"] = tokens[index]
+            index += 1
+        files.append(item)
+    return files
+
+
+async def _annotate_worktree_changes(
+    cwd: str, trunk: str, items: list[dict[str, Any]]
+) -> None:
+    """Measure local and trunk-relative files for every listed working tree.
+
+    This runs only on the explicit Git-drawer request, never in the five-second session
+    monitor. Results remain absent when Git could not measure them; an absent summary must
+    not be rendered as a clean/landed claim.
+    """
+    trunk_exists = False
+    if _SAFE_REF.fullmatch(trunk):
+        trunk_exists = not (
+            await _git(cwd, "show-ref", "--verify", "--quiet", f"refs/heads/{trunk}")
+        )[0]
+    semaphore = asyncio.Semaphore(4)
+
+    async def run_git(path: str, *args: str) -> tuple[int, str]:
+        async with semaphore:
+            return await _git(path, *args)
+
+    async def measure(item: dict[str, Any]) -> None:
+        path = item.get("worktree")
+        if not isinstance(path, str) or not path or item.get("bare"):
+            return
+        status_task = run_git(
+            path, "status", "--porcelain=v2", "-z", "--untracked-files=all"
+        )
+        branch = item.get("branch")
+        diff_task: Awaitable[tuple[int, str]] | None = None
+        if trunk_exists and isinstance(branch, str):
+            diff_task = run_git(
+                cwd,
+                "diff",
+                "--name-status",
+                "-z",
+                "--find-renames",
+                f"refs/heads/{trunk}...{branch}",
+            )
+        if diff_task is None:
+            status_code, status_output = await status_task
+            diff_result: tuple[int, str] | None = None
+        else:
+            (status_code, status_output), diff_result = await asyncio.gather(
+                status_task, diff_task
+            )
+        if not status_code:
+            item["working_tree"] = _bounded_change_summary(
+                _parse_working_tree_changes(status_output)
+            )
+        if diff_result is not None and not diff_result[0]:
+            item["branch_delta"] = _bounded_change_summary(
+                _parse_branch_changes(diff_result[1])
+            )
+
+    await asyncio.gather(*(measure(item) for item in items))
 
 
 async def unlanded_branch_counts(cwd: str, trunk: str = DEFAULT_AGENT_TRUNK) -> dict[str, int]:
@@ -6303,6 +6473,102 @@ def _parse_worktrees(output: str) -> list[dict[str, Any]]:
         else:
             current[line] = True
     return items
+
+
+def _graph_ref_labels(decorations: str) -> list[str]:
+    labels: list[str] = []
+    for raw in decorations.split(", "):
+        label = raw.strip()
+        if not label:
+            continue
+        if label.startswith("HEAD -> "):
+            labels.extend(["HEAD", label.removeprefix("HEAD -> ")])
+        else:
+            labels.append(label)
+    return labels
+
+
+def _parse_graph_lines(output: str, limit: int) -> tuple[list[dict[str, Any]], bool]:
+    """Turn Git's graph-prefixed log into typed commit and connector rows."""
+    parsed: list[dict[str, Any]] = []
+    commit_count = 0
+    has_more = False
+    for raw_line in output.splitlines():
+        if "\0" not in raw_line:
+            if commit_count <= limit and raw_line:
+                parsed.append({"kind": "connector", "graph": raw_line})
+            continue
+        fields = raw_line.split("\0")
+        if len(fields) != 7:
+            continue
+        if commit_count >= limit:
+            has_more = True
+            break
+        graph, oid, parents, decorations, author, timestamp, subject = fields
+        try:
+            committed_at = int(timestamp)
+        except ValueError:
+            committed_at = 0
+        parsed.append(
+            {
+                "kind": "commit",
+                "graph": graph,
+                "oid": oid,
+                "parents": parents.split(),
+                "refs": _graph_ref_labels(decorations),
+                "author": author,
+                "committed_at": committed_at,
+                "subject": subject,
+            }
+        )
+        commit_count += 1
+    return parsed, has_more
+
+
+async def git_graph(request: web.Request) -> web.Response:
+    """Return a bounded, read-only commit graph with Git's own lane layout."""
+    cwd = request.query.get("cwd") or str(Path.cwd())
+    raw_limit = request.query.get("limit") or str(GIT_GRAPH_DEFAULT_LIMIT)
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        return json_response({"error": "limit must be an integer"}, 400)
+    if not 1 <= limit <= GIT_GRAPH_MAX_LIMIT:
+        return json_response(
+            {"error": f"limit must be between 1 and {GIT_GRAPH_MAX_LIMIT}"}, 400
+        )
+    probe_code, probe_output = await _git(cwd, "rev-list", "--all", "--max-count=1")
+    if probe_code:
+        return json_response(
+            {
+                "error": probe_output or "unable to read Git graph",
+                "code": "git_timeout" if probe_code == 124 else "git_error",
+            },
+            504 if probe_code == 124 else 400,
+        )
+    if not probe_output:
+        return json_response({"lines": [], "limit": limit, "has_more": False})
+    marker_format = "%x00%H%x00%P%x00%D%x00%an%x00%at%x00%s"
+    code, output = await _git(
+        cwd,
+        "log",
+        "--graph",
+        "--date-order",
+        "--decorate=short",
+        "--all",
+        f"--max-count={limit + 1}",
+        f"--format={marker_format}",
+    )
+    if code:
+        return json_response(
+            {
+                "error": output or "unable to read Git graph",
+                "code": "git_timeout" if code == 124 else "git_error",
+            },
+            504 if code == 124 else 400,
+        )
+    lines, has_more = _parse_graph_lines(output, limit)
+    return json_response({"lines": lines, "limit": limit, "has_more": has_more})
 
 
 async def _listed_worktree_paths(cwd: str) -> dict[str, str]:

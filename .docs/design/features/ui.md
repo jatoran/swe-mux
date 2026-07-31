@@ -19,6 +19,15 @@ responsive controls.
   pane tab, Files is the drawer's navigator tab — so each reads its active state from where its
   surface actually lives, and the Files chip selects that Project before opening the drawer,
   since the drawer's Files view follows the active Project.
+- Projects sit in sections: one per Group, plus the ungrouped remainder headed `PROJECTS`. A
+  section header is its own drag handle, and carries a `⇅` control that sorts the Projects under
+  that heading — Manual, Recently active, Name A→Z / Z→A, Newest / Oldest first — highlighted
+  while a sort is active so a non-manual order is never a mystery. Sort is per section, not
+  global: Groups exist to separate unlike things, so one may be a hand-arranged shortlist while
+  another is a long alphabetical pile. Dragging a Project into place puts its section back on
+  Manual, because a hand-placed row that the next render re-sorts away reads as a broken drag.
+  The mode, and the ungrouped section's slot among the Groups, are device-local; Group order
+  itself is shared. Behavior detail lives in `projects.md`.
 - Only a tabbed pane indents its sessions in the sidebar, and it does so because it draws the
   bracket that explains the indent. Split branches are siblings at the same depth: the sidebar is
   a session list, not a pane-geometry diagram, and indenting per split produced unexplained

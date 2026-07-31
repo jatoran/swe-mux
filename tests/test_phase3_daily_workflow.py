@@ -137,6 +137,8 @@ def test_phase3_routes_are_registered(tmp_path: Path) -> None:
     app = create_app(Config(data_dir=tmp_path))
     routes = {(route.method, route.resource.canonical) for route in app.router.routes()}
     assert ("PUT", "/api/projects/order") in routes
+    # Sidebar sections reorder the same way Projects inside them do.
+    assert ("PUT", "/api/project-groups/order") in routes
     assert ("GET", "/api/prompts") in routes
     assert ("POST", "/api/prompts") in routes
     assert ("PUT", "/api/prompts/{scope}/{template_id}") in routes

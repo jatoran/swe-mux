@@ -28,7 +28,11 @@
 
 ## Core SQLite records
 
-- `projects` and `project_groups`: sidebar ownership and organization.
+- `projects` and `project_groups`: sidebar ownership and organization. Both carry a normalized
+  `position`; `projects.created_at` dates the registration, and `0` means unknown — databases
+  written before the column are backfilled from the earliest session ever spawned in the
+  Project, and one that never ran a session keeps `0` rather than being dated at upgrade time.
+  There is no stored "last active": it is derived per request from `history`.
 - `history`: durable agent-run lifecycle, canonical `project_id`, owning terminal `note_id`,
   native identity, transcript pointer, derived Git metadata, context/model telemetry, explicit
   compaction summary, exit state, materialized chronological native start/final conversational message

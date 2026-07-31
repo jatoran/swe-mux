@@ -72,6 +72,13 @@ export type PromptLibraryScope='off'|'global'|'project'|'both'
 export interface Project {
   id:string;name:string;root:string;position:number;group_id?:string|null;layout:PaneLayout|unknown;layout_revision:number
   sidebar_visible?:boolean
+  /** Registration time, epoch seconds; 0 for Projects registered before the daemon
+   *  dated them and never observed in history. Sidebar date ordering reads 0 as
+   *  unknown and sorts it last. */
+  created_at?:number
+  /** Derived server-side from history: the latest session activity in this Project,
+   *  epoch seconds, 0 if it has never run one. */
+  last_activity?:number
   default_backend?:ProjectBackend;default_profile_id?:string
   portable_options?:{default_shell_profile?:string;preferred_backend?:ProjectBackend;prompt_library_scope?:PromptLibraryScope;notification_sounds_enabled?:boolean;ignore_patterns?:string[]}
   effective_options?:{backend:ProjectBackend;profile_id:string;prompt_library_scope:PromptLibraryScope;notification_sounds_enabled:boolean}

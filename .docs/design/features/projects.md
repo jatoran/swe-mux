@@ -9,7 +9,7 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
 ## Ownership model
 
 - A Project has a stable ID, user-controlled name, one canonical existing folder, optional
-  Group, persisted position, and `sidebar_visible` state.
+  Group, persisted position, registration date, and `sidebar_visible` state.
 - A Project is the only container for sessions, layout, notes, file resources, Project options,
   and Project-scoped history work. A session's `project_id` is immutable.
 - Every spawn begins at the canonical Project root. Later `cd` commands update runtime/Git
@@ -37,8 +37,25 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   home for it, never a layer to hunt through.
 - Hiding a Project removes it from desktop/mobile navigation and numeric Project shortcuts. It
   preserves the registration, `.swe-mux/` content, layout, history, settings, and live sessions.
-- The sidebar renders only visible Projects, ordered by Group and normalized Project position.
-  Whole-row pointer dragging and Move up/down actions use the same persisted reorder contract.
+- The sidebar renders only visible Projects, grouped into sections: one per Group, plus the
+  ungrouped remainder labelled `PROJECTS`. Sections are reordered by dragging their header;
+  Group order is shared (it is `ProjectGroup.position`), while the ungrouped remainder has no
+  record to hold a position and so remembers its slot per device, defaulting to last.
+- Each section header carries a sort control (`⇅`) over that section's Projects only: Manual
+  order, Recently active, Name A→Z / Z→A, Newest / Oldest first. Sorting is per section because
+  Groups are how unlike things are separated — a hand-arranged shortlist and a long alphabetical
+  pile are both legitimate, and one global mode cannot be both. The mode is device-local.
+- Manual order is the default and the tie-break for every other mode, so a sort never discards
+  the arrangement underneath it. Placing a Project by hand — whole-row pointer dragging or Move
+  up/down, both on the same persisted reorder contract — returns that section to Manual and
+  writes the order that was on screen, so the move survives instead of being re-sorted away.
+- A drag only ever permutes the rows on screen; hidden Projects and empty Groups keep the slots
+  they already held rather than being reshuffled by a reorder the user could not see.
+- "Recently active" ranks on the latest session activity a Project has ever had, derived from
+  history (so Projects with nothing live still rank) and merged with live sessions at minute
+  granularity (so a busy PTY cannot re-sort the sidebar out from under the pointer). A Project
+  that has never run a session, or one registered before registrations were dated, reads as
+  unknown and sorts last in either direction rather than posing as the oldest.
 - Creating a Project validates the root and initializes `.swe-mux/config.toml` plus
   `.swe-mux/notes/project.md`. The registration is not inferred from Git or current cwd.
 - Add project has two modes of one form: register a folder that exists, or create a new folder
@@ -88,6 +105,7 @@ GET|POST /api/projects
 PATCH|DELETE /api/projects/{project_id}
 PUT /api/projects/order
 GET|POST /api/project-groups
+PUT /api/project-groups/order
 PATCH|DELETE /api/project-groups/{group_id}
 GET|PUT /api/project/config?cwd=<root>
 ```
@@ -97,7 +115,15 @@ override (`default_backend`, `default_profile_id`, sent as `null` to clear) and 
 `PUT /api/project/config` for the portable file.
 
 Project layout writes are revision checked. Whole-order reorder writes are validated as a
-complete permutation of every registered Project ID and normalized transactionally.
+complete permutation of every registered Project ID and normalized transactionally. Group
+reordering takes the same contract, including the `expected_order` guard that answers `409
+order_conflict` when a second device already moved something — two devices each writing a full
+permutation would otherwise let the loser silently win.
+
+Project payloads carry `created_at` (registration, epoch seconds; `0` when unknown) and derived
+`last_activity` (latest session activity from history; `0` when the Project has never run one).
+`last_activity` is derived on read rather than stored, because history already dates every
+session and a second write path could only drift from it.
 
 ## Key files
 
@@ -107,6 +133,7 @@ complete permutation of every registered Project ID and normalized transactional
 - `src/swe_mux/project_init.py`
 - `frontend/src/ProjectsManager.tsx`
 - `frontend/src/projectCreate.ts`
+- `frontend/src/projectSort.ts`
 - `frontend/src/App.tsx`
 - `src/swe_mux/project_actions.py`
 
