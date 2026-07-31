@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -24,10 +25,36 @@ RETRY_STATUSES = {408, 409, 429, 500, 502, 503, 504}
 RETRY_ATTEMPTS = 5
 RETRY_BASE_SECONDS = 0.5
 MAX_RETRY_SLEEP_SECONDS = 8.0
+# How much of the provider's own error text to keep. A 429 from OpenRouter names the
+# upstream provider and says whether the limit is the account's or that provider's —
+# the difference between "add credit" and "wait", and unrecoverable once discarded.
+MAX_PROVIDER_ERROR_CHARS = 400
+# Anything key-shaped is scrubbed out of a message that will be persisted, whatever
+# put it there. Covers OpenRouter's own `sk-or-v1-…` and the generic `sk-…` an
+# upstream provider might quote back at us.
+SECRET_SHAPED = re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}", re.IGNORECASE)
 
 
 class OpenRouterError(RuntimeError):
-    pass
+    """An OpenRouter call that failed, carrying whether trying again could help.
+
+    Callers schedule background retries off `retryable`. Without it every failure
+    looks alike, and a misconfigured key is retried on the same curve as a rate
+    limit — spending the retry budget on the one thing that cannot come back.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        retryable: bool = False,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.retryable = retryable
+        self.retry_after = retry_after
 
 
 @dataclass(slots=True, frozen=True)
@@ -84,6 +111,9 @@ class OpenRouterClient:
         token = key or self.secrets.get("openrouter_api_key")
         if not token:
             raise OpenRouterError("OpenRouter key is not configured")
+        # Held across attempts so the final raise can report the provider's own words
+        # rather than the bare status the last attempt happened to see.
+        detail = ""
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         client = await self._client()
         last_attempt = RETRY_ATTEMPTS - 1
@@ -102,14 +132,22 @@ class OpenRouterClient:
                         body.extend(chunk)
                         if len(body) > MAX_RESPONSE_BYTES:
                             raise OpenRouterError("OpenRouter response exceeded the size limit")
+                    retry_after = _retry_after(response)
+                    if response.status in RETRY_STATUSES:
+                        # Only ever read for statuses that mean "the far side is busy
+                        # or broken". An auth failure's body is the one that can echo
+                        # the credential that was rejected, and it stays redacted.
+                        detail = _provider_error(body)
                     if response.status in RETRY_STATUSES and attempt < last_attempt:
-                        await asyncio.sleep(
-                            self._retry_delay(attempt, _retry_after(response))
-                        )
+                        await asyncio.sleep(self._retry_delay(attempt, retry_after))
                         continue
                     if response.status >= 400:
                         raise OpenRouterError(
                             f"OpenRouter request failed with HTTP {response.status}"
+                            + (f": {detail}" if detail else ""),
+                            status=response.status,
+                            retryable=response.status in RETRY_STATUSES,
+                            retry_after=retry_after,
                         )
                     try:
                         value = json.loads(body)
@@ -122,8 +160,14 @@ class OpenRouterClient:
                 if attempt < last_attempt:
                     await asyncio.sleep(self._retry_delay(attempt, None))
                     continue
-                raise OpenRouterError("OpenRouter request failed") from exc
-        raise OpenRouterError("OpenRouter request failed")
+                raise OpenRouterError(
+                    f"OpenRouter request failed: {type(exc).__name__}", retryable=True
+                ) from exc
+        # Only reachable when every attempt drew a retryable status, so the caller's
+        # longer-horizon retry is exactly the right next move.
+        raise OpenRouterError(
+            "OpenRouter request failed" + (f": {detail}" if detail else ""), retryable=True
+        )
 
     def _retry_delay(self, attempt: int, retry_after: float | None) -> float:
         """Equal-jitter exponential backoff, with the server's own hint preferred.
@@ -189,7 +233,16 @@ class OpenRouterClient:
                 "stream": False,
                 "temperature": 0,
                 "max_tokens": max_tokens,
-                "provider": {"require_parameters": True, "allow_fallbacks": False},
+                # `require_parameters` is the guarantee that matters: it restricts
+                # routing to providers that actually honour `response_format`, so a
+                # fallback still returns the schema rather than prose. Pinning to the
+                # single top-ranked provider on top of that bought nothing and made
+                # one provider's bad hour a total outage — every title on
+                # 2026-07-31 failed with "temporarily rate-limited upstream" from
+                # DeepInfra while five other providers served the same model. There
+                # is no fallback to a *different model* here, so the answer cannot
+                # silently change quality; only which host produced it.
+                "provider": {"require_parameters": True, "allow_fallbacks": True},
                 "response_format": {
                     "type": "json_schema",
                     "json_schema": {"name": schema_name, "strict": True, "schema": schema},
@@ -236,6 +289,36 @@ def _retry_after(response: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return seconds if 0 <= seconds else None
+
+
+def _provider_error(body: bytes | bytearray) -> str:
+    """The provider's own explanation of a busy-or-broken call, when it sent one.
+
+    A bare "HTTP 429" is the same string whether the account is out of credit, the
+    key is throttled, or one upstream host is having a bad hour — three different
+    fixes. OpenRouter puts the distinction in `error.metadata.raw` and names the
+    host in `error.metadata.provider_name`; discarding it costs an hour of guessing
+    later, so it is carried into the message.
+
+    Read only for statuses that describe the far side's health, never for an auth
+    failure, and key-shaped text is scrubbed regardless: this string ends up in the
+    firings table and on the automation status surface.
+    """
+    try:
+        payload = json.loads(bytes(body))
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return ""
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict):
+        return ""
+    metadata = error.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    parts = [str(metadata.get("raw") or error.get("message") or "").strip()]
+    provider = str(metadata.get("provider_name") or "").strip()
+    if provider:
+        parts.append(f"(provider: {provider})")
+    text = " ".join(part for part in parts if part)[:MAX_PROVIDER_ERROR_CHARS]
+    return SECRET_SHAPED.sub("[redacted]", text)
 
 
 def _number(value: Any) -> float | None:

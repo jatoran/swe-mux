@@ -88,8 +88,10 @@ completion evidence is coalesced before completion-triggered calls.
 on `turn_started` and names the pane from that request; `builtin.session-titler` fires on
 `turn_ended` and reads the completed turn instead, but **only for a run whose request was never
 captured** — Codex has no prompt hook, and an agent adopted mid-conversation was never observed
-being asked anything. With a request on hand the `turn_ended` stage stands down entirely, even
-while the prompt-driven call is still pending or retrying. First title wins; nothing replaces one.
+being asked anything. With a request on hand the `turn_ended` stage stands down while the
+prompt-driven call still has attempts left, whether or not it has landed; once that ladder is
+spent, it takes over, because a weak name beats the `claude-15036b` placeholder. First title
+wins; nothing replaces one.
 
 The two rule ids read backwards (`-initial` is the primary) because they kept their original
 strings when the roles swapped, so existing annotations, user rules, and the `observer_titler_enabled`
@@ -113,18 +115,51 @@ degrades: it is the one observer input that needs neither a transcript on disk n
 observation. The action declares `minimum_capability = "telemetry"`; every other observer keeps the
 `semantic` default.
 
-**A title lost to the provider is retried in the background**, at 30s / 2min / 5min, up to three
-attempts (`TITLE_RETRY_DELAYS_SECONDS`). Only `OpenRouterError` qualifies: budget exhaustion, a
-degraded transcript, and a missing prompt are decisions a retry would reach again unchanged. Each
-retry re-enters `evaluate` through the normal guards, so a run that ended, rolled over, or got
-titled by the other stage simply stops. Retry firings carry a negative `event_seq` because firings
-are unique on `(event_seq, rule_id, rule_revision)`; negatives can never collide with the event
-bus's own. This exists because the previous behaviour was to wait for the next turn boundary, and
-an idle pane has none — sessions were measured sitting nameless for 20+ minutes after a burst of
-HTTP 429, which was 20 of 70 titler calls in a day. The provider client's backoff was widened at
-the same time (`openrouter.py`: 5 attempts, equal-jitter exponential, `Retry-After` honoured and
-capped); the two are complements, not alternatives — jittered backoff absorbs the burst, the
-scheduled retry covers an outage that outlasts it.
+**A title lost to the provider is retried in the background**, at 30s / 2min / 5min / 15min /
+45min / 90min (`TITLE_RETRY_DELAYS_SECONDS`), a horizon of a little over two hours. Only a
+*retryable* `OpenRouterError` qualifies — a rate limit or an upstream fault, per `error.retryable`.
+A rejected key fails identically forever, and budget exhaustion, a degraded transcript, and a
+missing prompt are decisions a retry would reach again unchanged. Each retry re-enters `evaluate`
+through the normal guards, so a run that ended, rolled over, or got titled by the other stage
+simply stops, and its row is dropped rather than re-swept. Retry firings carry a negative
+`event_seq` because firings are unique on `(event_seq, rule_id, rule_revision)`; negatives can
+never collide with the event bus's own.
+
+The pending attempt lives in an `automation_checkpoints` row keyed
+`title-retry:<rule_id>:<agent_run_id>`, holding the serialized event, the attempt number and a
+`due_at`; the automation interval loop sweeps due rows every 5s. It is deliberately *not* an
+`asyncio.sleep` task: the horizon is longer than this daemon's uptime between reloads and
+redeploys, so the successor process has to be the one that finishes the job. A ladder that runs
+out marks its row `exhausted` rather than deleting it — that marker is what releases the
+`turn_ended` fallback, and `status().queue.title_retries` reports pending and exhausted counts so
+"this pane will never get a name" is visible rather than inferred.
+
+**The last attempt switches model** (`cheap` → `standard`, only if they differ). A whole model's
+provider pool can be rate-limited at once, and then no amount of waiting on that model helps.
+
+This exists because the previous behaviour was to wait for the next turn boundary, and an idle
+pane has none — sessions were measured sitting nameless for 20+ minutes after a burst of HTTP 429,
+which was 20 of 70 titler calls in a day. The 30s/2m/5m ladder that replaced it was then measured
+too short: on 2026-07-31 an upstream outage lasted the whole day, every ladder gave up after eight
+minutes, and every session opened that day stayed nameless.
+
+The provider client is the other half. `openrouter.py` retries in-call (5 attempts, equal-jitter
+exponential, `Retry-After` honoured and capped) and, critically, **allows provider fallbacks**:
+`complete_json` sends `provider.require_parameters = true` — which is the guarantee that matters,
+restricting routing to providers that honour `response_format` — but no longer pins
+`allow_fallbacks = false`. Pinning bought nothing and turned one provider's bad hour into a total
+outage; that is the literal 2026-07-31 failure, where DeepInfra refused every call for the cheap
+model while five other providers served it. There is no fallback to a different *model* at this
+layer, so the answer's quality cannot silently change — only which host produced it. The layers
+are complements: jittered backoff absorbs a burst, fallbacks route around one sick provider, the
+scheduled retry covers an outage that outlasts both, and the model switch covers a pool-wide one.
+
+`OpenRouterError` carries `status`, `retryable` and `retry_after`. For statuses that describe the
+far side's health (`RETRY_STATUSES`) the message also carries the provider's own explanation —
+`error.metadata.raw` plus `provider_name` — because a bare "HTTP 429" reads as an account problem
+and cost an hour of guessing. An auth failure's body is still never echoed (it is the one that can
+quote the rejected credential back), and key-shaped text is scrubbed regardless, since these
+strings land in the firings table and on the status surface.
 
 A conversation rollover (an in-CLI `/clear` or `/new` — `backends.md`) always retitles, because it
 mints a new `agent_run_id` and the existing title describes work the conversation no longer

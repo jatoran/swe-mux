@@ -911,6 +911,40 @@ class AutomationStore:
 
         return await self._run(op)
 
+    async def checkpoints_with_prefix(self, prefix: str) -> list[tuple[str, dict[str, Any]]]:
+        """Every checkpoint under a namespace, for work that must survive a restart.
+
+        The daemon restarts on every reload and redeploy while its sessions keep
+        running, so anything scheduled only in memory is lost there. A namespace
+        scan is how that work is found again on the way back up.
+        """
+        pattern = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+        def op() -> list[tuple[str, dict[str, Any]]]:
+            rows = self._db.execute(
+                "SELECT key,value_json FROM automation_checkpoints "
+                "WHERE key LIKE ? ESCAPE '\\' ORDER BY key",
+                (pattern,),
+            ).fetchall()
+            items: list[tuple[str, dict[str, Any]]] = []
+            for row in rows:
+                try:
+                    value = json.loads(row["value_json"])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, dict):
+                    items.append((str(row["key"]), value))
+            return items
+
+        return await self._run(op)
+
+    async def clear_checkpoint(self, key: str) -> None:
+        def op() -> None:
+            self._db.execute("DELETE FROM automation_checkpoints WHERE key=?", (key,))
+            self._db.commit()
+
+        await self._run(op)
+
     async def add_lineage(
         self,
         parent_run_id: str,
