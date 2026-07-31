@@ -71,3 +71,57 @@ def test_geometry_that_holds_chrome_text_scales_with_it() -> None:
         ".workspace",  # the app-identity row above the sidebar
     ):
         assert selector in scaling_selectors, f"{selector} does not follow --ui-scale"
+
+
+# A selector whose height scales in one rule and is pinned to bare px in a later
+# one renders at the pinned value: the cascade is last-wins at equal specificity,
+# and a `@media(max-width:760px)` block sits after the base rule it overrides. So
+# a new mobile override silently un-scales that element on the one device the
+# scale mostly exists for. Each entry below is a deliberate pin, with its reason.
+INTENTIONAL_PINS = {
+    (".context-menu", "width"): "mobile: width:min(300px,100dvw - 8px), viewport-bound",
+    (".terminal-menu", "width"): "mobile: width:min(300px,100dvw - 8px), viewport-bound",
+    (".settings-panel", "height"): "height:min(760px,...) is a panel maximum, viewport-bound",
+    (".mobile-nav-toggle", "height"): "44px touch target, already comfortable at any scale",
+    (".terminal-action-rail button", "height"): "44px touch target",
+    (".terminal-action-rail button", "min-width"): "96px touch target",
+    (".sidebar-footer .notes-shelf-trigger", "height"): "44px touch target",
+}
+
+
+def test_no_unintended_rule_pins_a_height_the_base_scales() -> None:
+    css = (SRC / "style.css").read_text(encoding="utf-8")
+    # Blank comments, keeping newlines so the reported lines match the file.
+    css = re.sub(
+        r"/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), css, flags=re.DOTALL
+    )
+    props = ("height", "grid-template-rows", "width", "min-width", "line-height")
+    declaration = re.compile(r"(?<![-\w])(" + "|".join(props) + r")\s*:\s*([^;]+)")
+
+    scaled: set[tuple[str, str]] = set()
+    pinned: set[tuple[str, str]] = set()
+    for rule in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        if rule.group(1).lstrip().startswith("@"):
+            continue
+        for found in declaration.finditer(rule.group(2)):
+            value = found.group(2)
+            sizes = [float(size) for size in re.findall(r"(?<![\w.])(\d+(?:\.\d+)?)px", value)]
+            # Below ~16px is a dot, rule, divider or progress bar, not type.
+            if not sizes or max(sizes) < 16:
+                continue
+            for selector in rule.group(1).split(","):
+                key = (" ".join(selector.split()), found.group(1))
+                if not key[0]:
+                    continue
+                (scaled if "var(--ui-scale)" in value else pinned).add(key)
+
+    unexplained = (scaled & pinned) - set(INTENTIONAL_PINS)
+    assert not unexplained, (
+        "these selectors scale in one rule and are pinned to bare px in another, so the "
+        "pin wins and they stop following --ui-scale: "
+        + ", ".join(f"{selector} {prop}" for selector, prop in sorted(unexplained))
+        + " — either scale the pinned declaration or add it to INTENTIONAL_PINS with a reason"
+    )
+    # Keep the allowlist honest: an entry that no longer conflicts is stale.
+    stale = set(INTENTIONAL_PINS) - (scaled & pinned)
+    assert not stale, f"INTENTIONAL_PINS entries no longer conflict: {sorted(stale)}"
