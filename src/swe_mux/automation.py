@@ -10,7 +10,7 @@ import time
 import tomllib
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -119,13 +119,34 @@ FALLBACK_TITLE_RULE_ID = "builtin.session-titler"
 TITLE_RULE_IDS = {PROMPT_TITLE_RULE_ID, FALLBACK_TITLE_RULE_ID}
 # A title lost to a provider rate limit used to wait for the next turn boundary,
 # which on an idle pane never comes: sessions were observed sitting nameless for
-# 20+ minutes with the user waiting on nothing. Retry in the background instead,
-# on a curve long enough to outlast the burst that caused the 429.
-TITLE_RETRY_DELAYS_SECONDS = (30.0, 120.0, 300.0)
+# 20+ minutes with the user waiting on nothing. Retry in the background instead.
+#
+# The curve is sized against the failure that actually happens. The first three
+# steps ride out a burst of concurrent panes. The last three exist because an
+# upstream provider outage is measured in hours, not minutes: on 2026-07-31 a
+# 30s/2m/5m ladder gave up after eight minutes and every session opened that day
+# stayed nameless, because a run that has stopped retrying and is sitting idle has
+# nothing left to trigger it. Total horizon is a little over two hours.
+TITLE_RETRY_DELAYS_SECONDS = (30.0, 120.0, 300.0, 900.0, 2700.0, 5400.0)
 # Checkpoint namespace for the pinned first prompt of a run. In the store rather
 # than only on the Session because the daemon restarts (every reload, every
 # redeploy) while its sessions keep running, and the in-memory pin dies with it.
 RUN_PROMPT_CHECKPOINT_PREFIX = "run-prompt:"
+# Checkpoint namespace for a title attempt waiting to be retried. Same reason as
+# the prompt pin, and more acutely: the retry horizon is now longer than the gap
+# between two redeploys, so a purely in-memory timer would rarely survive to fire.
+TITLE_RETRY_CHECKPOINT_PREFIX = "title-retry:"
+# How often due retries are swept. The shortest delay is 30s, so a coarse tick adds
+# no meaningful latency and keeps the interval loop's per-second work at one indexed
+# lookup rather than a table scan.
+TITLE_RETRY_SWEEP_SECONDS = 5.0
+# Firings per sweep. A provider returning after an outage makes every waiting run due
+# at the same instant, and each firing is a network call made inline on the loop that
+# also fires timer rules. The overflow is due again on the next tick.
+TITLE_RETRY_SWEEP_LIMIT = 4
+# Ceiling on a provider-supplied `Retry-After`. Honouring an hours-long hint
+# verbatim would park the last attempt past the point where a name is still useful.
+MAX_TITLE_RETRY_DELAY_SECONDS = 900.0
 CAPABILITY_RANK = {"telemetry": 1, "inferred": 1, "semantic": 2, "derived": 2, "trusted": 3}
 ADAPTER_CAPABILITIES: dict[str, dict[str, Any]] = {
     "claude": {
@@ -377,6 +398,28 @@ class NormalizedEvent:
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)
+
+
+_EVENT_FIELDS = frozenset(field.name for field in fields(NormalizedEvent))
+
+
+def _serializable_event(event: NormalizedEvent) -> dict[str, Any]:
+    """A JSON round-trippable form of an event, for work that outlives the process."""
+    snapshot = event.snapshot()
+    snapshot["chain_rules"] = list(event.chain_rules)
+    return snapshot
+
+
+def _event_from_snapshot(snapshot: dict[str, Any]) -> NormalizedEvent:
+    """Rebuild an event persisted by `_serializable_event`.
+
+    Unknown keys are dropped rather than raising, so a snapshot written before a
+    field was added still replays; missing required keys raise `TypeError`, which
+    the caller treats as an unreplayable row.
+    """
+    values = {key: value for key, value in snapshot.items() if key in _EVENT_FIELDS}
+    values["chain_rules"] = tuple(values.get("chain_rules") or ())
+    return NormalizedEvent(**values)
 
 
 @dataclass(slots=True, frozen=True)
@@ -801,10 +844,11 @@ class AutomationEngine:
         self._unique_inflight: set[tuple[str, str]] = set()
         # Instance-level so a test can drive the retry curve without sleeping it.
         self._title_retry_delays: tuple[float, ...] = TITLE_RETRY_DELAYS_SECONDS
-        # Firings are unique on (event_seq, rule_id, rule_revision), so a retry of the
-        # same event needs a sequence of its own. Counting down from zero keeps retry
-        # firings distinguishable and can never collide with the event bus's own.
         self._retry_seq = 0
+        self._title_sweep_next = 0.0
+        # Refreshed by the sweep so the sync status surface can report it. A nonzero
+        # `exhausted` is the visible form of "this pane will not get a name".
+        self._title_retry_counts = {"pending": 0, "exhausted": 0}
         self._interval_next: dict[str, float] = {}
         self._source_probes: dict[str, dict[str, Any]] = {}
         # A dropped cost reconcile leaves the ledger under-counting that call, so
@@ -1003,6 +1047,13 @@ class AutomationEngine:
             await asyncio.sleep(1)
             with background.iteration(AUTOMATION_INTERVAL_LOOP):
                 await self._fire_due_intervals()
+                # Rides the same supervised loop rather than a timer of its own: a
+                # retry that only exists in the store needs something durable to
+                # notice it, and this loop is already restarted on failure.
+                now = time.time()
+                if now >= self._title_sweep_next:
+                    self._title_sweep_next = now + TITLE_RETRY_SWEEP_SECONDS
+                    await self._sweep_title_retries(now=now)
 
     async def _fire_due_intervals(self) -> None:
         now = time.time()
@@ -1104,20 +1155,25 @@ class AutomationEngine:
                         firing_id, "shadow" if rule.shadow else "completed"
                     )
                     await self._set_guard_checkpoint(rule, event)
+                    await self._clear_title_retry(rule, event)
                 except asyncio.CancelledError:
                     await self.store.finish_firing(firing_id, "cancelled", "cancelled")
                     raise
                 except Exception as exc:
                     await self.store.finish_firing(firing_id, "failed", str(exc)[:1000])
                     report["error"] = str(exc)
-                    if self._schedule_title_retry(rule, event, exc):
+                    if await self._schedule_title_retry(rule, event, exc):
                         report["retry_scheduled"] = True
             finally:
                 if unique_key:
                     self._unique_inflight.discard(unique_key)
         return reports
 
-    def _schedule_title_retry(
+    @staticmethod
+    def _title_retry_key(rule_id: str, agent_run_id: str) -> str:
+        return f"{TITLE_RETRY_CHECKPOINT_PREFIX}{rule_id}:{agent_run_id}"
+
+    async def _schedule_title_retry(
         self, rule: Rule, event: NormalizedEvent, error: BaseException
     ) -> bool:
         """Re-attempt a title the provider refused, without waiting for a turn boundary.
@@ -1126,37 +1182,161 @@ class AutomationEngine:
         piggyback on, so the pane keeps the backend's placeholder name until the user
         happens to type again. Retrying in the background is what closes that.
 
-        Only provider failures qualify. Everything else an observer raises — budget
-        exhausted, degraded observation, no prompt captured — is a decision that a
-        retry would reach again unchanged, so retrying it only spends calls.
+        The attempt is written to the store rather than held in an `asyncio.sleep`,
+        because the horizon it has to cover (hours, for an upstream outage) is longer
+        than this daemon's uptime between reloads. `_sweep_title_retries` is what
+        fires it, here or in the successor process.
+
+        Only *retryable* provider failures qualify. A refused key or a malformed
+        schema fails identically forever, and everything else an observer raises —
+        budget exhausted, degraded observation, no prompt captured — is a decision,
+        not a fault. Retrying those only spends calls.
         """
         if rule.id not in TITLE_RULE_IDS or not event.agent_run_id:
             return False
-        if not isinstance(error, OpenRouterError):
+        if not isinstance(error, OpenRouterError) or not error.retryable:
+            await self._clear_title_retry(rule, event)
             return False
         attempt = int(event.payload.get("title_retry") or 0)
+        key = self._title_retry_key(rule.id, event.agent_run_id)
         if attempt >= len(self._title_retry_delays):
+            # Exhausted, and recorded rather than forgotten. The record is what lets
+            # the no-prompt fallback stop standing down, and what tells a human
+            # reading the pane's state why it never got a name.
+            await self.store.set_checkpoint(
+                key,
+                {
+                    "rule_id": rule.id,
+                    "agent_run_id": event.agent_run_id,
+                    "session_id": event.session_id,
+                    "attempt": attempt,
+                    "exhausted": True,
+                    "last_error": str(error)[:500],
+                    "updated_at": time.time(),
+                },
+            )
             return False
         delay = self._title_retry_delays[attempt]
-        self._retry_seq -= 1
-        retry_event = replace(
-            event,
-            seq=self._retry_seq,
-            ts=time.time(),
-            payload={**event.payload, "title_retry": attempt + 1},
+        # The provider's own `Retry-After` beats a fixed curve when it is the longer
+        # of the two: it is the only party that knows when the limit actually lifts.
+        if error.retry_after is not None:
+            delay = max(delay, min(float(error.retry_after), MAX_TITLE_RETRY_DELAY_SECONDS))
+        payload = {**event.payload, "title_retry": attempt + 1}
+        if attempt + 1 == len(self._title_retry_delays) and self._escalation_model():
+            # Last resort: a whole model's provider pool can be rate-limited at once
+            # (that is precisely what happened on 2026-07-31 — every provider serving
+            # the cheap model refused while the standard model answered on the first
+            # try). Switching model switches pool. Only on the final attempt, so the
+            # normal path stays on the model the user chose and paid for.
+            payload["observer_model"] = "standard"
+        await self.store.set_checkpoint(
+            key,
+            {
+                "rule_id": rule.id,
+                "agent_run_id": event.agent_run_id,
+                "session_id": event.session_id,
+                "attempt": attempt + 1,
+                "due_at": time.time() + delay,
+                "last_error": str(error)[:500],
+                "updated_at": time.time(),
+                "event": _serializable_event(replace(event, payload=payload)),
+            },
         )
+        return True
 
-        async def later() -> None:
-            await asyncio.sleep(delay)
+    def _escalation_model(self) -> str:
+        """The standard model, when it is a genuinely different one to fall back to."""
+        standard = str(self.config.openrouter_standard_model or "")
+        return "" if standard == str(self.config.openrouter_cheap_model or "") else standard
+
+    async def _prompt_titler_gave_up(self, event: NormalizedEvent) -> bool:
+        """Whether the prompt titler has spent every attempt on this run."""
+        if not event.agent_run_id:
+            return False
+        key = self._title_retry_key(PROMPT_TITLE_RULE_ID, event.agent_run_id)
+        return bool((await self.store.checkpoint(key) or {}).get("exhausted"))
+
+    async def _clear_title_retry(self, rule: Rule, event: NormalizedEvent) -> None:
+        """Drop a run's pending retry once the question it was asking is answered."""
+        if rule.id not in TITLE_RULE_IDS or not event.agent_run_id:
+            return
+        await self.store.clear_checkpoint(self._title_retry_key(rule.id, event.agent_run_id))
+
+    async def _sweep_title_retries(self, *, now: float | None = None) -> int:
+        """Fire every title retry whose delay has elapsed, wherever it was scheduled.
+
+        Runs from the interval loop, so a retry written by a daemon that has since
+        been reloaded or redeployed is picked up by its successor — which is the
+        common case once the curve stretches past a few minutes.
+
+        Bounded per pass. Each firing is a network call made inline on the loop that
+        also fires timer rules, and a provider coming back after an outage releases
+        every waiting run at once. The remainder is simply due again in five seconds.
+        """
+        moment = time.time() if now is None else now
+        fired = 0
+        pending = exhausted = 0
+        due_rows: list[tuple[str, dict[str, Any]]] = []
+        for key, value in await self.store.checkpoints_with_prefix(TITLE_RETRY_CHECKPOINT_PREFIX):
+            if value.get("exhausted"):
+                exhausted += 1
+                continue
+            pending += 1
+            due = value.get("due_at")
+            if isinstance(due, int | float) and moment >= float(due):
+                due_rows.append((key, value))
+        # Oldest due first, so a run that has been waiting longest is not starved by
+        # the arbitrary key order a later one happens to sort under.
+        due_rows.sort(key=lambda row: float(row[1].get("due_at") or 0))
+        for key, value in due_rows[:TITLE_RETRY_SWEEP_LIMIT]:
+            snapshot = value.get("event")
+            event = None
+            if isinstance(snapshot, dict):
+                try:
+                    event = _event_from_snapshot(snapshot)
+                except (TypeError, ValueError):
+                    event = None
+            # Both titlers are built-ins, and a built-in only exists as a Rule for the
+            # event that produced it — which is exactly the event being replayed.
+            candidates = [] if event is None else [*self.rules, *self._builtin_rules(event)]
+            rule = next((item for item in candidates if item.id == value.get("rule_id")), None)
+            if event is None or rule is None or not rule.enabled:
+                # Unreplayable, or the rule was disabled or edited out from under a
+                # pending retry. Nothing will ever fire it: litter rather than work.
+                await self.store.clear_checkpoint(key)
+                pending -= 1
+                continue
+            self._retry_seq -= 1
+            # Firings are unique on (event_seq, rule_id, rule_revision), so a retry of
+            # the same event needs a sequence of its own. Counting down from zero keeps
+            # retry firings distinguishable and can never collide with the bus's own.
+            event = replace(event, seq=self._retry_seq, ts=moment)
+            fired += 1
             # Straight back through the guards: by now the run may have ended, been
             # cleared, or been titled by the other stage, and each of those is a
             # reason to stop that the guards already know how to state.
-            await self.evaluate(retry_event, rules=[rule], debounced=True)
-
-        task = asyncio.create_task(later(), name=f"automation-title-retry-{rule.id}")
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
-        return True
+            reports = await self.evaluate(event, rules=[rule], debounced=True)
+            if any(report.get("retry_scheduled") for report in reports):
+                continue
+            current = await self.store.checkpoint(key)
+            if current is None:
+                # The title landed and took its own row with it.
+                pending -= 1
+                continue
+            if current.get("exhausted"):
+                # Ran out of attempts on this pass. The marker is the record of that
+                # and must outlive the sweep that produced it.
+                pending -= 1
+                exhausted += 1
+                continue
+            if current.get("attempt") == value.get("attempt"):
+                # The row came back untouched: the firing was guarded off, or failed
+                # for a reason that does not retry. Either way nothing rescheduled it,
+                # and leaving the row behind would re-fire it every sweep forever.
+                await self.store.clear_checkpoint(key)
+                pending -= 1
+        self._title_retry_counts = {"pending": pending, "exhausted": exhausted}
+        return fired
 
     def _schedule_debounce(self, rule: Rule, event: NormalizedEvent, delay: float) -> None:
         key = (rule.id, event.agent_run_id or event.session_id or "global")
@@ -1309,10 +1489,12 @@ class AutomationEngine:
             if (
                 rule.id == FALLBACK_TITLE_RULE_ID
                 and await self._run_prompt(event, pin=not dry_run) is not None
+                and not await self._prompt_titler_gave_up(event)
             ):
                 # There is a prompt to title from, so the weaker last-turn reading is
-                # not needed — even if the prompt-driven call has not landed yet, or
-                # has failed and is still retrying.
+                # not needed — while the prompt-driven call still has attempts left,
+                # whether or not it has landed yet. Once it has spent them, a weak
+                # name beats the placeholder the pane is otherwise stuck with.
                 return False
             unique_key = self._unique_guard_key(rule, event)
             if unique_key in self._unique_inflight:
@@ -1490,6 +1672,12 @@ class AutomationEngine:
         ):
             raise ValueError("normalized transcript is unavailable")
         model_setting = str(action.get("model") or "cheap")
+        # A retry that has run out of road may ask for the other tier; see
+        # `_schedule_title_retry`. Only ever an escalation the engine set on its own
+        # retry event, never something an incoming event can carry in from outside.
+        escalated = str(event.payload.get("observer_model") or "")
+        if escalated in {"cheap", "standard"} and event.seq < 0:
+            model_setting = escalated
         model = {
             "cheap": self.config.openrouter_cheap_model,
             "standard": self.config.openrouter_standard_model,
@@ -2003,6 +2191,10 @@ class AutomationEngine:
                 # guess.
                 "unreconciled_calls": self._unreconciled_calls,
                 "last_reconcile_error": self._last_reconcile_error,
+                # Titles waiting on a provider that refused, and titles that ran out
+                # of attempts. The second number is the one worth an eyebrow: those
+                # panes keep their placeholder name for the rest of the run.
+                "title_retries": dict(self._title_retry_counts),
                 # Events dropped before automation ever saw them, per subscriber.
                 "bus": self.events.drop_stats(),
             },

@@ -191,7 +191,9 @@ async def test_openrouter_completion_requires_exact_model_and_strict_schema() ->
     body = session.requests[0][2]["json"]
     assert body["model"] == "vendor/exact"
     assert body["stream"] is False
-    assert body["provider"] == {"require_parameters": True, "allow_fallbacks": False}
+    # `require_parameters` is the guarantee (a provider that honours the schema);
+    # pinning to one provider on top of it is not, and cost a whole day of titles.
+    assert body["provider"] == {"require_parameters": True, "allow_fallbacks": True}
     assert body["response_format"]["json_schema"] == {
         "name": "summary_v1",
         "strict": True,
@@ -200,6 +202,74 @@ async def test_openrouter_completion_requires_exact_model_and_strict_schema() ->
     assert result.value == {"summary": "done"}
     assert result.input_tokens == 10
     assert result.output_tokens == 3
+
+
+async def test_rate_limit_names_the_upstream_provider_and_marks_itself_retryable() -> None:
+    """The one diagnostic that mattered used to be thrown away.
+
+    Every title on 2026-07-31 failed with a bare "HTTP 429", which reads as an
+    account problem. The body said otherwise — one upstream host was rate-limiting
+    a model five other hosts were serving — and finding that out took a manual
+    replay of the exact request. `retryable` is separate: it is what stops a
+    rejected key being retried on the same curve as a busy provider.
+    """
+    body = {
+        "error": {
+            "message": "Provider returned error",
+            "code": 429,
+            "metadata": {
+                "raw": "vendor/cheap is temporarily rate-limited upstream",
+                "provider_name": "DeepInfra",
+            },
+        }
+    }
+    session = FakeSession([FakeResponse(429, body) for _ in range(RETRY_ATTEMPTS)])
+    client = OpenRouterClient(MemorySecrets(), session=session, retry_base_seconds=0)  # type: ignore[arg-type]
+
+    with pytest.raises(OpenRouterError) as captured:
+        await client.test_key()
+
+    assert "rate-limited upstream" in str(captured.value)
+    assert "DeepInfra" in str(captured.value)
+    assert captured.value.retryable is True
+
+
+async def test_an_unusable_key_is_not_marked_retryable() -> None:
+    """A refused key fails identically forever; retrying it only spends the budget."""
+    session = FakeSession([FakeResponse(401, {"error": {"message": "No auth credentials"}})])
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(OpenRouterError) as captured:
+        await client.test_key()
+
+    assert captured.value.retryable is False
+    assert captured.value.status == 401
+
+    missing = OpenRouterClient(MemorySecrets(""))  # type: ignore[arg-type]
+    with pytest.raises(OpenRouterError) as unconfigured:
+        await missing.test_key()
+    assert unconfigured.value.retryable is False
+
+
+async def test_a_key_quoted_back_in_a_provider_error_is_scrubbed() -> None:
+    """Provider text reaches the firings table, so it is treated as publishable."""
+    # Assembled rather than written out: a literal would trip the repo's own
+    # pre-commit credential scanner, which is the same instinct being tested here.
+    key_shaped = "-".join(["sk", "or", "v1", "abcdef0123456789"])
+    body = {
+        "error": {
+            "message": "rejected",
+            "metadata": {"raw": f"upstream rejected {key_shaped} for tenant"},
+        }
+    }
+    session = FakeSession([FakeResponse(503, body) for _ in range(RETRY_ATTEMPTS)])
+    client = OpenRouterClient(MemorySecrets(), session=session, retry_base_seconds=0)  # type: ignore[arg-type]
+
+    with pytest.raises(OpenRouterError) as captured:
+        await client.test_key()
+
+    assert key_shaped not in str(captured.value)
+    assert "[redacted]" in str(captured.value)
 
 
 async def test_openrouter_rejects_oversized_and_redacts_http_error_body() -> None:

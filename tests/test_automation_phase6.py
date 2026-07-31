@@ -13,6 +13,8 @@ from typing import Any
 import pytest
 
 from swe_mux.automation import (
+    PROMPT_TITLE_RULE_ID,
+    TITLE_RETRY_SWEEP_LIMIT,
     AutomationEngine,
     NormalizedEvent,
     RuleValidationError,
@@ -523,7 +525,11 @@ class InstantTitleProvider(FakeProvider):
 
 
 def _titler_engine(
-    tmp_path: Path, session: Any, store: AutomationStore, provider: Any = None
+    tmp_path: Path,
+    session: Any,
+    store: AutomationStore,
+    provider: Any = None,
+    standard_model: str = "",
 ) -> AutomationEngine:
     return AutomationEngine(
         tmp_path / "rules.toml",
@@ -535,9 +541,21 @@ def _titler_engine(
             automation_enabled=True,
             observer_titler_enabled=True,
             openrouter_cheap_model="vendor/cheap",
+            openrouter_standard_model=standard_model,
         ),
         provider or InstantTitleProvider(),  # type: ignore[arg-type]
     )
+
+
+async def _run_due_retries(engine: AutomationEngine, rounds: int = 12) -> None:
+    """Drive the retry sweep to quiescence, as the interval loop would over time.
+
+    `now` is pushed far forward rather than slept through: the real curve reaches
+    90 minutes, and the property under test is the ladder, not the clock.
+    """
+    for _ in range(rounds):
+        if not await engine._sweep_title_retries(now=time.time() + 86_400):
+            return
 
 
 @pytest.mark.asyncio
@@ -651,19 +669,24 @@ async def test_initial_titler_is_skipped_when_no_prompt_was_observed(
 class RateLimitedThenTitleProvider(FakeProvider):
     """Fails the first N calls the way a provider rate limit does, then succeeds."""
 
-    def __init__(self, failures: int) -> None:
+    def __init__(self, failures: int, *, retryable: bool = True) -> None:
         self.remaining_failures = failures
+        self.retryable = retryable
         self.prompts: list[str] = []
+        self.models: list[str] = []
 
     async def complete_json(self, **values: Any) -> OpenRouterResult:
         self.prompts.append(str(values["messages"][-1]["content"]))
+        self.models.append(str(values["model"]))
         if self.remaining_failures > 0:
             self.remaining_failures -= 1
-            raise OpenRouterError("OpenRouter request failed with HTTP 429")
+            raise OpenRouterError(
+                "OpenRouter request failed with HTTP 429", status=429, retryable=self.retryable
+            )
         return OpenRouterResult(
             "generation-title",
-            "vendor/cheap",
-            "vendor/cheap",
+            str(values["model"]),
+            str(values["model"]),
             {"title": "Login Test Fix", "confidence": 0.95},
             40,
             8,
@@ -690,18 +713,50 @@ async def test_rate_limited_title_retries_in_the_background_off_the_first_reques
     store = AutomationStore(tmp_path / "mux.db")
     provider = RateLimitedThenTitleProvider(failures=1)
     engine = _titler_engine(tmp_path, session, store, provider=provider)
-    engine._title_retry_delays = (0.0,)
 
     reports = await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
     assert reports[0]["retry_scheduled"] is True
     # The user moves on while the retry is pending; the pinned request must win anyway.
     session.first_user_prompt = "never mind, check the deploy logs"
-    await asyncio.gather(*list(engine._background))
+    await _run_due_retries(engine)
 
     rows = await store.annotations(agent_run_id="run-1", tag="title")
     assert [row["content"] for row in rows] == ["Login Test Fix"]
     assert provider.prompts[0] == provider.prompts[1]
     assert "flaky login test" in provider.prompts[1]
+    # The landed title takes its pending retry with it, rather than leaving a row the
+    # sweep would re-fire against a run that already has a name.
+    assert not await store.checkpoints_with_prefix("title-retry:")
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_pending_title_retry_survives_a_daemon_restart(tmp_path: Path) -> None:
+    """The retry horizon is now longer than the gap between two redeploys.
+
+    A ladder that reaches 90 minutes cannot live in an `asyncio.sleep`: this daemon
+    restarts on every reload and every redeploy, and the successor has to be the one
+    that finishes the job. The successor shares nothing with its predecessor but the
+    store, so the store is where the pending attempt has to be.
+    """
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item, transcript_path=None, first_user_prompt="fix the flaky login test"
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    dying = _titler_engine(
+        tmp_path, session, store, provider=RateLimitedThenTitleProvider(failures=99)
+    )
+
+    await dying.evaluate(normalized_event(item, 10, event_type="turn_started"))
+    assert [key for key, _ in await store.checkpoints_with_prefix("title-retry:")]
+
+    # The daemon goes away mid-ladder; nothing of it is carried into the successor.
+    successor = _titler_engine(tmp_path, session, store, provider=RateLimitedThenTitleProvider(0))
+    assert await successor._sweep_title_retries(now=time.time() + 86_400) == 1
+
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["content"] for row in rows] == ["Login Test Fix"]
     store.close()
 
 
@@ -718,11 +773,49 @@ async def test_title_retries_stop_at_the_attempt_budget(tmp_path: Path) -> None:
     engine._title_retry_delays = (0.0, 0.0)
 
     await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
-    while engine._background:
-        await asyncio.gather(*list(engine._background))
+    await _run_due_retries(engine)
 
     assert not await store.annotations(agent_run_id="run-1", tag="title")
     assert len(provider.prompts) == 3
+    # Giving up is recorded, not forgotten: it is what lets the no-prompt fallback
+    # step in, and what a human reading the status surface sees.
+    rows = dict(await store.checkpoints_with_prefix("title-retry:"))
+    assert [value["exhausted"] for value in rows.values()] == [True]
+    # And a spent ladder must not keep re-firing every five seconds forever.
+    assert await engine._sweep_title_retries(now=time.time() + 86_400) == 0
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_the_last_attempt_escalates_to_the_other_model(tmp_path: Path) -> None:
+    """A whole model's provider pool can be rate-limited at once — that is the 2026-07-31
+    failure exactly: every provider serving the cheap model refused while the standard
+    model answered first try. Switching model is the only escalation left, so the last
+    attempt takes it rather than giving up with an option unspent.
+    """
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item, transcript_path=None, first_user_prompt="fix the flaky login test"
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+
+    class CheapModelIsDown(RateLimitedThenTitleProvider):
+        async def complete_json(self, **values: Any) -> OpenRouterResult:
+            self.remaining_failures = 99 if values["model"] == "vendor/cheap" else 0
+            return await super().complete_json(**values)
+
+    provider = CheapModelIsDown(failures=99)
+    engine = _titler_engine(
+        tmp_path, session, store, provider=provider, standard_model="vendor/standard"
+    )
+    engine._title_retry_delays = (0.0, 0.0, 0.0)
+
+    await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+    await _run_due_retries(engine)
+
+    assert provider.models == ["vendor/cheap"] * 3 + ["vendor/standard"]
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["content"] for row in rows] == ["Login Test Fix"]
     store.close()
 
 
@@ -738,7 +831,128 @@ async def test_a_decision_failure_is_not_retried(tmp_path: Path) -> None:
 
     assert reports[0].get("error")
     assert "retry_scheduled" not in reports[0]
-    assert not engine._background
+    assert not await store.checkpoints_with_prefix("title-retry:")
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_provider_failure_that_cannot_recover_is_not_retried(tmp_path: Path) -> None:
+    """A refused key is an `OpenRouterError` too, and retrying it is pure waste.
+
+    Before the error carried `retryable`, every provider fault looked alike: a bad
+    key burned the whole ladder on a call that could never succeed.
+    """
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item, transcript_path=None, first_user_prompt="fix the flaky login test"
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    provider = RateLimitedThenTitleProvider(failures=99, retryable=False)
+    engine = _titler_engine(tmp_path, session, store, provider=provider)
+
+    reports = await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+
+    assert reports[0].get("error")
+    assert "retry_scheduled" not in reports[0]
+    assert len(provider.prompts) == 1
+    assert not await store.checkpoints_with_prefix("title-retry:")
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_spent_prompt_ladder_hands_the_run_to_the_last_turn_fallback(
+    tmp_path: Path,
+) -> None:
+    """The fallback stands down while the prompt titler is still trying — not after.
+
+    Its reason for standing down is that a better title is on the way. Once the
+    better one has spent every attempt, the reason is gone, and a weak name beats
+    the `claude-15036b` placeholder the pane is otherwise stuck with.
+    """
+    transcript = tmp_path / "claude.jsonl"
+    transcript.write_text(
+        '{"type":"user","message":{"content":"hello"}}\n'
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n',
+        encoding="utf-8",
+    )
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item, transcript_path=transcript, first_user_prompt="fix the flaky login test"
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+
+    class OnlyThePromptSliceIsRefused(RateLimitedThenTitleProvider):
+        async def complete_json(self, **values: Any) -> OpenRouterResult:
+            self.remaining_failures = 99 if "flaky login test" in str(values["messages"]) else 0
+            return await super().complete_json(**values)
+
+    engine = _titler_engine(
+        tmp_path, session, store, provider=OnlyThePromptSliceIsRefused(failures=99)
+    )
+    engine._title_retry_delays = (0.0,)
+
+    await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+    blocked = await engine.evaluate(normalized_event(item, 11, source="native_hook"))
+    await _run_due_retries(engine)
+    allowed = await engine.evaluate(normalized_event(item, 12, source="native_hook"))
+
+    assert blocked[0]["guarded"] is True
+    assert allowed[0]["matched"] is True
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["rule_id"] for row in rows] == ["builtin.session-titler"]
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_is_bounded_and_reports_what_is_still_waiting(tmp_path: Path) -> None:
+    """A provider returning after an outage makes every waiting run due at once.
+
+    The sweep runs inline on the loop that also fires timer rules, so it takes a
+    bounded bite; the rest is due again five seconds later. The counts it leaves
+    behind are what the status surface reports.
+    """
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item, transcript_path=None, first_user_prompt="fix the flaky login test"
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    engine = _titler_engine(tmp_path, session, store)
+    for index in range(TITLE_RETRY_SWEEP_LIMIT + 2):
+        await store.set_checkpoint(
+            f"title-retry:{PROMPT_TITLE_RULE_ID}:run-{index}",
+            {"rule_id": PROMPT_TITLE_RULE_ID, "attempt": 1, "due_at": float(index), "event": {}},
+        )
+
+    assert await engine._sweep_title_retries(now=time.time()) == 0
+    # Unreplayable rows are dropped, not re-swept; the cap is what limits the bite.
+    remaining = await store.checkpoints_with_prefix("title-retry:")
+    assert len(remaining) == 2
+    assert engine._title_retry_counts == {"pending": 2, "exhausted": 0}
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_retry_for_a_run_that_ended_clears_itself(tmp_path: Path) -> None:
+    """A pending retry whose run is gone is litter, and the sweep runs every 5s.
+
+    Without this the row is re-fired, guarded off, and left in place — forever, for
+    every run that was ever rate-limited.
+    """
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item, transcript_path=None, first_user_prompt="fix the flaky login test"
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    engine = _titler_engine(
+        tmp_path, session, store, provider=RateLimitedThenTitleProvider(failures=99)
+    )
+
+    await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+    engine.sessions.sessions.clear()  # type: ignore[attr-defined]
+
+    assert await engine._sweep_title_retries(now=time.time() + 86_400) == 1
+    assert not await store.checkpoints_with_prefix("title-retry:")
+    assert await engine._sweep_title_retries(now=time.time() + 86_400) == 0
     store.close()
 
 
