@@ -2,16 +2,15 @@
 //
 // Two independent facts are joined here, because neither is enough on its own:
 //
-//  * `GET /api/git/worktrees` returns `git worktree list --porcelain`, which knows every
-//    working tree of the repository and which branch (or detached commit) each holds. It
-//    knows nothing about whether that tree is clean or how far it has drifted from its
-//    upstream.
+//  * `GET /api/git/worktrees` starts with `git worktree list --porcelain`, then annotates
+//    every tree with an explicit local-file summary and, where measurable, the files its
+//    checked-out branch changes relative to the agent trunk.
 //  * `git_monitor.py` polls the cwd of every *attached* session and mirrors branch, dirty
-//    count, and upstream divergence into that session's snapshot. It sees only the
-//    directories someone is actually sitting in.
+//    count, and upstream divergence into that session's snapshot. Its remaining unique
+//    contribution here is live upstream divergence and session attribution.
 //
 // Joining them by path is what makes the tab worth opening: the porcelain list supplies the
-// inventory, the session snapshots supply the live state of the rows you are working in.
+// inventory/file summaries, the session snapshots supply live attribution and divergence.
 // Nothing here runs Git — this module only rearranges what the daemon already reported.
 //
 // Explicit `.ts` extension: this module is reachable from the node test runner, whose
@@ -20,7 +19,19 @@ import type { Session } from './types.ts'
 
 /** One record of `git worktree list --porcelain`, as `server.py`'s `_parse_worktrees` emits it:
  *  `key value` lines become strings, valueless flag lines become `true`. */
-export type WorktreePorcelain = Record<string, string | number | true>
+export type WorktreePorcelain = Record<string, unknown>
+
+export type GitChangeFile = {
+  path: string
+  status: string
+  oldPath: string | null
+}
+
+export type GitChangeSummary = {
+  total: number
+  files: GitChangeFile[]
+  truncated: boolean
+}
 
 export type Worktree = {
   path: string
@@ -41,7 +52,26 @@ export type Worktree = {
    *  trunk, or the Git call failed) — deliberately distinct from 0, because rendering an
    *  unmeasured tree as "nothing to land" is the one wrong answer here. */
   unlanded: number | null
+  /** Uncommitted files in this worktree, measured when the drawer requested the inventory. */
+  workingTree: GitChangeSummary | null
+  /** Files changed by this branch relative to the agent trunk's merge base. */
+  branchDelta: GitChangeSummary | null
 }
+
+export type GitGraphCommit = {
+  kind: 'commit'
+  graph: string
+  oid: string
+  parents: string[]
+  refs: string[]
+  author: string
+  committedAt: number
+  subject: string
+}
+
+export type GitGraphConnector = { kind: 'connector'; graph: string }
+export type GitGraphLine = GitGraphCommit | GitGraphConnector
+export type GitGraph = { lines: GitGraphLine[]; limit: number; hasMore: boolean }
 
 /** A live session sitting somewhere in this repository, with whatever Git state it reported. */
 export type SessionGit = {
@@ -88,9 +118,30 @@ export function shortSha(oid: string | null): string {
 /** A flag line carries either a reason or nothing at all; normalize both to a string.
  *  The porcelain record also carries numeric fields now (`unlanded`), which no flag ever
  *  is, so a number here means a malformed row rather than a lock reason. */
-function reason(value: string | number | true | undefined): string | null {
-  if (value === undefined || typeof value === 'number') return null
-  return value === true ? '' : value
+function reason(value: unknown): string | null {
+  if (value === true) return ''
+  return typeof value === 'string' ? value : null
+}
+
+function changeSummary(value: unknown): GitChangeSummary | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const total = record.total
+  if (typeof total !== 'number' || !Number.isFinite(total) || total < 0) return null
+  const files: GitChangeFile[] = []
+  if (Array.isArray(record.files)) {
+    for (const raw of record.files) {
+      if (!raw || typeof raw !== 'object') continue
+      const item = raw as Record<string, unknown>
+      if (typeof item.path !== 'string' || typeof item.status !== 'string') continue
+      files.push({
+        path: item.path,
+        status: item.status,
+        oldPath: typeof item.old_path === 'string' ? item.old_path : null,
+      })
+    }
+  }
+  return { total, files, truncated: record.truncated === true }
 }
 
 export function parseWorktrees(raw: unknown): Worktree[] {
@@ -112,9 +163,64 @@ export function parseWorktrees(raw: unknown): Worktree[] {
       unlanded: typeof entry.unlanded === 'number' && Number.isFinite(entry.unlanded)
         ? entry.unlanded
         : null,
+      workingTree: changeSummary(entry.working_tree),
+      branchDelta: changeSummary(entry.branch_delta),
     })
   }
   return items
+}
+
+export function parseGitGraph(raw: unknown): GitGraph {
+  if (!raw || typeof raw !== 'object') return { lines: [], limit: 0, hasMore: false }
+  const record = raw as Record<string, unknown>
+  const lines: GitGraphLine[] = []
+  if (Array.isArray(record.lines)) {
+    for (const rawLine of record.lines) {
+      if (!rawLine || typeof rawLine !== 'object') continue
+      const line = rawLine as Record<string, unknown>
+      if (line.kind === 'connector' && typeof line.graph === 'string') {
+        lines.push({ kind: 'connector', graph: line.graph })
+        continue
+      }
+      if (
+        line.kind !== 'commit'
+        || typeof line.graph !== 'string'
+        || typeof line.oid !== 'string'
+        || typeof line.author !== 'string'
+        || typeof line.committed_at !== 'number'
+        || typeof line.subject !== 'string'
+      ) continue
+      lines.push({
+        kind: 'commit',
+        graph: line.graph,
+        oid: line.oid,
+        parents: Array.isArray(line.parents)
+          ? line.parents.filter((item): item is string => typeof item === 'string')
+          : [],
+        refs: Array.isArray(line.refs)
+          ? line.refs.filter((item): item is string => typeof item === 'string')
+          : [],
+        author: line.author,
+        committedAt: line.committed_at,
+        subject: line.subject,
+      })
+    }
+  }
+  return {
+    lines,
+    limit: typeof record.limit === 'number' && Number.isFinite(record.limit) ? record.limit : 0,
+    hasMore: record.has_more === true,
+  }
+}
+
+/** Compact porcelain/name-status code for a narrow file list. */
+export function changeStatusLabel(status: string): string {
+  if (status === '??') return '?'
+  const code = status.replace(/[\s.]/g, '')
+  if (!code) return '·'
+  if (code.startsWith('R')) return 'R'
+  if (code.startsWith('C')) return 'C'
+  return [...new Set(code)].join('')
 }
 
 /** The directory `git_monitor.py` actually polls for a session — the same rule as

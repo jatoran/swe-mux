@@ -1569,45 +1569,103 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* Dismissed records are history, not attention: readable when asked for, quiet otherwise. */
 .utility-drawer .notification-list article.dismissed{opacity:.55}
 .utility-drawer .notification-empty{margin:0;padding:22px 12px;color:var(--muted);text-align:center;line-height:1.45}
-/* Git tab: two lists over one repository — the branches checked out in it (with live
-   dirty/upstream state wherever a session is attached) and the worktrees themselves.
-   Rows are three stacked lines rather than a grid: a worktree path is the longest string
-   in the drawer and a column layout would ellipsis away the part that identifies it. */
-.git-tab-body{flex:1 1 auto;min-height:0;overflow:auto}
+/* Git: Map is the operational worktree projection; Log is Git's real commit DAG.
+   The compact row is the default reading. Paths, filenames, and destructive actions
+   exist only in the expanded detail so they do not compete with branch state. */
+.git-toolbar{flex:none;display:flex;align-items:center;gap:5px;min-height:34px;padding:4px 7px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.git-view-switch{display:flex;align-items:stretch;border:1px solid var(--line)}
+.git-view-switch button,.git-toolbar-action{min-height:24px;border:0;background:transparent;color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
+.git-view-switch button{padding:0 8px;border-right:1px solid var(--line);text-transform:uppercase;letter-spacing:.04em}
+.git-view-switch button:last-child{border-right:0}
+.git-view-switch button[aria-selected=true]{background:color-mix(in srgb,var(--accent) 12%,var(--panel));color:var(--text);box-shadow:inset 0 -2px var(--accent)}
+.git-toolbar-action{padding:0 6px;border:1px solid var(--line)}
+.git-toolbar-action:hover:not(:disabled){border-color:var(--accent);color:var(--text)}
+.git-toolbar-action:disabled{opacity:.45;cursor:not-allowed}
+.git-trunk{margin-left:auto;color:var(--muted);font-size:8px;white-space:nowrap}
+.git-add-form{flex:none;display:grid;gap:6px;padding:7px 9px;border-bottom:1px solid var(--accent);background:var(--panel2)}
+.git-add-form>div{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.git-add-form label{min-width:0;display:grid;gap:3px;color:var(--muted);font-size:8px}
+.git-add-form input{width:100%;min-width:0;min-height:29px;padding:0 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
+.git-add-form button{min-height:29px;border:1px solid var(--accent);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}
+.git-add-form button:disabled{opacity:.45;cursor:not-allowed}
+.git-tab-body{flex:1 1 auto;min-height:0;overflow:auto;background:var(--bg)}
 .git-state{margin:0;padding:14px 10px;color:var(--muted);font-size:9px;line-height:1.45;text-align:center}
 .git-state.error{color:var(--red);text-align:left;overflow-wrap:anywhere}
-.git-section>h3{display:flex;justify-content:space-between;align-items:center;gap:8px;position:sticky;top:0;z-index:1;margin:0;padding:6px 9px;background:var(--panel2);color:var(--muted);font-size:8px;font-weight:600;letter-spacing:.04em}
-.git-row{display:grid;gap:3px;padding:7px 9px;border-bottom:1px solid var(--line)}
-.git-row-main{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
-.git-row-main strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:400}
-.git-row-main strong.detached{color:var(--amber)}
-.git-row small{color:var(--muted);font-size:8px;line-height:1.4;overflow-wrap:anywhere}
-.git-quiet{color:var(--muted);opacity:.8}
-.git-flag{flex:none;padding:0 4px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-style:normal;font-size:8px}
-.git-flag.main{border-color:var(--accent);color:var(--accent)}
-.git-flag.live{border-color:color-mix(in srgb,var(--green) 55%,var(--line));color:var(--green)}
-.git-flag.warn{border-color:color-mix(in srgb,var(--amber) 55%,var(--line));color:var(--amber)}
-.git-metrics{margin-left:auto;display:flex;flex:none;align-items:center;gap:6px}
-.git-metrics em{color:var(--muted);font-style:normal;font-size:8px}
-.git-metrics em.dirty{color:var(--amber)}
-.git-metrics em.diverged{color:var(--accent)}
-.git-row-actions{display:flex;flex-wrap:wrap;align-items:center;gap:5px}
-.git-row-actions button{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
-.git-row-actions button:hover:not(:disabled){border-color:var(--accent)}
-.git-row-actions button.danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red)}
-.git-row-actions button:disabled{opacity:.45;cursor:not-allowed}
-.git-row-actions .git-quiet{font-size:8px;line-height:1.35}
+.git-map-row{border-bottom:1px solid var(--line);background:var(--panel)}
+.git-map-row.expanded{box-shadow:inset 2px 0 var(--accent)}
+.git-map-row-toggle{width:100%;min-height:47px;display:grid;grid-template-columns:max-content minmax(74px,1fr) minmax(0,auto) 12px;align-items:center;gap:7px;padding:6px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.git-map-row-toggle:hover{background:var(--panel2)}
+.git-map-rail{width:31px;color:var(--muted);font-size:11px;white-space:pre}
+.git-map-rail.main{color:var(--accent)}
+.git-map-identity{min-width:0;display:grid;gap:2px}
+.git-map-identity strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:400}
+.git-map-identity strong.detached{color:var(--amber)}
+.git-map-identity small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
+.git-map-metrics{min-width:0;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:2px 7px}
+.git-map-metrics em{font-style:normal;font-size:8px;white-space:nowrap}
+.git-map-metrics .clean{color:var(--muted)}
+.git-map-metrics .local,.git-map-metrics .unlanded,.git-map-metrics .warn{color:var(--amber)}
+.git-map-metrics .branch-files,.git-map-metrics .diverged{color:var(--accent)}
+.git-map-metrics .landed,.git-map-metrics .live{color:var(--green)}
+.git-map-chevron{color:var(--muted);font-size:11px;text-align:center}
+.git-map-detail{display:grid;gap:8px;padding:1px 9px 9px 47px;background:color-mix(in srgb,var(--panel2) 72%,var(--bg))}
+.git-map-path{margin:0;color:var(--muted);font-size:8px;line-height:1.35;overflow-wrap:anywhere}
+.git-change-group{min-width:0;border-top:1px solid var(--line)}
+.git-change-group h4,.git-external h3{display:flex;justify-content:space-between;gap:8px;margin:0;padding:5px 0 3px;color:var(--muted);font-size:8px;font-weight:600;letter-spacing:.04em}
+.git-change-files{display:grid}
+.git-change-file{min-width:0;display:grid;grid-template-columns:22px minmax(0,1fr);gap:3px;padding:2px 0;font-size:8px;line-height:1.35}
+.git-change-file b{color:var(--accent);font-weight:600}
+.git-change-file b.status-\?,.git-change-file b.status-d{color:var(--amber)}
+.git-change-file span{min-width:0;overflow-wrap:anywhere}
+.git-change-file del{color:var(--muted)}
+.git-change-file i{color:var(--muted);font-style:normal}
+.git-change-empty{margin:0;padding:3px 0;color:var(--muted);font-size:8px;line-height:1.35}
+.git-map-actions{display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding-top:2px}
+.git-map-actions button{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;font-size:8px;cursor:pointer}
+.git-map-actions button:hover:not(:disabled){border-color:var(--accent)}
+.git-map-actions button.danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red)}
+.git-map-actions button:disabled{opacity:.45;cursor:not-allowed}
+.git-quiet{color:var(--muted);font-size:8px;line-height:1.35}
 .git-row-error{margin:0;color:var(--red);font-size:8px;line-height:1.4;overflow-wrap:anywhere}
-/* The create form stays folded away: adding a worktree is deliberate, and three text
-   fields permanently occupying the drawer's foot would crowd the lists it serves. */
-.git-add{flex:none}
-.git-add form{display:grid;gap:6px;margin-top:6px}
-.drawer-fields button.git-add-toggle{min-height:28px;border-color:var(--line);color:var(--muted)}
-.drawer-fields button.git-add-toggle[aria-expanded=true]{border-color:var(--accent);color:var(--text)}
+.git-external{padding:5px 9px 8px;border-top:1px solid var(--line);background:var(--panel)}
+.git-external>div{display:flex;justify-content:space-between;gap:8px;padding:3px 0;font-size:8px}
+.git-external strong{min-width:0;overflow:hidden;text-overflow:ellipsis;font-weight:400}
+.git-external>div span{color:var(--muted);text-align:right}
+/* Git supplies every graph prefix, including connector-only rows. Styling characters by
+   two-column lane keeps the real topology while giving it the subdued Git Graph palette. */
+.git-graph{min-width:max-content;padding:5px 0;background:var(--bg)}
+.git-graph-row{display:grid;grid-template-columns:max-content minmax(220px,1fr);align-items:start;gap:7px;min-height:39px;padding:3px 9px}
+.git-graph-row:hover{background:var(--panel2)}
+.git-graph-connector{height:11px;padding:0 9px;color:var(--muted);line-height:11px}
+.git-graph-glyph{display:block;min-width:12px;white-space:pre;color:var(--muted);font-size:10px;line-height:16px}
+.git-graph-glyph i{font-style:normal}
+.git-graph-glyph .lane-0{color:var(--accent)}
+.git-graph-glyph .lane-1{color:var(--green)}
+.git-graph-glyph .lane-2{color:var(--amber)}
+.git-graph-glyph .lane-3{color:#c58af9}
+.git-graph-glyph .lane-4{color:#ff7996}
+.git-commit{min-width:0;display:grid;gap:2px}
+.git-commit-title{min-width:0;display:grid;grid-template-columns:58px minmax(0,1fr);gap:6px;align-items:baseline}
+.git-commit-title strong{color:var(--accent);font-size:8px;font-weight:400}
+.git-commit-title span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px}
+.git-commit-refs{display:flex;flex-wrap:wrap;gap:3px}
+.git-commit-refs em{padding:0 3px;border:1px solid color-mix(in srgb,var(--accent) 50%,var(--line));color:var(--accent);font-size:7px;font-style:normal;white-space:nowrap}
+.git-commit-refs em.head{border-color:var(--green);color:var(--green)}
+.git-commit-refs em.tag{border-color:var(--amber);color:var(--amber)}
+.git-commit small{color:var(--muted);font-size:7px}
+.git-load-more{display:block;min-height:30px;margin:6px auto;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:8px;cursor:pointer}
+.git-load-more:hover:not(:disabled){border-color:var(--accent)}
+.git-load-more:disabled{opacity:.45}
+.git-graph-limit{margin:0;padding:7px;color:var(--muted);font-size:8px;text-align:center}
 @media(max-width:760px){
   .utility-rail{display:none}
-  .git-row-actions button{min-height:36px;padding:0 12px}
-  .drawer-fields button.git-add-toggle{min-height:36px}
+  .git-toolbar{min-height:42px}
+  .git-view-switch button,.git-toolbar-action{min-height:32px}
+  .git-trunk{display:none}
+  .git-add-form input{min-height:38px;font-size:16px}
+  .git-add-form button,.git-map-actions button{min-height:36px;padding:0 12px}
+  .git-map-row-toggle{min-height:56px}
+  .git-map-detail{padding-left:20px}
   /* No rail on touch, so the strip is the only tab control: taller, wider, bigger marks.
      Width is the constrained axis, not height — the overlay is `min(430px, 92vw)`, so a
      360px phone gives the strip 331px and eight 44px tabs plus the close button need 382.

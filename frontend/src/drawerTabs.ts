@@ -44,7 +44,7 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'queue', label: 'Queue', title: 'Queue — messages staged for this agent, and the mailbox', scope: 'session' },
   { id: 'files', label: 'Files', title: 'Files — browse or search this Project, then open into a pane', scope: 'project' },
   { id: 'notes', label: 'Notes', title: 'Notes — Project and session notes, opened into a pane', scope: 'project' },
-  { id: 'git', label: 'Git', title: 'Git — branches and worktrees of this Project’s repository', scope: 'project' },
+  { id: 'git', label: 'Git', title: 'Git — worktree map and commit graph for this Project', scope: 'project' },
   { id: 'notifications', label: 'Alerts', title: 'Alerts — notifications and attention records', scope: 'app' },
 ]
 

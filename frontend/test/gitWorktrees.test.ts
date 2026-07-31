@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   branchRows,
+  changeStatusLabel,
   divergenceLabel,
   isAbsolutePath,
   normalizePath,
+  parseGitGraph,
   parseWorktrees,
   pathTail,
   repoSessions,
@@ -60,6 +62,41 @@ test('unlanded counts survive parsing, and an unmeasured tree is null not zero',
   assert.equal(empty.unlanded, 0)
   assert.equal(missing.unlanded, null)
   assert.equal(bogus.unlanded, null, 'a non-numeric count is unmeasured, not zero')
+})
+
+test('worktree and trunk-relative file summaries remain separate', () => {
+  const [item] = parseWorktrees([{
+    worktree: '/repo',
+    branch: 'refs/heads/agent/map',
+    working_tree: {
+      total: 2,
+      files: [
+        { status: '.M', path: 'frontend/src/GitTab.tsx' },
+        { status: '??', path: 'frontend/src/new.ts' },
+      ],
+      truncated: false,
+    },
+    branch_delta: {
+      total: 1,
+      files: [{ status: 'R100', path: 'new-name.ts', old_path: 'old-name.ts' }],
+      truncated: true,
+    },
+  }])
+  assert.equal(item.workingTree?.total, 2)
+  assert.equal(item.workingTree?.files[1].path, 'frontend/src/new.ts')
+  assert.equal(item.branchDelta?.total, 1)
+  assert.equal(item.branchDelta?.files[0].oldPath, 'old-name.ts')
+  assert.equal(item.branchDelta?.truncated, true)
+})
+
+test('malformed change summaries remain unmeasured instead of clean', () => {
+  const [item] = parseWorktrees([{
+    worktree: '/repo',
+    working_tree: { total: 'zero', files: [] },
+    branch_delta: null,
+  }])
+  assert.equal(item.workingTree, null)
+  assert.equal(item.branchDelta, null)
 })
 
 test('junk from the daemon yields no worktrees rather than throwing', () => {
@@ -178,4 +215,38 @@ test('divergence reads as arrows, and says nothing when level with upstream', ()
   assert.equal(divergenceLabel({ ahead: 0, behind: 3 }), '↓3')
   assert.equal(divergenceLabel({ ahead: 0, behind: 0 }), '')
   assert.equal(divergenceLabel(null), '')
+})
+
+test('commit graph parsing keeps Git connector rows and typed commits', () => {
+  const graph = parseGitGraph({
+    lines: [
+      {
+        kind: 'commit',
+        graph: '*   ',
+        oid: 'aabbccdd00112233',
+        parents: ['parent-a', 'parent-b'],
+        refs: ['HEAD', 'integration'],
+        author: 'Ada',
+        committed_at: 123,
+        subject: 'Merge the map',
+      },
+      { kind: 'connector', graph: '|\\  ' },
+      { kind: 'bogus', graph: '*' },
+    ],
+    limit: 80,
+    has_more: true,
+  })
+  assert.equal(graph.lines.length, 2)
+  assert.equal(graph.lines[0].kind, 'commit')
+  assert.equal(graph.lines[1].kind, 'connector')
+  assert.equal(graph.limit, 80)
+  assert.equal(graph.hasMore, true)
+})
+
+test('file status labels fit the narrow change list', () => {
+  assert.equal(changeStatusLabel('??'), '?')
+  assert.equal(changeStatusLabel('.M'), 'M')
+  assert.equal(changeStatusLabel(' M'), 'M')
+  assert.equal(changeStatusLabel('R100'), 'R')
+  assert.equal(changeStatusLabel('C75'), 'C')
 })

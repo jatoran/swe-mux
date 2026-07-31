@@ -31,10 +31,16 @@
   than a chip. It is Project-scoped, sitting after Notes: it reports on the repository
   behind the Project rather than opening a document into a pane, so it closes the
   Project-scoped block without being a navigator (`ui.md`).
-- It shows two lists over one repository, joined by path. **Branches** is every branch the
-  repository has checked out, annotated with dirty count and upstream divergence wherever a
-  session is attached inside that tree; **worktrees** is the porcelain list itself, with the
-  main/bare/locked/prunable flags and how many live sessions are working in each.
+- It has two readings of one repository. **Map** is the default operational projection:
+  one compact row per worktree, ordered as Git's porcelain inventory, with branch/detached
+  identity, directory tail, local file count, unlanded commit count, trunk-relative file
+  count, upstream divergence where a session supplies it, and live-session count. **Log**
+  is the actual commit DAG: Git's own `--graph` lane prefixes plus structured commit,
+  parent, ref-decoration, author, timestamp, and subject fields.
+- A Map row expands in place. Full path, bounded local filenames, bounded trunk-relative
+  filenames, flags, and remove controls stay out of the compact reading until requested.
+  Local means not committed; branch files means the diff from the trunk merge base; unlanded
+  means commits the trunk does not have. These three counts never collapse into "dirty."
 - The join is by **path, never by branch name**. A detached HEAD reports its short commit
   SHA in the branch field, which can never match the worktree's own detached marker. Path
   comparison unifies separators and case (Git reports forward slashes on Windows; a session
@@ -46,15 +52,25 @@
   "is there agent work sitting here that never reached master", which previously required
   asking at a shell. Measured with one `for-each-ref` call using the `ahead-behind` atom,
   gated behind a cheap `show-ref` so a repo with no trunk pays nothing.
+- Opening/refreshing Map explicitly measures every listed non-bare worktree, including one
+  with no attached session. `git status --porcelain=v2 -z --untracked-files=all` supplies
+  local files. `git diff --name-status -z --find-renames
+  integration...<checked-out-branch>` supplies the branch delta. Each list carries the exact
+  total and at most 200 file records; `truncated` says the list is a prefix. These calls are
+  drawer-request work behind concurrency four, not additions to the five-second monitor.
 - **Unmeasured is `null`, never `0`.** A missing trunk, a failed call, or a timeout omits the
-  field entirely, and the tab renders no flag. Reporting zero would claim there is nothing
-  waiting to be landed, which is the one wrong answer this measurement can give.
+  affected field entirely. Map reports a clean/landed claim only from measured zeroes.
+  Reporting zero on failure would claim there is nothing waiting, which is the one wrong
+  answer this measurement can give.
+- Log asks for the newest 80 commits and can grow to 200. The backend preserves Git's
+  connector-only rows and returns typed commit rows; the frontend colors the lane characters
+  without recomputing topology. One extra commit is requested only to decide `has_more`.
 - Removing a worktree deletes the directory, never the branch, so committed-but-unlanded work
-  is not at risk. The confirm says so explicitly, because the unlanded flag directly above it
-  otherwise reads as a reason not to remove.
-- A branch with no attached session has **no** working-tree state rather than a clean one.
-  Dirty and divergence exist only for cwds the monitor polls, and rendering an unmeasured
-  tree as clean would be a claim the daemon never made.
+  is not at risk. The expanded confirmation says so explicitly. A forced removal can discard
+  local files and therefore names that risk separately.
+- Upstream divergence still exists only for cwd values the session monitor polls. The
+  drawer-request inventory makes local/trunk-relative file state independent of attachment;
+  it does not add repository-wide remote/upstream polling.
 - A live session whose cwd is in none of the listed worktrees still earns a row, marked as
   another repository: a nested or sibling checkout under the same Project root is worth
   seeing, but it is not one of this repository's trees.
@@ -72,11 +88,10 @@
 - Every Git call the daemon makes is bounded at four seconds. That is right for a status
   poll and short for `worktree add`, so a timeout is reported as "may still have completed",
   never as a failure.
-- Live updates need no polling. Branch, dirty, and divergence ride the session snapshots the
-  tab already receives, so `git_changed` refreshes them by re-render; the worktree list is
-  refetched when `worktree_created`/`worktree_removed`/`git_changed` reach the client. A
-  worktree created by hand in a terminal emits no event at all, which is what the explicit
-  Refresh is for.
+- Live updates add no browser timer. Branch/divergence ride session snapshots; Map refetches
+  its inventory/summaries on `worktree_created`/`worktree_removed`/`git_changed`; an open Log
+  refetches on the same events. A worktree created by hand in a terminal emits no event at
+  all, which is what the explicit Refresh is for.
 
 ## Spawning a session into a worktree
 

@@ -595,6 +595,7 @@ GET    /git/projects
 POST   /git/projects/resolve
 GET    /git/projects/{scope_id}
 GET    /git/worktrees
+GET    /git/graph
 POST   /git/worktrees
 DELETE /git/worktrees
 GET    /processes
@@ -619,7 +620,28 @@ not first-class frontend navigation.
 a branch also carries `unlanded`: commits on that branch which `trunk` (default
 `integration`) does not have. The field is **absent** rather than `0` when it could not be
 measured — no such trunk, a Git failure, or a timeout — because zero would read as "nothing
-waiting to be landed". `trunk` must match `[A-Za-z0-9._/-]{1,200}`.
+waiting to be landed". Each non-bare row also carries measured `working_tree` and, when the
+trunk/branch comparison succeeds, `branch_delta`:
+
+```ts
+type GitChangeFile = {status: string; path: string; old_path?: string}
+type GitChangeSummary = {
+  total: number
+  files: GitChangeFile[]        // first 200
+  truncated: boolean
+}
+```
+
+`working_tree` is uncommitted porcelain-v2 status for that exact worktree, including
+individual untracked files. `branch_delta` is name-status from the trunk merge base to the
+checked-out branch. Absence means unmeasured; measured zero means clean/no branch files.
+`trunk` must match `[A-Za-z0-9._/-]{1,200}`.
+
+`GET /git/graph?cwd=&limit=` returns `{lines, limit, has_more}`. `limit` is 1–200 (default
+80). Lines are either `{kind:"connector", graph}` or typed commit rows carrying `graph`,
+`oid`, `parents`, `refs`, `author`, `committed_at`, and `subject`. `graph` is Git's own
+`git log --graph` prefix; connector rows preserve merge topology between commits. The route
+is read-only and queries all local refs.
 
 `POST /git/worktrees` takes `{cwd, path, branch?, start_point?, spawn?}`. With `spawn`
 present (an ordinary spawn body; `project_id` required) it creates the worktree and then
