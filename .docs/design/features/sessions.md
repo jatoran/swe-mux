@@ -231,7 +231,8 @@ and reattachable browser viewports.
 - `src/swe_mux/pty_host.py`
 - `src/swe_mux/supervisor.py`
 - `src/swe_mux/supervisor_client.py`
-- `src/swe_mux/scrollback.py` (`tail()` is the replay budget; `bytes()` is retention)
+- `src/swe_mux/scrollback.py` (`tail_bytes()` reads the end without joining; `tail()` is
+  the replay budget; `bytes()` is full retention)
 - `src/swe_mux/git_projects.py`
 - `src/swe_mux/spawn_contract.py`
 - `src/swe_mux/adapters/`

@@ -30,7 +30,7 @@ from .models import GitState, SessionRecord, SessionState
 from .pty_host import PtyHost, merge_environment
 from .runtime_cwd import Osc7Parser, local_directory_from_osc7
 from .screen_mode import SCREEN_TOGGLE, ScreenModeParser
-from .scrollback import ScrollbackBuffer
+from .scrollback import SCREEN_TAIL_BYTES, ScrollbackBuffer
 from .spawn_contract import infer_agent_executable_backend, scrub_claude_session_markers
 from .supervisor_client import RemotePtyHost, SupervisorClient, host_for_adoption
 from .terminal_arbitration import OwnerState, effective_geometry, release_owner
@@ -3671,7 +3671,7 @@ class SessionManager:
         if scrollback is None:
             return "unknown"
         try:
-            tail = scrollback.bytes()[-8192:].decode("utf-8", "replace")
+            tail = scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
         except (OSError, ValueError):
             return "unknown"
         return pty_tail_state(tail)

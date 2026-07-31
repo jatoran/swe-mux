@@ -13,6 +13,7 @@ from typing import Any
 from .adapters.codex import codex_data_home
 from .event_bus import EventBus
 from .models import SessionState
+from .scrollback import SCREEN_TAIL_BYTES
 from .session import (
     Session,
     pty_tail_state,
@@ -1053,7 +1054,9 @@ def session_pty_state(session: Session) -> str:
     if scrollback is None:
         return "unknown"
     try:
-        return pty_tail_state(scrollback.bytes()[-8192:].decode("utf-8", "replace"))
+        return pty_tail_state(
+            scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
+        )
     except (OSError, ValueError):
         return "unknown"
 
@@ -1137,7 +1140,7 @@ def _background_wait_reason(session: Session) -> str | None:
     if scrollback is None:
         return None
     try:
-        tail = scrollback.bytes()[-8192:].decode("utf-8", "replace")
+        tail = scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
     except Exception:
         return None
     return "waiting_on_background" if pty_tail_waiting_on_background(tail) else None

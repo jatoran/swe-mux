@@ -79,3 +79,111 @@ export function scrollTerminalToTail(term: TerminalTail | null | undefined): boo
   }
   return term.buffer.active.viewportY >= term.buffer.active.baseY
 }
+
+/**
+ * A viewport pass slower than this is not affordable once per animation frame.
+ *
+ * A fit is not a layout tweak. It is `term.resize`, which on a ConPTY-backed buffer
+ * appends a `BufferLine` (with its own `Uint32Array`) per gained row and can rebuild
+ * the whole `CircularList` backing array when the scrollback bound grows; a `resize`
+ * frame to the daemon, which resizes the real pseudoconsole and makes the CLI repaint
+ * everything it is showing; and a full `refresh()` of every row. On a pane holding one
+ * screen that is microseconds. On one holding tens of thousands of real scrollback
+ * lines — which is what mux's Codex sessions are, since they run with
+ * `alternate_screen=never` so the transcript lives in scrollback — it is not.
+ *
+ * 8 ms is half a 60 Hz frame: above it, doing this per frame cannot keep up by
+ * definition, so the work has to be coalesced instead.
+ */
+export const EXPENSIVE_VIEWPORT_PASS_MS = 8
+
+/** Quiet period that ends a burst. Below the ~150 ms that reads as lag. */
+export const VIEWPORT_SETTLE_MS = 120
+
+/**
+ * Hard cap on coalescing, so a continuous gesture still updates.
+ *
+ * A soft keyboard animates for ~250-400 ms and then stops, so the settle above ends
+ * it. Dragging a splitter does not stop, and without this the terminal would hold its
+ * old grid for the whole drag.
+ */
+export const VIEWPORT_SETTLE_MAX_MS = 600
+
+export interface SettleTimers {
+  now: () => number
+  setTimer: (fn: () => void, ms: number) => number
+  clearTimer: (id: number) => void
+}
+
+export interface ViewportScheduler {
+  /**
+   * Ask for a viewport pass. `burst` marks a trigger that arrives in floods —
+   * `visualViewport`/`window` resize and `ResizeObserver` — as opposed to a discrete
+   * one (becoming visible, a pane revealed, a rail change), which always runs now.
+   */
+  request: (burst: boolean) => void
+  /** Report how long the last pass took, so the next burst can be judged. */
+  observeCost: (milliseconds: number) => void
+  cancel: () => void
+  readonly deferred: boolean
+}
+
+/**
+ * Run viewport passes eagerly while they are cheap, and coalesce them once they are not.
+ *
+ * Deliberately adaptive rather than keyed on the backend or on a buffer-size guess. The
+ * thing that makes a fit unaffordable is how much work *this* pane's buffer makes it,
+ * which is exactly what timing the last pass measures — and it lands on the right answer
+ * for a case nobody enumerated (a Claude session that has left the alternate screen, a
+ * shell with a huge `cat` in its scrollback) without naming it.
+ *
+ * The first pass of a burst therefore always runs: it is both the responsive thing to do
+ * and the measurement that decides the rest. On a small pane every frame keeps fitting,
+ * exactly as before. On a large one the remaining ~20 frames of a keyboard animation
+ * collapse into a single pass after it settles — and each frame skipped is also a
+ * pseudoconsole resize the CLI does not have to repaint for.
+ */
+export function createViewportScheduler(
+  run: () => void,
+  timers: SettleTimers,
+): ViewportScheduler {
+  let timer: number | null = null
+  let burstStartedAt = 0
+  let lastCost = 0
+
+  const fire = () => {
+    timer = null
+    burstStartedAt = 0
+    run()
+  }
+
+  const cancel = () => {
+    if (timer === null) return
+    timers.clearTimer(timer)
+    timer = null
+    burstStartedAt = 0
+  }
+
+  return {
+    request(burst: boolean) {
+      if (!burst || lastCost < EXPENSIVE_VIEWPORT_PASS_MS) {
+        cancel()
+        run()
+        return
+      }
+      const now = timers.now()
+      if (timer === null) burstStartedAt = now
+      else timers.clearTimer(timer)
+      const elapsed = now - burstStartedAt
+      const wait = Math.max(0, Math.min(VIEWPORT_SETTLE_MS, VIEWPORT_SETTLE_MAX_MS - elapsed))
+      timer = timers.setTimer(fire, wait)
+    },
+    observeCost(milliseconds: number) {
+      lastCost = milliseconds
+    },
+    cancel,
+    get deferred() {
+      return timer !== null
+    },
+  }
+}

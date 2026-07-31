@@ -178,6 +178,12 @@ for a healthy session.
 
 ## Reading the PTY screen
 
+The screen is read from the last `SCREEN_TAIL_BYTES` (8 KiB) via
+`ScrollbackBuffer.tail_bytes`, which walks the chunk deque from the right. It matters that
+this is not `bytes()[-8192:]`: the watchdog reads the screen for every agent session twice
+a pass on a 5-second loop, so joining full retention first cost tens of megabytes a second
+of pure allocation across a fleet — worst for Codex, whose buffers are the fullest.
+
 `pty_tail_state` classifies the scrollback tail as `working` ("esc to interrupt"),
 `approval` (a permission dialog), `idle` ("? for shortcuts") or `unknown`. The tail
 retains redraw history, so **presence is not enough** — a session that showed a dialog and

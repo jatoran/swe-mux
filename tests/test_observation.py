@@ -23,8 +23,21 @@ from swe_mux.observation import (
     observe_transcript,
     transcript_tail_turn_state,
 )
+from swe_mux.scrollback import ScrollbackBuffer
 from swe_mux.session import Session
 from tests.support.detection_replay import ReplaySession
+
+
+def screen(data: bytes) -> ScrollbackBuffer:
+    """A real retention buffer holding one screen.
+
+    The real class, not a stub: every screen reader goes through `tail_bytes`, whose
+    whole point is that it walks the chunk deque instead of joining the buffer, and a
+    hand-rolled `bytes`-only stand-in would route around exactly that.
+    """
+    buffer = ScrollbackBuffer(1 << 20)
+    buffer.append(data)
+    return buffer
 
 
 def record(backend: str) -> SessionRecord:
@@ -598,7 +611,7 @@ def _watchdog_session(
         # no source at all takes the unwitnessed pair instead and is pinned
         # separately, so leaving this at 0 would silently retarget them.
         last_hook_ts=now - 100.0 if last_hook_ts is None else last_hook_ts,
-        scrollback=SimpleNamespace(bytes=lambda: scrollback),
+        scrollback=screen(scrollback),
         observation_state={"root_turn_active": False, "root_completion_seen": True},
         note_watchdog_recovery=lambda _reason, **_kw: None,
     )
@@ -1053,19 +1066,15 @@ async def test_the_pty_starts_and_ends_the_first_turn_when_nothing_else_can(
     session = _unwitnessed_session()
     manager = _fake_manager()
 
-    session.scrollback = SimpleNamespace(bytes=lambda: b"\xe2\x9d\xaf  ? for shortcuts")
+    session.scrollback = screen(b"\xe2\x9d\xaf  ? for shortcuts")
     await SessionManager._watchdog_check_session(manager, session, time.time())
     assert session.record.state == "idle"
 
-    session.scrollback = SimpleNamespace(
-        bytes=lambda: b"? for shortcuts\n\xe2\x80\xa2 Working (esc to interrupt)"
-    )
+    session.scrollback = screen(b"? for shortcuts\n\xe2\x80\xa2 Working (esc to interrupt)")
     await SessionManager._watchdog_check_session(manager, session, time.time())
     assert session.record.state == "working"
 
-    session.scrollback = SimpleNamespace(
-        bytes=lambda: b"\xe2\x80\xa2 Working (esc to interrupt)\n? for shortcuts"
-    )
+    session.scrollback = screen(b"\xe2\x80\xa2 Working (esc to interrupt)\n? for shortcuts")
     await SessionManager._watchdog_check_session(manager, session, time.time())
     assert session.record.state == "idle"
 
@@ -1078,7 +1087,7 @@ async def test_the_pty_stands_down_for_good_once_any_real_source_speaks() -> Non
 
     session = _unwitnessed_session()
     session.last_hook_ts = time.time()
-    session.scrollback = SimpleNamespace(bytes=lambda: b"\xe2\x80\xa2 esc to interrupt")
+    session.scrollback = screen(b"\xe2\x80\xa2 esc to interrupt")
     await SessionManager._watchdog_check_session(_fake_manager(), session, time.time())
     assert session.record.state == "idle"
 

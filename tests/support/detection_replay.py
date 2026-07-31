@@ -44,6 +44,11 @@ class ReplayScrollback:
     def bytes(self) -> bytes:
         return self.data
 
+    def tail_bytes(self, count: int) -> bytes:
+        # The real buffer walks its chunk deque to avoid materializing megabytes;
+        # a fixture's screen is one small string, so the slice is the same answer.
+        return self.data[-count:] if count > 0 else b""
+
 
 @dataclass(slots=True)
 class VirtualClock:

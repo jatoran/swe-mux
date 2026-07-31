@@ -48,6 +48,34 @@ mount-effect dependency — listing it would dispose and rebuild the terminal on
 is the cost warm panes remove. Becoming visible again schedules a full redraw and a tail scroll,
 since output that arrived while the pane was hidden moved `baseY` with no viewport following it.
 
+## Viewport passes are coalesced once they get expensive
+
+A "viewport pass" is a fit: `term.resize`, a `resize` frame to the daemon, and a full
+`refresh()`. On a pane showing one screen that is microseconds. On one holding tens of
+thousands of real scrollback lines it is not — `term.resize` appends a `BufferLine` (each
+with its own `Uint32Array`) per gained row on a ConPTY-backed buffer and can rebuild the
+whole `CircularList` backing array, and the `resize` frame resizes the real pseudoconsole,
+which makes the CLI repaint everything it is showing.
+
+Three triggers arrive in floods: `visualViewport` resize, `window` resize, and the host's
+`ResizeObserver` (which also sees `--app-height` change on every `visualViewport` event).
+A soft keyboard fires ~20 of them across its open animation, so a long Codex session paid
+all of the above ~20 times and then visibly scrolled while the repaints streamed in.
+
+`createViewportScheduler` (`terminalViewport.ts`) runs the first pass of a burst — it is
+both the responsive thing to do and the measurement — and coalesces the rest until the
+burst settles, but *only* when the last pass exceeded `EXPENSIVE_VIEWPORT_PASS_MS` (half a
+60 Hz frame). The decision is adaptive rather than keyed on the backend or on a buffer-size
+guess, so it also covers cases nobody enumerated: a Claude session that left the alternate
+screen, a shell with a huge `cat` in its scrollback. A cheap pane keeps fitting on every
+event exactly as before. `VIEWPORT_SETTLE_MAX_MS` caps the coalescing so a continuous
+gesture (dragging a splitter) still updates.
+
+Each pass also restores the tail when the viewport was on it beforehand. A ConPTY-backed
+buffer gains blank rows on a resize instead of pulling scrollback back down, so `baseY`
+moves and the viewport is left above the newest line; a viewport the user had deliberately
+scrolled up is left alone.
+
 ## Optimistic layout writes
 
 `updateLayout(projectId, next)` first updates `layoutValues` and `layoutMap`, then appends a PATCH

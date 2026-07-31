@@ -9,6 +9,10 @@ from __future__ import annotations
 import builtins
 from collections import deque
 
+# What every screen classifier reads. Enough to hold a full redraw of a tall
+# terminal plus its escape sequences, and small enough that reading it is free
+# next to the megabytes of retention behind it.
+SCREEN_TAIL_BYTES = 8192
 # How far past a trim point to look for a line boundary. Cutting the *start* of a
 # retained stream can land inside an escape sequence, which the client would
 # render as literal garbage on its first line; resuming after the next newline
@@ -65,6 +69,38 @@ class ScrollbackBuffer:
     def bytes(self) -> bytes:
         return b"".join(self._chunks)
 
+    def tail_bytes(self, count: int) -> builtins.bytes:
+        """The newest ``count`` bytes, without materializing the whole buffer.
+
+        Every caller that reads this buffer wants its *end* — the screen classifier
+        reads 8 KiB, the replay budget reads a few hundred, nested-agent detection
+        reads what arrived since its cursor — and each was reaching it through
+        ``bytes()``, which joins the entire retention into one new object first.
+
+        That is not a micro-optimization at this size. The state watchdog reads the
+        screen for every agent session twice a pass on a 5-second loop, so a fleet of
+        full 5 MiB buffers was allocating and copying tens of megabytes a second to
+        look at 8 KiB — and it is worst exactly where the buffers are fullest, which
+        is Codex, since it runs with `alternate_screen=never` and puts its whole
+        transcript in scrollback rather than repainting one screen.
+
+        Walking the chunk deque from the right touches only the chunks it needs.
+        """
+        if count <= 0:
+            return b""
+        if count >= self._size:
+            return self.bytes()
+        collected: list[builtins.bytes] = []
+        remaining = count
+        for chunk in reversed(self._chunks):
+            if len(chunk) >= remaining:
+                collected.append(chunk[len(chunk) - remaining :])
+                break
+            collected.append(chunk)
+            remaining -= len(chunk)
+        collected.reverse()
+        return b"".join(collected)
+
     def tail(self, limit: int | None) -> builtins.bytes:
         """The newest ``limit`` bytes, trimmed to a line boundary.
 
@@ -80,10 +116,9 @@ class ScrollbackBuffer:
         ``limit=None`` returns everything, for callers that want exact retention
         rather than a replay budget.
         """
-        retained = self.bytes()
-        if limit is None or limit <= 0 or len(retained) <= limit:
-            return retained
-        window = retained[-limit:]
+        if limit is None or limit <= 0 or self._size <= limit:
+            return self.bytes()
+        window = self.tail_bytes(limit)
         boundary = window.find(b"\n", 0, TAIL_ALIGN_LOOKAHEAD)
         return window[boundary + 1 :] if boundary >= 0 else window
 
@@ -97,10 +132,8 @@ class ScrollbackBuffer:
         return self._size
 
     def bytes_since(self, position: int) -> builtins.bytes:
-        retained = self.bytes()
-        retained_start = self._written - len(retained)
         if position >= self._written:
             return b""
-        if position <= retained_start:
-            return retained
-        return retained[position - retained_start :]
+        if position <= self._written - self._size:
+            return self.bytes()
+        return self.tail_bytes(self._written - position)

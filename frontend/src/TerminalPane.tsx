@@ -34,7 +34,7 @@ import { railPayload, resolveRail, type RailBackend, type RailItem } from './com
 import { activatePromptRailItem } from './promptRail'
 import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { currentProfile, loadRailItems } from './deviceSettings'
-import { APP_TAIL_KEY, appOwnsTail, redrawVisibleTerminal, refitVisibleTerminal, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
+import { APP_TAIL_KEY, appOwnsTail, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
 import { geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
 import {
   applyOwnerFrame,
@@ -602,9 +602,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       refitVisibleTerminal(fit, host.current)
     }
-    const scheduleViewport = (invalidateAtlas: boolean) => {
-      invalidateAtlasOnRedraw ||= invalidateAtlas
-      if (invalidateAtlas) diagnoseRender?.('full_redraw_requested', { pendingReplayWrites })
+    const runViewportPass = () => {
       window.cancelAnimationFrame(fitFrame)
       window.cancelAnimationFrame(redrawFrame)
       fitFrame = window.requestAnimationFrame(() => {
@@ -614,8 +612,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // would keep the PTY sized for a tab nobody is looking at.
         if (paneIsHidden() && localFit) sendViewport(localFit.cols, localFit.rows)
         if (!terminalHostIsVisible(host.current)) return
+        // A resize moves `baseY` (a ConPTY-backed buffer gains blank rows rather than
+        // pulling scrollback back down), so a viewport that was on the newest line no
+        // longer is. Remembered before the fit and restored after, because "was the
+        // user reading the tail" is not answerable once the grid has changed — and
+        // yanking someone who had deliberately scrolled up is worse than not.
+        const wasAtTail = !offTailRef.current
+        const startedAt = performance.now()
         measureFit()
         applyGeometry()
+        // Timed around the two calls that do the work, so the scheduler's decision to
+        // coalesce is based on this pane's real cost rather than on its backend.
+        viewportScheduler.observeCost(performance.now() - startedAt)
+        if (wasAtTail) scrollTerminalToTail(term)
         // DOM/WebGL pixels can be discarded while a pane or browser tab is hidden.
         // Repaint one frame after layout settles so every terminal row is invalidated.
         redrawFrame = window.requestAnimationFrame(() => {
@@ -634,7 +643,24 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         })
       })
     }
+    const viewportScheduler = createViewportScheduler(runViewportPass, {
+      now: () => performance.now(),
+      setTimer: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimer: id => window.clearTimeout(id),
+    })
+    const scheduleViewport = (invalidateAtlas: boolean, burst = false) => {
+      invalidateAtlasOnRedraw ||= invalidateAtlas
+      if (invalidateAtlas) diagnoseRender?.('full_redraw_requested', { pendingReplayWrites })
+      viewportScheduler.request(burst)
+    }
     const scheduleFit = () => scheduleViewport(false)
+    // Resize floods: a soft keyboard fires `visualViewport` resizes through its whole
+    // open/close animation, and every one of them changes `--app-height`, which the
+    // host's ResizeObserver sees too. Fitting per frame is what made opening the
+    // keyboard on a long Codex session lag and then visibly scroll: each pass resized
+    // the pseudoconsole, so the CLI repainted its entire scrollback-mode transcript,
+    // ~20 times over. The scheduler runs the first one and coalesces the rest.
+    const scheduleBurstFit = () => scheduleViewport(false, true)
     const scheduleFullRedraw = () => scheduleViewport(true)
     scheduleFitRef.current = scheduleFullRedraw
     paneVisibilityRef.current = (nowVisible: boolean) => {
@@ -1270,13 +1296,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     host.current.addEventListener('dragover', dragOver)
     host.current.addEventListener('dragleave', dragLeave)
     host.current.addEventListener('drop', drop)
-    const observer = new ResizeObserver(scheduleFit)
+    const observer = new ResizeObserver(scheduleBurstFit)
     observer.observe(host.current)
     const intersection = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver(entries => {
       if (entries.some(entry => entry.isIntersecting)) scheduleFullRedraw()
     })
     intersection?.observe(host.current)
-    window.addEventListener('resize', scheduleFit)
+    window.addEventListener('resize', scheduleBurstFit)
     // Redraw only: reconnect decisions all belong to the liveness watcher below, which
     // owns the attempt bookkeeping and can also recover from a stalled handshake.
     // Scheduled in both directions: becoming hidden is what deregisters this pane's
@@ -1295,11 +1321,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       enabled:()=>!disposed&&!['exited','crashed'].includes(stateRef.current),
       reconnect:reconnectNow,
     })
-    window.visualViewport?.addEventListener('resize',scheduleFit)
+    window.visualViewport?.addEventListener('resize',scheduleBurstFit)
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleFit);window.visualViewport?.removeEventListener('resize',scheduleFit);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{} }
+    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput])
 
   const copy = async () => {

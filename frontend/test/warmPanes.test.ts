@@ -104,3 +104,34 @@ test('everything that gates on being looked at asks paneIsHidden, not the docume
     assert.ok(source.includes(marker), `TerminalPane no longer contains: ${marker}`)
   }
 })
+
+test('every resize flood is routed through the coalescing scheduler', () => {
+  // visualViewport/window resize and the host ResizeObserver are the three triggers
+  // that arrive per animation frame. Any one of them left on the eager path puts the
+  // per-frame pseudoconsole resize (and the CLI repaint behind it) straight back.
+  const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
+  for (const marker of [
+    "new ResizeObserver(scheduleBurstFit)",
+    "window.addEventListener('resize', scheduleBurstFit)",
+    "window.visualViewport?.addEventListener('resize',scheduleBurstFit)",
+  ]) {
+    assert.ok(source.includes(marker), `resize trigger no longer coalesced: ${marker}`)
+  }
+})
+
+test('a resize restores the tail only for a viewport that was already on it', () => {
+  // A ConPTY-backed buffer gains blank rows on a resize rather than pulling
+  // scrollback down, so `baseY` moves and the viewport is left above the newest
+  // line -- which is the "it scrolls down again" the fix is for. Someone who had
+  // deliberately scrolled up must not be yanked to the bottom by their keyboard.
+  const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
+  assert.match(source, /const wasAtTail = !offTailRef\.current/)
+  assert.match(source, /if \(wasAtTail\) scrollTerminalToTail\(term\)/)
+})
+
+test('the scheduler is fed the measured cost of each pass', () => {
+  // Without this the adaptive path never learns, and every pane silently reverts to
+  // fitting on every frame.
+  const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
+  assert.match(source, /viewportScheduler\.observeCost\(performance\.now\(\) - startedAt\)/)
+})

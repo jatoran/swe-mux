@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   APP_TAIL_KEY,
+  EXPENSIVE_VIEWPORT_PASS_MS,
+  VIEWPORT_SETTLE_MAX_MS,
+  VIEWPORT_SETTLE_MS,
   appOwnsTail,
+  createViewportScheduler,
   redrawVisibleTerminal,
   refitVisibleTerminal,
   scrollTerminalToTail,
@@ -92,4 +96,154 @@ test('jump-to-latest asks the application too, but only one that owns a viewport
   // A shell owns no viewport, so the bytes would only land in a half-typed command line.
   assert.equal(appOwnsTail('shell', true), false)
   assert.equal(APP_TAIL_KEY, '\x1b[1;5F')
+})
+
+// --- Adaptive viewport scheduling -------------------------------------------
+
+function fakeTimers() {
+  let clock = 0
+  let nextId = 1
+  const pending = new Map<number, { at: number; fn: () => void }>()
+  return {
+    timers: {
+      now: () => clock,
+      setTimer: (fn: () => void, ms: number) => {
+        const id = nextId++
+        pending.set(id, { at: clock + ms, fn })
+        return id
+      },
+      clearTimer: (id: number) => { pending.delete(id) },
+    },
+    advance(ms: number) {
+      const target = clock + ms
+      for (;;) {
+        const due = [...pending.entries()]
+          .filter(([, entry]) => entry.at <= target)
+          .sort((a, b) => a[1].at - b[1].at)[0]
+        if (!due) break
+        pending.delete(due[0])
+        clock = due[1].at
+        due[1].fn()
+      }
+      clock = target
+    },
+    get scheduled() { return pending.size },
+  }
+}
+
+test('a cheap pane keeps fitting on every event, exactly as before', () => {
+  const { timers, advance } = fakeTimers()
+  let runs = 0
+  const scheduler = createViewportScheduler(() => { runs += 1 }, timers)
+  for (let frame = 0; frame < 10; frame += 1) {
+    scheduler.observeCost(1)
+    scheduler.request(true)
+    advance(16)
+  }
+  assert.equal(runs, 10)
+  assert.equal(scheduler.deferred, false)
+})
+
+test('an expensive pane runs the first pass and coalesces the rest of the burst', () => {
+  // The soft-keyboard case: ~20 visualViewport resizes across the animation, each
+  // one otherwise a pseudoconsole resize the CLI repaints its whole transcript for.
+  const { timers, advance } = fakeTimers()
+  let runs = 0
+  const scheduler = createViewportScheduler(() => { runs += 1 }, timers)
+  scheduler.request(true)
+  assert.equal(runs, 1, 'the first pass always runs — it is also the measurement')
+  scheduler.observeCost(EXPENSIVE_VIEWPORT_PASS_MS + 4)
+
+  for (let frame = 0; frame < 20; frame += 1) {
+    scheduler.request(true)
+    advance(16)
+  }
+  assert.equal(runs, 1, 'nothing ran mid-animation')
+  assert.ok(scheduler.deferred)
+
+  advance(VIEWPORT_SETTLE_MS)
+  assert.equal(runs, 2, 'one pass once the viewport settled')
+  assert.equal(scheduler.deferred, false)
+})
+
+test('a continuous gesture still updates at the cap instead of holding forever', () => {
+  // Dragging a splitter never stops, so the settle alone would freeze the grid for
+  // the whole drag. The cap bounds how stale the shown grid can get.
+  const { timers, advance } = fakeTimers()
+  const firedAt: number[] = []
+  const scheduler = createViewportScheduler(() => firedAt.push(timers.now()), timers)
+  scheduler.observeCost(EXPENSIVE_VIEWPORT_PASS_MS)
+  for (let elapsed = 0; elapsed < VIEWPORT_SETTLE_MAX_MS * 3; elapsed += 16) {
+    scheduler.request(true)
+    // Cost stays high: a real drag keeps doing the expensive work every pass.
+    scheduler.observeCost(EXPENSIVE_VIEWPORT_PASS_MS)
+    advance(16)
+  }
+  assert.ok(firedAt.length >= 2, `expected repeated cap fires, got ${firedAt.join()}`)
+  assert.ok(
+    firedAt[0] <= VIEWPORT_SETTLE_MAX_MS,
+    `first update must land within the cap, landed at ${firedAt[0]}`,
+  )
+  for (let i = 1; i < firedAt.length; i += 1) {
+    const gap = firedAt[i] - firedAt[i - 1]
+    assert.ok(
+      gap <= VIEWPORT_SETTLE_MAX_MS + VIEWPORT_SETTLE_MS,
+      `gap between updates was ${gap}ms`,
+    )
+  }
+})
+
+test('a discrete trigger is never deferred, however expensive the pane', () => {
+  // Becoming visible, a pane revealed, a rail change: these arrive once and the
+  // user is looking at the result, so waiting on a settle that will never come
+  // would leave a stale grid on screen.
+  const { timers } = fakeTimers()
+  let runs = 0
+  const scheduler = createViewportScheduler(() => { runs += 1 }, timers)
+  scheduler.observeCost(EXPENSIVE_VIEWPORT_PASS_MS * 10)
+  scheduler.request(false)
+  assert.equal(runs, 1)
+  assert.equal(scheduler.deferred, false)
+})
+
+test('a discrete trigger supersedes a burst already waiting', () => {
+  const { timers, advance } = fakeTimers()
+  let runs = 0
+  const scheduler = createViewportScheduler(() => { runs += 1 }, timers)
+  scheduler.observeCost(EXPENSIVE_VIEWPORT_PASS_MS)
+  scheduler.request(true)
+  assert.ok(scheduler.deferred)
+  scheduler.request(false)
+  assert.equal(runs, 1)
+  assert.equal(scheduler.deferred, false)
+  advance(VIEWPORT_SETTLE_MS * 4)
+  assert.equal(runs, 1, 'the superseded burst must not fire a second pass')
+})
+
+test('cancelling drops a pending burst', () => {
+  const { timers, advance } = fakeTimers()
+  let runs = 0
+  const scheduler = createViewportScheduler(() => { runs += 1 }, timers)
+  scheduler.observeCost(EXPENSIVE_VIEWPORT_PASS_MS)
+  scheduler.request(true)
+  scheduler.cancel()
+  advance(VIEWPORT_SETTLE_MS * 4)
+  assert.equal(runs, 0)
+  assert.equal(scheduler.deferred, false)
+})
+
+test('a pane that becomes cheap again stops deferring', () => {
+  // The cost is re-measured every pass, so a session whose buffer was trimmed, or
+  // one whose fit turned into a no-op, goes back to live fitting on its own.
+  const { timers, advance } = fakeTimers()
+  let runs = 0
+  const scheduler = createViewportScheduler(() => { runs += 1 }, timers)
+  scheduler.observeCost(EXPENSIVE_VIEWPORT_PASS_MS)
+  scheduler.request(true)
+  advance(VIEWPORT_SETTLE_MS)
+  assert.equal(runs, 1)
+  scheduler.observeCost(0)
+  scheduler.request(true)
+  assert.equal(runs, 2)
+  assert.equal(scheduler.deferred, false)
 })

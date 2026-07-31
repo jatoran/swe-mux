@@ -51,6 +51,52 @@ def test_scrollback_zero_capacity_retains_nothing() -> None:
     assert buffer.bytes() == b""
 
 
+def test_tail_bytes_reads_the_end_without_joining_the_buffer() -> None:
+    # Every screen reader wants the last few KiB of a buffer that holds megabytes.
+    # Routing that through bytes() joined the whole retention first, on a 5-second
+    # watchdog loop, per agent session -- worst where buffers are fullest, which is
+    # Codex (alternate_screen=never puts its transcript in scrollback).
+    buffer = ScrollbackBuffer(1024)
+    for index in range(20):
+        buffer.append(f"chunk{index:02d}|".encode())
+    whole = buffer.bytes()
+    for count in (0, 1, 7, 8, 9, 50, len(whole) - 1, len(whole), len(whole) + 100):
+        assert buffer.tail_bytes(count) == (whole[-count:] if count else b""), count
+    assert buffer.tail_bytes(-5) == b""
+
+
+def test_tail_bytes_touches_only_the_chunks_it_needs() -> None:
+    # The whole point: it must not walk (or join) the chunks it is not returning.
+    buffer = ScrollbackBuffer(1 << 20)
+    reads: list[int] = []
+
+    class CountingChunk(bytes):
+        def __len__(self) -> int:  # noqa: D105 - counts access, not behavior
+            reads.append(1)
+            return super().__len__()
+
+    for _index in range(500):
+        buffer.append(CountingChunk(b"0123456789"))
+    reads.clear()
+    assert len(buffer.tail_bytes(25)) == 25
+    assert len(reads) <= 8, f"walked {len(reads)} chunks to read 25 bytes of 5000"
+
+
+def test_bytes_since_uses_the_same_right_anchored_walk() -> None:
+    buffer = ScrollbackBuffer(1024)
+    buffer.append(b"aaaa")
+    buffer.append(b"bbbb")
+    assert buffer.bytes_since(0) == b"aaaabbbb"
+    assert buffer.bytes_since(4) == b"bbbb"
+    assert buffer.bytes_since(8) == b""
+    assert buffer.bytes_since(99) == b""
+    # A cursor older than what is still retained returns everything retained.
+    trimmed = ScrollbackBuffer(4)
+    trimmed.append(b"aaaa")
+    trimmed.append(b"bbbb")
+    assert trimmed.bytes_since(0) == b"bbbb"
+
+
 def test_replay_tail_is_bounded_without_touching_retention() -> None:
     # Retention and replay are separate budgets: the daemon keeps history to scroll
     # back through, while an attaching client has to parse everything it is handed
