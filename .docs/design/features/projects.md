@@ -42,11 +42,13 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   sorts, reorders, and folds on the same terms, and orders by its visible name.
 - Each section header carries a sort control (`⇅`) covering **two levels**. Flat, and acting on
   that section's Projects: Manual order, Recently active, Name A→Z / Z→A, Newest / Oldest first.
-  Behind a `Sort sections` group, acting on the sections themselves: Manual order, Recently
+  Behind a `Sort Groups` group, acting on the sections themselves: Manual order, Recently
   active, Name A→Z / Z→A. Both live on the header because a header's `⇅` already means "how is
   this list ordered" and the sidebar has no section-level header to hang a second control on;
   the submenu keeps the common case one click deep and carries its current mode in its label,
-  since section order has no always-visible indicator of its own.
+  since section order has no always-visible indicator of its own. The submenu is named for
+  Groups, the app's own word for these, even though it also orders the ungrouped remainder —
+  its tooltip carries that, and "sections" was jargon nothing else in the UI used.
 - Project sorting is per section because Groups are how unlike things are separated — a
   hand-arranged shortlist and a long alphabetical pile are both legitimate, and one global mode
   cannot be both. Section sorting is necessarily one setting. Both are device-local.
