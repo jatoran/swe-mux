@@ -49,7 +49,7 @@ import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
 import { VoicePlayer } from './VoicePlayer'
 import { ConversationControl } from './ConversationControl'
-import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, unlockPlayback } from './voice'
+import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { currentProfile, loadDrawerTabOrder, loadSettings, refreshSettings, saveDrawerTabOrder } from './deviceSettings'
 import { initPush } from './push'
@@ -776,6 +776,11 @@ export function App() {
       .then(config=>applyConfig(config,includeTheme))
       .catch(()=>{})
 
+  // Read aloud turned off in Settings (here or on another device — `configuration_changed`
+  // refetches this status everywhere) silences whatever is mid-clip rather than letting it
+  // run out.
+  useEffect(() => { if (voiceStatus && !voiceStatus.enabled) stopAllPlayback() }, [voiceStatus?.enabled])
+
   useEffect(() => {
     void refresh()
     void loadConfig(true)
@@ -981,7 +986,11 @@ export function App() {
               trigger: event.payload?.trigger,
               streamId: event.payload?.stream_id,
             } }))
-            if (!isReplay && event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoplayEnabled()) enqueueAutoplay(clipId,String(event.payload?.stream_id||'')||null)
+            // The pane's mode is re-checked here as well as on the daemon: a clip
+            // generated just before the user hit "off" would otherwise land and start
+            // speaking after the switch was thrown.
+            const autoAllowed = eventSession ? eventSession.voice_mode !== 'off' : true
+            if (!isReplay && event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoAllowed && autoplayEnabled()) enqueueAutoplay(clipId,String(event.payload?.stream_id||'')||null,event.session_id||null)
           }
           if (event.type === 'settings_changed') refreshSettings()
           // Another device (or another tab) changed the ring; an open picker refetches.
@@ -2132,8 +2141,12 @@ export function App() {
     if (mode === 'off' || mode === 'on_demand' || mode === 'auto') return mode
     return voiceStatus?.enabled ? voiceStatus.default_mode : 'off'
   }
-  const setVoiceMode = (session: Session, mode: VoiceMode) =>
-    api<Session>('PATCH', `/api/sessions/${session.id}`, { voice_mode: mode }).then(updateSession).catch(cause => setError(cause instanceof Error ? cause.message : String(cause)))
+  const setVoiceMode = (session: Session, mode: VoiceMode) => {
+    // Cut this pane's audio on the click, not when the PATCH lands and not when the
+    // current clip happens to end: "off" has to be audible immediately.
+    if (mode === 'off') stopSessionPlayback(session.id)
+    return api<Session>('PATCH', `/api/sessions/${session.id}`, { voice_mode: mode }).then(updateSession).catch(cause => setError(cause instanceof Error ? cause.message : String(cause)))
+  }
   const cycleVoiceMode = (session: Session) => {
     const order: VoiceMode[] = ['off', 'on_demand', 'auto']
     void setVoiceMode(session, order[(order.indexOf(effectiveVoiceMode(session)) + 1) % order.length])
@@ -2143,7 +2156,7 @@ export function App() {
     unlockPlayback()
     try {
       const clip = await api<VoiceClip>('POST', `/api/sessions/${session.id}/voice/generate`)
-      if (clip?.id) void playClip(clip.id).catch(() => {})
+      if (clip?.id) void playClip(clip.id, session.id).catch(() => {})
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 

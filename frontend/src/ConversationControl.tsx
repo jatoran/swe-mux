@@ -3,7 +3,7 @@ import { api } from './api'
 import { buildVoiceMatcher, conversationCapability, DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, PersistentVoiceCapture } from './conversation'
 import { enableMobileVoice, mobileVoiceDestination } from './mobileVoice'
 import type { Session, VoiceClip, VoiceStatus } from './types'
-import { bargeInPlayback, getPlayback, playClip, setAutoplayEnabled, unlockPlayback } from './voice'
+import { bargeInPlayback, getPlayback, playClip, unlockPlayback } from './voice'
 
 type Phase='off'|'starting'|'listening'|'hearing'|'transcribing'|'sending'|'standby'|'error'
 
@@ -85,10 +85,11 @@ export function ConversationControl({session,status,onSession}:{session:Session;
       bargeInPlayback();setPhase('listening');setDetail('Playback stopped. Still listening.');return
     }
     if(parsed.command==='read'){
+      if(!status.enabled){setPhase('listening');setDetail('Read aloud is off — enable it in Settings → Voice. Still listening.');return}
       setPhase('sending');setDetail('Preparing the latest reply…')
       try{
         const clip=await api<VoiceClip>('POST',`/api/sessions/${session.id}/voice/generate`)
-        unlockPlayback();await playClip(clip.id);setPhase('listening');setDetail('Reply read. Still listening.')
+        unlockPlayback();await playClip(clip.id,session.id);setPhase('listening');setDetail('Reply read. Still listening.')
       }catch(cause){setPhase('error');setDetail(cause instanceof Error?cause.message:String(cause))}
       return
     }
@@ -124,9 +125,12 @@ export function ConversationControl({session,status,onSession}:{session:Session;
     await handleTranscript(String(payload.text||''))
   }
 
+  // Talk mode is mic → transcribe → PTY. It does not require read aloud and never
+  // changes it: the tts chip, the device autoplay toggle, and this button are three
+  // independent switches. Only the read/summary/verbatim voice commands need TTS,
+  // and each reports that itself.
   const start=async()=>{
     if(enabledRef.current){stop();return}
-    if(!status.enabled){setPhase('error');setDetail('Enable read aloud in Settings → Voice first.');return}
     const capability=conversationCapability()
     if(!capability.secureContext){
       setPhase('starting');setDetail('Creating a private HTTPS address for mobile voice…')
@@ -140,7 +144,9 @@ export function ConversationControl({session,status,onSession}:{session:Session;
     }
     if(!capability.available||!status.stt_available){setPhase('error');setDetail(capability.available?(status.stt_diagnostic||'Daemon transcription is unavailable.'):capability.reason);return}
     setPhase('starting');setDetail('Requesting microphone…')
-    unlockPlayback();setAutoplayEnabled(true)
+    // Unlock only: this is the gesture mobile browsers require before any later
+    // programmatic play(), so the `read reply` command works. It turns nothing on.
+    unlockPlayback()
     window.dispatchEvent(new CustomEvent('mux:conversation-claim',{detail:{sessionId:session.id}}))
     const capture=new PersistentVoiceCapture({
       playbackActive:()=>getPlayback().playing,
@@ -151,7 +157,6 @@ export function ConversationControl({session,status,onSession}:{session:Session;
     try{
       await capture.start();captureRef.current=capture;enabledRef.current=true;standbyRef.current=false
       setPhase('listening');setDetail(`Listening. Say “${wake}, send” to submit.`)
-      if(session.voice_mode!=='auto')void api<Session>('PATCH',`/api/sessions/${session.id}`,{voice_mode:'auto'}).then(onSession).catch(()=>{})
     }catch(cause){capture.stop();enabledRef.current=false;setPhase('error');setDetail(cause instanceof Error?cause.message:String(cause))}
   }
 

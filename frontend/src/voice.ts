@@ -11,11 +11,16 @@ const AUTOPLAY_KEY = 'mux:voice-autoplay'
 // Minimal valid silent wav used purely to unlock the element inside a gesture.
 const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA='
 
+// Clips carry the session they belong to so turning read aloud off for one pane
+// can cut that pane's audio without silencing another pane that is still on.
+type QueueItem = { clipId: string; streamId: string | null; sessionId: string | null }
+
 let audioElement: HTMLAudioElement | null = null
 let currentClipId: string | null = null
 let currentStreamId: string | null = null
+let currentSessionId: string | null = null
 let unlocked = false
-let queue: Array<{clipId:string;streamId:string|null}> = []
+let queue: QueueItem[] = []
 const suppressedStreams = new Set<string>()
 let state: PlaybackState = { clipId: null, playing: false, position: 0, duration: 0 }
 const listeners = new Set<() => void>()
@@ -61,14 +66,16 @@ export function unlockPlayback(): void {
   void audio.play().catch(() => { unlocked = false })
 }
 
-export async function playClip(clipId: string): Promise<void> {
+export async function playClip(clipId: string, sessionId: string | null = null): Promise<void> {
   currentStreamId = null
+  currentSessionId = sessionId
   await playClipAudio(clipId)
 }
 
-async function playQueuedClip(item:{clipId:string;streamId:string|null}):Promise<void>{
+async function playQueuedClip(item:QueueItem):Promise<void>{
   if(item.streamId&&suppressedStreams.has(item.streamId))return
   currentStreamId=item.streamId
+  currentSessionId=item.sessionId
   await playClipAudio(item.clipId)
 }
 
@@ -100,24 +107,63 @@ export function autoplayEnabled(): boolean {
 export function setAutoplayEnabled(value: boolean): void {
   try { localStorage.setItem(AUTOPLAY_KEY, value ? '1' : '0') } catch { /* private mode */ }
   if (value) unlockPlayback()
+  // Muting the device while a clip is mid-sentence has to be immediate; leaving it
+  // to finish contradicts the 🔇 the button now shows.
+  else stopAllPlayback()
   notify()
 }
 
-export function enqueueAutoplay(clipId: string, streamId: string | null = null): void {
+export function enqueueAutoplay(clipId: string, streamId: string | null = null, sessionId: string | null = null): void {
   if (!autoplayEnabled()) return
   if(streamId&&suppressedStreams.has(streamId))return
-  const item={clipId,streamId}
+  const item:QueueItem={clipId,streamId,sessionId}
   if (state.playing && currentClipId && currentClipId !== clipId) { queue.push(item); return }
   queue = []
   void playQueuedClip(item).catch(() => { /* blocked until a gesture unlocks the element */ })
 }
 
+function suppressCurrentStream():void{
+  if(!currentStreamId)return
+  suppressedStreams.add(currentStreamId)
+  if(suppressedStreams.size>64)suppressedStreams.delete(suppressedStreams.values().next().value as string)
+}
+
 export function bargeInPlayback():void{
-  if(currentStreamId){
-    suppressedStreams.add(currentStreamId)
-    if(suppressedStreams.size>64)suppressedStreams.delete(suppressedStreams.values().next().value as string)
-  }
+  suppressCurrentStream()
   queue=[]
   audioElement?.pause()
   setState({playing:false})
+}
+
+// Hard stop: unlike pausePlayback (which keeps the clip loaded so the play button
+// resumes it), this abandons the clip so the strip shows nothing playing and a
+// later play starts from the beginning.
+function haltCurrentClip():void{
+  audioElement?.pause()
+  currentClipId=null
+  currentStreamId=null
+  currentSessionId=null
+  state={clipId:null,playing:false,position:0,duration:0}
+  notify()
+}
+
+// Read aloud was turned off for one session. Cut that session's audio and drop its
+// queued clips; other sessions keep playing, and anything already queued for them
+// advances rather than being stranded behind the halted clip.
+export function stopSessionPlayback(sessionId: string): void {
+  const hitCurrent = currentSessionId === sessionId
+  if (hitCurrent) suppressCurrentStream()
+  queue = queue.filter(item => item.sessionId !== sessionId)
+  if (!hitCurrent) return
+  haltCurrentClip()
+  const next = queue.shift()
+  if (next) void playQueuedClip(next).catch(() => { /* autoplay chain stops on error */ })
+}
+
+// Read aloud was turned off globally (Settings) or for this device (autoplay
+// toggle): nothing should keep playing anywhere.
+export function stopAllPlayback(): void {
+  suppressCurrentStream()
+  queue = []
+  haltCurrentClip()
 }

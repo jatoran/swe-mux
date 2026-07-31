@@ -80,6 +80,18 @@ affect the PTY, session state, transcripts, history, or projects.
   localStorage device-autoplay toggle decides whether `auto` clips play on that client.
 - Auto clips share a stream ID. Barge-in (`bargeInPlayback`) pauses playback, clears its
   queue, and suppresses later clips from the same reply while leaving manual replay available.
+- **Turning read aloud off is immediate, at all three scopes.** The singleton element is
+  shared, so clips are tagged with the session that owns them and each "off" switch stops
+  exactly what it turns off: the pane's `tts:` chip going to `off` calls `stopSessionPlayback`
+  (that session's clip is halted and its queued clips dropped; another pane's audio keeps
+  playing, and a clip already queued for a still-enabled pane is promoted rather than
+  stranded), while the device autoplay toggle and the global Settings switch call
+  `stopAllPlayback`. All of them fire on the click, not when the PATCH lands or when the
+  current clip finishes. A hard stop abandons the clip (unlike `pausePlayback`, which keeps it
+  loaded to resume), so the strip reads as stopped and a later play restarts from zero.
+- The autoplay path re-checks the pane's mode on arrival as well as on the daemon, because a
+  clip synthesized just before the user hit `off` would otherwise land and start speaking after
+  the switch was thrown.
 
 ## Conversation mode (STT)
 
@@ -87,8 +99,13 @@ affect the PTY, session state, transcripts, history, or projects.
 
 - `PersistentVoiceCapture` opens `getUserMedia` (mono, echo cancellation, noise suppression,
   auto gain) and a `ScriptProcessorNode`, and stays armed across silence. Exactly one pane
-  owns capture per browser; a `mux:conversation-claim` event stops any other pane. Enabling it
-  selects `auto` TTS and device autoplay.
+  owns capture per browser; a `mux:conversation-claim` event stops any other pane.
+- **Conversation mode and read aloud are independent switches and neither one moves the
+  other.** Talk is mic → transcribe → PTY and needs only `stt_enabled`, so starting it does not
+  require read aloud, does not set the pane to `auto`, and does not enable device autoplay.
+  Starting it does call `unlockPlayback`, which is not a setting: it is the user gesture mobile
+  browsers demand before any later programmatic `play()`, so the `read` command can speak at
+  all. Only the `read` command needs TTS, and it says so if read aloud is off.
 - Voice activity detection is energy-based on an adaptive noise floor (EMA). Speech starts
   when RMS exceeds `max(0.012, noiseFloor*3.2, playbackActive ? 0.035 : 0)` — the raised floor
   during playback keeps the agent's own TTS from self-triggering. A ~320 ms pre-roll is
