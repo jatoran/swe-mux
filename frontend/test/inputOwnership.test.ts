@@ -48,12 +48,12 @@ test('only a visible, focused pane takes input back on its own', () => {
   // window, so focus alone had a background desktop pane stealing the keyboard back
   // from the phone on every claim, forever.
   const base = {
-    reason: 'claimed_elsewhere', focusInHost: true, documentHidden: false,
+    reason: 'claimed_elsewhere', focusInHost: true, paneHidden: false,
     windowFocused: true, lastReclaimAt: null, now: 10_000,
   }
   assert.equal(shouldReclaimAfterDisplacement(base), true)
   assert.equal(shouldReclaimAfterDisplacement({ ...base, windowFocused: false }), false)
-  assert.equal(shouldReclaimAfterDisplacement({ ...base, documentHidden: true }), false)
+  assert.equal(shouldReclaimAfterDisplacement({ ...base, paneHidden: true }), false)
   assert.equal(shouldReclaimAfterDisplacement({ ...base, focusInHost: false }), false)
 })
 
@@ -62,7 +62,7 @@ test('a refusal is never grounds to claim again', () => {
   // on the refusal is a claim/deny loop that runs at the speed of the round trip —
   // one live session had logged 7566 refused claims that way.
   const base = {
-    focusInHost: true, documentHidden: false, windowFocused: true,
+    focusInHost: true, paneHidden: false, windowFocused: true,
     lastReclaimAt: null, now: 10_000,
   }
   assert.equal(shouldReclaimAfterDisplacement({ ...base, reason: 'denied_device_in_use' }), false)
@@ -73,7 +73,7 @@ test('a refusal is never grounds to claim again', () => {
 
 test('a pane cannot re-claim twice inside the cooldown', () => {
   const base = {
-    reason: 'claimed_elsewhere', focusInHost: true, documentHidden: false,
+    reason: 'claimed_elsewhere', focusInHost: true, paneHidden: false,
     windowFocused: true, now: 10_000,
   }
   assert.equal(shouldReclaimAfterDisplacement({ ...base, lastReclaimAt: 9_000 }), false)

@@ -34,6 +34,24 @@ def test_an_unowned_session_goes_to_whoever_asks() -> None:
     assert decision.state.last_gesture_at is None
 
 
+def test_an_unowned_session_still_refuses_a_pane_that_is_not_on_screen() -> None:
+    """The letterbox bug: a warm pane (mounted, `display:none`, behind another tab)
+    attaches, passively claims the session nobody owns yet, and — because the owner
+    dictates geometry — resizes ConPTY to the size it reports. Its host measures zero,
+    so that size is xterm's unfitted 80x24 default, and every on-screen client is then
+    told to letterbox to a grid the user never chose."""
+    decision = evaluate_claim(OwnerState(), desktop(now=100.0, focused=False))
+    assert not decision.granted
+    assert decision.reason == "denied_unfocused"
+    assert decision.state.connection_id is None
+
+    # A real gesture is still a human, so it takes an unowned session either way.
+    clicked = evaluate_claim(
+        OwnerState(), desktop(now=100.0, reason="gesture", focused=False)
+    )
+    assert clicked.granted and clicked.state.connection_id == "desktop-conn"
+
+
 def test_a_gesture_always_wins_even_against_an_active_owner() -> None:
     owned = OwnerState("desktop-conn", 4, "desktop", last_gesture_at=99.0)
     decision = evaluate_claim(owned, phone(now=100.0))

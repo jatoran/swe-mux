@@ -34,7 +34,7 @@ import { railPayload, resolveRail, type RailBackend, type RailItem } from './com
 import { activatePromptRailItem } from './promptRail'
 import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { currentProfile, loadRailItems } from './deviceSettings'
-import { APP_TAIL_KEY, appOwnsTail, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
+import { APP_TAIL_KEY, appOwnsTail, attachRegistersViewport, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
 import { geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
 import {
   applyOwnerFrame,
@@ -75,6 +75,17 @@ const MAX_PENDING_INPUT = 4096
 
 /** The pane's normal font size. A letterboxed pane renders below it and never above. */
 const BASE_FONT_SIZE = 11
+
+/**
+ * How long a letterbox must persist before the pane says so.
+ *
+ * Every ordinary resize letterboxes for a moment: the fit pass re-measures and compares
+ * against a `serverGeometry` that is by definition one round trip stale, so the pane
+ * draws the old grid until the daemon's `geometry` frame lands. Announcing that would be
+ * a chip flickering on every drag. What is worth announcing is the state that does not
+ * resolve, which is the bug this notice exists for.
+ */
+const LETTERBOX_NOTICE_DELAY_MS = 1500
 
 interface Props {
   session: Session
@@ -187,8 +198,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // pane can say "input is on your phone" instead of silently swallowing keystrokes.
   const [inputOwnership,setInputOwnership]=useState<OwnershipView>(UNOWNED)
   const claimInputRef=useRef<(reason:ClaimReason)=>void>(()=>{})
-  // True while this pane renders a size another device chose (see terminalLetterbox).
-  const [letterboxActive,setLetterboxed]=useState(false)
+  // The grid this pane is rendering when it is not its own fit, as `cols×rows`, or ''
+  // (see terminalLetterbox). The size and not just a flag, because when no *other
+  // device* holds input there is no owner notice to hang it off, and a pane that
+  // silently draws 80x24 into a 125x50 box reads as a broken UI rather than as a
+  // session sized elsewhere. `letterboxSettled` below is what keeps that from flashing.
+  const [letterboxSize,setLetterboxSize]=useState('')
+  const letterboxActive=letterboxSize!==''
+  const [letterboxSettled,setLetterboxSettled]=useState(false)
+  useEffect(()=>{
+    if(!letterboxSize){setLetterboxSettled(false);return}
+    const timer=window.setTimeout(()=>setLetterboxSettled(true),LETTERBOX_NOTICE_DELAY_MS)
+    return ()=>window.clearTimeout(timer)
+  },[letterboxSize])
   // Bumped when another surface edits the shared rail config so this pane re-reads it.
   const [,bumpRailRev]=useState(0)
   useEffect(()=>{const on=()=>bumpRailRev(value=>value+1);window.addEventListener('mux:settings-changed',on);return()=>window.removeEventListener('mux:settings-changed',on)},[])
@@ -215,7 +237,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setFindResult('')
     setKillArmed(false)
     setInputOwnership(UNOWNED)
-    setLetterboxed(false)
+    setLetterboxSize('')
     appOffTailRef.current=false
     setAppOffTail(false)
   },[session.id])
@@ -586,18 +608,22 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       localFitBox = null
       if (!letterboxed) return
       letterboxed = false
-      setLetterboxed(false)
+      setLetterboxSize('')
       term.options.fontSize = BASE_FONT_SIZE
     }
     const applyGeometry = () => {
       if (serverGeometry && !geometryMatchesFit(serverGeometry, localFit)) {
-        if (!letterboxed) { letterboxed = true; setLetterboxed(true) }
+        letterboxed = true
+        // Set every pass, not only on the transition: the arbitrated size can change
+        // while this pane stays letterboxed, and a notice naming the wrong grid is
+        // worse than none.
+        setLetterboxSize(`${serverGeometry.cols}×${serverGeometry.rows}`)
         applyLetterbox(serverGeometry)
         return
       }
       if (letterboxed) {
         letterboxed = false
-        setLetterboxed(false)
+        setLetterboxSize('')
         term.options.fontSize = BASE_FONT_SIZE
       }
       refitVisibleTerminal(fit, host.current)
@@ -610,7 +636,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // otherwise a hidden client's last size would hold the PTY hostage. A warm
         // pane has layout of its own (it is only `display:none`), so without this it
         // would keep the PTY sized for a tab nobody is looking at.
-        if (paneIsHidden() && localFit) sendViewport(localFit.cols, localFit.rows)
+        if (paneIsHidden()) sendViewport(localFit?.cols ?? term.cols, localFit?.rows ?? term.rows)
         if (!terminalHostIsVisible(host.current)) return
         // A resize moves `baseY` (a ConPTY-backed buffer gains blank rows rather than
         // pulling scrollback back down), so a viewport that was on the newest line no
@@ -667,7 +693,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (!nowVisible) {
         // Hidden by `display:none`, so the host measures zero and the scheduled fit
         // would return before deregistering. Send the deregistration directly.
-        if (localFit) sendViewport(localFit.cols, localFit.rows)
+        // Unconditional in the dimensions: `sendViewport` reads `hidden` itself, so what
+        // matters is that the frame goes at all. Gating it on a `localFit` this pane may
+        // never have taken (a reconnect nulls it) is what let a registration outlive the
+        // pane's own visibility and hold the PTY at a size nobody was looking at.
+        sendViewport(localFit?.cols ?? term.cols, localFit?.rows ?? term.rows)
         return
       }
       // Back on screen. The pane may have missed geometry changes while it had no
@@ -868,7 +898,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           if (!ownsInput && shouldReclaimAfterDisplacement({
             reason: typeof frame.reason === 'string' ? frame.reason : null,
             focusInHost: !!document.activeElement && host.current?.contains(document.activeElement) === true,
-            documentHidden: document.hidden,
+            paneHidden: paneIsHidden(),
             windowFocused: paneIsFocused(),
             lastReclaimAt,
             now: Date.now(),
@@ -937,12 +967,21 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         serverGeometry=null
         resetLetterbox()
         const fitted = refitVisibleTerminal(fit, host.current)
-        next.send(JSON.stringify(terminalAttachReadyFrame(term.cols, term.rows, activeRenderer, document.hidden)))
+        // `document.hidden` is not this pane's visibility: a warm pane is `display:none`
+        // inside a *foreground* tab, so it answered "visible", registered the 80x24 it
+        // had never fitted, and — being unowned — took ownership and resized the session
+        // to it. `paneIsHidden` is the pane's own axis, and the fit check covers the rest.
+        const registers = attachRegistersViewport(fitted, paneIsHidden())
+        // Seeded here so a pane that later goes hidden can withdraw the size it actually
+        // registered, rather than waiting on a fit pass it will never be visible to run.
+        if (registers) localFit = { cols: term.cols, rows: term.rows }
+        next.send(JSON.stringify(terminalAttachReadyFrame(term.cols, term.rows, activeRenderer, !registers)))
         // attach_ready is itself a viewport registration; recording it keeps the fit
         // pass that follows from sending the same dimensions again.
-        sentViewport={cols:term.cols,rows:term.rows,hidden:document.hidden}
+        sentViewport={cols:term.cols,rows:term.rows,hidden:!registers}
         diagnoseRender?.('attach_ready_sent', {
           fitted,
+          registers,
           cols: term.cols,
           rows: term.rows,
           renderer: activeRenderer,
@@ -1572,7 +1611,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     <button class={findCase ? 'active' : ''} title="Match case" aria-pressed={findCase} onClick={() => { setFindCase(value => !value); setFindResult('') }}>Aa</button>
     <span class={findResult === 'no match' ? 'missing' : ''}>{findResult}</span>
     <button title="Close find" onClick={closeFind}>×</button>
-  </div>}{ownerNotice&&<div class="terminal-input-owner" role="status"><span>{ownerNotice}{letterboxActive?' · showing its size':''}</span><button title="Take terminal input on this device" onClick={()=>{claimInputRef.current('gesture');focusTerminalInputRef.current()}}>Take over</button></div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
+  </div>}{ownerNotice
+    ?<div class="terminal-input-owner" role="status"><span>{ownerNotice}{letterboxActive?` · showing its ${letterboxSize}`:''}</span><button title="Take terminal input on this device" onClick={()=>{claimInputRef.current('gesture');focusTerminalInputRef.current()}}>Take over</button></div>
+    /* Letterboxed with nobody else visibly holding input. `inputOwnerNotice` only speaks
+       when this pane was *refused*, so the case that looks most broken — a grid drawn at
+       a size this pane never chose, with no explanation anywhere — was the one case that
+       said nothing at all. Claiming input is the fix as well as the explanation: the owner
+       dictates geometry, so taking it resizes the session to this pane. */
+    :letterboxActive&&letterboxSettled&&<div class="terminal-input-owner letterbox-notice" role="status"><span>Showing {letterboxSize} · sized elsewhere</span><button title="Size this session to this pane" onClick={()=>{claimInputRef.current('gesture');focusTerminalInputRef.current()}}>Resize</button></div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
     const data=event.clipboardData
     const image=data&&clipboardImage(Array.from(data.items))
     if(image){event.preventDefault();void insertTerminalImage(termRef.current!,session,image).then(()=>{setManualPaste(false);showClipboardStatus('Pasted')}).catch(cause=>reportError(cause instanceof Error?cause.message:'Clipboard image paste failed.'));return}

@@ -6,6 +6,7 @@ import {
   VIEWPORT_SETTLE_MAX_MS,
   VIEWPORT_SETTLE_MS,
   appOwnsTail,
+  attachRegistersViewport,
   createViewportScheduler,
   redrawVisibleTerminal,
   refitVisibleTerminal,
@@ -42,6 +43,17 @@ test('hidden terminal panes do not fit or redraw at zero size', () => {
   assert.equal(redrawVisibleTerminal({ cols: 80, rows: 24, refresh: () => { redraws += 1 } }, hidden), false)
   assert.equal(fits, 0)
   assert.equal(redraws, 0)
+})
+
+test('a pane registers a viewport only when it fitted itself while on screen', () => {
+  assert.equal(attachRegistersViewport(true, false), true)
+  // The bug this exists for: a warm pane is `display:none` inside a *foreground* tab, so
+  // `document.hidden` is false while the pane is not on screen at all. Its host measures
+  // zero, so the attach-time fit no-ops and `term.cols/rows` are xterm's unfitted 80x24
+  // default. Registering that made it the session's size for every visible client.
+  assert.equal(attachRegistersViewport(false, false), false)
+  assert.equal(attachRegistersViewport(true, true), false)
+  assert.equal(attachRegistersViewport(false, true), false)
 })
 
 test('visible terminal panes refit and invalidate every rendered row', () => {

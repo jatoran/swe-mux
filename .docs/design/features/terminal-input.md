@@ -54,6 +54,17 @@ reshape the PTY for the device in use. Every client is told the result and any c
 own fit differs LETTERBOXES: shrink the font, never re-fit, because re-fitting is what put
 two devices into a resize loop.
 
+A client registers a viewport only when it fitted itself *while on screen*
+(`attachRegistersViewport`). Both halves are load-bearing, and getting either wrong pins a
+session to a size nobody chose: a pane's own visibility is not `document.hidden` (a warm
+pane is `display:none` inside a foreground tab), and a pane that could not fit — its host
+measures zero — is still holding xterm's unfitted 80x24 default, or, after a letterbox,
+another device's grid, since leaving a letterbox restores the font but not the grid.
+Because ownership carries geometry, an unfocused client is refused an unowned session too;
+otherwise a background pane wins it by default and resizes the session for whoever can see
+it. Deregistration is correspondingly unconditional: a pane going hidden withdraws whether
+or not it ever recorded a fit of its own.
+
 ## Invariants
 
 - A refusal is never grounds to claim again. Clients re-claim only on displacement, at most
@@ -65,6 +76,11 @@ two devices into a resize loop.
   prompts the user to fix what is not broken.
 - Ownership is released when its connection ends, before anything is awaited — a handler
   cancelled on disconnect re-raises at its first await.
+- A pane never reports a size it did not measure on screen. Unmeasured dimensions are not
+  a smaller viewport, they are no viewport.
+- A persistent letterbox is stated in the pane. `inputOwnerNotice` speaks only when this
+  pane was refused, so without a standalone notice the case that looks most broken —
+  someone else's grid, drawn with no explanation — was the one that said nothing.
 
 ## API surface
 
@@ -94,7 +110,10 @@ says a claim was refused; only that log says which device asked and why it lost.
 `PASSIVE_CLAIM_HOLD_SECONDS` (10) in `src/swe_mux/terminal_arbitration.py`,
 `REFUSED_CLAIM_COOLDOWN_SECONDS` (1) in `src/swe_mux/server.py`, `RECLAIM_COOLDOWN_MS`
 (5000) and `GESTURE_WINDOW_MS` (1500) in `frontend/src/inputOwnership.ts`,
-`MIN_LETTERBOX_FONT_PX` (4) in `frontend/src/terminalLetterbox.ts`. None user-facing.
+`MIN_LETTERBOX_FONT_PX` (4) in `frontend/src/terminalLetterbox.ts`,
+`LETTERBOX_NOTICE_DELAY_MS` (1500) in `frontend/src/TerminalPane.tsx` — every ordinary
+resize letterboxes for one round trip, so only a letterbox that outlives this is stated.
+None user-facing.
 
 ## Key files
 

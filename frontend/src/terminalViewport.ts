@@ -12,6 +12,23 @@ export function refitVisibleTerminal(fit: TerminalFit, host: TerminalHost | null
   return true
 }
 
+/**
+ * Whether an attaching pane may register the dimensions it is about to report.
+ *
+ * Two things have to hold, and the second is not implied by the first: the pane is on
+ * screen, *and* it has just fitted itself. Skipping the fit check is what pinned whole
+ * sessions to xterm's 80x24 construction default. A pane whose host measures zero — a
+ * warm pane behind another tab is `display:none` — cannot fit, so `term.cols/rows` are
+ * whatever they last were: the unfitted default on a first attach, and on a reconnect
+ * the grid `applyLetterbox` resized to *another* device's size, because leaving a
+ * letterbox restores the font but not the grid. Reporting either re-registers a size
+ * nobody measured, and since the owner dictates geometry it becomes the whole session's
+ * size — including for the client that can actually see it.
+ */
+export function attachRegistersViewport(fitted: boolean, paneHidden: boolean): boolean {
+  return fitted && !paneHidden
+}
+
 export function redrawVisibleTerminal(term: TerminalDimensions, host: TerminalHost | null): boolean {
   if (!terminalHostIsVisible(host) || term.rows < 1) return false
   term.refresh(0, term.rows - 1)

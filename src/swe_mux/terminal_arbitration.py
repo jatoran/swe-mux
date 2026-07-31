@@ -17,6 +17,9 @@ The rules here are pure so they can be tested without a PTY, a socket, or a brow
 * A *passive* claim — attach, reconnect, or restored DOM focus — may not displace an
   owner a human has typed into within `PASSIVE_CLAIM_HOLD_SECONDS`, and may not
   displace anyone at all when the claiming client reports itself unfocused or hidden.
+  An unfocused client may not take an *unowned* session either: ownership carries
+  geometry with it, so a background pane winning it by default is a resize of the
+  session for everyone who can actually see it.
 * A passive claim may never cross device classes while another device class is the
   one in use (`device_presence.py`). Ownership is per session, so the gesture window
   above only protects the session being typed into, and only for seconds — which left
@@ -108,6 +111,14 @@ def evaluate_claim(
         )
         return ClaimDecision(True, renewed, GRANT_RENEWED, changed=False)
     if state.connection_id is None:
+        # Unowned is not a free-for-all. A pane that reports itself off screen has no
+        # human behind it, and ownership is not just the keyboard — the owner dictates
+        # PTY geometry outright (`effective_geometry`). Granting it here is how a warm
+        # pane attaching behind another tab, at a size it had never measured, resized
+        # ConPTY for the session and left every on-screen client letterboxing to it.
+        # A gesture still wins: intent beats state, and a click is a human by definition.
+        if not gesture and not request.focused:
+            return ClaimDecision(False, state, DENY_UNFOCUSED, changed=False)
         return ClaimDecision(True, _granted(state, request), GRANT_UNOWNED, changed=True)
     if gesture:
         return ClaimDecision(True, _granted(state, request), GRANT_GESTURE, changed=True)

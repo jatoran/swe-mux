@@ -97,12 +97,35 @@ test('everything that gates on being looked at asks paneIsHidden, not the docume
   const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
   for (const marker of [
     '() => replaying || paneIsHidden()',
-    'if (paneIsHidden() && localFit) sendViewport(',
+    'if (paneIsHidden()) sendViewport(',
     'const hidden = paneIsHidden()',
     'visible: !paneIsHidden(),',
+    'paneHidden: paneIsHidden(),',
+    'attachRegistersViewport(fitted, paneIsHidden())',
   ]) {
     assert.ok(source.includes(marker), `TerminalPane no longer contains: ${marker}`)
   }
+  // The list above only proves the checks that exist are right; it is blind to a new one
+  // added on the document instead. `attach_ready` was exactly that, and it registered a
+  // warm pane's unfitted 80x24 as a visible viewport, which — ownership carrying geometry
+  // — resized the whole session to it. Outside its own definition and the prose about it,
+  // `document.hidden` has no correct use in this file.
+  const uses = source
+    .split('\n')
+    .filter((line: string) => line.includes('document.hidden') && !line.trimStart().startsWith('//'))
+  assert.deepEqual(uses.map((line: string) => line.trim()), [
+    'const paneIsHidden = () => document.hidden || !visibleRef.current',
+  ])
+})
+
+test('a pane withdraws its viewport whether or not it recorded a fit', () => {
+  // Both deregistration paths used to be gated on a `localFit` the pane may never have
+  // taken: a reconnect nulls it, and a pane that is hidden when the socket opens cannot
+  // measure one. The registration then outlived the pane's own visibility and held the
+  // PTY at a size nobody was looking at.
+  const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
+  assert.ok(!/if \(localFit\) sendViewport\(/.test(source))
+  assert.equal(source.match(/sendViewport\(localFit\?\.cols \?\? term\.cols/g)?.length, 2)
 })
 
 test('every resize flood is routed through the coalescing scheduler', () => {

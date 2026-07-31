@@ -101,7 +101,9 @@ export function shouldReclaimAfterDisplacement(input: {
   /** Why the daemon says this pane does not own input. */
   reason: string | null
   focusInHost: boolean
-  documentHidden: boolean
+  /** Whether this *pane* is off screen, which `document.hidden` alone does not answer:
+   *  a warm pane is `display:none` inside a foreground tab. */
+  paneHidden: boolean
   windowFocused: boolean
   /** When this pane last re-claimed on its own, for the cooldown below. */
   lastReclaimAt: number | null
@@ -112,7 +114,7 @@ export function shouldReclaimAfterDisplacement(input: {
   // trip: one live session had logged 7566 refused claims. Only being *displaced* —
   // someone else took input this pane held — is grounds to ask for it back.
   if (input.reason !== 'claimed_elsewhere') return false
-  if (!input.focusInHost || input.documentHidden || !input.windowFocused) return false
+  if (!input.focusInHost || input.paneHidden || !input.windowFocused) return false
   // Belt and braces: whatever else goes wrong, one pane cannot claim in a loop.
   return input.lastReclaimAt === null || input.now - input.lastReclaimAt >= RECLAIM_COOLDOWN_MS
 }
