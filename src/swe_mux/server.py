@@ -79,7 +79,8 @@ from .meta_hooks import MetaHookEngine, parse_hook_rules
 from .models import MuxEvent
 from .observation import (
     apply_hook_observation,
-    conversation_rollover_native_id,
+    conversation_rollover_decision,
+    foreign_conversation_hook_id,
     hook_event_scope,
 )
 from .openrouter import OpenRouterClient, OpenRouterError
@@ -6212,18 +6213,6 @@ async def hook_ingress(request: web.Request) -> web.Response:
         raise ValueError("hook payload must be a JSON object")
     event_payload = hook_event_payload(payload)
     scope = hook_event_scope(event_type, payload)
-    session.last_hook_ts = time.time()
-    if event_type in _TRANSCRIPT_BACKED_HOOK_EVENTS:
-        session.last_turn_hook_ts = session.last_hook_ts
-    request.app["automation"].note_native_hook(session.record.id)
-    if event_type not in _NORMALIZED_HOOK_EVENT_TYPES:
-        await request.app["events"].emit(
-            event_type,
-            session_id=session.record.id,
-            source="hook",
-            scope=scope,
-            **event_payload,
-        )
     # An in-CLI `/clear` replaces the conversation under a live PTY: the CLI
     # reports its new id here, and that ends the current agent run. Rolled before
     # the observation below so the SessionStart transition lands on the new run.
@@ -6231,14 +6220,18 @@ async def hook_ingress(request: web.Request) -> web.Response:
     # — but it must not degrade to the old silent-swap behaviour either. Failing
     # closed marks observation stale, which is exactly true: we know the
     # conversation moved and we did not manage to follow it.
-    rollover_native_id = conversation_rollover_native_id(session, event_type, payload)
-    if rollover_native_id is not None:
+    decision = conversation_rollover_decision(session, event_type, payload)
+    if decision.roll_to is not None:
+        reported_transcript = str(payload.get("transcript_path") or "")
         try:
             await request.app["sessions"].roll_agent_conversation(
                 session.record.id,
-                native_id=rollover_native_id,
+                native_id=decision.roll_to,
                 reason="conversation_rolled",
                 source=str(payload.get("source") or "hook"),
+                # The CLI names the file it is now writing; deriving it from the
+                # session cwd instead re-guesses what the hook already proves.
+                transcript=Path(reported_transcript) if reported_transcript else None,
             )
         except Exception:
             log.exception(
@@ -6250,6 +6243,43 @@ async def hook_ingress(request: web.Request) -> web.Response:
                 "the CLI reported a new conversation that could not be adopted"
             )
             session.publish_update()
+    elif decision.refused is not None:
+        session.state_transitions.append(
+            {
+                "ts": time.time(),
+                "kind": "conversation_rollover_refused",
+                "native_session_id": decision.refused,
+                "reason": decision.refusal_reason,
+            }
+        )
+        await request.app["events"].emit(
+            "conversation_rollover_refused",
+            session_id=session.record.id,
+            source="hook",
+            backend=session.record.backend,
+            native_session_id=decision.refused,
+            reason=decision.refusal_reason,
+        )
+    # The session's own spawn conversation speaking while the record is bound
+    # elsewhere is proof the identity was stolen (a nested child rolled it away);
+    # heal before the foreign check below would discard the evidence.
+    await request.app["sessions"].maybe_heal_from_own_conversation_hook(session, payload)
+    if foreign_conversation_hook_id(session, payload) is None:
+        # Only this session's own conversation counts as evidence: a nested
+        # child's hooks must not refresh liveness, date staleness, or reach the
+        # event bus as this session's activity.
+        session.last_hook_ts = time.time()
+        if event_type in _TRANSCRIPT_BACKED_HOOK_EVENTS:
+            session.last_turn_hook_ts = session.last_hook_ts
+        request.app["automation"].note_native_hook(session.record.id)
+        if event_type not in _NORMALIZED_HOOK_EVENT_TYPES:
+            await request.app["events"].emit(
+                event_type,
+                session_id=session.record.id,
+                source="hook",
+                scope=scope,
+                **event_payload,
+            )
     await apply_hook_observation(session, event_type, payload, request.app["events"])
     return json_response({"ok": True})
 

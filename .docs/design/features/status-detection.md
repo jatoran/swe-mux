@@ -178,19 +178,44 @@ for a healthy session.
 
 ## Reading the PTY screen
 
-The screen is read from the last `SCREEN_TAIL_BYTES` (8 KiB) via
+The screen is read from the last `SCREEN_TAIL_BYTES` (32 KiB) via
 `ScrollbackBuffer.tail_bytes`, which walks the chunk deque from the right. It matters that
-this is not `bytes()[-8192:]`: the watchdog reads the screen for every agent session twice
-a pass on a 5-second loop, so joining full retention first cost tens of megabytes a second
-of pure allocation across a fleet — worst for Codex, whose buffers are the fullest.
+this is not a slice of the joined retention: the watchdog reads the screen for every agent
+session twice a pass on a 5-second loop, so joining full retention first cost tens of
+megabytes a second of pure allocation across a fleet — worst for Codex, whose buffers are
+the fullest. The window is sized against redraw *traffic*, not one frame: the current CLI's
+spinner and a waiting dialog's `●` pulse keep writing while the screen is static, and 8 KiB
+of that traffic evicted a dialog's own text within ~90 s (the verdict then degrades to
+`unknown`, which is conservative but blind).
 
-`pty_tail_state` classifies the scrollback tail as `working` ("esc to interrupt"),
-`approval` (a permission dialog), `idle` ("? for shortcuts") or `unknown`. The tail
-retains redraw history, so **presence is not enough** — a session that showed a dialog and
-then resumed still contains the dialog text. Only the marker that appears *last* describes
-the live frame, and every caller treats `unknown` as no evidence rather than a licence to
-change state. The approval markers are deliberately narrow: a false `approval` only makes
-the daemon more conservative (it vetoes clearing an awaiting and blocks the idle backstop).
+Before matching, the tail is normalized (`_normalize_tail_text`): window titles (OSC) are
+removed outright — the CLI rewrites them with arbitrary task text while working — cursor
+movement reads as a space, styling as nothing, and whitespace runs collapse. This is not
+cosmetic: the current CLI positions every word of a dialog footer at an absolute column
+(`Enter\x1b[8Gto\x1b[11Gconfirm`), so no marker phrase is a contiguous substring of the
+raw stream.
+
+`pty_tail_state` classifies the normalized tail as `working`, `approval` (a permission or
+workspace-trust dialog), `idle`, or `unknown`. The markers are version-layered: pre-2.x
+CLIs draw "esc to interrupt" / "? for shortcuts", while the current CLI draws neither —
+its frame-recurring working marker is the spinner phrase ellipsis ("✶ Envisioning…",
+re-written on every animation tick), its idle marker the permission-mode footer's
+"(shift+tab to cycle)", and its dialogs say "Do you want to proceed?" / "Esc to cancel" /
+"Tab to amend" / "Enter to confirm". Marker drift here is silent and disabling — measured
+2026-07-31, the old markers matched nothing the current CLI writes (0 hits across 518 KB
+of a busy session), so every screen recovery below was dead and a stale "awaiting
+approval" survived minutes of visible work. Real captured streams are pinned under
+`tests/fixtures/pty_tails/` (`test_pty_tail_modern.py`); when the CLI drifts again,
+recapture rather than synthesize.
+
+The tail retains redraw history, so **presence is not enough** — a session that showed a
+dialog and then resumed still contains the dialog text. Only the marker that appears
+*last* describes the live frame, and every caller treats `unknown` as no evidence rather
+than a licence to change state. Ordering is also what keeps the ellipsis honest: a dialog
+or an idle footer is always drawn after the last spinner frame, so their markers outrank
+it on a blocked or finished screen. The approval markers are deliberately narrow: a false
+`approval` only makes the daemon more conservative (it vetoes clearing an awaiting and
+blocks the idle backstop).
 
 ## Watchdog recovery (pinned behavior)
 
@@ -226,7 +251,26 @@ All three classify as `inferred`, record the stall duration and tail verdict, an
 pinned by fixtures at their exact thresholds (`claude-watchdog-ended-stuck`,
 `claude-esc-pause-without-marker`, `codex-watchdog-unknown-tail`,
 `claude-long-tool-never-cut`, `claude-approval-resume-pty`,
-`claude-pending-approval-not-cleared`, `codex-unwitnessed-first-turn`).
+`claude-modern-spinner-resume`, `claude-pending-approval-not-cleared`,
+`codex-unwitnessed-first-turn`).
+
+## Foreign conversations on the hook channel
+
+The hook ingress authenticates the *session*, not the process: a nested child CLI
+launched by the session's own tool call inherits the hook wiring and speaks over the same
+channel with its own conversation id. Identity is guarded at the rollover decision
+(`backends.md` — a bound session rolls only on an in-place replacement: not
+`source: "startup"`, not another cwd), and state is guarded here: once a Claude session is
+bound, `apply_hook_observation` drops any hook naming a different conversation before it
+can move state — a child's `PermissionRequest` must not raise an "awaiting approval" no
+screen shows. Drops are ledgered (`foreign_conversation_hook_ignored`) and counted in
+`status_health.counters.foreign_hook_ignored`, and a dropped hook does not refresh
+`last_hook_ts` — a child's chatter is not this session's liveness. The one id never
+treated as foreign is the session's own mux id: its spawn conversation speaking while the
+record is bound elsewhere is identity-corruption evidence, and it heals the binding back
+to the anchor instead (`session_identity_reconciled`, trigger `own_conversation_hook`),
+guarded by the retired-run set so a `/clear` can never be un-cleared. Pinned by
+`claude-nested-child-hooks` and `tests/test_conversation_rollover.py`.
 
 ## Status-health metrics and bounds
 

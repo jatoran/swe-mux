@@ -4,11 +4,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from .adapters.codex import codex_data_home
 from .event_bus import EventBus
@@ -1352,9 +1353,32 @@ async def _bind_native_id_from_hook(
     session.publish_update()
 
 
-def conversation_rollover_native_id(
+class RolloverDecision(NamedTuple):
+    """What a root SessionStart means for this session's conversation identity.
+
+    ``roll_to`` names the successor conversation to adopt. ``refused`` carries a
+    candidate that provably is not this PTY replacing its own conversation —
+    logged rather than rolled, so the identity a nested child would steal stays
+    put while the refusal remains observable in the ledger.
+    """
+
+    roll_to: str | None = None
+    refused: str | None = None
+    refusal_reason: str | None = None
+
+
+def _same_directory(left: str, right: str) -> bool:
+    try:
+        return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
+            os.path.abspath(right)
+        )
+    except (OSError, ValueError):
+        return False
+
+
+def conversation_rollover_decision(
     session: Session, event_type: str, payload: dict[str, Any]
-) -> str | None:
+) -> RolloverDecision:
     """The new conversation id when this hook proves the CLI replaced its own.
 
     `/clear` mints a fresh session id and starts a fresh transcript file, then
@@ -1363,28 +1387,73 @@ def conversation_rollover_native_id(
     strongest identity evidence available and, unlike the filesystem watcher, it
     is unaffected by sibling sessions sharing the cwd.
 
-    The reason is deliberately not enumerated from the hook's `source`
-    (`clear` / `resume` / `compact` / `startup`). "The CLI says it is now writing a
-    different conversation" is the fact; the id comparison is what establishes it.
-    `compact` and `startup` report the *unchanged* id and so never match, which is
-    exactly right — a compaction is the same conversation.
+    The ingress and the secret authenticate the *session*, not the process:
+    a nested `claude` launched by this session's own tool call inherits the hook
+    wiring and reports itself over the same channel. Two facts separate it from
+    the CLI replacing its own conversation, and both refuse the roll:
+
+    - ``source == "startup"`` is a fresh process announcing itself. An in-place
+      replacement (`/clear`, in-CLI `/resume`) reports ``clear``/``resume``;
+      `compact` keeps the id and never reaches the comparison. A bound session's
+      own CLI cannot fire a root ``startup`` — its process-level restarts go
+      through daemon lifecycle (demote/promote), never this hook.
+    - A cwd that is not this session's. Replacing a conversation cannot move the
+      CLI's working directory; a child probing from a scratch dir cannot fake it.
+
+    Measured live 2026-07-31: a session whose task spawned probe children rolled
+    its identity 14 times onto their conversations and spent most of its life
+    showing their unanswerable "awaiting approval".
 
     Distinct from `_bind_native_id_from_hook`, which fills an *unknown* id and is
     still forbidden from rekeying a bound session. Replacing a bound conversation
     is a lifecycle transition (a new agent run), not a rebind.
     """
+    nothing = RolloverDecision()
     if event_type != "SessionStart" or hook_event_scope(event_type, payload) != "root":
-        return None
+        return nothing
     if session.record.backend not in {"claude", "codex"}:
-        return None
+        return nothing
     current = session.record.native_session_id or ""
     if not _HOOK_NATIVE_ID.fullmatch(current):
         # Nothing bound yet: that is the bind path's job, not a rollover.
-        return None
+        return nothing
     native_id = str(payload.get("session_id") or payload.get("sessionId") or "")
     if not _HOOK_NATIVE_ID.fullmatch(native_id) or native_id == current:
-        return None
+        return nothing
     if session.agent_lifecycle_id == native_id:
+        return nothing
+    source = str(payload.get("source") or "")
+    if source == "startup":
+        return RolloverDecision(refused=native_id, refusal_reason="foreign_process_startup")
+    hook_cwd = str(payload.get("cwd") or "")
+    session_cwd = session.record.run_cwd or session.record.cwd
+    if hook_cwd and session_cwd and not _same_directory(hook_cwd, session_cwd):
+        return RolloverDecision(refused=native_id, refusal_reason="cwd_mismatch")
+    return RolloverDecision(roll_to=native_id)
+
+
+def foreign_conversation_hook_id(session: Session, payload: dict[str, Any]) -> str | None:
+    """The foreign conversation a hook speaks for, or None when it is this session's.
+
+    A hook authenticated with this session's secret still names the conversation
+    it describes (`session_id` in every Claude hook payload). Once this session
+    is bound, an id that is neither the bound conversation nor the session's own
+    spawn conversation belongs to another process sharing the wiring — a nested
+    child CLI — and must not drive this session's state. The spawn conversation
+    (`record.id`, minted via ``--session-id``) is deliberately never foreign:
+    it speaking while the session is bound elsewhere is identity-corruption
+    evidence, which the heal path acts on rather than discarding.
+    """
+    if session.record.backend != "claude":
+        return None
+    if conversation_unbound(session):
+        return None
+    native_id = str(payload.get("session_id") or payload.get("sessionId") or "")
+    if not _HOOK_NATIVE_ID.fullmatch(native_id):
+        return None
+    if native_id == (session.record.native_session_id or ""):
+        return None
+    if native_id == session.record.id:
         return None
     return native_id
 
@@ -1396,6 +1465,35 @@ async def apply_hook_observation(
     events: EventBus,
 ) -> None:
     scope = hook_event_scope(event_type, payload)
+    # A foreign conversation's hook must not move this session's state — its
+    # PermissionRequest raises an "awaiting approval" for a dialog that is not on
+    # this screen and that nothing here can ever answer. Checked after the caller
+    # ran the rollover decision, so a `/clear` successor has already been adopted
+    # and reads as this session's own by the time it gets here.
+    foreign_id = foreign_conversation_hook_id(session, payload)
+    if foreign_id is not None:
+        counters = getattr(session, "status_health_counters", None)
+        if isinstance(counters, dict):
+            counters["foreign_hook_ignored"] = counters.get("foreign_hook_ignored", 0) + 1
+        transitions = getattr(session, "state_transitions", None)
+        if transitions is not None:
+            transitions.append(
+                {
+                    "ts": time.time(),
+                    "kind": "foreign_conversation_hook_ignored",
+                    "event": event_type,
+                    "native_session_id": foreign_id,
+                }
+            )
+        await events.emit(
+            "foreign_conversation_hook_ignored",
+            session_id=session.record.id,
+            source="hook",
+            scope=scope,
+            kind=event_type,
+            native_session_id=foreign_id,
+        )
+        return
     if scope == "subagent":
         await events.emit(
             "subagent_activity",

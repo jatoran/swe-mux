@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "nested_child_hook_cross_attribution",
+  "description": "A nested claude launched by this session's own tool call inherits the hook wiring and speaks over the same authenticated ingress with its own conversation id. Observed live 2026-07-31: the child's SessionStart(startup) rolled the parent's identity onto the child's conversation 14 times, and each child's PermissionRequest pinned the parent to 'awaiting approval' for a dialog on no screen anyone could see. Every child event must be ledgered and dropped: the parent stays working through the whole barrage, and its own hooks keep driving state afterwards.",
+  "steps": [
+    {"kind": "session", "record": {"native_session_id": "a1b2c3d4-1111-4222-8333-944444444444"}},
+    {"kind": "transcript", "ts_offset": 0, "record": {"type": "user", "isSidechain": false, "message": {"content": "probe the launcher shim"}}, "expect_state": "working"},
+    {"kind": "transcript", "ts_offset": 0, "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Bash", "input": {}}], "stop_reason": "tool_use"}}, "expect_state": "working"},
+    {"kind": "hook", "event": "SessionStart", "payload": {"session_id": "0c1d2e3f-5555-4666-8777-988888888888", "source": "startup", "cwd": "C:/scratch/pasteprobe"}, "expect_state": "working"},
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {"session_id": "0c1d2e3f-5555-4666-8777-988888888888", "prompt": "read the launcher"}, "expect_state": "working"},
+    {"kind": "hook", "event": "PreToolUse", "payload": {"session_id": "0c1d2e3f-5555-4666-8777-988888888888", "tool_name": "Read"}, "expect_state": "working"},
+    {"kind": "hook", "event": "PermissionRequest", "payload": {"session_id": "0c1d2e3f-5555-4666-8777-988888888888", "tool_name": "Read"}, "expect_state": "working", "expect_awaiting": null},
+    {"kind": "hook", "event": "Notification", "payload": {"session_id": "0c1d2e3f-5555-4666-8777-988888888888", "notification_type": "permission_prompt", "message": "Claude needs your permission"}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "timer", "seconds": 300},
+    {"kind": "hook", "event": "SessionEnd", "payload": {"session_id": "0c1d2e3f-5555-4666-8777-988888888888", "reason": "other"}, "expect_state": "working"},
+    {"kind": "transcript", "ts_offset": 0, "record": {"type": "user", "isSidechain": false, "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "probe finished", "is_error": false}]}}, "expect_state": "working"},
+    {"kind": "hook", "event": "Stop", "payload": {"session_id": "a1b2c3d4-1111-4222-8333-944444444444"}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "Bash"},
+      {"type": "foreign_conversation_hook_ignored", "source": "hook", "scope": "root", "kind": "SessionStart"},
+      {"type": "foreign_conversation_hook_ignored", "source": "hook", "scope": "root", "kind": "UserPromptSubmit"},
+      {"type": "foreign_conversation_hook_ignored", "source": "hook", "scope": "root", "kind": "PreToolUse"},
+      {"type": "foreign_conversation_hook_ignored", "source": "hook", "scope": "root", "kind": "PermissionRequest"},
+      {"type": "foreign_conversation_hook_ignored", "source": "hook", "scope": "root", "kind": "Notification"},
+      {"type": "foreign_conversation_hook_ignored", "source": "hook", "scope": "root", "kind": "SessionEnd"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "Bash", "success": true},
+      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 3, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

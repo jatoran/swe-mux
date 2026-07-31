@@ -131,10 +131,25 @@
   Nothing measured on the retired conversation carries forward.
 - One trigger per backend, by evidence the backend can actually give. **Claude's own
   `SessionStart` hook** arrives over the session's loopback ingress with the session's own
-  secret and names the conversation the CLI is now writing; a reported id that differs from
-  the bound one *is* the rollover, and the hook's `source`
-  (`clear`/`resume`/`compact`/`startup`) is recorded as `start_source` but never
-  enumerated on — `compact` and `startup` report the unchanged id and so never roll. This path
+  secret and names the conversation the CLI is now writing. A reported id that differs from
+  the bound one is a rollover **only when it can be this PTY replacing its own
+  conversation**: the ingress and the secret authenticate the *session*, not the process,
+  and a nested `claude` launched by the session's own tool call inherits the hook wiring
+  and speaks over the same channel. Two facts separate the two, and either refuses the roll
+  (ledgered and emitted as `conversation_rollover_refused`): `source: "startup"` is a fresh
+  process announcing itself — an in-place replacement reports `clear`/`resume`, while
+  `compact` keeps the id and never reaches the comparison — and a hook `cwd` that is not
+  the session's, because replacing a conversation cannot move the CLI's working directory.
+  (Measured live 2026-07-31 before the guard: a session whose task spawned probe children
+  rolled onto their conversations 14 times and spent most of its life showing their
+  unanswerable "awaiting approval".) Once bound, the session's **state also listens only to
+  its own conversation**: a hook naming any other conversation is ledgered
+  (`foreign_conversation_hook_ignored`, counted in status health) and dropped without
+  refreshing liveness — with one exception. The session's *spawn* conversation (its own mux
+  id, minted via `--session-id`) speaking while the record is bound elsewhere is proof the
+  identity was stolen, and it heals the binding back (`session_identity_reconciled`,
+  trigger `own_conversation_hook`); the retired-conversation set guards the heal, so a
+  stale hook spooled before a legitimate `/clear` can never un-clear it. This path
   is unaffected by sibling sessions, and it is Claude's *only* rollover path: adapters declare
   `reports_conversation_rollover` (and, separately, `assigns_conversation_id` — whether mux
   named the conversation at spawn, which decides whether the transcript is *derived* from the

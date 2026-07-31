@@ -19,6 +19,7 @@ from swe_mux.observation import (
     _record_parser_observation,
     apply_hook_observation,
     classify_transcript_event,
+    foreign_conversation_hook_id,
     tail_turn_state,
 )
 from swe_mux.screen_mode import ScreenModeParser
@@ -333,12 +334,16 @@ class DetectionReplay:
             )
         elif kind == "hook":
             # A hook reaching this session is what proves the side channel exists,
-            # exactly as the live ingress records before dispatching.
-            self.session.last_hook_ts = self.clock.wall()
+            # exactly as the live ingress records before dispatching — and, like
+            # the ingress, only for this session's own conversation: a nested
+            # child's hook is ledgered and dropped without counting as evidence.
+            payload = dict(step.get("payload") or {})
+            if foreign_conversation_hook_id(self.session, payload) is None:  # type: ignore[arg-type]
+                self.session.last_hook_ts = self.clock.wall()
             await apply_hook_observation(
                 self.session,  # type: ignore[arg-type]
                 str(step["event"]),
-                dict(step.get("payload") or {}),
+                payload,
                 self.events,
             )
         elif kind == "terminal":

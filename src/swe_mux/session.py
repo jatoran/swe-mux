@@ -561,19 +561,59 @@ WatchdogAction = Literal[
 # *last* is the live frame. An unrecognized TUI reads "unknown" and every caller
 # treats that as "no evidence", never as a licence to change state.
 PtyTailState = Literal["working", "approval", "idle", "unknown"]
-PTY_WORKING_MARKERS = ("esc to interrupt",)
+# "esc to interrupt" is the pre-2.x CLI. Captured 2026-07-31 against the current
+# Claude Code: no working frame contains it (0 hits across 518 KB of a busy
+# session's scrollback), which silently disabled every screen-based recovery —
+# most visibly `resume_working`, leaving sessions displayed "awaiting approval"
+# through minutes of real work. The invariant that survives the CLI's partial-
+# cell redraws is the spinner phrase itself ("✶ Envisioning…", "● Reading 1
+# file…"): the word varies per frame but always ends in U+2026, and it recurs on
+# every animation tick, so it stays inside the 8 KiB tail for as long as the CLI
+# is actually busy. Ordering keeps it honest — a dialog or an idle footer is
+# always drawn *after* the last spinner frame, so their markers outrank it on a
+# blocked or finished screen. Window titles are the one later writer that could
+# carry stray text; `pty_tail_state` strips OSC sequences before matching.
+PTY_WORKING_MARKERS = ("esc to interrupt", "…")
 # Deliberately narrow: a false "approval" only ever makes the daemon *more*
 # conservative (it vetoes clearing an awaiting and blocks the idle backstop).
+# "esc to cancel"/"tab to amend" are the current CLI's dialog affordances
+# (permission dialogs say "Do you want to proceed? … Esc to cancel · Tab to
+# amend"); "enter to confirm" covers the workspace-trust dialog, whose body
+# never says "do you want to" but blocks the session just the same.
 PTY_APPROVAL_MARKERS = (
     "do you want to",
     "allow this command",
     "allow codex to",
+    "esc to cancel",
+    "tab to amend",
+    "enter to confirm",
 )
-PTY_IDLE_MARKERS = ("? for shortcuts",)
+# "? for shortcuts" is the pre-2.x idle footer; the current CLI's idle screen
+# shows the permission-mode line ("⏵⏵ accept edits on (shift+tab to cycle) …")
+# instead, and that parenthetical is its stable, mode-independent fragment.
+PTY_IDLE_MARKERS = ("? for shortcuts", "(shift+tab to cycle)")
 # The CLI's own line for "my turn is over but background work is still running"
 # (`✻ Waiting for 2 background tasks to finish`). This is an *idle sub-reason*,
 # never a state: the composer accepts input and delivery is safe either way.
 PTY_BACKGROUND_WAIT_MARKERS = ("waiting for", "background task")
+
+
+# Escape sequences ride the same byte stream as the text and break it two ways.
+# Window titles (OSC 0/2) carry arbitrary task text the CLI rewrites while
+# working — text that could contain any marker, including the spinner ellipsis —
+# so they are removed outright (including one the tail window cut mid-write).
+# Cursor and styling codes land *inside* phrases: the current CLI positions
+# every word of "Enter to confirm · Esc to cancel" at an absolute column
+# (`Enter\x1b[8Gto\x1b[11Gconfirm`), so the spacing exists only as cursor
+# movement and the marker is not a contiguous substring of the raw stream.
+# Cursor movement therefore reads as a space, styling as nothing, and runs of
+# whitespace collapse — restoring write-order prose, which is what the ordering
+# comparison has always meant.
+_OSC_TITLE_SEQUENCE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_OSC_TITLE_UNTERMINATED = re.compile(r"\x1b\][^\x07\x1b]*\Z")
+_CSI_CURSOR_MOVEMENT = re.compile(r"\x1b\[[0-9;]*[ABCDEFGHfd]")
+_CSI_OR_SIMPLE_ESCAPE = re.compile(r"\x1b\[[0-9;:?<=>]*[A-Za-z@`~]|\x1b[=>()#][0-9A-Za-z]?")
+_TAIL_WHITESPACE_RUN = re.compile(r"[\s\x00-\x08\x0b-\x1f]+")
 
 
 def pty_tail_waiting_on_background(tail: str) -> bool:
@@ -582,14 +622,26 @@ def pty_tail_waiting_on_background(tail: str) -> bool:
     Ordering-aware like `pty_tail_state`: the marker must appear *after* the last
     idle prompt, because the retained tail also holds the frame from before the
     turn ended.
+
+    Compared against the hard interrupt hint only, not the spinner-ellipsis
+    working marker: the background-wait line is itself spinner-drawn, so on
+    current CLIs its own frame would outrank it and the sub-reason could never
+    be read.
     """
-    lowered = tail.lower()
+    lowered = _normalize_tail_text(tail).lower()
     marker = max((lowered.rfind(item) for item in PTY_BACKGROUND_WAIT_MARKERS), default=-1)
     if marker < 0:
         return False
-    working = max((lowered.rfind(item) for item in PTY_WORKING_MARKERS), default=-1)
+    working = lowered.rfind("esc to interrupt")
     # A live turn ("esc to interrupt") is `working`, not a background wait.
     return marker > working
+
+
+def _normalize_tail_text(tail: str) -> str:
+    text = _OSC_TITLE_UNTERMINATED.sub("", _OSC_TITLE_SEQUENCE.sub("", tail))
+    text = _CSI_CURSOR_MOVEMENT.sub(" ", text)
+    text = _CSI_OR_SIMPLE_ESCAPE.sub("", text)
+    return _TAIL_WHITESPACE_RUN.sub(" ", text)
 
 
 def pty_tail_state(tail: str) -> PtyTailState:
@@ -599,7 +651,7 @@ def pty_tail_state(tail: str) -> PtyTailState:
     and then resumed still has the dialog text in the retained tail, so only the
     last marker describes the live frame.
     """
-    lowered = tail.lower()
+    lowered = _normalize_tail_text(tail).lower()
     positions: list[tuple[int, PtyTailState]] = []
     for markers, name in (
         (PTY_WORKING_MARKERS, "working"),
@@ -3280,7 +3332,44 @@ class SessionManager:
                 if not self._claude_owns_conversation(session, native_id):
                     await self._heal_claude_identity(session, native_id)
 
-    async def _heal_claude_identity(self, session: Session, disputed: str) -> None:
+    async def maybe_heal_from_own_conversation_hook(
+        self, session: Session, payload: dict[str, Any]
+    ) -> bool:
+        """Heal a session whose own spawn conversation speaks while bound elsewhere.
+
+        Claude is spawned with ``--session-id <mux id>``, so a hook naming exactly
+        ``record.id`` can only come from the conversation this PTY was created to
+        run. If the record is bound to some other conversation at that moment, the
+        binding is corruption — a nested child CLI rolled the identity away — and
+        the pane's own conversation speaking is the strongest possible proof.
+
+        The one legitimate way the spawn conversation retires is an in-CLI
+        replacement (`/clear`), and a rollover records exactly that in
+        ``ignored_detection_runs`` — so a retired conversation's stale hook can
+        never un-clear a session. The set is in-memory and dies with the daemon,
+        which is correct on both sides: a retired conversation cannot outlive its
+        CLI process to speak after a restart, while a corrupted binding adopted
+        from the supervisor is healed by the first real hook that arrives.
+        """
+        record = session.record
+        if record.backend != "claude" or record.state in TERMINAL_STATES or session.stopping:
+            return False
+        native_id = str(payload.get("session_id") or payload.get("sessionId") or "")
+        if not _CLAUDE_NATIVE_ID.fullmatch(native_id) or native_id != record.id:
+            return False
+        disputed = record.native_session_id or ""
+        if not disputed or disputed == native_id:
+            return False
+        if ("claude", native_id) in session.ignored_detection_runs:
+            return False
+        await self._heal_claude_identity(
+            session, disputed, trigger="own_conversation_hook"
+        )
+        return record.native_session_id == native_id
+
+    async def _heal_claude_identity(
+        self, session: Session, disputed: str, *, trigger: str = "live_sweep"
+    ) -> None:
         """Send a Claude session back to its own conversation.
 
         The disputed conversation provably is not this pane's, so keeping the
@@ -3368,7 +3457,7 @@ class SessionManager:
             backend=record.backend,
             native_session_id=anchor,
             transcript_path=str(transcript) if transcript else None,
-            trigger="live_sweep",
+            trigger=trigger,
         )
         self._start_observer(session, transcript)
 
@@ -3564,7 +3653,7 @@ class SessionManager:
         path = self._hook_spool_path(session.record.id)
         if path is None:
             return
-        from .observation import apply_hook_observation
+        from .observation import apply_hook_observation, foreign_conversation_hook_id
 
         record = session.record
         if record.state in TERMINAL_STATES:
@@ -3643,10 +3732,16 @@ class SessionManager:
                     }
                 )
                 continue
-            session.last_hook_ts = time.time()
-            session.state_transitions.append(
-                {"ts": time.time(), "kind": "hook_spool_replay", "event": event_type}
-            )
+            # Same identity discipline as the live ingress: the pane's own spawn
+            # conversation heals a stolen binding, and a foreign conversation's
+            # spooled event neither refreshes liveness nor drives state (the
+            # observation layer ledgers and drops it).
+            await self.maybe_heal_from_own_conversation_hook(session, payload)
+            if foreign_conversation_hook_id(session, payload) is None:
+                session.last_hook_ts = time.time()
+                session.state_transitions.append(
+                    {"ts": time.time(), "kind": "hook_spool_replay", "event": event_type}
+                )
             try:
                 await apply_hook_observation(session, event_type, payload, self.events)
             except Exception:

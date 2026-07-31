@@ -111,6 +111,16 @@
       "fixture": "codex-unwitnessed-first-turn.json",
       "guard": "tests/test_codex_provisional_binding.py::test_a_provisional_transcript_never_rekeys_the_conversation",
       "root_cause": "Following the sole unclaimed rollout by elimination lets the first turn be observed, but the file is a guess: rekeying native_session_id from it, writing the history row, or publishing its tokens would render a stranger's conversation under this pane's identity."
+    },
+    "nested_child_hook_cross_attribution": {
+      "fixture": "claude-nested-child-hooks.json",
+      "guard": "tests/test_conversation_rollover.py::test_a_fresh_process_announcing_itself_never_rolls_a_bound_session",
+      "root_cause": "The hook ingress and secret authenticate the session, not the process: a nested claude launched by this session's own tool call inherits the wiring and speaks over the same channel. Its SessionStart(startup) rolled the parent's identity onto the child's conversation (14 times, live 2026-07-31) and its PermissionRequest pinned 'awaiting approval' for a dialog on no visible screen. Rollovers now require an in-place replacement (clear/resume, same cwd) and a bound session's state only listens to its own conversation; the pane's spawn conversation speaking while bound elsewhere heals the identity back."
+    },
+    "modern_cli_marker_drift": {
+      "fixture": "claude-modern-spinner-resume.json",
+      "guard": "tests/test_pty_tail_modern.py::test_current_cli_screens_classify",
+      "root_cause": "Claude Code 2.x removed 'esc to interrupt' and '? for shortcuts' and draws dialog phrases one column-positioned word at a time, so the raw-substring markers matched nothing and every screen-based recovery (resume_working above all) silently disabled — sessions displayed 'awaiting approval' through minutes of visible work. Markers now target the frame-recurring spinner ellipsis and the current dialog/footer affordances, matched over cursor-normalized text, with real captured streams pinned as fixtures."
     }
   }
 }

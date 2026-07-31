@@ -11,8 +11,14 @@ from collections import deque
 
 # What every screen classifier reads. Enough to hold a full redraw of a tall
 # terminal plus its escape sequences, and small enough that reading it is free
-# next to the megabytes of retention behind it.
-SCREEN_TAIL_BYTES = 8192
+# next to the megabytes of retention behind it. Sized against redraw *traffic*,
+# not one frame: the current CLI's spinner and a waiting dialog's pulse both
+# keep writing while the screen is static, and 8 KiB of that traffic evicted
+# the dialog's own text (measured 2026-07-31: ~90 s of dialog pulse pushed
+# "Do you want to proceed?" out of the window and the verdict degraded to
+# "unknown"). 32 KiB keeps several minutes of animation alongside the frame
+# that drew it, at a read cost still trivial next to the retention behind it.
+SCREEN_TAIL_BYTES = 32768
 # How far past a trim point to look for a line boundary. Cutting the *start* of a
 # retained stream can land inside an escape sequence, which the client would
 # render as literal garbage on its first line; resuming after the next newline

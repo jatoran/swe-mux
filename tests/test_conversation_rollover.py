@@ -28,7 +28,8 @@ from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.observation import (
     _record_parser_observation,
     _transcript_authoritative,
-    conversation_rollover_native_id,
+    conversation_rollover_decision,
+    foreign_conversation_hook_id,
 )
 from swe_mux.server import _branch_source_id, hook_event_payload
 from swe_mux.session import Session, SessionManager
@@ -90,17 +91,74 @@ def hook_session(native_id: str = ORIGINAL, *, backend: str = "claude") -> Any:
 def test_a_session_start_reporting_a_different_conversation_is_a_rollover() -> None:
     session = hook_session()
     payload = {"session_id": CLEARED, "source": "clear"}
-    assert conversation_rollover_native_id(session, "SessionStart", payload) == CLEARED
+    decision = conversation_rollover_decision(session, "SessionStart", payload)
+    assert decision.roll_to == CLEARED
+    assert decision.refused is None
 
 
-def test_compact_and_startup_report_the_same_id_and_never_roll() -> None:
-    # /compact keeps the conversation; the CLI reports the id it already has. The
-    # id comparison is the whole gate, which is why `source` is recorded but never
-    # enumerated — a future source value cannot accidentally become a rollover.
+def test_compact_reports_the_same_id_and_never_rolls() -> None:
+    # /compact keeps the conversation; the CLI reports the id it already has, so
+    # the id comparison alone rules it out before any source is consulted.
     session = hook_session()
-    for source in ("compact", "startup", "resume"):
+    for source in ("compact", "startup", "resume", "clear"):
         payload = {"session_id": ORIGINAL, "source": source}
-        assert conversation_rollover_native_id(session, "SessionStart", payload) is None
+        decision = conversation_rollover_decision(session, "SessionStart", payload)
+        assert decision == (None, None, None)
+
+
+def test_a_fresh_process_announcing_itself_never_rolls_a_bound_session() -> None:
+    # The regression this pins, observed live 2026-07-31: a nested `claude`
+    # launched by this session's own tool call inherits the hook wiring and
+    # fires a root SessionStart with `source: "startup"` and its own fresh id.
+    # A bound session's own CLI can only replace its conversation in place
+    # (`clear`/`resume`); a `startup` with a new id is another process, and
+    # adopting it hands the session's identity — and its "awaiting approval"
+    # display — to a child nobody can see or answer.
+    session = hook_session()
+    payload = {"session_id": CLEARED, "source": "startup"}
+    decision = conversation_rollover_decision(session, "SessionStart", payload)
+    assert decision.roll_to is None
+    assert decision.refused == CLEARED
+    assert decision.refusal_reason == "foreign_process_startup"
+
+
+def test_a_replacement_reported_from_another_cwd_never_rolls() -> None:
+    # `/clear` and in-CLI `/resume` cannot move the CLI's working directory, so a
+    # candidate whose hook cwd is elsewhere is a foreign process regardless of
+    # what source it claims.
+    session = hook_session()
+    session.record.run_cwd = "D:/PROJECTS/repo"
+    for source in ("clear", "resume"):
+        payload = {"session_id": CLEARED, "source": source, "cwd": "C:/Temp/scratch"}
+        decision = conversation_rollover_decision(session, "SessionStart", payload)
+        assert decision.roll_to is None
+        assert decision.refused == CLEARED
+        assert decision.refusal_reason == "cwd_mismatch"
+
+
+def test_a_replacement_in_the_session_cwd_still_rolls() -> None:
+    session = hook_session()
+    session.record.run_cwd = "D:/PROJECTS/repo"
+    for source in ("clear", "resume"):
+        payload = {
+            "session_id": CLEARED,
+            "source": source,
+            # Same directory through a different spelling: the comparison must
+            # normalize, not string-match.
+            "cwd": "D:\\PROJECTS\\other\\..\\repo",
+        }
+        decision = conversation_rollover_decision(session, "SessionStart", payload)
+        assert decision.roll_to == CLEARED
+
+
+def test_a_replacement_without_a_cwd_or_source_still_rolls() -> None:
+    # An older shim or CLI that omits either field must not lose `/clear`
+    # tracking: only positive evidence of a foreign process refuses.
+    session = hook_session()
+    decision = conversation_rollover_decision(
+        session, "SessionStart", {"session_id": CLEARED}
+    )
+    assert decision.roll_to == CLEARED
 
 
 def test_an_unbound_session_binds_instead_of_rolling() -> None:
@@ -108,30 +166,28 @@ def test_an_unbound_session_binds_instead_of_rolling() -> None:
     # and the one-way bind path owns that case.
     session = hook_session(native_id="mux-id")
     payload = {"session_id": CLEARED, "source": "startup"}
-    assert conversation_rollover_native_id(session, "SessionStart", payload) is None
+    assert conversation_rollover_decision(session, "SessionStart", payload).roll_to is None
 
 
 def test_a_subagent_session_start_never_rolls_the_root_run() -> None:
     session = hook_session()
     payload = {"session_id": CLEARED, "source": "clear", "isSidechain": True}
-    assert conversation_rollover_native_id(session, "SessionStart", payload) is None
+    assert conversation_rollover_decision(session, "SessionStart", payload) == (
+        None,
+        None,
+        None,
+    )
 
 
 def test_a_shell_and_a_non_session_start_hook_never_roll() -> None:
     shell = hook_session(backend="shell")
-    assert (
-        conversation_rollover_native_id(
-            shell, "SessionStart", {"session_id": CLEARED, "source": "clear"}
-        )
-        is None
-    )
+    assert conversation_rollover_decision(
+        shell, "SessionStart", {"session_id": CLEARED, "source": "clear"}
+    ) == (None, None, None)
     agent = hook_session()
-    assert (
-        conversation_rollover_native_id(
-            agent, "UserPromptSubmit", {"session_id": CLEARED}
-        )
-        is None
-    )
+    assert conversation_rollover_decision(
+        agent, "UserPromptSubmit", {"session_id": CLEARED}
+    ) == (None, None, None)
 
 
 def test_a_redelivered_hook_for_the_current_conversation_is_a_no_op() -> None:
@@ -140,7 +196,124 @@ def test_a_redelivered_hook_for_the_current_conversation_is_a_no_op() -> None:
     session.agent_lifecycle_id = CLEARED
     session.record.native_session_id = CLEARED
     payload = {"session_id": CLEARED, "source": "clear"}
-    assert conversation_rollover_native_id(session, "SessionStart", payload) is None
+    assert conversation_rollover_decision(session, "SessionStart", payload) == (
+        None,
+        None,
+        None,
+    )
+
+
+# ----------------------------------------------- foreign-conversation hook filter
+
+
+def test_a_bound_sessions_state_only_listens_to_its_own_conversation() -> None:
+    session = hook_session()
+    # The bound conversation and the spawn conversation are never foreign; any
+    # other well-formed conversation id is.
+    assert foreign_conversation_hook_id(session, {"session_id": ORIGINAL}) is None
+    assert foreign_conversation_hook_id(session, {"session_id": CLEARED}) == CLEARED
+    session.record.native_session_id = CLEARED
+    spawn = {"session_id": session.record.id}
+    # Not foreign even while bound elsewhere: the heal path owns that evidence.
+    assert foreign_conversation_hook_id(session, spawn) is None
+
+
+def test_the_foreign_filter_stands_down_while_unbound_and_for_other_backends() -> None:
+    unbound = hook_session(native_id="mux-id")
+    assert foreign_conversation_hook_id(unbound, {"session_id": CLEARED}) is None
+    codex = hook_session(backend="codex")
+    assert foreign_conversation_hook_id(codex, {"session_id": CLEARED}) is None
+    # A payload that names no conversation cannot be judged.
+    assert foreign_conversation_hook_id(hook_session(), {}) is None
+
+
+# ----------------------------------------------------- healing a stolen identity
+
+MUX_PANE = "7f0a1b2c-3d4e-4f5a-8b9c-0d1e2f3a4b5c"
+
+
+def stolen_manager(tmp_path: Path) -> tuple[Any, Session]:
+    """A pane whose identity a nested child rolled onto its own conversation."""
+    record = agent_record(cwd=str(tmp_path))
+    record.id = MUX_PANE
+    record.spawn_native_session_id = MUX_PANE
+    record.native_session_id = CLEARED
+    record.agent_run_id = "stolen-run"
+    record.agent_run_seq = 5
+    manager, session = rollover_manager(record)
+    session.agent_lifecycle_id = CLEARED
+    manager._stop_observer = AsyncMock()
+    manager._start_observer = lambda _session, _path: None
+    manager._reset_provider_observation = lambda _record: None
+    manager.history.quarantine_misattributed_agent_run = AsyncMock()
+    manager.history.reset_run_transcript_copy = AsyncMock()
+    manager.history.reopen_agent_run = AsyncMock()
+    return manager, session
+
+
+async def test_the_spawn_conversation_speaking_heals_a_stolen_binding(
+    tmp_path: Path,
+) -> None:
+    # The pane was spawned with `--session-id MUX_PANE`, so a hook naming exactly
+    # that conversation can only be this PTY's own CLI. It speaking while the
+    # record is bound to a child's conversation proves the binding is corruption.
+    manager, session = stolen_manager(tmp_path)
+
+    healed = await manager.maybe_heal_from_own_conversation_hook(
+        session, {"session_id": MUX_PANE}
+    )
+
+    record = session.record
+    assert healed is True
+    assert record.native_session_id == MUX_PANE
+    assert session.agent_lifecycle_id == MUX_PANE
+    assert record.agent_run_id == MUX_PANE
+    assert record.agent_run_seq == 0
+    manager.history.quarantine_misattributed_agent_run.assert_awaited_once_with(
+        "stolen-run", "live_identity_reconciled"
+    )
+    reconciled = manager.events.emit.await_args
+    assert reconciled.args[0] == "session_identity_reconciled"
+    assert reconciled.kwargs["native_session_id"] == MUX_PANE
+    assert reconciled.kwargs["trigger"] == "own_conversation_hook"
+
+
+async def test_a_retired_spawn_conversation_never_heals_back(tmp_path: Path) -> None:
+    # After a legitimate `/clear` the spawn conversation is recorded as retired;
+    # a stale hook it spooled before dying must not un-clear the session.
+    manager, session = stolen_manager(tmp_path)
+    session.ignored_detection_runs.add(("claude", MUX_PANE))
+
+    healed = await manager.maybe_heal_from_own_conversation_hook(
+        session, {"session_id": MUX_PANE}
+    )
+
+    assert healed is False
+    assert session.record.native_session_id == CLEARED
+    manager.history.reopen_agent_run.assert_not_awaited()
+
+
+async def test_a_healthy_binding_is_left_alone(tmp_path: Path) -> None:
+    manager, session = stolen_manager(tmp_path)
+    session.record.native_session_id = MUX_PANE
+
+    healed = await manager.maybe_heal_from_own_conversation_hook(
+        session, {"session_id": MUX_PANE}
+    )
+
+    assert healed is False
+    manager.history.reopen_agent_run.assert_not_awaited()
+
+
+async def test_only_the_spawn_conversation_can_trigger_the_heal(tmp_path: Path) -> None:
+    manager, session = stolen_manager(tmp_path)
+
+    for payload in ({"session_id": ORIGINAL}, {"session_id": "not-a-uuid"}, {}):
+        assert (
+            await manager.maybe_heal_from_own_conversation_hook(session, payload)
+            is False
+        )
+    assert session.record.native_session_id == CLEARED
 
 
 def test_the_start_source_survives_the_event_envelope_collision() -> None:

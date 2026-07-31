@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "modern_cli_marker_drift",
+  "description": "Current Claude Code draws no 'esc to interrupt' while working and no '? for shortcuts' while idle, so the pre-2.x markers matched nothing and every screen-based recovery silently disabled — an answered approval stayed displayed for the rest of the turn. The spinner phrase ellipsis is the frame-recurring working marker, and a live dialog (its own affordances, 'Esc to cancel') still vetoes the resume.",
+  "steps": [
+    {"kind": "transcript", "ts_offset": 0, "record": {"type": "user", "isSidechain": false, "message": {"content": "build the project"}}, "expect_state": "working"},
+    {"kind": "hook", "event": "PermissionRequest", "payload": {"tool_name": "Bash"}, "expect_state": "awaiting", "expect_awaiting": "approval"},
+    {"kind": "pty_tail", "data": "Bash command\n\nnpm run build\n\nDo you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No\n\nEsc to cancel · Tab to amend"},
+    {"kind": "timer", "seconds": 8},
+    {"kind": "watchdog", "expect_state": "awaiting", "expect_awaiting": "approval", "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "pty_tail", "data": "Bash command\n\nnpm run build\n\nDo you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No\n\nEsc to cancel · Tab to amend\n\n✶ Herding… ✳ Herding… (3s · thinking) ● Running 1 command…"},
+    {"kind": "timer", "seconds": 6},
+    {"kind": "watchdog", "expect_state": "working"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "approval_needed", "source": "hook", "scope": "root", "kind": "approval"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "awaiting", "source": "hook", "proof": "proven", "awaiting_reason": "approval"},
+      {"previous": "awaiting", "state": "working", "source": "watchdog-pty", "proof": "inferred"}
+    ],
+    "parser": {"status": "ready", "recognized": 1, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "blocked",
+    "delivery_reason": "root_agent_working"
+  }
+}
