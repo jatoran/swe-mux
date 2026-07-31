@@ -1,0 +1,94 @@
+{
+ "schema_version": 1,
+ "backend": "codex",
+ "edge_case": "unwitnessed_first_turn_pty_only",
+ "description": "A fresh Codex pane has no bound transcript and has never received a hook: Codex mints its own thread id and names it only on agent-turn-complete, so for the whole first turn the PTY screen is the only source that can speak. The unwitnessed pair moves it, and stands down the moment a real source arrives.",
+ "steps": [
+  {
+   "kind": "pty_tail",
+   "data": "❯  ? for shortcuts"
+  },
+  {
+   "kind": "watchdog",
+   "expect_state": "idle",
+   "expect_delivery": "unknown"
+  },
+  {
+   "kind": "pty_tail",
+   "data": "❯  ? for shortcuts\n• Working (esc to interrupt)"
+  },
+  {
+   "kind": "watchdog",
+   "expect_state": "working"
+  },
+  {
+   "kind": "timer",
+   "seconds": 30
+  },
+  {
+   "kind": "watchdog",
+   "expect_state": "working"
+  },
+  {
+   "kind": "pty_tail",
+   "data": "• Working (esc to interrupt)\n❯  ? for shortcuts"
+  },
+  {
+   "kind": "watchdog",
+   "expect_state": "idle"
+  },
+  {
+   "kind": "hook",
+   "event": "agent-turn-complete",
+   "payload": {
+    "thread-id": "019fb5bc-d3b2-7690-b229-f8c494e67223"
+   },
+   "expect_state": "idle"
+  },
+  {
+   "kind": "pty_tail",
+   "data": "❯  ? for shortcuts\n• Working (esc to interrupt)"
+  },
+  {
+   "kind": "watchdog",
+   "expect_state": "idle"
+  }
+ ],
+ "expected": {
+  "events": [
+   {
+    "type": "turn_started",
+    "source": "watchdog-pty",
+    "scope": "root"
+   },
+   {
+    "type": "turn_ended",
+    "source": "watchdog-pty",
+    "scope": "root",
+    "outcome": "completed"
+   }
+  ],
+  "states": [
+   {
+    "previous": "idle",
+    "state": "working",
+    "source": "watchdog-pty",
+    "proof": "inferred"
+   },
+   {
+    "previous": "working",
+    "state": "idle",
+    "source": "watchdog-pty",
+    "proof": "inferred"
+   }
+  ],
+  "parser": {
+   "status": "watching",
+   "recognized": 0,
+   "unknown": 0,
+   "unknown_signatures": {}
+  },
+  "delivery_state": "unknown",
+  "delivery_reason": "observation_capability_unknown"
+ }
+}

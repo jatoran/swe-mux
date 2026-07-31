@@ -23,7 +23,7 @@ Three axes stay separate and are never collapsed:
 | --- | --- | --- |
 | `starting` | daemon | Spawn/promotion of an agent backend (lifecycle ownership). |
 | `running` | daemon | Shell lifecycle (spawn or demotion back to shell). |
-| `working` | transcript, hook | A root turn began or root tool activity: user prompt / assistant / tool records in order, or `UserPromptSubmit`/`PreToolUse`/`PostToolUse` while the transcript is not authoritative. The PTY may never invent work. |
+| `working` | transcript, hook, watchdog-pty | A root turn began or root tool activity: user prompt / assistant / tool records in order, or `UserPromptSubmit`/`PreToolUse`/`PostToolUse` while the transcript is not authoritative. The PTY may never invent work — except under the two narrow `watchdog-pty` rules below, both of which need the CLI's own spinner to be the *last* marker on screen. |
 | `awaiting` | transcript, hook | An explicit block: approval request, `request_user_input` (question), elicitation dialog, or rate limit — always with a typed `awaiting_reason`. |
 | `idle` | transcript, hook, pty, watchdog, watchdog-pty, daemon | A proven turn boundary (`turn_duration`, `end_turn`+text, `task_complete`, Stop hook, `idle_prompt`, interrupt marker, catch-up settle) — or a bounded inferred recovery (startup-quiet fallback, watchdog paths below). A catch-up settle over a session already idle also emits `root_turn_settled`, which changes no state but is the only way delivery readiness can learn that a session left running across a daemon restart is at its prompt (`delivery-readiness.md`). |
 | `exited` / `crashed` | pty, daemon | Process ground truth: the exit code through `terminal_exit_outcome`. |
@@ -134,6 +134,36 @@ hiding a prompt the user has not answered loses their attention entirely. Every 
 therefore requires positive proof, and the PTY is used as a *veto* on the transcript path
 rather than as a source.
 
+### The unwitnessed session (PTY-only turns)
+
+A session is **unwitnessed** when both tiers that may prove work are structurally
+absent: no transcript is bound and no hook has ever arrived (`session_is_unwitnessed`).
+This is reachable, not defensive. Codex has no session-start hook and mints its own
+thread id, which it first names on `agent-turn-complete` — so until turn one *ends* a
+fresh pane has neither tier, and `working` was reachable from neither source. The
+startup-quiet PTY fallback's `idle` was therefore the last word for the whole turn:
+measured live at 200 s of "ready · turn complete" while the agent worked, with the
+rollout's own `task_started` sitting on disk 4 s after spawn.
+
+For such a session the watchdog runs a symmetric pair, the only rules here that read
+an `idle` session:
+
+- `idle` + screen shows the working spinner → `begin_pty_turn` (opens a real root turn
+  through `_begin_root_turn`, so `turn_started`, delivery readiness, and every turn
+  consumer see what a transcript-started turn produces).
+- `working` + screen shows the idle prompt → `end_pty_turn`.
+
+Both are `watchdog-pty`/`inferred`, filed at PTY priority so any transcript or hook
+evidence in the same turn outranks them without forcing. Neither is stall-gated: the
+other recoveries wait because a proven source might still be about to speak, and here
+none can. Neither can act on an approval screen, because `pty_tail_state` is
+ordering-aware and a live dialog reads `approval` rather than `working` or `idle` — so
+this pair can no more start a turn on top of an unanswered prompt than close one that
+is still blocked. A single hook or a bound transcript ends the standing permanently;
+a temporary silence on a channel that exists is what the stall-gated paths above are
+for. Latency is one watchdog poll (5 s), and in practice the provisional binding
+(`backends.md`) usually beats it.
+
 ## Transition ledger
 
 Every applied transition goes through `apply_state_transition` (shared verbatim by the
@@ -170,6 +200,10 @@ the daemon more conservative (it vetoes clearing an awaiting and blocks the idle
   resuming on that would hide a prompt the user must answer.
 - `working`/`awaiting` stalled ≥ `STATE_WATCHDOG_ENDED_STUCK_SECONDS` (6s) with a quiet
   transcript whose tail **proves** the turn ended → force idle (`watchdog`).
+- **Unwitnessed** (no transcript bound and no hook ever received): `idle` + working
+  spinner → `begin_pty_turn`; `working` + idle prompt → `end_pty_turn`. Evaluated
+  first, because it is the only rule that reads an `idle` session, and deliberately
+  not stall-gated (see above).
 - Tail `unknown`/`open` (schema drift, missing marker, observer on a sibling transcript)
   → only after `STATE_WATCHDOG_PTY_STUCK_SECONDS` (60s) **and** the screen's live frame is
   the idle prompt → force idle (`watchdog-pty`). A session parked at a real dialog reads
@@ -186,7 +220,7 @@ All three classify as `inferred`, record the stall duration and tail verdict, an
 pinned by fixtures at their exact thresholds (`claude-watchdog-ended-stuck`,
 `claude-esc-pause-without-marker`, `codex-watchdog-unknown-tail`,
 `claude-long-tool-never-cut`, `claude-approval-resume-pty`,
-`claude-pending-approval-not-cleared`).
+`claude-pending-approval-not-cleared`, `codex-unwitnessed-first-turn`).
 
 ## Status-health metrics and bounds
 
@@ -253,7 +287,7 @@ that no surface reintroduces an inline heuristic.
 
 - `src/swe_mux/session.py` — contract tables, `apply_state_transition`,
   `watchdog_decision`, `pty_tail_appears_idle`, `apply_watchdog_recovery`,
-  `session_status_health`, `fleet_status_health`
+  `session_is_unwitnessed`, `session_status_health`, `fleet_status_health`
 - `src/swe_mux/observation.py` — evidence extraction, `tail_turn_state`, hook/transcript
   handlers, `closed_by_transcript` latch, trailing-completion guard
 - `src/swe_mux/models.py` — `SessionState`, `AwaitingReason`,

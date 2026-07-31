@@ -101,6 +101,16 @@
       "fixture": "claude-promote-demote-lifecycle.json",
       "guard": "tests/test_agent_lifecycle.py::test_shell_prompt_after_agent_exit_demotes_quiescent_session",
       "root_cause": "Promotion/demotion are daemon-owned lifecycle transitions (starting/running); they must flow through the ledger and reset source arbitration for the new backend's evidence."
+    },
+    "unwitnessed_first_turn_pty_only": {
+      "fixture": "codex-unwitnessed-first-turn.json",
+      "guard": "tests/test_observation.py::test_the_pty_starts_and_ends_the_first_turn_when_nothing_else_can",
+      "root_cause": "Codex has no session-start hook and mints its own thread id, which it names only on agent-turn-complete, so for the whole first turn a fresh pane has neither a bound transcript nor a hook. `working` was reachable from neither source, so the startup-quiet PTY fallback's `idle` was the last word and the pane read 'ready - turn complete' while the agent worked (measured live at 200 s)."
+    },
+    "provisional_transcript_attribution": {
+      "fixture": "codex-unwitnessed-first-turn.json",
+      "guard": "tests/test_codex_provisional_binding.py::test_a_provisional_transcript_never_rekeys_the_conversation",
+      "root_cause": "Following the sole unclaimed rollout by elimination lets the first turn be observed, but the file is a guess: rekeying native_session_id from it, writing the history row, or publishing its tokens would render a stranger's conversation under this pane's identity."
     }
   }
 }

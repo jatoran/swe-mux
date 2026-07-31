@@ -314,12 +314,13 @@ def test_session_meta_mirrors_the_mcp_token_for_adoption() -> None:
         hook_secret="hs",
         mcp_token="mcp-tok",
         transcript_path=None,
+        transcript_provisional=False,
         agent_lifecycle_id=None,
     ))
     meta = SessionManager._session_meta(session)
     assert meta["mcp_token"] == "mcp-tok"
     # And a Session constructed without one holds the never-authenticates value.
-    assert Session.__init__.__kwdefaults__ == {"mcp_token": None}
+    assert Session.__init__.__kwdefaults__["mcp_token"] is None
 
 
 def test_claude_adapter_registers_the_mux_mcp_server(tmp_path: Path) -> None:

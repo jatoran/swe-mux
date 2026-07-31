@@ -63,6 +63,31 @@
   the state is still `starting`, a one-second quiet period after live PTY output marks the
   interactive prompt ready at the lowest evidence tier. Any later hook/transcript evidence
   supersedes this startup-only fallback.
+- **A Codex rollout may be followed provisionally before its conversation is proven.** Identity
+  still comes only from the hook — an outsider cannot forge one, and nothing on disk separates
+  our rollout from a `codex` started in the same cwd outside mux (`originator` betrays only the
+  headless `codex exec`). But refusing to *read* the file until then meant a fresh pane had no
+  transcript and no hook for its entire first turn, so its status could not move at all: measured
+  live at 200 s of "ready · turn complete" with the rollout's own `task_started` written 4 s
+  after spawn. The sole unclaimed candidate is therefore adopted **for state only** when the
+  backend mints its own conversation id, the session is still unbound, and the file was *created*
+  around this agent run's start — the last being the gate the earlier analysis lacked, since
+  `recent_transcripts` filters on mtime, which any live outsider passes continuously.
+- A provisional binding may move turn state, tool detail, and awaiting reasons, and nothing else.
+  It may not rekey `native_session_id` (from the file's own `session_meta` or otherwise), write
+  the history row, or publish tokens, context, model, or compaction evidence — all of which are
+  durable claims that some work was *this* session's. It is also not mirrored into supervisor
+  metadata, which a successor daemon would read as an established binding. The worst case for a
+  wrong guess is a pane reading "working" while an unrelated codex runs: visible, self-correcting,
+  and strictly more conservative for delivery than the "ready" it replaces.
+- `agent-turn-complete` resolves it. If the hook names the conversation the guess was already
+  following, the binding is promoted (`transcript_binding_confirmed`) and the history row is
+  finally written; if it names a different one, the guess is discarded
+  (`transcript_binding_discarded`) and the observer re-derives by exact match, which exists from
+  that moment on. Nothing durable was written under the guess, so the discard is complete.
+  `GET /api/sessions/{sid}/state-log` reports `transcript_provisional`.
+- When even that guess is unavailable, the PTY screen drives the first turn on its own
+  (`status-detection.md` § the unwitnessed session).
 - **Every interactive PowerShell session re-asserts the shim directory at the front of PATH
   after the user's `$PROFILE` runs**, so profiles that rebuild PATH (registry refresh,
   version managers) cannot silently bypass shim promotion/demotion and hook injection. The

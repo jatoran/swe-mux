@@ -384,6 +384,14 @@ body {
 .terminal-pane {
   grid-template-rows:34px auto minmax(0,1fr);
 }
+/* A recently-viewed terminal kept mounted behind the active tab (warmPanes.ts), so
+   returning to it costs no buffer replay. `display:none` rather than a transparent
+   overlay: it must take no layout (its host measures zero, which is what stops it
+   refitting and reshaping the shared PTY) and must not be reachable by pointer,
+   focus, or a screen reader while another tab is on screen. */
+.terminal-pane.pane-warm {
+  display:none;
+}
 .pane-bar {
   height:34px;
 }

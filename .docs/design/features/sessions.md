@@ -62,6 +62,15 @@ and reattachable browser viewports.
 - Claude/Codex promotion preserves the parent PTY's canonical Project and records an atomic
   agent-run history lifecycle.
 - Attach, detach, browser reconnect, and pane operations never change process state.
+- **Retention and replay are separate budgets.** `scrollback_bytes` (5 MiB) is what the daemon
+  keeps; `attach_replay_bytes` (512 KiB) is what a fresh attach or a resync is handed. A client
+  must parse every replayed byte before it can render anything, and xterm time-slices that work
+  across render frames, so a full-buffer replay is *watched* happening — worst for a CLI in raw
+  scrollback mode (Codex), whose bytes are real lines that each allocate and scroll rather than
+  repaints of one alternate screen. A trimmed window resumes after the next newline so it can
+  never begin inside an escape sequence, and restates the alternate screen when it cut the
+  child's `?1049h` off (otherwise a full-screen TUI would repaint into the client's *normal*
+  buffer, growing scrollback on every frame — the exact cost the bound removes).
 - Slow subscribers receive a gap frame and deterministic bounded replay.
 - Explicit kill attempts adapter-specific graceful exit before process-tree termination.
 - Once the root exit code is captured, an ended session releases its dead ConPTY host. The
@@ -222,7 +231,7 @@ and reattachable browser viewports.
 - `src/swe_mux/pty_host.py`
 - `src/swe_mux/supervisor.py`
 - `src/swe_mux/supervisor_client.py`
-- `src/swe_mux/scrollback.py`
+- `src/swe_mux/scrollback.py` (`tail()` is the replay budget; `bytes()` is retention)
 - `src/swe_mux/git_projects.py`
 - `src/swe_mux/spawn_contract.py`
 - `src/swe_mux/adapters/`

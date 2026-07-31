@@ -542,6 +542,7 @@ async def test_supervisor_adoption_repairs_legacy_identity_and_persists_it(
     manager.supervisor = client
     manager.sessions = {}
     manager.max_scrollback = 128
+    manager.attach_replay_bytes = None
     manager.adapters = {
         "shell": SimpleNamespace(name="shell"),
         "codex": SimpleNamespace(
@@ -674,24 +675,69 @@ def test_sole_candidate_is_refused_when_the_spawn_named_the_conversation(
         )
 
 
-def test_no_backend_binds_a_transcript_by_elimination(tmp_path: Path) -> None:
-    """A fresh, unclaimed, PTY-corroborated candidate is still not evidence.
+def test_a_backend_that_names_its_own_conversation_never_adopts_by_elimination(
+    tmp_path: Path,
+) -> None:
+    """Claude is exact-matchable, so the guess would be a pure downgrade.
 
-    Measured live: an unbound Codex pane adopted the rollout of a `codex` started
-    outside mux in the same cwd, rekeying itself onto the stranger's thread. Neither
-    "created after this run began" nor "our PTY was producing output when it
-    appeared" excludes an outsider, because an agent TUI repaints continuously — so
-    the fallback is refused for every backend and binding comes from the CLI's own
-    authenticated hook instead.
+    Its transcript path is *derived* from the id mux injected as `--session-id`, so
+    the exact-match route always exists. Taking the elimination path there could
+    only ever bind an unmanaged CLI's conversation in exchange for nothing.
     """
     candidate = tmp_path / "fresh.jsonl"
     candidate.write_text("{}\n", encoding="utf-8")
-    for backend in ("claude", "codex"):
-        session = fake_agent_session(backend, None, cwd=str(tmp_path))
-        session.record.id = "0a24af3b-ef3a-4ed4-a0c3-d1525ed684e0"
-        session.record.native_session_id = session.record.id
-        session.record.last_activity_ts = time.time()
-        assert (
-            SessionManager._may_adopt_sole_candidate(session, candidate, time.time() - 1)
-            is False
-        ), backend
+    session = fake_agent_session("claude", None, cwd=str(tmp_path))
+    session.record.id = "0a24af3b-ef3a-4ed4-a0c3-d1525ed684e0"
+    session.record.native_session_id = session.record.id
+    session.record.last_activity_ts = time.time()
+    assert (
+        SessionManager._may_adopt_sole_candidate(session, candidate, time.time()) is False
+    )
+
+
+def test_elimination_adopts_a_codex_rollout_born_with_the_run(tmp_path: Path) -> None:
+    """Codex cannot be exact-matched until its first turn ends, so it may guess.
+
+    The guess is what lets a fresh pane report its first turn at all: Codex mints
+    its own thread id and names it only on `agent-turn-complete`, so before that
+    there is no id to match and the pane would otherwise sit at "ready · turn
+    complete" for the whole turn (measured live at 200 s).
+    """
+    candidate = tmp_path / "rollout-fresh.jsonl"
+    candidate.write_text("{}\n", encoding="utf-8")
+    session = fake_agent_session("codex", None, cwd=str(tmp_path))
+    session.record.id = "0a24af3b-ef3a-4ed4-a0c3-d1525ed684e0"
+    session.record.native_session_id = session.record.id
+    session.record.last_activity_ts = time.time()
+    assert SessionManager._may_adopt_sole_candidate(session, candidate, time.time()) is True
+
+
+def test_elimination_refuses_a_rollout_that_predates_the_run(tmp_path: Path) -> None:
+    """The gate the original analysis was missing: creation time, not mtime.
+
+    Measured live: an unbound Codex pane adopted the rollout of a `codex` started
+    outside mux in the same cwd. `recent_transcripts` filters on mtime, which any
+    live outsider passes continuously; when the file was *born* is a fact about
+    its own origin that a long-running outsider cannot satisfy.
+    """
+    outsider = tmp_path / "rollout-outsider.jsonl"
+    outsider.write_text("{}\n", encoding="utf-8")
+    session = fake_agent_session("codex", None, cwd=str(tmp_path))
+    session.record.native_session_id = session.record.id
+    session.record.last_activity_ts = time.time()
+    assert (
+        SessionManager._may_adopt_sole_candidate(session, outsider, time.time() + 3600)
+        is False
+    )
+
+
+def test_elimination_stops_once_the_conversation_is_bound(tmp_path: Path) -> None:
+    """A guess may never displace or race an established conversation."""
+    candidate = tmp_path / "rollout-fresh.jsonl"
+    candidate.write_text("{}\n", encoding="utf-8")
+    session = fake_agent_session("codex", None, cwd=str(tmp_path))
+    session.record.native_session_id = "019fb51c-4dd0-7aa0-92af-177137dbcc01"
+    session.record.last_activity_ts = time.time()
+    assert (
+        SessionManager._may_adopt_sole_candidate(session, candidate, time.time()) is False
+    )

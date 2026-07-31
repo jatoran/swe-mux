@@ -3,6 +3,7 @@ import type { ComponentChildren, JSX } from 'preact'
 import { api, openWebSocket } from './api'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness } from './liveness'
 import { TerminalPane } from './TerminalPane'
+import { recordPaneVisits, warmPaneIds } from './warmPanes'
 import { windowsPtyCompatibility, type TerminalRendererPreference, type WindowsPtyCompatibility } from './terminalRenderer'
 import { ProjectResource } from './ProjectResource'
 import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentResult, type SendToAgentTarget } from './SendToAgentPicker'
@@ -1035,6 +1036,23 @@ export function App() {
   useEffect(()=>{
     setSeenActivity(prev=>reconcileSeen(prev,sessions,visibleSessionIds))
   },[sessions,visibleSessionKey])
+
+  // Terminals stay mounted for a few switches after you leave them, so coming back
+  // costs no replay (`warmPanes.ts`). Recency is recorded from the layout rather than
+  // from focus: what matters is which pane a stack was last *showing*, which is also
+  // what survives a project switch and a workspace restore.
+  const [warmHistory,setWarmHistory]=useState<string[]>([])
+  useEffect(()=>{
+    setWarmHistory(history=>recordPaneVisits(history,visibleSessionIds))
+  },[visibleSessionKey])
+  const layoutTerminalIds=terminalIds(activeLayout)
+  const layoutTerminalKey=layoutTerminalIds.join(' ')
+  // Budgeted across the whole workspace, not per stack: three hidden terminals is
+  // three sockets and three scrollbacks however they are arranged on screen.
+  const warmTerminalIds=useMemo(
+    ()=>warmPaneIds(warmHistory,visibleSessionIds,layoutTerminalIds),
+    [warmHistory,visibleSessionKey,layoutTerminalKey],
+  )
 
   useEffect(()=>{
     if(!activeLayout.root){if(focusedViewId)setFocusedViewId(null);return}
@@ -2622,7 +2640,7 @@ export function App() {
     )
   }
 
-  const renderPaneNode = (node: PaneNode|PaneLeaf, path = '', insideStack = false): ComponentChildren => {
+  const renderPaneNode = (node: PaneNode|PaneLeaf, path = '', insideStack = false, paneVisible = true): ComponentChildren => {
     if (node.type === 'split') {
       return <div class={`pane-split ${node.direction}`}>
         <div class="pane-branch" style={{ flex: `${node.ratio} 1 0` }}>{renderPaneNode(node.first, `${path}f`)}</div>
@@ -2679,7 +2697,9 @@ export function App() {
           const label=session?sessionName(session):child.id
           return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session?.state)}/>{label}</button>{closeTab(child,label,session)}</div>
         })}
-      </div><div class="stack-active">{renderPaneNode(activeChild,`${path}t`,true)}</div></section>
+      </div><div class="stack-active">{node.children
+        .filter(child=>child.id===activeChild.id||(child.kind==='terminal'&&warmTerminalIds.includes(child.id)))
+        .map(child=>renderPaneNode(child,`${path}t`,true,child.id===activeChild.id))}</div></section>
     }
     if(node.kind==='note'){
       const identity=parseNoteResourceId(node.id)
@@ -2737,7 +2757,10 @@ export function App() {
       {(voiceAvailable||conversationAvailable)&&<button class="mobile-voice-action voice-settings" title="Open all Voice settings" onClick={()=>openSettings('Voice')}>audio…</button>}
     </>:null
     const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} onSession={updateSession} />:null
-    const terminalPane=<section class={`terminal-pane ${activeId === id ? 'focused' : ''}`} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
+    // `key` matters here in a way it does not for a single-child stack: a stack now
+    // renders its active pane *and* its warm siblings, so without a stable identity a
+    // reorder would rebuild terminals rather than move them.
+    const terminalPane=<section key={id} class={`terminal-pane ${activeId === id ? 'focused' : ''} ${paneVisible ? '' : 'pane-warm'}`} aria-hidden={paneVisible?undefined:'true'} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
       <div class="pane-bar" onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
         {/* A stale transcript is the one fault that looks like a healthy session: the state
             below is being read off a conversation this PTY may no longer be running (an
@@ -2749,7 +2772,7 @@ export function App() {
         <div class="pane-tools"><button class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button>{isAgent(session)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}<button class="pane-tool-label" aria-label={`Inspect processes for ${sessionName(session)}`} title="Processes and previews" onClick={() => {setActiveId(session.id);openProcessViewer(session)}}>proc</button><button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
       {voiceStripNode}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} visible={paneVisible} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Terminal tabs">

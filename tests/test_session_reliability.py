@@ -24,6 +24,10 @@ def _fake_session(max_bytes: int = 32) -> Any:
     fake.subscribers = set()
     fake.record = cast(Any, type("Record", (), {"snapshot": lambda self: {"state": "running"}})())
     fake.revision = 0
+    # Replay is exact here: these fixtures pin the *retention* contract, and a
+    # replay budget would silently trim the very boundaries they assert on.
+    fake.attach_replay_bytes = None
+    fake.screen = ScreenModeParser()
     return fake
 
 
@@ -45,6 +49,63 @@ def test_scrollback_zero_capacity_retains_nothing() -> None:
     buffer = ScrollbackBuffer(0)
     buffer.append(b"ignored")
     assert buffer.bytes() == b""
+
+
+def test_replay_tail_is_bounded_without_touching_retention() -> None:
+    # Retention and replay are separate budgets: the daemon keeps history to scroll
+    # back through, while an attaching client has to parse everything it is handed
+    # before it can render anything.
+    buffer = ScrollbackBuffer(1024)
+    buffer.append(b"line one\nline two\nline three\n")
+    assert buffer.tail(None) == buffer.bytes()
+    assert buffer.tail(10_000) == buffer.bytes()
+    assert buffer.tail(len(buffer.bytes())) == buffer.bytes()
+    # Trimmed windows resume after the next newline so the client can never begin
+    # parsing inside an escape sequence.
+    assert buffer.tail(14) == b"line three\n"
+
+
+def test_a_trimmed_replay_with_no_line_boundary_is_still_bounded() -> None:
+    # One enormous line (a TUI repainting with cursor moves and no newline) has no
+    # safe cut, and truncating the *bound* instead would defeat it.
+    buffer = ScrollbackBuffer(1024)
+    buffer.append(b"x" * 600)
+    assert buffer.tail(100) == b"x" * 100
+
+
+def test_a_bounded_replay_restates_the_alternate_screen_it_cut_off() -> None:
+    # The switch is written once at startup and never repeated, so a window that
+    # begins after it would leave the client painting a full-screen TUI into its
+    # *normal* buffer — every repaint growing scrollback instead of overwriting one
+    # screen, which is the exact cost the bound exists to remove.
+    fake = _fake_session(4096)
+    fake.attach_replay_bytes = 32
+    fake.screen.feed(b"\x1b[?1049h")
+    fake.scrollback.append(b"\x1b[?1049h" + b"repaint\n" * 40)
+    replay = Session.replay_bytes(fake)
+    assert replay.startswith(b"\x1b[?1049h")
+    assert len(replay) < 64
+
+
+def test_a_replay_that_carries_its_own_toggle_is_left_alone() -> None:
+    # The window contains its own answer; prefixing would override a child that
+    # deliberately left the alternate screen inside it.
+    fake = _fake_session(4096)
+    fake.attach_replay_bytes = 64
+    fake.screen.feed(b"\x1b[?1049h")
+    fake.scrollback.append(b"filler\n" * 40 + b"\x1b[?1049lback to normal\n")
+    replay = Session.replay_bytes(fake)
+    assert not replay.startswith(b"\x1b[?1049h")
+    assert b"\x1b[?1049l" in replay
+
+
+def test_an_untrimmed_replay_is_never_prefixed() -> None:
+    # Nothing was cut, so the stream already contains whatever the child said.
+    fake = _fake_session(4096)
+    fake.attach_replay_bytes = 4096
+    fake.screen.feed(b"\x1b[?1049h")
+    fake.scrollback.append(b"\x1b[?1049hshort\n")
+    assert Session.replay_bytes(fake) == b"\x1b[?1049hshort\n"
 
 
 async def test_natural_exit_releases_conpty_but_retains_scrollback() -> None:

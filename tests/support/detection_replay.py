@@ -28,6 +28,7 @@ from swe_mux.session import (
     apply_state_transition,
     apply_watchdog_recovery,
     pty_tail_state,
+    session_is_unwitnessed,
     session_status_health,
     terminal_exit_outcome,
     watchdog_decision,
@@ -58,6 +59,12 @@ class VirtualClock:
     def advance(self, seconds: float) -> None:
         self.monotonic_value += seconds
         self.wall_value += seconds
+
+
+# Stand-in for a bound transcript. Only its presence is read (by
+# `session_is_unwitnessed`); the harness feeds records directly rather than
+# through a file.
+REPLAY_TRANSCRIPT = Path("replay://transcript")
 
 
 class ReplaySession:
@@ -94,6 +101,12 @@ class ReplaySession:
             assigns_conversation_id=backend == "claude",
         )
         self.state_source_priority = -1
+        # Which evidence channels this session has ever had. `session_is_unwitnessed`
+        # reads both, and the unwitnessed watchdog pair is licensed by their absence,
+        # so the harness has to track them the way a live Session does rather than
+        # letting a fixture assert the conclusion directly.
+        self.transcript_path: Path | None = None
+        self.last_hook_ts = 0.0
         self.tool_names: dict[str, str] = {}
         self.observation_state: dict[str, Any] = {
             "root_turn_active": False,
@@ -261,6 +274,9 @@ class DetectionReplay:
         return stamped
 
     async def transcript_record(self, record: dict[str, Any]) -> None:
+        # Observing a record means a transcript is bound, which is what production
+        # sets before the observer reads its first line.
+        self.session.transcript_path = REPLAY_TRANSCRIPT
         self.tail_records.append(dict(record))
         recognized, signature = classify_transcript_event(self.session.record.backend, record)
         if self.session.record.backend == "claude":
@@ -288,6 +304,7 @@ class DetectionReplay:
             # Records that reached the transcript file but were never observed
             # live (crashed/stuck observer, records lost mid-race). Only the
             # watchdog's tail read can see them.
+            self.session.transcript_path = REPLAY_TRANSCRIPT
             for record in step.get("records") or []:
                 self.tail_records.append(dict(record))
         elif kind == "pty_tail":
@@ -310,6 +327,9 @@ class DetectionReplay:
                 force=True,
             )
         elif kind == "hook":
+            # A hook reaching this session is what proves the side channel exists,
+            # exactly as the live ingress records before dispatching.
+            self.session.last_hook_ts = self.clock.wall()
             await apply_hook_observation(
                 self.session,  # type: ignore[arg-type]
                 str(step["event"]),
@@ -413,14 +433,18 @@ class DetectionReplay:
         session = self.session
         stalled = max(0.0, self.clock.monotonic() - session.last_state_change_monotonic)
         pty_state = pty_tail_state(self.pty_tail)
-        # Mirrors _watchdog_check_session: the awaiting-resume pass runs before
-        # the transcript tail is even read, because after an approval the
+        unwitnessed = session_is_unwitnessed(session)
+        # Mirrors _watchdog_check_session: the unwitnessed pair is evaluated first
+        # (it is the only rule that reads an idle session), then the awaiting-resume
+        # pass before the transcript tail is even read, because after an approval the
         # transcript is usually busy rather than quiet.
         action = watchdog_decision(
             session.record.state,
             stalled_seconds=stalled,
             tail_verdict=None,
             pty_state=pty_state,
+            awaiting_reason=session.record.awaiting_reason,
+            unwitnessed=unwitnessed,
         )
         verdict: str | None = None
         if action == "none":
@@ -430,6 +454,8 @@ class DetectionReplay:
                 stalled_seconds=stalled,
                 tail_verdict=verdict,
                 pty_state=pty_state,
+                awaiting_reason=session.record.awaiting_reason,
+                unwitnessed=unwitnessed,
             )
         if action == "none":
             return

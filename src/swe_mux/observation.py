@@ -996,6 +996,35 @@ def _observation_state(session: Session) -> dict[str, Any]:
     return state
 
 
+def provisional_observation(session: Session) -> bool:
+    """True while the followed transcript was chosen by elimination, not identity.
+
+    A backend that mints its own conversation id cannot be exact-matched to a file
+    until it names that id over the authenticated hook ingress, which Codex only
+    does when its first turn *ends*. Following the sole unclaimed candidate in the
+    meantime is what lets a fresh pane report its first turn at all
+    (`_may_adopt_sole_candidate`), but the file is a well-reasoned guess rather
+    than a proven fact, so it is trusted for exactly one thing: state.
+
+    Everything this gates is *attribution* — a durable claim that some work was
+    this session's. Getting that wrong renders a stranger's conversation under
+    this pane's identity, which no amount of later correction undoes:
+
+    - `native_session_id` from the file's own header. Rebinding to it would make
+      the guess self-confirming and would defeat the hook check entirely.
+    - Token counts, context window, and model. These are displayed on the pane and
+      copied into the history row at turn end.
+    - Compaction evidence, which is durable per-session operational telemetry.
+    - The history row itself (written in `SessionManager._observe`).
+
+    State is deliberately not on that list. A wrong guess there costs a pane that
+    reads "working" while some other codex runs — visible, self-correcting on the
+    next hook, and strictly more conservative for delivery than the "ready · turn
+    complete" it replaces.
+    """
+    return bool(getattr(session, "transcript_provisional", False))
+
+
 def _transcript_authoritative(session: Session) -> bool:
     """True once the ordered transcript observer has proven itself healthy.
 
@@ -1309,6 +1338,14 @@ async def _bind_native_id_from_hook(
         backend=session.record.backend,
         native_session_id=native_id,
     )
+    # This is the moment a provisional follow can be judged: the conversation now
+    # has a proven id, so the guessed file is either confirmed (promote it to a
+    # real binding and write the history row) or refuted (drop it and re-bind by
+    # exact match). Routed through a sink because resolution belongs to the
+    # SessionManager, which owns observers and history.
+    resolve = getattr(session, "provisional_binding_sink", None)
+    if callable(resolve):
+        resolve()
     session.publish_update()
 
 
@@ -1787,10 +1824,14 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             )
             return
         state["codex_scope"] = "root"
-        native_id = payload.get("id") or payload.get("session_id")
-        if native_id:
-            session.record.native_session_id = str(native_id)
-        session.record.model = str(payload.get("model") or "") or session.record.model
+        # A provisional follow must not read identity out of the file it guessed:
+        # that would make the guess confirm itself and bypass the hook check that
+        # is the only real evidence of which conversation this PTY is running.
+        if not provisional_observation(session):
+            native_id = payload.get("id") or payload.get("session_id")
+            if native_id:
+                session.record.native_session_id = str(native_id)
+            session.record.model = str(payload.get("model") or "") or session.record.model
         await _transition(session, events, "idle", evidence="session_meta")
     if state.get("codex_scope") == "subagent":
         await events.emit(
@@ -1984,17 +2025,26 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             depth=len(payload.get("agent_path") or []),
         )
     elif payload_type == "context_compacted" or outer_type == "compacted":
-        await events.emit(
-            "context_compacted",
-            session_id=session.record.id,
-            source="transcript",
-            scope="root",
-            backend="codex",
-            capability="explicit_native",
-            confidence="high",
-            parser_version=OBSERVATION_SCHEMA_VERSION,
-        )
+        # Durable per-session operational telemetry: attributing a stranger's
+        # compaction is a claim about this pane that nothing later removes.
+        if not provisional_observation(session):
+            await events.emit(
+                "context_compacted",
+                session_id=session.record.id,
+                source="transcript",
+                scope="root",
+                backend="codex",
+                capability="explicit_native",
+                confidence="high",
+                parser_version=OBSERVATION_SCHEMA_VERSION,
+            )
     elif payload_type == "token_count":
+        # Shown on the pane and copied into the history row at turn end, so this
+        # is attribution rather than state and waits for the conversation to be
+        # proven. Nothing is lost by waiting: Codex reports cumulative totals, so
+        # the first count read after the binding carries the whole turn.
+        if provisional_observation(session):
+            return
         info = payload.get("info") or payload
         total = info.get("total_token_usage") or {}
         current = info.get("last_token_usage") or total

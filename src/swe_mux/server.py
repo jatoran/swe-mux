@@ -140,7 +140,12 @@ from .provider_accounts import (
 from .push import PUSH_SENDER_LOOP, PushSender, PushStore
 from .reconcile import reconcile_external_history
 from .secret_store import PlatformSecretStore, SecretStoreError
-from .session import STATE_WATCHDOG_LOOP, Session, SessionManager
+from .session import (
+    STATE_WATCHDOG_LOOP,
+    Session,
+    SessionManager,
+    session_is_unwitnessed,
+)
 from .settings_store import SettingsStore
 from .spawn_contract import (
     SpawnRequest,
@@ -772,6 +777,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         child_env,
         hook_spool_dir=config.data_dir / "hook-spool",
         supervisor=supervisor_client,
+        attach_replay_bytes=config.attach_replay_bytes,
     )
     if supervisor_client is not None:
         try:
@@ -3512,6 +3518,14 @@ async def get_session_state_log(request: web.Request) -> web.Response:
             "last_hook_ts": session.last_hook_ts or None,
             "transcript_path": str(transcript) if transcript else None,
             "transcript_mtime": transcript_mtime,
+            # Whether that path was proven or guessed. A provisional binding drives
+            # state only, so a session reporting live turns with no tokens and a
+            # placeholder conversation id is explained by this field and not a bug.
+            "transcript_provisional": session.transcript_provisional,
+            # No transcript and no hook ever: the PTY screen is the only source
+            # that can move this session, which is what licenses the
+            # begin/end_pty_turn watchdog pair.
+            "unwitnessed": session_is_unwitnessed(session),
             "observer_restart_count": session.observer_restart_count,
             "observer_last_fault": session.observer_last_fault,
             "watchdog_recoveries": session.watchdog_recoveries,

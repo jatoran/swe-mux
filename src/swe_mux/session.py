@@ -29,7 +29,7 @@ from .history import HistoryIndex
 from .models import GitState, SessionRecord, SessionState
 from .pty_host import PtyHost, merge_environment
 from .runtime_cwd import Osc7Parser, local_directory_from_osc7
-from .screen_mode import ScreenModeParser
+from .screen_mode import SCREEN_TOGGLE, ScreenModeParser
 from .scrollback import ScrollbackBuffer
 from .spawn_contract import infer_agent_executable_backend, scrub_claude_session_markers
 from .supervisor_client import RemotePtyHost, SupervisorClient, host_for_adoption
@@ -141,9 +141,20 @@ STATE_EVIDENCE_SOURCES: dict[str, frozenset[str]] = {
     "starting": frozenset({"daemon"}),
     "running": frozenset({"daemon"}),
     # Active states require provider evidence; the PTY may never invent work.
-    # "watchdog-pty" is admitted for `working` under one narrow rule enforced by
-    # watchdog_decision: it may only resolve an already-answered `awaiting` back
-    # into the turn that is still running, never start a turn from `idle`.
+    # "watchdog-pty" is admitted for `working` under two narrow rules, both
+    # enforced by watchdog_decision and both requiring the CLI's own spinner to be
+    # the *last* marker on screen:
+    #   - `resume_working` resolves an already-answered `awaiting` back into the
+    #     turn that is still running.
+    #   - `begin_pty_turn` starts a turn from `idle`, but only for an
+    #     *unwitnessed* session: an agent with no bound transcript that has never
+    #     received a hook, i.e. one where the PTY is the only witness there is.
+    #     This is the mirror of the startup-quiet PTY fallback below. A source
+    #     trusted to say "the prompt is ready" has to be trusted to say "the
+    #     prompt is no longer ready", or it is a one-way ratchet into a lie: a
+    #     fresh Codex pane, which cannot bind its rollout until its first
+    #     `agent-turn-complete` names the thread, otherwise reports "ready · turn
+    #     complete" for the entire first turn (measured live at 200 s).
     "working": frozenset({"transcript", "hook", "watchdog-pty"}),
     "awaiting": frozenset({"transcript", "hook"}),
     # Idle may be proven (transcript/hook boundary) or a bounded inferred
@@ -536,7 +547,14 @@ def terminal_exit_outcome(
     return state, final_reason, detail
 
 
-WatchdogAction = Literal["none", "force_idle_ended", "force_idle_pty", "resume_working"]
+WatchdogAction = Literal[
+    "none",
+    "force_idle_ended",
+    "force_idle_pty",
+    "resume_working",
+    "begin_pty_turn",
+    "end_pty_turn",
+]
 
 # What the CLI is showing right now, read from the scrollback tail. The tail
 # holds redraw history, so presence alone is not enough: the marker that appears
@@ -601,6 +619,33 @@ def pty_tail_appears_idle(tail: str) -> bool:
     return pty_tail_state(tail) == "idle"
 
 
+def session_is_unwitnessed(session: Any) -> bool:
+    """True when this agent's PTY screen is the only source that can ever speak.
+
+    Not "no evidence yet" — *no channel*. Both tiers that are allowed to prove
+    work are structurally absent: no transcript is bound (so the ordered record
+    cannot be read, provisionally or otherwise) and no hook has ever arrived (so
+    the side channel has never reached this session).
+
+    This is a real, reachable configuration rather than a defensive guard. Codex
+    has no session-start hook and mints its own thread id, so the first thing
+    that can ever name its conversation is the `agent-turn-complete` notify at
+    the *end* of turn one; until then a fresh pane has neither tier. It is also
+    where a misconfigured `notify` program or a hook ingress the CLI cannot reach
+    leaves a session permanently, which is why the predicate is written in terms
+    of the channels rather than in terms of Codex.
+
+    Deliberately one hook, not one *recent* hook: a session that has ever been
+    witnessed has a working channel, and a temporary silence on it is what the
+    stall-gated recoveries above are for.
+    """
+    if getattr(session.record, "backend", None) not in AGENT_BACKENDS:
+        return False
+    if getattr(session, "transcript_path", None) is not None:
+        return False
+    return not getattr(session, "last_hook_ts", 0.0)
+
+
 def watchdog_decision(
     state: SessionState,
     *,
@@ -608,6 +653,7 @@ def watchdog_decision(
     tail_verdict: str | None,
     pty_state: PtyTailState,
     awaiting_reason: str | None = None,
+    unwitnessed: bool = False,
 ) -> WatchdogAction:
     """Pure quiescence-watchdog decision, shared with the replay harness.
 
@@ -624,9 +670,28 @@ def watchdog_decision(
     A genuine long tool call keeps "esc to interrupt" on screen, and a real
     pending dialog reads "approval", so neither is ever cut short.
 
+    ``begin_pty_turn``/``end_pty_turn`` are the *unwitnessed* pair, and the only
+    rules here that read an `idle` session. ``unwitnessed`` means this agent has
+    no bound transcript and has never received a hook: there is no other source
+    that could ever speak, so refusing the PTY does not keep the status
+    conservative, it freezes it. Both directions require the marker to be the
+    *last* one on screen (`pty_tail_state` is ordering-aware), which is also what
+    makes them safe around a dialog: a pending approval reads "approval", never
+    "working" or "idle", so this pair can neither start a turn on top of a
+    prompt the user has not answered nor close one that is still blocked.
+
+    Deliberately symmetric and deliberately not stall-gated. The stall windows
+    below exist because a *proven* source might still be about to speak; here
+    nothing else can, so waiting only lengthens a status that is already wrong.
+
     ``tail_verdict=None`` means the transcript tail has not been read: the
     caller is doing the cheap pass that can only resume an awaiting session.
     """
+    if unwitnessed:
+        if state == "idle" and pty_state == "working":
+            return "begin_pty_turn"
+        if state == "working" and pty_state == "idle":
+            return "end_pty_turn"
     if state not in {"working", "awaiting"}:
         return "none"
     if (
@@ -671,11 +736,46 @@ async def apply_watchdog_recovery(
     seen, turn inactive", which would make _finish_root_turn a no-op. Re-open
     the turn so the forced close always lands and re-emits the boundary.
     """
-    from .observation import _finish_root_turn, _transition
+    from .observation import _begin_root_turn, _finish_root_turn, _transition
 
+    if action == "begin_pty_turn":
+        # Opening a turn, not repairing one: go through the normal turn-start
+        # path so the bookkeeping, `turn_started` event, and delivery readiness
+        # see exactly what a transcript- or hook-started turn produces. Pre-setting
+        # `root_turn_active` (as the repair actions below do) would suppress that
+        # emit and leave the turn half-open.
+        session.note_watchdog_recovery(
+            "pty_turn_started_unwitnessed",
+            stalled_seconds=stalled_seconds,
+            tail_verdict=tail_verdict,
+        )
+        await _begin_root_turn(
+            session,
+            events,
+            source="watchdog-pty",
+            evidence="pty_working_spinner_unwitnessed",
+        )
+        return
     session.observation_state["root_turn_active"] = True
     session.observation_state["root_completion_seen"] = False
-    if action == "resume_working":
+    if action == "end_pty_turn":
+        # The same screen that opened this turn now shows the input prompt. No
+        # stall window: nothing else can ever close it, so waiting would only
+        # hold a session at "working" after it has visibly finished.
+        session.note_watchdog_recovery(
+            "pty_turn_ended_unwitnessed",
+            stalled_seconds=stalled_seconds,
+            tail_verdict=tail_verdict,
+        )
+        await _finish_root_turn(
+            session,
+            events,
+            source="watchdog-pty",
+            force=True,
+            inferred=True,
+            evidence="pty_idle_prompt_unwitnessed",
+        )
+    elif action == "resume_working":
         # The block is gone but the turn is not: reclaim arbitration from the
         # hook that raised the awaiting and let the run finish normally. The
         # turn bookkeeping above guarantees the eventual close still lands.
@@ -746,9 +846,15 @@ class Session:
         startup_started_at: float | None = None,
         *,
         mcp_token: str | None = None,
+        attach_replay_bytes: int | None = None,
     ) -> None:
         self.record, self.pty, self.adapter = record, pty, adapter
         self.scrollback = ScrollbackBuffer(max_scrollback)
+        # What a fresh attach or a resync replays, as distinct from what is
+        # retained above. Carried on the session rather than read per-request so
+        # every attach path (browser, adopted supervisor session, tests) is bound
+        # by the same policy. ``None`` replays everything retained.
+        self.attach_replay_bytes = attach_replay_bytes
         self.subscribers: set[PtySubscriber] = set()
         self.tasks: set[asyncio.Task[Any]] = set()
         self.stopping = False
@@ -833,6 +939,10 @@ class Session:
         self.agent_stop_event = asyncio.Event()
         self.observer_task: asyncio.Task[Any] | None = None
         self.transcript_path: Path | None = None
+        # A transcript adopted by elimination rather than by identity evidence
+        # (`_may_adopt_sole_candidate`). It may drive *state* and nothing else:
+        # see `provisional_observation_blocks` for the exact list and why.
+        self.transcript_provisional = False
         self.detection_task: asyncio.Task[Any] | None = None
         # The launcher-generated lifecycle id remains stable even when an
         # adapter later discovers and records a different native transcript id.
@@ -898,23 +1008,50 @@ class Session:
         # hook secret, transcript path) into the supervisor so a future daemon
         # can rebuild this Session after a restart. None for in-process PTYs.
         self.meta_sink: Callable[[], None] | None = None
+        # Called by the hook path the moment this session's conversation id is
+        # proven, so the manager can confirm or discard a provisional transcript
+        # binding. Sync: it schedules its own task rather than blocking the hook.
+        self.provisional_binding_sink: Callable[[], None] | None = None
 
     def subscribe(self, maxsize: int = 1024) -> PtySubscriber:
         subscriber = PtySubscriber(asyncio.Queue(maxsize=maxsize))
         self.subscribers.add(subscriber)
         return subscriber
 
-    def replay_and_subscribe(
-        self,
-    ) -> tuple[dict[str, Any], int, bytes, PtySubscriber]:
+    def replay_and_subscribe(self) -> tuple[dict[str, Any], int, bytes, PtySubscriber]:
         """Atomically snapshot replay bytes and register for subsequent output.
 
         This method has no await points, so the single event-loop fanout task cannot
         append output between the snapshot and subscription. A new attachment therefore
         neither misses nor duplicates the boundary chunk.
+
+        `attach_replay_bytes` bounds only what this attach replays
+        (`ScrollbackBuffer.tail`); retention is untouched and later output is
+        unaffected.
         """
         subscriber = self.subscribe()
-        return self.record.snapshot(), self.revision, self.scrollback.bytes(), subscriber
+        return self.record.snapshot(), self.revision, self.replay_bytes(), subscriber
+
+    def replay_bytes(self) -> bytes:
+        """Retained output for a fresh attach, bounded and self-contained.
+
+        A bounded window can begin after the child selected the alternate screen,
+        which would leave the client painting a full-screen TUI into its *normal*
+        buffer — every repaint growing scrollback instead of overwriting one
+        screen, which is precisely the cost the bound exists to remove. The daemon
+        tracks the mode from the stream itself (`screen_mode.py`), so it can
+        restate it.
+
+        Only restated when the window carries no toggle of its own. A window that
+        does contains its own answer, and prefixing would override a child that
+        deliberately left the alternate screen inside it.
+        """
+        replay = self.scrollback.tail(self.attach_replay_bytes)
+        if len(replay) == self.scrollback.size:
+            return replay
+        if self.screen.mode == "alternate" and not SCREEN_TOGGLE.search(replay):
+            return b"\x1b[?1049h" + replay
+        return replay
 
     def _schedule_resync(self, subscriber: PtySubscriber, rejected: bytes | None = None) -> None:
         if rejected is not None:
@@ -1153,10 +1290,17 @@ class Session:
     def take_resync(
         self, subscriber: PtySubscriber
     ) -> tuple[int, int, bytes, dict[str, Any], int, dict[str, Any] | None]:
-        """Capture a deterministic recovery boundary without yielding the event loop."""
+        """Capture a deterministic recovery boundary without yielding the event loop.
+
+        Bounded by the same budget as a fresh attach, and for the same reason: the
+        client resets its terminal on a resync, so what it receives is a complete
+        replay into an empty buffer rather than a patch. A resync is also triggered
+        by a client that could not keep up, which is the worst moment to hand one
+        the largest possible payload.
+        """
         dropped_bytes = subscriber.dropped_bytes
         dropped_chunks = subscriber.dropped_chunks
-        replay = self.scrollback.bytes()
+        replay = self.replay_bytes()
         snapshot = self.record.snapshot()
         revision = self.revision
         exit_frame = subscriber.exit_pending
@@ -1182,9 +1326,13 @@ class SessionManager:
         child_env: dict[str, str] | None = None,
         hook_spool_dir: Path | None = None,
         supervisor: SupervisorClient | None = None,
+        attach_replay_bytes: int | None = None,
     ) -> None:
         self.adapters, self.reaper, self.history, self.events = adapters, reaper, history, events
         self.max_scrollback = max_scrollback
+        # Retention budget above, replay budget here: every Session this manager
+        # builds is bound by it, whether spawned or adopted from the supervisor.
+        self.attach_replay_bytes = attach_replay_bytes
         self.ingress_url = ingress_url.rstrip("/")
         self.child_env = child_env or {}
         self.hook_spool_dir = hook_spool_dir
@@ -1414,6 +1562,7 @@ class SessionManager:
             ownership_job,
             startup_started_at,
             mcp_token=mcp_token,
+            attach_replay_bytes=self.attach_replay_bytes,
         )
         self.sessions[sid] = session
         if isinstance(pty, RemotePtyHost):
@@ -1513,13 +1662,19 @@ class SessionManager:
 
     @staticmethod
     def _session_meta(session: Session) -> dict[str, Any]:
+        # A provisional path is deliberately not mirrored. The successor daemon
+        # reads this metadata as an *established* binding and starts its observer
+        # on it directly, which would silently promote a guess to a fact across a
+        # restart — and across exactly the restart that erased the reasoning
+        # behind it. Omitting it costs one re-derivation: the adopted session
+        # re-enters `_await_owned_transcript` and either exact-matches (the hook
+        # bound it in the meantime) or guesses again under the same rules.
+        transcript = None if session.transcript_provisional else session.transcript_path
         return {
             "record": session.record.snapshot(),
             "hook_secret": session.hook_secret,
             "mcp_token": session.mcp_token,
-            "transcript_path": (
-                str(session.transcript_path) if session.transcript_path else None
-            ),
+            "transcript_path": str(transcript) if transcript else None,
             "agent_lifecycle_id": session.agent_lifecycle_id,
         }
 
@@ -1612,8 +1767,14 @@ class SessionManager:
 
     async def _await_owned_transcript(
         self, session: Session, stop_event: asyncio.Event
-    ) -> Path | None:
-        """Wait for transcript evidence uniquely owned by this live PTY."""
+    ) -> tuple[Path, bool] | None:
+        """Wait for a transcript this live PTY may follow, and say how strongly.
+
+        Returns ``(path, provisional)``. ``provisional=False`` is an exact
+        conversation-id match and binds everything. ``provisional=True`` is an
+        adoption by elimination and may only drive state
+        (`_may_adopt_sole_candidate`).
+        """
         while not stop_event.is_set():
             cwd = Path(session.record.run_cwd or session.record.cwd)
             started = session.record.agent_run_started_at or session.record.created_at
@@ -1627,11 +1788,11 @@ class SessionManager:
                 item for item in candidates if item[2] == session.record.native_session_id
             ]
             if exact:
-                return max(exact)[1]
+                return max(exact)[1], False
             if len(candidates) == 1 and self._may_adopt_sole_candidate(
                 session, candidates[0][1], started
             ):
-                return candidates[0][1]
+                return candidates[0][1], True
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=0.5)
             except TimeoutError:
@@ -1640,19 +1801,13 @@ class SessionManager:
 
     @staticmethod
     def _may_adopt_sole_candidate(session: Session, candidate: Path, started: float) -> bool:
-        """Never. A transcript is bound by identity evidence, not by elimination.
+        """Whether the sole unclaimed candidate may be followed *provisionally*.
 
-        The candidate pool is the backend's shared per-cwd transcript directory, so
-        "the only unclaimed file" can easily be an unmanaged CLI's conversation (a
-        headless `claude -p` from a script, a plain-terminal `codex`). Adopting it
-        rekeys native_session_id, rebinds the history row, and renders the outsider's
-        status and tokens under this session's identity.
+        Never for identity. The candidate pool is the backend's shared per-cwd
+        transcript directory, so "the only unclaimed file" can easily be an
+        unmanaged CLI's conversation (a headless `claude -p` from a script, a
+        plain-terminal `codex`), and no filesystem gate separates them:
 
-        Every filesystem gate that looked sufficient has been measured and is not:
-
-        - Claude never needs the fallback at all: its transcript path is *derived*
-          from the native id mux injected as `--session-id`, so the exact-match route
-          always exists.
         - For a backend that mints its own conversation id, "created after this run
           began" plus "our PTY was producing output when it appeared" both pass for an
           outsider, because an agent TUI repaints continuously — verified live: an
@@ -1662,13 +1817,52 @@ class SessionManager:
           distinguishes only the headless `codex exec` case (`codex_exec`/`exec`); an
           interactive outsider reports `codex-tui`/`cli`, exactly like ours.
 
-        What an outsider cannot forge is a hook: it arrives over this session's own
-        loopback ingress authenticated with this session's own secret. Codex reports
-        its `thread-id` on `agent-turn-complete`, which is what binds it
-        (`_bind_native_id_from_hook`), so the guess is not needed here.
+        So identity still comes only from a hook, which an outsider cannot forge:
+        it arrives over this session's own loopback ingress authenticated with this
+        session's own secret, and Codex names its `thread-id` on
+        `agent-turn-complete` (`_bind_native_id_from_hook`).
+
+        What changed is the *consequence* of following a file. Adoption used to
+        mean rekeying `native_session_id`, writing the history row, and publishing
+        the file's tokens and context — all of which mis-render a stranger's work
+        under this pane's identity, which is why this returned False outright. A
+        provisional follow does none of that (`provisional_observation_blocks`);
+        it may move turn state and nothing else. The worst case for a wrong guess
+        is therefore a pane that reads "working" while an unrelated codex runs:
+        cosmetic, self-correcting on the next real hook, and strictly more
+        conservative for delivery than the alternative.
+
+        The alternative is not "stay safe", it is "say nothing". Codex cannot name
+        its thread until its first turn *ends*, so refusing here left every fresh
+        pane reporting "ready · turn complete" for the whole first turn while its
+        rollout sat on disk unread — measured live at 200 s, with the rollout's own
+        `task_started` written 4 s after spawn.
+
+        Gates, all required:
+
+        - The backend must mint its own conversation id. Claude never needs this
+          path (its transcript is *derived* from the id mux injected as
+          `--session-id`, so the exact match always exists), and taking it there
+          would be a pure downgrade.
+        - The session must still be unbound, so this can never displace or race a
+          conversation the daemon already established.
+        - The file must have been *created* around this agent run's start, not
+          merely written to recently. This is the one gate the original analysis
+          did not apply: `recent_transcripts` filters on mtime, which any live
+          outsider passes continuously, while creation time is a fact about the
+          file's own origin that a long-running outsider cannot satisfy.
         """
-        del session, candidate, started
-        return False
+        adapter = getattr(session, "adapter", None)
+        if getattr(adapter, "assigns_conversation_id", True):
+            return False
+        from .observation import conversation_unbound
+
+        if not conversation_unbound(session):
+            return False
+        created = file_created_at(candidate)
+        if created is None:
+            return False
+        return abs(created - started) <= _TRANSCRIPT_CREATION_SLACK_SECONDS
 
     def _adoption_transcript_claims(
         self,
@@ -2013,6 +2207,7 @@ class SessionManager:
                 self.max_scrollback,
                 hook_secret,
                 mcp_token=str(meta.get("mcp_token") or ""),
+                attach_replay_bytes=self.attach_replay_bytes,
             )
             session.scrollback.seed(replay, int(response.get("position", len(replay))))
             # The screen switch is written once, at startup, and never repeated.
@@ -2102,12 +2297,78 @@ class SessionManager:
             session.observer_task.cancel()
         session.agent_stop_event = asyncio.Event()
         session.transcript_path = transcript
+        # Every caller that hands a path here derived it from identity evidence
+        # (spawn id, hook-reported rollover, adoption metadata). Only the
+        # elimination path inside `_observe` sets this, and it clears here so a
+        # re-bind can never inherit a previous run's provisional standing.
+        session.transcript_provisional = False
+        session.provisional_binding_sink = lambda: self._queue_provisional_resolution(session)
         task = asyncio.create_task(
             self._observe(session, transcript, session.agent_stop_event),
             name=f"observe-{session.record.id}",
         )
         session.observer_task = task
         session.tasks.add(task)
+
+    def _queue_provisional_resolution(self, session: Session) -> None:
+        """Schedule provisional-binding resolution off the hook request path."""
+        if not session.transcript_provisional:
+            return
+        task = asyncio.create_task(
+            self._resolve_provisional_transcript(session),
+            name=f"provisional-bind-{session.record.id}",
+        )
+        session.tasks.add(task)
+        task.add_done_callback(session.tasks.discard)
+
+    async def _resolve_provisional_transcript(self, session: Session) -> None:
+        """Confirm or discard a guessed transcript now that the id is proven.
+
+        Runs in its own task, never inside the observer, so the discard branch is
+        free to restart that observer without cancelling its own caller.
+        """
+        if not session.transcript_provisional:
+            return
+        path = session.transcript_path
+        native_id = session.record.native_session_id
+        observed = session.adapter.transcript_native_id(path) if path is not None else None
+        if path is not None and observed and observed == native_id:
+            # The guess was right. Everything the provisional standing withheld —
+            # identity-derived history, tokens, context — is now safe, and the
+            # observer already tailing this file simply keeps going.
+            session.transcript_provisional = False
+            await self.history.session_promoted(session.record, str(path))
+            await self.events.emit(
+                "transcript_binding_confirmed",
+                session_id=session.record.id,
+                source="hook",
+                scope="root",
+                backend=session.record.backend,
+                transcript_path=str(path),
+                native_session_id=native_id,
+            )
+            session.publish_update()
+            return
+        # Refuted: the pane was following someone else's conversation. Nothing
+        # durable was written under it (that is the point of the standing), so
+        # dropping the guess is complete. Re-entering the observer with no path
+        # now takes the exact-match route, which exists from this moment on.
+        log.info(
+            "session %s discarding provisional transcript %s: conversation is %s",
+            session.record.id,
+            path.name if path is not None else "<none>",
+            native_id,
+        )
+        await self.events.emit(
+            "transcript_binding_discarded",
+            session_id=session.record.id,
+            source="hook",
+            scope="root",
+            backend=session.record.backend,
+            transcript_path=str(path) if path is not None else None,
+            native_session_id=native_id,
+        )
+        self._start_observer(session, None)
 
     def _start_detection(self, session: Session) -> None:
         if session.detection_task and not session.detection_task.done():
@@ -2346,6 +2607,7 @@ class SessionManager:
         session.observation_replay = False
         session.agent_promoted_at = None
         session.transcript_path = None
+        session.transcript_provisional = False
         # The spool is keyed by mux session id, which survives demotion. Anything
         # the ending agent run left behind would replay into the next promotion.
         self.discard_hook_spool(session.record.id)
@@ -2581,13 +2843,16 @@ class SessionManager:
 
         adapter = session.adapter
         path = transcript
+        provisional = False
         if path is None or not path.exists():
-            path = await self._await_owned_transcript(session, stop_event)
+            found = await self._await_owned_transcript(session, stop_event)
+            path, provisional = found if found else (None, False)
         backoff = OBSERVER_RESTART_BACKOFF_MIN_SECONDS
         while path and not stop_event.is_set():
             session.transcript_path = path
+            session.transcript_provisional = provisional
             native_id = adapter.transcript_native_id(path)
-            if native_id and native_id != session.record.native_session_id:
+            if native_id and native_id != session.record.native_session_id and not provisional:
                 # Codex binds a placeholder mux id until the rollout file names
                 # the real conversation, so re-deriving from the file is correct
                 # there. For Claude the record identity is authoritative (spawn
@@ -2595,6 +2860,10 @@ class SessionManager:
                 # handed to the observer was derived from it — a mismatched stem
                 # means the path is wrong, and rekeying the record to match it is
                 # exactly the cross-attribution this design forbids.
+                #
+                # A provisional follow never reaches here: the whole point is that
+                # the file was chosen by elimination, so its id is precisely what
+                # has not been established. Identity waits for the hook.
                 if session.record.backend == "claude":
                     log.warning(
                         "observer for session %s handed transcript %s that does not "
@@ -2606,7 +2875,22 @@ class SessionManager:
                 else:
                     session.record.native_session_id = native_id
             await self._await_registration(session)
-            await self.history.session_promoted(session.record, str(path))
+            if provisional:
+                # The history row is keyed by conversation and carries the
+                # transcript path: writing it now would file a possibly-foreign
+                # conversation under this pane, which is the cross-attribution
+                # this whole path is designed to avoid. `promote_provisional_
+                # transcript` writes it if and when the hook confirms the file.
+                await self.events.emit(
+                    "transcript_provisionally_bound",
+                    session_id=session.record.id,
+                    source="daemon",
+                    scope="root",
+                    backend=session.record.backend,
+                    transcript_path=str(path),
+                )
+            else:
+                await self.history.session_promoted(session.record, str(path))
             observe_task = asyncio.create_task(
                 observe_transcript(session, path, self.events, stop_event),
                 name=f"observe-tail-{session.record.id}",
@@ -2624,8 +2908,14 @@ class SessionManager:
                 # CLI is on another conversation, so the agent run ends here and a
                 # new one begins. Applied in place rather than through
                 # roll_agent_conversation, which would cancel this very task.
+                #
+                # Unless the file being left was never ours to begin with. A
+                # rollover retires a conversation — it rekeys identity, closes the
+                # history row, and mints a new agent run — and none of that is
+                # meaningful for a guess. Re-aim the guess instead and stay
+                # provisional; the hook still decides what this session really is.
                 switched_native = adapter.transcript_native_id(switch)
-                if switched_native:
+                if switched_native and not provisional:
                     await self._apply_conversation_rollover(
                         session,
                         native_id=switched_native,
@@ -3048,6 +3338,7 @@ class SessionManager:
         session.observation_replay = False
         session.state_source_priority = -1
         session.transcript_path = None
+        session.transcript_provisional = False
         apply_state_transition(
             session,
             "starting",
@@ -3116,9 +3407,16 @@ class SessionManager:
         if record.backend not in {"claude", "codex"}:
             return
         await self._drain_hook_spool(session)
-        if record.state not in {"working", "awaiting"}:
-            return
         if session.observation_replay:
+            return
+        # The unwitnessed pair runs before the active-state gate below, because it
+        # is the only rule here that reads an `idle` session — the state a fresh
+        # Codex pane is stranded in for its whole first turn.
+        if session_is_unwitnessed(session) and await self._check_unwitnessed_pty_turn(
+            session, now
+        ):
+            return
+        if record.state not in {"working", "awaiting"}:
             return
         stalled = now - session.last_state_change_ts
         pty_state = self._pty_tail_state(session)
@@ -3200,6 +3498,36 @@ class SessionManager:
             stalled_seconds=stalled,
             tail_verdict=verdict,
         )
+
+    async def _check_unwitnessed_pty_turn(self, session: Session, now: float) -> bool:
+        """Drive turn state from the screen while nothing else can. True if applied.
+
+        Only reached for a session `session_is_unwitnessed` accepts, so this can
+        neither outrank nor pre-empt a real source: the moment a transcript binds
+        (even provisionally) or a single hook lands, the predicate goes false and
+        this path stands down for the rest of the session's life. The transition
+        itself is filed at PTY priority, so ordered evidence arriving in the same
+        turn takes ownership without needing to force.
+        """
+        record = session.record
+        action = watchdog_decision(
+            record.state,
+            stalled_seconds=now - session.last_state_change_ts,
+            tail_verdict=None,
+            pty_state=self._pty_tail_state(session),
+            awaiting_reason=record.awaiting_reason,
+            unwitnessed=True,
+        )
+        if action not in {"begin_pty_turn", "end_pty_turn"}:
+            return False
+        await apply_watchdog_recovery(
+            session,
+            self.events,
+            action,
+            stalled_seconds=now - session.last_state_change_ts,
+            tail_verdict=None,
+        )
+        return True
 
     def _hook_spool_path(self, session_id: str) -> Path | None:
         # getattr keeps lifecycle paths callable from the partially-constructed

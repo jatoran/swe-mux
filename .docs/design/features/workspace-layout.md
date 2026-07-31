@@ -147,16 +147,28 @@ PaneLeaf = terminal | note | preview | history | queue
   non-cryptographic uniqueness fallback. Direct tailnet HTTP therefore remains able to create
   tabs/panes when secure-context-only APIs are unavailable.
 
+## Warm terminal panes
+
+Switching to another tab in a stack hides the terminal it leaves rather than unmounting it, for
+the last few panes shown. A tab switch therefore costs no PTY reattach and no buffer replay,
+which is what made returning to a long Codex session visibly redraw for several seconds. The set
+is bounded and recency-ordered (`WARM_TERMINAL_PANES`), and a hidden pane behaves as a
+backgrounded tab for every shared resource — it deregisters its viewport from PTY geometry
+arbitration, cannot take input ownership, and cannot write the system clipboard. Mechanics:
+`technical/frontend/workspace-state.md` § Warm terminal panes.
+
 ## Key files
 
 - `frontend/src/layout.ts`
 - `frontend/src/mobileWorkspace.ts`
+- `frontend/src/warmPanes.ts`
 - `frontend/src/App.tsx`
 - `frontend/src/dragReorder.ts`
 - `frontend/src/pointerDragClaim.ts`
 - `src/swe_mux/layouts.py`
 - `src/swe_mux/history.py`
 - `frontend/test/layout.test.ts`
+- `frontend/test/warmPanes.test.ts`
 - `frontend/test/mobileWorkspace.test.ts`
 - `frontend/test/randomId.test.ts`
 - `tests/test_projects_reliability.py`

@@ -247,6 +247,14 @@ class Config:
     claude_args: list[str] = field(default_factory=list)
     codex_args: list[str] = field(default_factory=list)
     scrollback_bytes: int = 5 * 1024 * 1024
+    # What a *fresh attach* replays, as opposed to what the daemon retains. The
+    # client has to parse every replayed byte before it can render anything, and
+    # xterm time-slices that across render frames, so a full-buffer replay is
+    # visibly watched happening — worst on a CLI in raw scrollback mode (Codex),
+    # whose bytes are real lines that each allocate and scroll rather than
+    # repaints of one alternate screen. Retention is unchanged: scrolling back
+    # further is a client concern, reconnect latency is everyone's.
+    attach_replay_bytes: int = 512 * 1024
     # Session-preserving reload: spawn PTYs in the out-of-process supervisor so
     # live sessions survive a daemon restart. Off by default while the split
     # proves itself; in-process spawning remains the automatic fallback.
@@ -620,6 +628,8 @@ def _validate(config: Config) -> None:
         errors["ccusage_refresh_minutes"] = "must be between 0 and 1440 minutes"
     if not 1024 <= config.scrollback_bytes <= 1024 * 1024 * 1024:
         errors["scrollback_bytes"] = "must be between 1 KiB and 1 GiB"
+    if not 1024 <= config.attach_replay_bytes <= 1024 * 1024 * 1024:
+        errors["attach_replay_bytes"] = "must be between 1 KiB and 1 GiB"
     if not 0.25 <= config.git_poll_seconds <= 3600:
         errors["git_poll_seconds"] = "must be between 0.25 and 3600 seconds"
     if not 0.5 <= config.process_poll_seconds <= 60:

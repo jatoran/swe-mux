@@ -88,6 +88,18 @@ interface Props {
   /** ConPTY compatibility descriptor from the daemon; undefined off Windows. */
   windowsPty?: WindowsPtyCompatibility
   mobileInput: MobileInputSettings
+  /**
+   * Whether this pane is the one on screen in its stack. A false value is a *warm*
+   * pane (`warmPanes.ts`): fully live, deliberately kept mounted so returning to it
+   * costs no replay, but not being looked at. It therefore has to behave like a
+   * minimized window rather than like a visible one — it deregisters its viewport so
+   * it cannot reshape the shared PTY, and it never writes the system clipboard.
+   *
+   * Read through a ref inside the mount effect rather than being one of its
+   * dependencies: making it a dependency would dispose and rebuild the terminal on
+   * every tab switch, which is the exact cost warm panes exist to remove.
+   */
+  visible: boolean
   /** Open the command-rail settings editor (the rail's trailing gear). */
   onConfigureRail?: () => void
   /** Fork this agent conversation into a sibling pane (rail Branch button). */
@@ -143,7 +155,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session) {
   term.focus()
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, onConfigureRail, onBranch }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, visible, onConfigureRail, onBranch }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
@@ -239,6 +251,18 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   backendRef.current=session.backend
   const broadcastRef = useRef(broadcast)
   broadcastRef.current = broadcast
+  // A warm pane is mounted and live while hidden, so "is this pane being looked at"
+  // is a second, independent axis from `document.hidden`. Everything that used to
+  // ask the document alone now asks `paneIsHidden`, which is either.
+  const visibleRef = useRef(visible)
+  // Set inside the mount effect; re-registers or deregisters this pane's viewport
+  // when it is shown or hidden, and repaints on the way back in.
+  const paneVisibilityRef = useRef<(next:boolean)=>void>(()=>{})
+  useEffect(()=>{
+    if(visibleRef.current===visible)return
+    visibleRef.current=visible
+    paneVisibilityRef.current(visible)
+  },[visible])
 
   const prepareClipboardFallback = (text:string) => {
     setPreparedClipboard(text)
@@ -303,6 +327,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
 
   useEffect(() => {
     if (!host.current) return
+    // Either axis hides this pane: the browser tab is in the background, or this pane
+    // is a warm one behind another tab in its own stack. Nothing downstream cares
+    // which — a hidden pane must not size the PTY, claim the keyboard, or write the
+    // system clipboard, and both cases are hidden for exactly those purposes.
+    const paneIsHidden = () => document.hidden || !visibleRef.current
     const reportStartup = (milestone: StartupMilestone) => {
       if (startupOrigin !== undefined) onStartupTiming?.(milestone, performance.now() - startupOrigin)
     }
@@ -335,12 +364,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       prepareClipboardFallback,
       reportError,
       undefined,
-      // Drop OSC 52 clipboard writes that arrive from replayed scrollback (every
-      // re-attach on a tab/project switch replays the buffer through term.write)
-      // or while the browser tab is hidden. Only a live, visible copy should reach
-      // the system clipboard. `replaying` is declared below but is only read when a
+      // Drop OSC 52 clipboard writes that arrive from replayed scrollback (a cold
+      // attach replays the buffer through term.write) or while this pane is not the
+      // one being looked at. Only a live, visible copy should reach the system
+      // clipboard — and a warm pane is exactly a live session writing into a tab the
+      // user is not on. `replaying` is declared below but is only read when a
       // sequence actually arrives, long after connect() runs.
-      () => replaying || document.hidden,
+      () => replaying || paneIsHidden(),
     )))
     term.loadAddon(new Unicode11Addon())
     term.unicode.activeVersion = '11'
@@ -493,7 +523,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let letterboxed = false
     const sendViewport = (cols: number, rows: number) => {
       if (socket?.readyState !== WebSocket.OPEN) return
-      const hidden = document.hidden
+      const hidden = paneIsHidden()
       if (sentViewport?.cols === cols && sentViewport.rows === rows && sentViewport.hidden === hidden) return
       sentViewport = { cols, rows, hidden }
       // `hidden` deregisters this viewport instead of registering it: a minimized
@@ -579,8 +609,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       window.cancelAnimationFrame(redrawFrame)
       fitFrame = window.requestAnimationFrame(() => {
         // Deregistering has to happen even when the pane has no layout to measure,
-        // otherwise a hidden client's last size would hold the PTY hostage.
-        if (document.hidden && localFit) sendViewport(localFit.cols, localFit.rows)
+        // otherwise a hidden client's last size would hold the PTY hostage. A warm
+        // pane has layout of its own (it is only `display:none`), so without this it
+        // would keep the PTY sized for a tab nobody is looking at.
+        if (paneIsHidden() && localFit) sendViewport(localFit.cols, localFit.rows)
         if (!terminalHostIsVisible(host.current)) return
         measureFit()
         applyGeometry()
@@ -605,6 +637,21 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const scheduleFit = () => scheduleViewport(false)
     const scheduleFullRedraw = () => scheduleViewport(true)
     scheduleFitRef.current = scheduleFullRedraw
+    paneVisibilityRef.current = (nowVisible: boolean) => {
+      if (!nowVisible) {
+        // Hidden by `display:none`, so the host measures zero and the scheduled fit
+        // would return before deregistering. Send the deregistration directly.
+        if (localFit) sendViewport(localFit.cols, localFit.rows)
+        return
+      }
+      // Back on screen. The pane may have missed geometry changes while it had no
+      // layout to measure, and its renderer may hold pixels from before the tab was
+      // resized, so this is a full redraw rather than a plain fit. The tail scroll is
+      // the same repair `finishReplay` does: output that arrived while the pane was
+      // hidden moved `baseY` without moving a viewport nobody was watching.
+      scheduleFullRedraw()
+      window.requestAnimationFrame(() => scrollTerminalToTail(term))
+    }
     // Chromium device emulation can preserve a live WebGL context while changing
     // its emulated pixel ratio, leaving xterm interactive but visually blank.
     // The built-in renderer is reliable for the single full-screen mobile pane.
@@ -672,8 +719,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // claim look like it came from a background window.
     const paneIsFocused = () => deviceIsFocused({
       profile: device,
-      visible: !document.hidden,
-      hasFocus: document.hasFocus(),
+      visible: !paneIsHidden(),
+      // A hidden pane must never look focused: input arbitration hands the keyboard
+      // to whoever answers true, and a warm pane in a background tab has as much
+      // claim to it as a minimized window does.
+      hasFocus: !paneIsHidden() && document.hasFocus(),
     })
     const claimInput = (reason: ClaimReason) => {
       if (socket?.readyState === WebSocket.OPEN) {
@@ -1231,7 +1281,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // owns the attempt bookkeeping and can also recover from a stalled handshake.
     // Scheduled in both directions: becoming hidden is what deregisters this pane's
     // viewport, so the PTY stops being sized for a window nobody is looking at.
-    const onVisibility=()=>{document.hidden?scheduleFit():scheduleFullRedraw()}
+    const onVisibility=()=>{paneIsHidden()?scheduleFit():scheduleFullRedraw()}
     const onPageShow=()=>scheduleFullRedraw()
     const onWindowFocus=()=>scheduleFullRedraw()
     document.addEventListener('visibilitychange',onVisibility)

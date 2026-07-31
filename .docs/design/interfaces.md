@@ -417,6 +417,11 @@ On initial attach, the daemon sends `state` and waits up to 250 ms for
 `replay_start`; an old-style `resize` frame also releases replay, and timeout preserves
 compatibility with clients that send neither. Other frames arriving during this window are
 buffered and handled after `replay_end`. Later `attach_ready` frames are equivalent to `resize`.
+Replay is bounded by `attach_replay_bytes` (default 512 KiB) rather than by full retention, and
+the same bound applies to a resync, which resets the client's terminal and so receives a complete
+replay into an empty buffer rather than a patch. A pane the client is keeping mounted but not
+showing reports `hidden:true` exactly as a backgrounded browser tab does, which deregisters its
+viewport from geometry arbitration.
 
 ### Multi-device arbitration
 

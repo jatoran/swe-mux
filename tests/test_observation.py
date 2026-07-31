@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import time
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -584,12 +585,19 @@ def _open_tail_transcript(path: Path) -> None:
     )
 
 
-def _watchdog_session(path: Path | None, now: float, scrollback: bytes) -> Any:
+def _watchdog_session(
+    path: Path | None, now: float, scrollback: bytes, *, last_hook_ts: float | None = None
+) -> Any:
     session = SimpleNamespace(
         record=record("claude"),
         observation_replay=False,
         last_state_change_ts=now - 100.0,  # stalled well past the PTY stuck window
         transcript_path=path,
+        # Witnessed by default: these fixtures pin the *stall-gated* recoveries,
+        # which exist for a session whose sources have gone quiet. A session with
+        # no source at all takes the unwitnessed pair instead and is pinned
+        # separately, so leaving this at 0 would silently retarget them.
+        last_hook_ts=now - 100.0 if last_hook_ts is None else last_hook_ts,
         scrollback=SimpleNamespace(bytes=lambda: scrollback),
         observation_state={"root_turn_active": False, "root_completion_seen": True},
         note_watchdog_recovery=lambda _reason, **_kw: None,
@@ -612,6 +620,9 @@ def _fake_manager() -> Any:
     # Reuse the real PTY screen classifier so the test exercises it end to end.
     mgr._pty_tail_state = SessionManager._pty_tail_state
     mgr._pty_appears_idle = lambda s: SessionManager._pty_appears_idle(cast(Any, mgr), s)
+    mgr._check_unwitnessed_pty_turn = lambda s, n: SessionManager._check_unwitnessed_pty_turn(
+        cast(Any, mgr), s, n
+    )
     return mgr
 
 
@@ -989,3 +1000,165 @@ def test_transcript_tail_codex_states(tmp_path: Path) -> None:
     _write_jsonl(path, [{"type": "event_msg", "payload": {"type": "function_call", "name": "x"}}])
     assert transcript_tail_turn_state("codex", path) == "open"
     assert transcript_tail_turn_state("codex", tmp_path / "missing.jsonl") == "unknown"
+
+
+# --- The unwitnessed pair: a session whose PTY screen is the only witness -------
+
+
+def _unwitnessed_session(backend: str = "codex") -> Any:
+    """A fresh agent pane: no transcript bound, no hook ever received."""
+    session = _watchdog_session(None, time.time(), b"", last_hook_ts=0.0)
+    session.record.backend = backend
+    session.record.state = "idle"
+    session.record.awaiting_reason = None
+    return session
+
+
+def test_a_fresh_codex_pane_is_unwitnessed_and_a_bound_or_hooked_one_is_not(
+    tmp_path: Path,
+) -> None:
+    from swe_mux.session import session_is_unwitnessed
+
+    session = _unwitnessed_session()
+    assert session_is_unwitnessed(session) is True
+    # Either channel appearing ends it, and neither ever comes back.
+    bound = _unwitnessed_session()
+    bound.transcript_path = tmp_path / "rollout.jsonl"
+    assert session_is_unwitnessed(bound) is False
+    hooked = _unwitnessed_session()
+    hooked.last_hook_ts = time.time()
+    assert session_is_unwitnessed(hooked) is False
+
+
+def test_a_shell_is_never_unwitnessed() -> None:
+    # It has no agent state to derive, and its prompt is not an agent's idle marker.
+    from swe_mux.session import session_is_unwitnessed
+
+    session = _unwitnessed_session("shell")
+    assert session_is_unwitnessed(session) is False
+
+
+async def test_the_pty_starts_and_ends_the_first_turn_when_nothing_else_can(
+    monkeypatch: Any,
+) -> None:
+    """The reported bug: a Codex pane reads "ready · turn complete" while working.
+
+    Codex cannot name its thread until `agent-turn-complete`, so for the whole first
+    turn there is no transcript and no hook — and `working` was reachable from
+    neither. Measured live at 200 s with the rollout's own `task_started` written 4 s
+    after spawn.
+    """
+    from swe_mux.session import SessionManager
+
+    session = _unwitnessed_session()
+    manager = _fake_manager()
+
+    session.scrollback = SimpleNamespace(bytes=lambda: b"\xe2\x9d\xaf  ? for shortcuts")
+    await SessionManager._watchdog_check_session(manager, session, time.time())
+    assert session.record.state == "idle"
+
+    session.scrollback = SimpleNamespace(
+        bytes=lambda: b"? for shortcuts\n\xe2\x80\xa2 Working (esc to interrupt)"
+    )
+    await SessionManager._watchdog_check_session(manager, session, time.time())
+    assert session.record.state == "working"
+
+    session.scrollback = SimpleNamespace(
+        bytes=lambda: b"\xe2\x80\xa2 Working (esc to interrupt)\n? for shortcuts"
+    )
+    await SessionManager._watchdog_check_session(manager, session, time.time())
+    assert session.record.state == "idle"
+
+
+async def test_the_pty_stands_down_for_good_once_any_real_source_speaks() -> None:
+    """One hook is enough, forever: the channel exists, so the PTY is not the only
+    witness any more and a temporary silence on it is the stall-gated recoveries'
+    job rather than this one's."""
+    from swe_mux.session import SessionManager
+
+    session = _unwitnessed_session()
+    session.last_hook_ts = time.time()
+    session.scrollback = SimpleNamespace(bytes=lambda: b"\xe2\x80\xa2 esc to interrupt")
+    await SessionManager._watchdog_check_session(_fake_manager(), session, time.time())
+    assert session.record.state == "idle"
+
+
+def test_the_unwitnessed_pair_never_acts_on_an_approval_screen() -> None:
+    """Both directions need their own marker *last* on screen, and a dialog is
+    neither — so this can no more start a turn on top of an unanswered prompt than
+    it can close one that is still blocked."""
+    from swe_mux.session import watchdog_decision
+
+    for state in ("idle", "working"):
+        assert (
+            watchdog_decision(
+                cast(Any, state),
+                stalled_seconds=0.0,
+                tail_verdict=None,
+                pty_state="approval",
+                unwitnessed=True,
+            )
+            == "none"
+        )
+
+
+def test_the_unwitnessed_pair_is_inert_on_an_unreadable_screen() -> None:
+    from swe_mux.session import watchdog_decision
+
+    for state in ("idle", "working"):
+        assert (
+            watchdog_decision(
+                cast(Any, state),
+                stalled_seconds=0.0,
+                tail_verdict=None,
+                pty_state="unknown",
+                unwitnessed=True,
+            )
+            == "none"
+        )
+
+
+def test_a_witnessed_session_never_takes_the_unwitnessed_pair() -> None:
+    from swe_mux.session import watchdog_decision
+
+    assert (
+        watchdog_decision(
+            "idle",
+            stalled_seconds=999.0,
+            tail_verdict=None,
+            pty_state="working",
+            unwitnessed=False,
+        )
+        == "none"
+    )
+
+
+async def test_a_pty_started_turn_emits_the_same_boundary_as_any_other(
+    monkeypatch: Any,
+) -> None:
+    """It opens a real turn, not a bare state poke: delivery readiness, the queue,
+    and every turn consumer key off `turn_started`, and a half-open turn would also
+    make the eventual close a no-op."""
+    from swe_mux.session import apply_watchdog_recovery
+
+    session = _unwitnessed_session()
+    session.state_source_priority = -1
+    session.state_transitions = deque(maxlen=8)
+    session.state_changes = deque(maxlen=8)
+    session.status_health_counters = {}
+    session.terminal_latencies = deque(maxlen=8)
+    session.last_evidence_ts = time.time()
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    class Bus:
+        async def emit(self, event_type: str, **payload: Any) -> None:
+            events.append((event_type, payload))
+
+    session.transition = lambda state, detail, **kw: Session.transition(  # type: ignore[attr-defined]
+        session, state, detail, **kw
+    )
+    session.publish_update = lambda: None
+    await apply_watchdog_recovery(session, cast(Any, Bus()), "begin_pty_turn")
+    assert session.record.state == "working"
+    assert session.observation_state["root_turn_active"] is True
+    assert [name for name, _ in events if name == "turn_started"] == ["turn_started"]
