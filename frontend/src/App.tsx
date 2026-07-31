@@ -67,6 +67,7 @@ import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from '
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
+import { dismissSoftKeyboard } from './mobileKeyboard'
 import { MOBILE_TAB_ORDER_KEY, moveMobileTab, parseMobileTabOrder, pruneMobileTabOrder, serializeMobileTabOrder, type MobileTabOrder } from './mobileTabOrder'
 import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
@@ -400,16 +401,21 @@ export function App() {
   // no workspace between them and bury one under the other's scrim, so opening either
   // closes the other. On desktop the sidebar is an in-flow column that the right-edge
   // panel never covers, so both stay open there.
+  // Opening either also lowers the soft keyboard, for the same reason: it is
+  // held up by a field now behind the scrim, and it covers up to half of the
+  // panel that just opened (see mobileKeyboard.ts). Both rules live in the
+  // setters rather than at each call site so every entry point — gesture,
+  // command, nav toggle, tutorial — inherits them.
   type OpenState=boolean|((value:boolean)=>boolean)
   const setSidebarOpen=(next:OpenState)=>{
     const open=typeof next==='function'?next(sidebarOpen):next
     setSidebarOpenState(open)
-    if(open&&mobileWorkspace)setClipboardOpenState(false)
+    if(open&&mobileWorkspace){setClipboardOpenState(false);dismissSoftKeyboard()}
   }
   const setClipboardOpen=(next:OpenState)=>{
     const open=typeof next==='function'?next(clipboardOpen):next
     setClipboardOpenState(open)
-    if(open&&mobileWorkspace)setSidebarOpenState(false)
+    if(open&&mobileWorkspace){setSidebarOpenState(false);dismissSoftKeyboard()}
   }
   /** Open the drawer on a specific tab (or toggle that tab shut if it is already showing). */
   const showDrawerTab=(tab:DrawerTabId)=>{

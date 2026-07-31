@@ -650,6 +650,13 @@ responsive controls.
   enforced in the state setters themselves (`App.tsx` wraps both `useState` setters), not at each
   call site, so every entry point — gesture, command, nav toggle, tutorial — inherits it. Desktop
   is unaffected: there the sidebar is an in-flow column the drawer's own column never covers.
+- Opening either mobile panel also lowers the soft keyboard, in the same setters and for the same
+  reason: the keyboard is held up by a field that is now behind the scrim, and it covers up to
+  half of the panel that just opened. There is no API for "hide the keyboard", so the focused
+  field is blurred (`mobileKeyboard.ts`; only fields that actually raise a keyboard, so focus on a
+  button or a readonly field keeps its place in the tab order). This is not the terminal's
+  read/select mode: nothing is made sticky, and tapping the terminal or any field once the panel
+  is closed raises the keyboard again.
 - Spawning a terminal closes the mobile sidebar. Every launch focuses the new tab, so every
   launch has to clear what is covering it — launching from a sidebar Project row otherwise
   focused a tab the drawer was still hiding, which reads as "the Run button did nothing". This
