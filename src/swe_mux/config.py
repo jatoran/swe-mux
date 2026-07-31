@@ -38,6 +38,13 @@ THEMES = {
     "custom",
 }
 CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "accent", "error"}
+# Chrome scale steps, as a multiplier on the 11 px base the whole non-terminal UI
+# renders at. Discrete rather than a free number: the browser multiplies both the
+# font and a fixed set of row/bar heights by this, and there is no useful
+# difference between 1.13 and 1.15 — only a way to land on a value that looks
+# broken. 1.4 is the ceiling because past it the fixed paddings and grid tracks
+# that deliberately do *not* scale start to crowd.
+UI_SCALES = {0.9, 1.0, 1.1, 1.25, 1.4}
 # The note editor's own grammars: a normalized chord (`mod+shift+r`) and a
 # command id (`markdown.toggle_task`). The daemon cannot know which commands the
 # vendored editor actually implements, so it checks shape only and the browser
@@ -287,6 +294,14 @@ class Config:
             "error": "#f07178",
         }
     )
+    # Chrome scale, split by device class because the same UI is driven from a
+    # desktop browser and a phone and they do not want the same density — a
+    # single number cannot say "the phone is too small but the desktop is fine".
+    # The browser picks one by the same `(max-width:760px)` breakpoint the
+    # workspace uses, so a desktop window dragged narrow switches with it.
+    # Both default to 1.0: installing this build changes nothing on screen.
+    ui_scale_desktop: float = 1.0
+    ui_scale_mobile: float = 1.0
     middle_click_paste: bool = True
     broadcast_default: bool = False
     mobile_vertical_drag: str = "smart"
@@ -780,6 +795,15 @@ def _validate(config: Config) -> None:
                 )
     if config.theme not in THEMES:
         errors["theme"] = f"must be one of {', '.join(sorted(THEMES))}"
+    for scale_field in ("ui_scale_desktop", "ui_scale_mobile"):
+        # TOML round-trips 1.0 as a float but a JSON PATCH sends bare `1`, so an
+        # int is a legitimate spelling of a scale and must not be rejected here.
+        value = getattr(config, scale_field)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            errors[scale_field] = "must be a number"
+        elif not any(abs(float(value) - step) < 1e-9 for step in UI_SCALES):
+            allowed = ", ".join(f"{step:g}" for step in sorted(UI_SCALES))
+            errors[scale_field] = f"must be one of {allowed}"
     if set(config.custom_theme) != CUSTOM_THEME_KEYS or any(
         not isinstance(value, str)
         or len(value) != 7

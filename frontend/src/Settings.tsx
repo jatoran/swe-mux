@@ -10,6 +10,8 @@ import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from
 import { listShortcutBindings, type ShortcutPolicy } from '@continuity-editor/editor'
 import { applyNoteEditorConfig, DEFAULT_NOTE_SHORTCUT_OVERRIDES, resetNoteRailArrangement } from './noteEditorSettings'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
+import { applyUiScale, uiScaleLabel, UI_SCALE_STEPS, type UiScale } from './uiScale'
+import { currentProfile } from './deviceSettings'
 import { enableMobileVoice } from './mobileVoice'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { clearProjectRail, loadRailItems, projectRailIsCustom, saveRailItems } from './deviceSettings'
@@ -45,6 +47,7 @@ type Config = {
   note_font_family:string;note_font_size_px:number;note_line_height:number
   note_command_rail:'auto'|'on'|'off';note_rail_button_size_px:number
   note_indent_guides:boolean
+  ui_scale_desktop:UiScale;ui_scale_mobile:UiScale
   note_shortcut_overrides:Record<string,string>
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
   ccusage_claude_command:string[]; ccusage_codex_command:string[]
@@ -491,6 +494,15 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   }
 
   const change = <K extends keyof Config>(key: K, value: Config[K]) => setDraft(current => current ? {...current,[key]:value} : current)
+  // Previewed live, like the theme, because the only way to judge a chrome scale
+  // is to see the chrome at it. Editing the *other* device class is a no-op on
+  // screen, which is correct: `applyUiScale` resolves this device's key either
+  // way, so setting the phone's scale from a desktop shows nothing here.
+  const changeUiScale = (key:'ui_scale_desktop'|'ui_scale_mobile', raw:string) => {
+    const scale = Number(raw) as UiScale
+    change(key,scale)
+    applyUiScale({...draft!,[key]:scale})
+  }
   // Only the overlay is stored, never the whole table: a chord left on the
   // editor's default keeps following the editor, so a Continuity upgrade that
   // rebinds something is not frozen out by a copy saved here.
@@ -529,7 +541,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
       setConfig(next); setDraft(next);setClaudeArgs(JSON.stringify(next.claude_args));setCodexArgs(JSON.stringify(next.codex_args));setErrors({})
       setSavedRules(rules);setSavedBindings(bindings)
       setStatus(next.restart_required.length ? `saved · restart required: ${next.restart_required.join(', ')}` : 'saved · hot applied')
-      configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next)
+      configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); applyUiScale(next)
       return true
     } catch (error) {
       const typed = error as Error & {fields?:Record<string,string>}
@@ -539,7 +551,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   }
   const reset = async () => {
     const next = await api<Config>('POST','/api/config/reset',{})
-    setConfig(next); setDraft(next); configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); setStatus('defaults restored')
+    setConfig(next); setDraft(next); configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); applyUiScale(next); setStatus('defaults restored')
   }
   const exportConfig = () => {
     if (!draft) return
@@ -619,7 +631,9 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   }
   const discardAndLeave=()=>{
     if(!closeIntent)return
-    if(config){configureCustomTheme(config.custom_theme);applyTheme(config.theme)}
+    // Theme and chrome scale are previewed live as you pick them, so discarding
+    // has to put both back — not just the draft that was never saved.
+    if(config){configureCustomTheme(config.custom_theme);applyTheme(config.theme);applyUiScale(config)}
     leaveSettings(closeIntent)
   }
   const saveAndLeave=async()=>{
@@ -976,7 +990,13 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <p>No public Funnel access is enabled. Regular mobile access remains available at the direct 100.x tailnet URL; Tailscale access policy controls which devices can connect.</p>
         </section>}
 
-        {activeTab==='appearance'&&<section><h3>Appearance</h3><label>Theme<select value={draft.theme} onChange={e=>{const value=e.currentTarget.value as ThemeName;change('theme',value);applyTheme(value)}}><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option><option value="solarized-dark">Solarized Dark</option><option value="tokyo-night">Tokyo Night</option><option value="gruvbox-dark">Gruvbox Dark</option><option value="catppuccin-mocha">Catppuccin Mocha</option><option value="catppuccin-latte">Catppuccin Latte</option><option value="nord">Nord</option><option value="dracula">Dracula</option><option value="everforest-dark">Everforest Dark</option><option value="rose-pine">Rosé Pine</option><option value="kanagawa">Kanagawa</option><option value="ayu-dark">Ayu Dark</option><option value="tron">Tron</option><option value="synthwave-84">Synthwave '84</option><option value="cyberpunk-neon">Cyberpunk Neon</option><option value="amber-crt">Amber CRT</option><option value="green-phosphor">Green Phosphor</option><option value="borland-dos">Borland DOS</option><option value="custom">Custom</option></select></label>{draft.theme==='custom' && <div class="theme-tokens">{Object.entries(draft.custom_theme).map(([key,value])=><label>{key}<input value={value} onInput={e=>{const custom={...draft.custom_theme,[key]:e.currentTarget.value};change('custom_theme',custom);configureCustomTheme(custom);applyTheme('custom')}} /></label>)}</div>}<input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} /><div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div><p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p></section>}
+        {activeTab==='appearance'&&<section><h3>Appearance</h3><label>Theme<select value={draft.theme} onChange={e=>{const value=e.currentTarget.value as ThemeName;change('theme',value);applyTheme(value)}}><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option><option value="solarized-dark">Solarized Dark</option><option value="tokyo-night">Tokyo Night</option><option value="gruvbox-dark">Gruvbox Dark</option><option value="catppuccin-mocha">Catppuccin Mocha</option><option value="catppuccin-latte">Catppuccin Latte</option><option value="nord">Nord</option><option value="dracula">Dracula</option><option value="everforest-dark">Everforest Dark</option><option value="rose-pine">Rosé Pine</option><option value="kanagawa">Kanagawa</option><option value="ayu-dark">Ayu Dark</option><option value="tron">Tron</option><option value="synthwave-84">Synthwave '84</option><option value="cyberpunk-neon">Cyberpunk Neon</option><option value="amber-crt">Amber CRT</option><option value="green-phosphor">Green Phosphor</option><option value="borland-dos">Borland DOS</option><option value="custom">Custom</option></select></label>{draft.theme==='custom' && <div class="theme-tokens">{Object.entries(draft.custom_theme).map(([key,value])=><label>{key}<input value={value} onInput={e=>{const custom={...draft.custom_theme,[key]:e.currentTarget.value};change('custom_theme',custom);configureCustomTheme(custom);applyTheme('custom')}} /></label>)}</div>}<input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} /><div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div><p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
+          <h3>Interface scale</h3>
+          <label>Desktop interface scale<select value={String(draft.ui_scale_desktop)} onChange={e=>changeUiScale('ui_scale_desktop',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>
+          <label>Mobile interface scale<select value={String(draft.ui_scale_mobile)} onChange={e=>changeUiScale('ui_scale_mobile',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>
+          <p class="settings-scale-active">This window is using the <strong>{currentProfile()==='mobile'?'mobile':'desktop'}</strong> value — the other one will not change anything you can see from here.</p>
+          <p>The desktop browser and the phone keep separate scales, because they rarely want the same density. Both are editable from either device, so you can size the phone from here rather than on the phone. A window picks its value by width, at the same point the mobile layout takes over, so a desktop window dragged narrow adopts the mobile scale.</p>
+          <p>Scale moves the text of every menu, tab, sidebar row, and panel together with the row and bar heights that hold it, so nothing clips at a larger size. Padding, icons, and touch targets deliberately stay put — that is what keeps a bigger interface from also becoming a sparser one. The terminal has its own font size and is not affected, and the note editor keeps its own typography under <strong>Notes</strong>.</p></section>}
   </Fragment>
 
   // Rebuilt on the first keystroke of a search and then reused until the search

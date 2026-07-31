@@ -36,7 +36,9 @@ def test_settings_panel_is_top_aligned_and_viewport_bounded() -> None:
     viewport_contract = css.split(
         "/* Settings must stay inside the browser viewport at every window height. */", 1
     )[1]
-    assert "height:calc(100dvh - 42px)" in viewport_contract
+    # 42px at chrome scale 1. The offset tracks `--ui-scale` because the mobile
+    # topbar it sits under does; pinning it would overlap or gap at other scales.
+    assert "height:calc(100dvh - calc(42px*var(--ui-scale)))" in viewport_contract
     assert "align-items:flex-start" in viewport_contract
     assert "overflow:hidden" in viewport_contract
     assert "overflow-y:auto" in viewport_contract

@@ -200,7 +200,9 @@ def test_pane_local_tab_rails_and_resizable_collapsible_sidebar_are_wired() -> N
     assert 'class="sidebar-resizer"' in app
     assert ".workspace.sidebar-collapsed" in css
     assert ".pane-stack>.stack-tabs{display:flex}" in css
-    assert "grid-template-rows:34px minmax(0,1fr)" in css
+    # 34px at chrome scale 1; the row follows `--ui-scale` so the tab strip grows
+    # with the tab titles in it (`features/ui.md`, Appearance → chrome scale).
+    assert "grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)" in css
 
 
 def test_collapsed_sidebar_rail_keeps_sidebar_controls_reachable() -> None:

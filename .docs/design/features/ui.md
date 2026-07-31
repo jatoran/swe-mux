@@ -213,6 +213,51 @@ responsive controls.
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
   the editor package rather than hand-listed, so it cannot drift from what the editor binds.
+- Appearance exposes **chrome scale**, one multiplier on the size of every non-terminal
+  surface, stored **separately for desktop and mobile**. Both default to `1.0`, so installing
+  the build that added it changes nothing on screen; it only moves when the user moves it.
+  - It is a *scale* and not a font size on purpose. All chrome type is already one number —
+    `style.css` forces `font-size:var(--ui-font-size)` onto every element inside `.app-shell`
+    that is not the terminal, with an `!important` that beats the ~165 per-rule font sizes
+    written before it — so exposing that number alone is a two-line change. It is also the
+    version that wrecks the layout: text grows inside rows and bars whose heights are fixed
+    px, so labels clip and the two-line session row overflows. `--ui-scale` therefore
+    multiplies `--ui-font-size` *and* the row/bar heights that hold a line of chrome text, and
+    a row grows with the text in it.
+  - The line between what scales and what does not is **what clips**, not what looks big:
+    - A fixed `height` or a px `grid-template-rows` track clips its contents, so every one
+      of them on a text-bearing surface scales — rows, bars, tab strips, menu items, form
+      controls — as do the fixed `width`s of menus and popovers (a label truncates instead)
+      and the three px `line-height`s.
+    - `min-height` is a *floor*, and growing text already pushes past a floor, so the ~187
+      of them are left alone. That is also why the 44 px touch minimums need no exception
+      written for them: they bind only while the scaled content is smaller than a thumb.
+    - Overlays positioned under a bar (`inset:42px 0 0`, `height:calc(100dvh - 42px)`) scale
+      that offset in lockstep with the bar, or they overlap it or leave a gap.
+    - Padding, gaps, borders, radii, and the SVG icon sizes (px "never in `em`", for the
+      reason in *Utility drawer*) do not scale. None are type-derived, and holding them
+      still is what keeps a larger interface from also becoming a sparser one. Nor do
+      panel *maxima* (`height:min(760px, 100dvh - 42px)`) — those are viewport-bound — or
+      widths the user already drags (the sidebar, the docked drawer).
+    - The steps stop at 1.4 because past it the fixed values start to crowd.
+  - Because every conversion is `<n>px` → `calc(<n>px*var(--ui-scale))`, substituting
+    `--ui-scale: 1` back into the stylesheet reproduces the pre-feature file exactly. That
+    is the check to re-run if this is ever extended: the default must stay inert.
+  - Steps are discrete (`0.9 / 1.0 / 1.1 / 1.25 / 1.4`, validated against the same list in
+    `config.py` and `uiScale.ts`) rather than a free number. There is no useful difference
+    between 1.13 and 1.15, only a way to land on a value that looks broken, and a hand-edited
+    `config.toml` carrying one falls back to `1.0` rather than rendering at it.
+  - The split is by device class because the same UI is driven from a desktop browser and a
+    phone and one number cannot say "the phone is too small but the desktop is fine". A window
+    resolves its value through the same `(max-width:760px)` breakpoint as the mobile workspace
+    projection and the device-class settings profiles, and re-resolves when that breakpoint
+    flips, so a desktop window dragged narrow adopts the mobile scale live. Both values are
+    editable from either device — sizing the phone from the desktop is the point, since the
+    phone is the harder device to type on — and the panel says which of the two the window
+    you are looking at is currently using.
+  - Excluded from it entirely: the terminal, which has its own font size and whose cell grid
+    feeds cross-device viewport arbitration (`features/terminal-input.md`), and the note
+    editor, whose typography is its own `--continuity-*` setting under Notes.
 - Terminals exposes `auto | webgl | dom` renderer selection. `auto` preserves accelerated WebGL
   on desktop with automatic DOM fallback; mobile and Codex terminals always use DOM regardless
   of the preference so their scrollback remains stable.

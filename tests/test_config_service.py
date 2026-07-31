@@ -255,6 +255,37 @@ def test_note_opening_default_is_hot_reloadable_and_validated(tmp_path: Path) ->
         update_config(config, {"notes_default_open": "window"})
 
 
+def test_ui_scale_is_per_device_class_hot_reloadable_and_stepped(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+
+    # Both default to 1: installing this build must not resize anyone's UI.
+    assert config.ui_scale_desktop == 1.0
+    assert config.ui_scale_mobile == 1.0
+
+    hot, restart = update_config(config, {"ui_scale_mobile": 1.25})
+
+    assert hot == {"ui_scale_mobile"}
+    assert restart == set()
+    reloaded = load_config(path)
+    assert reloaded.ui_scale_mobile == 1.25
+    # The two classes are independent — sizing the phone must not touch the desktop.
+    assert reloaded.ui_scale_desktop == 1.0
+
+    # A JSON PATCH sends bare `1` for a whole number, which is a legitimate
+    # spelling of the 1.0 step and must not be rejected as the wrong type.
+    update_config(config, {"ui_scale_desktop": 1.4})
+    hot, _ = update_config(config, {"ui_scale_desktop": 1})
+    assert hot == {"ui_scale_desktop"}
+    assert load_config(path).ui_scale_desktop == 1
+
+    for bad in (2.0, 0.5, 1.05, "1.25"):
+        with pytest.raises(ValueError, match="ui_scale_desktop"):
+            update_config(config, {"ui_scale_desktop": bad})
+    # A rejected value leaves the stored config untouched.
+    assert load_config(path).ui_scale_desktop == 1.0
+
+
 def test_note_editor_settings_are_hot_reloadable_and_validated(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     config = load_config(path)

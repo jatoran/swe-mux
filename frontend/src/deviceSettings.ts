@@ -19,7 +19,9 @@ export type SettingsDomain = 'sounds' | 'notifications' | 'commandRail' | 'fileT
 type ProfileSettings = Partial<Record<SettingsDomain, Record<string, unknown>>>
 type AllSettings = Record<SettingsProfile, ProfileSettings>
 
-const MOBILE_QUERY = '(max-width:760px)'
+/** The one device-class breakpoint. Exported so chrome scale (`uiScale.ts`) splits
+ *  desktop from mobile on exactly the same line the workspace and these settings do. */
+export const MOBILE_QUERY = '(max-width:760px)'
 const LEGACY_SOUND_KEY = 'swe-mux:session-sounds-v1'
 
 let cache: AllSettings = { desktop: {}, mobile: {} }

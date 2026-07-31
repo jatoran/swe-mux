@@ -61,6 +61,7 @@ import { GuidedTutorial, type TutorialStepId } from './GuidedTutorial'
 import { completeTutorial, emitTutorialAction, resetTutorial, shouldStartTutorial } from './tutorial'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { applyNoteEditorConfig } from './noteEditorSettings'
+import { applyUiScale, watchUiScaleProfile } from './uiScale'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command } from './commands'
 import { copyPreparedText } from './terminalClipboard'
 import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from './fileClipboard'
@@ -759,6 +760,7 @@ export function App() {
   const applyConfig = (config:AppConfig, includeTheme:boolean) => {
     if (includeTheme) { configureCustomTheme(config.custom_theme); applyTheme(config.theme) }
     applyNoteEditorConfig(config)
+    applyUiScale(config)
     setXtermScrollback(config.xterm_scrollback_lines)
     setTerminalRenderer(config.terminal_renderer)
     // Value-compared for the same reason as mobileInput below: this feeds
@@ -866,6 +868,10 @@ export function App() {
     media.addEventListener('change', update)
     return () => media.removeEventListener('change', update)
   }, [])
+
+  // Chrome scale is stored per device class, so crossing the breakpoint changes
+  // which stored value applies — not just the layout.
+  useEffect(() => watchUiScaleProfile(), [])
 
   useEffect(() => {
     const viewport = window.visualViewport
