@@ -1,4 +1,5 @@
 import './terminalKeys.test.ts'
+import './pendingInput.test.ts'
 import './terminalProtocol.test.ts'
 import './layout.test.ts'
 import './menuPosition.test.ts'

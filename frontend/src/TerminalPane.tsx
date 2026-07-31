@@ -48,6 +48,7 @@ import {
   type ClaimReason,
   type OwnershipView,
 } from './inputOwnership'
+import { pendingInputDecision } from './pendingInput'
 import { deviceIsFocused, PRESENCE_REPORTED_EVENT } from './devicePresence'
 import { localPreviewUrl } from './previewLinks'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness, type ConnectionPhase } from './liveness'
@@ -65,13 +66,6 @@ import {
 } from './terminalRenderDiagnostics'
 
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
-
-/**
- * Ceiling on keystrokes held while the terminal buffer replays. A replay is short,
- * so this is only reached when one never completes (socket died mid-stream); the cap
- * keeps that from accumulating input forever.
- */
-const MAX_PENDING_INPUT = 4096
 
 /** The pane's normal font size. A letterboxed pane renders below it and never above. */
 const BASE_FONT_SIZE = 11
@@ -1073,7 +1067,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       if (replaying) {
-        if (pendingUserInputLength + data.length > MAX_PENDING_INPUT) return
+        if (pendingInputDecision(pendingUserInputLength, data.length) === 'overflow') {
+          // Losing input without saying so is what made this look like the terminal
+          // "eating" pastes; past the ceiling the pane owes the user an explanation.
+          reportError('Input dropped: the terminal was still restoring its buffer.')
+          return
+        }
         pendingUserInputLength += data.length
         pendingUserInput.push({ data, broadcast: broadcastRef.current })
         return
