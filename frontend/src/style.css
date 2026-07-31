@@ -1186,9 +1186,13 @@ body {
 .terminal-action-rail button:disabled{opacity:.38;cursor:not-allowed}.terminal-action-rail span{min-width:0;max-width:220px;margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 /* Jump-to-latest. Only rendered while the viewport is off the tail, and anchored
    above the action rail so it never covers the newest line it points at. */
-.terminal-jump-latest{grid-row:1;grid-column:1;justify-self:end;align-self:end;z-index:14;margin:0 9px 9px 0;min-height:26px;padding:0 10px;border:1px solid var(--green);background:color-mix(in srgb,var(--bg) 88%,var(--green));color:var(--green);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer;box-shadow:0 2px 10px #0009}
+/* Square, because the label is a lone arrow: the horizontal padding here was sized for
+   "↓ latest" and reads as a lopsided box around one glyph. Font size is deliberately not
+   set — `.app-shell *` forces `--ui-font-size` with `!important`, so the arrow scales with
+   the rest of the chrome and any size declared here would be dead code. */
+.terminal-jump-latest{grid-row:1;grid-column:1;justify-self:end;align-self:end;z-index:14;margin:0 9px 9px 0;min-width:26px;min-height:26px;padding:0;border:1px solid var(--green);background:color-mix(in srgb,var(--bg) 88%,var(--green));color:var(--green);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer;box-shadow:0 2px 10px #0009}
 .terminal-jump-latest:hover{background:color-mix(in srgb,var(--bg) 72%,var(--green))}
-@media(hover:none){.terminal-jump-latest{min-height:38px;padding:0 14px;font-size:11px}}
+@media(hover:none){.terminal-jump-latest{min-width:38px;min-height:38px;padding:0}}
 .terminal-image-drop{position:absolute;z-index:18;inset:10px;display:grid;place-items:center;border:2px dashed var(--green);background:color-mix(in srgb,var(--bg) 82%,transparent);color:var(--green);font-weight:700;letter-spacing:.06em;text-transform:uppercase;pointer-events:none}
 .terminal-connection{position:absolute;z-index:13;top:5px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;padding:3px 7px;border:1px solid var(--line);background:var(--panel);color:var(--muted);pointer-events:none}
 .terminal-connection.reconnecting{color:var(--amber)}.terminal-connection.ended{color:var(--red)}

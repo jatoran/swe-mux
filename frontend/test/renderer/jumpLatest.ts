@@ -1,4 +1,4 @@
-// Harness for the mobile "↓ latest" chip (`.terminal-jump-latest` in TerminalPane).
+// Harness for the mobile jump-to-latest chip (`.terminal-jump-latest` in TerminalPane).
 //
 // It mounts the real chip markup and the real stylesheet over a real xterm terminal so a
 // synthesized touch tap goes through the same hit-testing the phone does, and it drives the
