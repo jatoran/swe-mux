@@ -820,6 +820,35 @@ async def test_the_last_attempt_escalates_to_the_other_model(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_a_prompt_pasted_from_a_phone_still_gets_a_title(tmp_path: Path) -> None:
+    """The 2026-07-31 mobile failure, end to end.
+
+    A pasted `⚠️` reached the titler as a lone surrogate (the hook shim had
+    decoded UTF-8 with the Windows code page), and the slice encode raised
+    `UnicodeEncodeError` — a `ValueError`, so it was recorded as an observer fault
+    and never retried. Three sessions were left permanently nameless.
+    """
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item,
+        transcript_path=None,
+        first_user_prompt="# \udc8f TWO HARD WARNINGS about the deploy script",
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    provider = RateLimitedThenTitleProvider(failures=0)
+    engine = _titler_engine(tmp_path, session, store, provider=provider)
+
+    reports = await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+
+    assert reports[0].get("error") is None
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["content"] for row in rows] == ["Login Test Fix"]
+    # Nothing unencodable may reach the provider, whatever the caller handed us.
+    assert provider.prompts[0].encode("utf-8")
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_a_decision_failure_is_not_retried(tmp_path: Path) -> None:
     """Only provider faults retry; a run with no request would fail identically."""
     item = record(tmp_path)

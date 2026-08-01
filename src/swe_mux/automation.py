@@ -9,10 +9,10 @@ import re
 import time
 import tomllib
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .automation_store import AutomationStore
 from .background_tasks import background
@@ -21,6 +21,7 @@ from .event_bus import EventBus
 from .models import MuxEvent, SessionRecord
 from .openrouter import OpenRouterClient, OpenRouterError, OpenRouterResult
 from .session import SessionManager
+from .text_safety import utf8_safe_value
 from .transcript_view import parse_transcript_cached
 
 AUTOMATION_INGEST_LOOP = "automation-ingest"
@@ -715,6 +716,21 @@ def _validate_action(rule_id: str, action: dict[str, Any], *, result_mapping: bo
         raise RuleValidationError(f"rule {rule_id} llm minimum_capability is invalid")
 
 
+def _encodable_messages(
+    messages: Sequence[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bytes]:
+    """Slice messages made UTF-8 representable, with the bytes they serialize to.
+
+    Every slice is hashed and measured by encoding it, and every observer input is
+    rendered from the same messages, so this is the one place both can be made
+    total. A lone surrogate reaching here used to raise `UnicodeEncodeError` — a
+    `ValueError`, so it was caught as an observer fault and the run lost its title
+    permanently, four layers from the hook that decoded the byte wrong.
+    """
+    safe = cast(list[dict[str, Any]], utf8_safe_value(list(messages)))
+    return safe, json.dumps(safe, separators=(",", ":"), ensure_ascii=False).encode()
+
+
 class TranscriptSliceService:
     async def build(
         self,
@@ -749,10 +765,9 @@ class TranscriptSliceService:
         else:
             raise ValueError(f"unsupported transcript slice: {kind}")
         selected = selected[-max_messages:]
-        encoded = json.dumps(selected, separators=(",", ":"), ensure_ascii=False).encode()
+        selected, encoded = _encodable_messages(selected)
         while selected and len(encoded) > max_bytes:
-            selected = selected[1:]
-            encoded = json.dumps(selected, separators=(",", ":"), ensure_ascii=False).encode()
+            selected, encoded = _encodable_messages(selected[1:])
         if time.monotonic() - started > 2.1:
             raise TimeoutError("transcript slice exceeded its parsing budget")
         return TranscriptSlice(
@@ -767,13 +782,11 @@ class TranscriptSliceService:
     @staticmethod
     def from_prompt(text: str, kind: str = "prompt_text") -> TranscriptSlice:
         """A one-message slice holding the user's request, read from no file."""
-        messages = (
-            {"role": "user", "ts": time.time(), "content": [{"type": "text", "text": text}]},
-        )
-        encoded = json.dumps(messages, separators=(",", ":"), ensure_ascii=False).encode()
+        raw = [{"role": "user", "ts": time.time(), "content": [{"type": "text", "text": text}]}]
+        messages, encoded = _encodable_messages(raw)
         return TranscriptSlice(
             kind,
-            messages,
+            tuple(messages),
             len(encoded),
             max(1, len(encoded) // 4),
             False,
@@ -784,18 +797,18 @@ class TranscriptSliceService:
     def from_annotations(
         items: list[dict[str, Any]], kind: str = "summary_chain"
     ) -> TranscriptSlice:
-        messages = tuple(
+        raw = [
             {
                 "role": "assistant",
                 "ts": item["created_at"],
                 "content": [{"type": "text", "text": item["content"]}],
             }
             for item in reversed(items[-24:])
-        )
-        encoded = json.dumps(messages, separators=(",", ":"), ensure_ascii=False).encode()
+        ]
+        messages, encoded = _encodable_messages(raw)
         return TranscriptSlice(
             kind,
-            messages,
+            tuple(messages),
             len(encoded),
             max(1, len(encoded) // 4),
             len(items) > len(messages),

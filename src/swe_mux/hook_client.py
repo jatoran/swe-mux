@@ -70,13 +70,41 @@ def _spool(event: str, payload: object) -> None:
         sys.stderr.write(f"swe-mux hook spool write failed for {event}: {error}\n")
 
 
+def _read_payload() -> str:
+    """The hook payload, decoded as the UTF-8 that JSON is defined to be.
+
+    `sys.stdin.read()` decodes with the process's locale encoding, which on
+    Windows is the ANSI code page (cp1252) with `errors="surrogateescape"`. Claude
+    writes hook JSON as UTF-8, so every non-ASCII character arrived mojibaked —
+    `⚠️` (`E2 9A A0 EF B8 8F`) became `â` `š` `\\xa0` `ï` `¸` plus a *lone
+    surrogate* `\\udc8f`, because 0x8F is one of the five bytes cp1252 leaves
+    undefined and surrogateescape is where undecodable bytes go.
+
+    The mojibake alone was silent corruption of every prompt, title, and history
+    entry containing an emoji or an accent. The lone surrogate was worse: it is
+    not encodable UTF-8 at all, so the first thing downstream to call `.encode()`
+    raised, and for the titler that meant panes opened from a phone (where the
+    pasted text carries emoji) never got a name.
+
+    Reading bytes and decoding explicitly is the fix. `errors="replace"` covers
+    genuinely malformed input without ever reintroducing a lone surrogate.
+    """
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is not None:
+        raw: bytes = buffer.read()
+        return raw.decode("utf-8", errors="replace")
+    # No binary view: a frozen windowed build can hand us a stub stream. Nothing
+    # better is available there, and it is not the path hooks actually take.
+    return str(sys.stdin.read()) if sys.stdin is not None else ""
+
+
 def main() -> None:
     event = sys.argv[1] if len(sys.argv) > 1 else "hook"
     url = os.environ.get("MUX_HOOK_URL")
     secret = os.environ.get("MUX_HOOK_SECRET")
     if not url or not secret:
         return
-    raw = sys.stdin.read() or (sys.argv[2] if len(sys.argv) > 2 else "")
+    raw = _read_payload() or (sys.argv[2] if len(sys.argv) > 2 else "")
     try:
         payload = json.loads(raw) if raw.strip() else {}
     except json.JSONDecodeError:

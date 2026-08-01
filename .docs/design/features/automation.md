@@ -154,6 +154,16 @@ layer, so the answer's quality cannot silently change — only which host produc
 are complements: jittered backoff absorbs a burst, fallbacks route around one sick provider, the
 scheduled retry covers an outage that outlasts both, and the model switch covers a pool-wide one.
 
+**Observer input is scrubbed before it is hashed, measured, or sent.** Slice construction
+and `complete_json` both run text through `text_safety.utf8_safe`, because a lone surrogate
+anywhere in the input makes the whole slice unserializable and `json.dumps(...,
+ensure_ascii=False).encode()` raises `UnicodeEncodeError` — a `ValueError`, so it was caught
+as an observer fault, reported at a byte offset inside a JSON blob, and never retried
+(correctly: retrying would fail identically). The source of those surrogates was the hook
+shim decoding UTF-8 with the Windows code page, fixed at that boundary too — `backends.md`
+has the byte-level account. Both layers are kept: the shim fix stops new corruption, and the
+scrub means no future bad byte from a transcript, a paste, or a CLI can cost a run its name.
+
 `OpenRouterError` carries `status`, `retryable` and `retry_after`. For statuses that describe the
 far side's health (`RETRY_STATUSES`) the message also carries the provider's own explanation —
 `error.metadata.raw` plus `provider_name` — because a bare "HTTP 429" reads as an account problem
