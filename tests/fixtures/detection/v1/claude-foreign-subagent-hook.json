@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "foreign_subagent_hook_annotation",
+  "description": "A nested child CLI inherits the hook wiring, so its SubagentStart arrives on this session's ingress naming the child's conversation. The foreign-conversation filter runs before annotation extraction: the child's fleet must never count as this session's subagents, while the session's own conversation still counts normally.",
+  "steps": [
+    {
+      "kind": "session",
+      "record": {
+        "native_session_id": "11111111-2222-4333-8444-555566667777"
+      }
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 0,
+      "record": {
+        "type": "user",
+        "isSidechain": false,
+        "message": {
+          "content": "probe the CLI"
+        }
+      },
+      "expect_state": "working"
+    },
+    {
+      "kind": "hook",
+      "event": "SubagentStart",
+      "payload": {
+        "session_id": "99999999-8888-4777-8666-555544443333",
+        "agent_id": "child-probe"
+      },
+      "expect_standing": []
+    },
+    {
+      "kind": "hook",
+      "event": "SubagentStart",
+      "payload": {
+        "session_id": "11111111-2222-4333-8444-555566667777",
+        "agent_id": "own-agent"
+      },
+      "expect_standing": [
+        {
+          "kind": "subagents",
+          "source": "hook",
+          "evidence": "hook:SubagentStart",
+          "count": 1,
+          "detail": null,
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "hook",
+      "event": "SubagentStop",
+      "payload": {
+        "session_id": "11111111-2222-4333-8444-555566667777",
+        "agent_id": "own-agent"
+      },
+      "expect_standing": []
+    },
+    {
+      "kind": "hook",
+      "event": "Stop",
+      "payload": {
+        "session_id": "11111111-2222-4333-8444-555566667777"
+      },
+      "expect_state": "idle",
+      "expect_standing": []
+    }
+  ],
+  "expected": {
+    "events": [
+      {
+        "type": "turn_started",
+        "source": "transcript",
+        "scope": "root"
+      },
+      {
+        "type": "foreign_conversation_hook_ignored",
+        "source": "hook",
+        "scope": "subagent",
+        "kind": "SubagentStart"
+      },
+      {
+        "type": "subagent_activity",
+        "source": "hook",
+        "scope": "subagent",
+        "kind": "SubagentStart"
+      },
+      {
+        "type": "subagent_activity",
+        "source": "hook",
+        "scope": "subagent",
+        "kind": "SubagentStop"
+      },
+      {
+        "type": "turn_ended",
+        "source": "hook",
+        "scope": "root",
+        "outcome": "completed"
+      }
+    ],
+    "states": [
+      {
+        "previous": "idle",
+        "state": "working",
+        "source": "transcript",
+        "proof": "proven"
+      },
+      {
+        "previous": "working",
+        "state": "idle",
+        "source": "hook",
+        "proof": "proven"
+      }
+    ],
+    "standing": [],
+    "parser": {
+      "status": "ready",
+      "recognized": 1,
+      "unknown": 0,
+      "unknown_signatures": {}
+    },
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

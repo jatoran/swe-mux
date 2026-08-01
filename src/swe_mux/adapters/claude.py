@@ -109,6 +109,12 @@ class ClaudeAdapter:
             "PostToolUseFailure",
             "PermissionRequest",
             "Notification",
+            # Subagent lifecycle drives the `subagents` standing-activity count
+            # (starts − stops); sidechain transcript records are the fallback
+            # tier when these are lost. They arrive subagent-scoped and carry
+            # the root session_id, so the foreign-conversation filter composes.
+            "SubagentStart",
+            "SubagentStop",
             "Stop",
             "SessionEnd",
         ):

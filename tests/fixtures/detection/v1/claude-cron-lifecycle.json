@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "Cron annotation lifecycle from tool_use inputs alone (jobs are session-only and in-memory per the CLI's own schema, so the transcript is the complete source): each CronCreate increments the count and carries the cadence as detail, CronList only refreshes, each CronDelete decrements, and the last delete clears. The expiry mirrors the CLI's own 7-day recurring-job auto-expiry.",
+  "steps": [
+    {
+      "kind": "transcript",
+      "ts_offset": 0,
+      "record": {
+        "type": "user",
+        "isSidechain": false,
+        "message": {
+          "content": "schedule the deploy checks"
+        }
+      },
+      "expect_state": "working"
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 1,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_c1",
+              "name": "CronCreate",
+              "input": {
+                "cron": "*/5 * * * *",
+                "prompt": "check the deploy"
+              }
+            }
+          ]
+        }
+      },
+      "expect_standing": [
+        {
+          "kind": "cron",
+          "source": "transcript",
+          "evidence": "transcript:CronCreate",
+          "count": 1,
+          "detail": "*/5 * * * *",
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 2,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_c2",
+              "name": "CronCreate",
+              "input": {
+                "cron": "3 9 * * *",
+                "prompt": "morning report",
+                "recurring": false
+              }
+            }
+          ]
+        }
+      },
+      "expect_standing": [
+        {
+          "kind": "cron",
+          "source": "transcript",
+          "evidence": "transcript:CronCreate",
+          "count": 2,
+          "detail": "3 9 * * * (once)",
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 3,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_c3",
+              "name": "CronList",
+              "input": {}
+            }
+          ]
+        }
+      },
+      "expect_standing": [
+        {
+          "kind": "cron",
+          "source": "transcript",
+          "evidence": "transcript:CronList",
+          "count": 2,
+          "detail": "3 9 * * * (once)",
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 4,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_c4",
+              "name": "CronDelete",
+              "input": {
+                "id": "job-a"
+              }
+            }
+          ]
+        }
+      },
+      "expect_standing": [
+        {
+          "kind": "cron",
+          "source": "transcript",
+          "evidence": "transcript:CronDelete",
+          "count": 1,
+          "detail": "3 9 * * * (once)",
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 5,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_c5",
+              "name": "CronDelete",
+              "input": {
+                "id": "job-b"
+              }
+            }
+          ]
+        }
+      },
+      "expect_standing": []
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 6,
+      "record": {
+        "type": "system",
+        "subtype": "turn_duration",
+        "durationMs": 3000
+      },
+      "expect_state": "idle",
+      "expect_standing": []
+    }
+  ],
+  "expected": {
+    "events": [
+      {
+        "type": "turn_started",
+        "source": "transcript",
+        "scope": "root"
+      },
+      {
+        "type": "tool_use",
+        "source": "transcript",
+        "scope": "root",
+        "tool": "CronCreate"
+      },
+      {
+        "type": "tool_use",
+        "source": "transcript",
+        "scope": "root",
+        "tool": "CronCreate"
+      },
+      {
+        "type": "tool_use",
+        "source": "transcript",
+        "scope": "root",
+        "tool": "CronList"
+      },
+      {
+        "type": "tool_use",
+        "source": "transcript",
+        "scope": "root",
+        "tool": "CronDelete"
+      },
+      {
+        "type": "tool_use",
+        "source": "transcript",
+        "scope": "root",
+        "tool": "CronDelete"
+      },
+      {
+        "type": "turn_ended",
+        "source": "transcript",
+        "scope": "root",
+        "outcome": "completed"
+      }
+    ],
+    "states": [
+      {
+        "previous": "idle",
+        "state": "working",
+        "source": "transcript",
+        "proof": "proven"
+      },
+      {
+        "previous": "working",
+        "state": "idle",
+        "source": "transcript",
+        "proof": "proven"
+      }
+    ],
+    "standing": [],
+    "parser": {
+      "status": "ready",
+      "recognized": 7,
+      "unknown": 0,
+      "unknown_signatures": {}
+    },
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

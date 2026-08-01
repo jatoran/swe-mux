@@ -33,6 +33,12 @@ async def test_versioned_detection_replay_golden(path: Path) -> None:
         assert checkpoint["actual_state"] == checkpoint["expected_state"]
         if checkpoint["expected_awaiting"] is not None:
             assert checkpoint["actual_awaiting"] == checkpoint["expected_awaiting"]
+    # Standing-activity annotations are golden output too: expect_standing steps
+    # pin the set mid-run, expected.standing pins the final set.
+    for checkpoint in result["standing_checkpoints"]:
+        assert checkpoint["actual"] == checkpoint["expected"]
+    if "standing" in manifest["expected"]:
+        assert result["standing_activity"] == manifest["expected"]["standing"]
 
 
 async def test_replay_oracles_have_no_false_safe_or_false_blocked_decisions() -> None:
@@ -122,6 +128,8 @@ async def test_replay_corpus_covers_phase35_status_matrix() -> None:
     sources: set[str] = set()
     watchdog_actions: set[str] = set()
     step_kinds: set[str] = set()
+    standing_adds: set[str] = set()
+    standing_clears: set[str] = set()
     contract_violations = 0
     for path in sorted(FIXTURES.glob("*.json")):
         if path.name == INVENTORY.name:
@@ -135,9 +143,18 @@ async def test_replay_corpus_covers_phase35_status_matrix() -> None:
             sources.add(item["source"])
             if "awaiting_reason" in item:
                 awaiting_reasons.add(item["awaiting_reason"])
+        for entry in result["standing_ledger"]:
+            if entry["action"] == "added":
+                standing_adds.add(entry["activity"])
+            elif entry["action"] in {"removed", "expired"}:
+                standing_clears.add(entry["activity"])
         watchdog_actions.update(result["health"]["watchdog_recovery_actions"])
         contract_violations += result["health"]["counters"].get("contract_violations", 0)
 
+    # Every standing-activity kind must appear with at least one add and one
+    # clear (positive removal or TTL expiry) somewhere in the corpus.
+    assert standing_adds >= {"loop", "cron", "background_tasks", "subagents"}
+    assert standing_clears >= {"loop", "cron", "background_tasks", "subagents"}
     assert states_seen >= {"working", "idle", "awaiting", "crashed", "exited"}
     assert awaiting_reasons >= {"approval", "question", "elicitation", "rate_limit"}
     assert proofs == {"proven", "inferred"}

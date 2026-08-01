@@ -121,6 +121,16 @@
       "fixture": "claude-modern-spinner-resume.json",
       "guard": "tests/test_pty_tail_modern.py::test_current_cli_screens_classify",
       "root_cause": "Claude Code 2.x removed 'esc to interrupt' and '? for shortcuts' and draws dialog phrases one column-positioned word at a time, so the raw-substring markers matched nothing and every screen-based recovery (resume_working above all) silently disabled — sessions displayed 'awaiting approval' through minutes of visible work. Markers now target the frame-recurring spinner ellipsis and the current dialog/footer affordances, matched over cursor-normalized text, with real captured streams pinned as fixtures."
+    },
+    "standing_annotation_never_latches": {
+      "fixture": "claude-loop-expiry.json",
+      "guard": "tests/test_standing_activity.py::test_expiry_drops_only_past_due_annotations_and_counts",
+      "root_cause": "A standing-activity annotation whose clearing evidence never arrives (killed loop runner, lost completion record) would otherwise display forever — the annotation-axis version of every stuck-status incident. Every annotation the evidence bounds carries an expiry, the watchdog's TTL sweep decays it, and each decay counts in status health as standing_activity_expired."
+    },
+    "foreign_subagent_hook_annotation": {
+      "fixture": "claude-foreign-subagent-hook.json",
+      "guard": "tests/test_standing_activity.py::test_foreign_subagent_hook_never_counts",
+      "root_cause": "A nested child CLI inherits the hook wiring, so its SubagentStart/SubagentStop arrive on the parent's ingress naming the child's conversation; counting them would render the child's fleet as this session's subagents. The foreign-conversation filter runs before annotation extraction, so a foreign lifecycle hook is ledgered and dropped without touching the annotation set."
     }
   }
 }

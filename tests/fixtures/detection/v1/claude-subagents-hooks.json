@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "Subagent lifecycle hooks own the subagents annotation count (starts minus stops, floor 0): two SubagentStart hooks count 2, a sidechain transcript record refreshes recency without touching the hook-owned count, and the final SubagentStop positively clears the annotation.",
+  "steps": [
+    {
+      "kind": "session",
+      "record": {
+        "native_session_id": "11111111-2222-4333-8444-555566667777"
+      }
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 0,
+      "record": {
+        "type": "user",
+        "isSidechain": false,
+        "message": {
+          "content": "fan out the review"
+        }
+      },
+      "expect_state": "working"
+    },
+    {
+      "kind": "hook",
+      "event": "SubagentStart",
+      "payload": {
+        "session_id": "11111111-2222-4333-8444-555566667777",
+        "agent_id": "agent-1"
+      },
+      "expect_standing": [
+        {
+          "kind": "subagents",
+          "source": "hook",
+          "evidence": "hook:SubagentStart",
+          "count": 1,
+          "detail": null,
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "hook",
+      "event": "SubagentStart",
+      "payload": {
+        "session_id": "11111111-2222-4333-8444-555566667777",
+        "agent_id": "agent-2"
+      },
+      "expect_standing": [
+        {
+          "kind": "subagents",
+          "source": "hook",
+          "evidence": "hook:SubagentStart",
+          "count": 2,
+          "detail": null,
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "hook",
+      "event": "SubagentStop",
+      "payload": {
+        "session_id": "11111111-2222-4333-8444-555566667777",
+        "agent_id": "agent-1"
+      },
+      "expect_standing": [
+        {
+          "kind": "subagents",
+          "source": "hook",
+          "evidence": "hook:SubagentStop",
+          "count": 1,
+          "detail": null,
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 4,
+      "record": {
+        "type": "assistant",
+        "isSidechain": true,
+        "message": {
+          "content": [
+            {
+              "type": "text",
+              "text": "child working"
+            }
+          ]
+        }
+      },
+      "expect_standing": [
+        {
+          "kind": "subagents",
+          "source": "transcript",
+          "evidence": "transcript:sidechain",
+          "count": 1,
+          "detail": null,
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "hook",
+      "event": "SubagentStop",
+      "payload": {
+        "session_id": "11111111-2222-4333-8444-555566667777",
+        "agent_id": "agent-2"
+      },
+      "expect_standing": []
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 8,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "text",
+              "text": "all reviews merged"
+            }
+          ],
+          "stop_reason": "end_turn"
+        }
+      },
+      "expect_state": "idle",
+      "expect_standing": []
+    }
+  ],
+  "expected": {
+    "events": [
+      {
+        "type": "turn_started",
+        "source": "transcript",
+        "scope": "root"
+      },
+      {
+        "type": "subagent_activity",
+        "source": "hook",
+        "scope": "subagent",
+        "kind": "SubagentStart"
+      },
+      {
+        "type": "subagent_activity",
+        "source": "hook",
+        "scope": "subagent",
+        "kind": "SubagentStart"
+      },
+      {
+        "type": "subagent_activity",
+        "source": "hook",
+        "scope": "subagent",
+        "kind": "SubagentStop"
+      },
+      {
+        "type": "subagent_activity",
+        "source": "transcript",
+        "scope": "subagent",
+        "kind": "assistant"
+      },
+      {
+        "type": "subagent_activity",
+        "source": "hook",
+        "scope": "subagent",
+        "kind": "SubagentStop"
+      },
+      {
+        "type": "turn_ended",
+        "source": "transcript",
+        "scope": "root",
+        "outcome": "completed"
+      }
+    ],
+    "states": [
+      {
+        "previous": "idle",
+        "state": "working",
+        "source": "transcript",
+        "proof": "proven"
+      },
+      {
+        "previous": "working",
+        "state": "idle",
+        "source": "transcript",
+        "proof": "proven"
+      }
+    ],
+    "standing": [],
+    "parser": {
+      "status": "ready",
+      "recognized": 3,
+      "unknown": 0,
+      "unknown_signatures": {}
+    },
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

@@ -577,28 +577,33 @@ def set_standing_activity(
     source: str,
     evidence: str,
     expires_at: float | None = None,
-    count: int = 1,
+    count: int | None = None,
     detail: str | None = None,
     since: float | None = None,
     now: float | None = None,
 ) -> bool:
     """Add or refresh one annotation. Returns True when the visible set changed.
 
-    A pure TTL refresh (same count, same detail) updates the expiry silently:
-    subagent/background evidence renews at tool-record cadence, and ledgering
-    or fanning out every renewal would bury the entries that matter.
+    ``count``/``detail`` left at None keep an existing annotation's values, so a
+    corroborating source that cannot know them (the PTY's background-wait line
+    knows *that* tasks run, not how many) refreshes without clobbering the
+    counting source. A pure TTL refresh (unchanged count and detail) updates the
+    expiry silently: subagent/background evidence renews at tool-record cadence,
+    and ledgering or fanning out every renewal would bury the entries that matter.
     """
     now = time.time() if now is None else now
     record = session.record
     for activity in record.standing_activity:
         if activity.kind != kind:
             continue
-        changed = bool(activity.count != count or activity.detail != detail)
+        next_count = activity.count if count is None else count
+        next_detail = activity.detail if detail is None else detail
+        changed = bool(activity.count != next_count or activity.detail != next_detail)
         activity.source = source
         activity.evidence = evidence
         activity.expires_at = expires_at
-        activity.count = count
-        activity.detail = detail
+        activity.count = next_count
+        activity.detail = next_detail
         if changed:
             _standing_activity_ledger(session, "updated", activity, now)
         return changed
@@ -608,7 +613,7 @@ def set_standing_activity(
         evidence=evidence,
         since=now if since is None else since,
         expires_at=expires_at,
-        count=count,
+        count=1 if count is None else count,
         detail=detail,
     )
     record.standing_activity.append(activity)

@@ -561,6 +561,13 @@ class DetectionReplay:
             "state_checkpoints": self.state_checkpoints,
             "standing_checkpoints": self.standing_checkpoints,
             "standing_activity": normalized_standing_activity(self.session),
+            # Annotation lifecycle actions, for the corpus coverage matrix:
+            # every kind must appear with at least one add and one clear.
+            "standing_ledger": [
+                {"action": entry["action"], "activity": entry["activity"]}
+                for entry in self.session.state_transitions
+                if entry.get("kind") == "standing_activity"
+            ],
             "readiness": readiness,
             "health": {
                 "counters": dict(self.session.status_health_counters),

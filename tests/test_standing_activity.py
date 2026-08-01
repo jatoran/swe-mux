@@ -267,6 +267,129 @@ def test_adoption_tolerates_schema_drift() -> None:
     assert activity.evidence == "transcript:CronCreate"
 
 
+# ------------------------------------------------------ Claude signal extraction
+
+OWN_CONVERSATION = "11111111-2222-4333-8444-555566667777"
+FOREIGN_CONVERSATION = "99999999-8888-4777-8666-555544443333"
+
+
+async def test_foreign_subagent_hook_never_counts() -> None:
+    # A nested child CLI inherits the hook wiring; its SubagentStart names the
+    # child's conversation. The foreign filter runs before annotation
+    # extraction, so the child's fleet never counts as this session's.
+    replay = DetectionReplay("claude")
+    replay.session.record.native_session_id = OWN_CONVERSATION
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "SubagentStart",
+            "payload": {"session_id": FOREIGN_CONVERSATION, "agent_id": "child-probe"},
+        }
+    )
+    assert replay.session.record.standing_activity == []
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "SubagentStart",
+            "payload": {"session_id": OWN_CONVERSATION, "agent_id": "own-agent"},
+        }
+    )
+    (activity,) = replay.session.record.standing_activity
+    assert (activity.kind, activity.count, activity.source) == ("subagents", 1, "hook")
+
+
+async def test_subagent_hooks_own_the_count_over_the_transcript_fallback() -> None:
+    # Once a lifecycle hook has arrived this run, a Task tool_use launch only
+    # refreshes recency — double-counting one subagent from two tiers is the
+    # cross-source failure mode this split exists to prevent.
+    replay = DetectionReplay("claude")
+    replay.session.record.native_session_id = OWN_CONVERSATION
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "SubagentStart",
+            "payload": {"session_id": OWN_CONVERSATION, "agent_id": "agent-1"},
+        }
+    )
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 1,
+            "record": {
+                "type": "assistant",
+                "isSidechain": False,
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_t1",
+                            "name": "Task",
+                            "input": {"description": "helper", "prompt": "go"},
+                        }
+                    ]
+                },
+            },
+        }
+    )
+    (activity,) = replay.session.record.standing_activity
+    assert activity.count == 1
+
+
+async def test_background_close_without_tracked_open_decrements_the_annotation() -> None:
+    # A daemon restart loses the open-launch map while the adopted snapshot
+    # still carries the annotation; the completion notification must still
+    # count it down rather than leaving it to TTL decay.
+    replay = DetectionReplay("claude")
+    session = replay.session
+    now = replay.clock.wall()
+    set_standing_activity(
+        session,
+        "background_tasks",
+        source="transcript",
+        evidence="transcript:Bash:run_in_background",
+        expires_at=now + 1800,
+        count=2,
+        now=now,
+    )
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 0,
+            "record": {
+                "type": "user",
+                "isSidechain": False,
+                "message": {
+                    "content": (
+                        "<task-notification>\n<task-id>blost1</task-id>\n"
+                        "<tool-use-id>toolu_lost1</tool-use-id>\n<status>completed</status>\n"
+                        "</task-notification>"
+                    )
+                },
+            },
+        }
+    )
+    (activity,) = session.record.standing_activity
+    assert activity.count == 1
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 1,
+            "record": {
+                "type": "user",
+                "isSidechain": False,
+                "message": {
+                    "content": (
+                        "<task-notification>\n<task-id>blost2</task-id>\n"
+                        "<tool-use-id>toolu_lost2</tool-use-id>\n<status>completed</status>\n"
+                        "</task-notification>"
+                    )
+                },
+            },
+        }
+    )
+    assert session.record.standing_activity == []
+
+
 # ------------------------------------------------------------- replay harness
 
 

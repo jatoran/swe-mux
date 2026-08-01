@@ -144,6 +144,42 @@ Add/refresh/expire/clear go through `set_standing_activity` /
 adoption round-trips it across daemon restarts), appears on `/api/sessions` rows and
 `/api/sessions/{sid}/state-log`, and rides every `update` fanout frame.
 
+Detection sources (Claude — extractors in `observation.py`, live records only; historical
+catch-up never arms an annotation, a pre-restart set survives via the snapshot instead).
+Record shapes verified 2026-07-31 against live transcripts and the CLI's own tool schemas:
+
+- **`loop`** — assistant `ScheduleWakeup` tool_use `{delaySeconds, reason, prompt}` arms
+  with `expires_at = record ts + delaySeconds (clamped to the runtime's [60, 3600]) +
+  slack` and the reason as `detail`; `{stop: true}` positively clears. The wakeup firing
+  is a normal user turn; the re-arm silently refreshes the expiry, and the slack absorbs
+  the gap. A loop whose wakeup never fires decays on its own.
+- **`cron`** — the CLI's cron jobs are **session-only**: in-memory, no on-disk store
+  (`durable` is a documented no-op), gone when the CLI exits, recurring jobs auto-expired
+  after 7 days. The transcript is therefore the complete source, and the run-scoped
+  clears already match the store's lifetime. `CronCreate {cron, prompt, recurring?}`
+  increments (cadence as `detail`, expiry mirroring the CLI's 7-day bound),
+  `CronDelete {id}` decrements, the last delete clears; `CronList` results are free text
+  and only refresh.
+- **`background_tasks`** — a Bash tool_use with `run_in_background: true` opens (tracked
+  by tool_use id in `observation_state`); the launch's tool_result ("Command running in
+  background with ID: <task_id>") binds the task id. Closes: a `<task-notification>`
+  user record naming the launch's `<tool-use-id>`, or `TaskStop {task_id}`. A close with
+  no tracked open (state lost across a daemon restart) decrements the adopted
+  annotation's own count. No evidence bounds a background task's duration, so the TTL is
+  a slow decay (30 min) refreshed by background evidence and by the CLI's own
+  background-wait footer at turn end, which corroborates without knowing the count.
+  `idle_reason: waiting_on_background` is now *derived* from this annotation (or the
+  live footer) at each turn end — kept one release for UI compat.
+- **`subagents`** — `SubagentStart`/`SubagentStop` lifecycle hooks (registered in
+  `adapters/claude.py`) own the count (starts − stops, floor 0; a stop at zero clears).
+  Fallback when hooks are lost: `Task`/`Agent` tool_use opens, its tool_result closes —
+  but only while no lifecycle hook has arrived this run, so one subagent is never
+  counted by two tiers. Any sidechain record refreshes recency (creating at count 1 if
+  even the launch was missed). Hooks arrive subagent-scoped carrying the root
+  `session_id`; the foreign filter runs first, so a nested child's fleet never counts.
+  Rendered on the working axis too (`working · Task · 2 subagents`) — the root turn is
+  open during Task execution.
+
 ### Leaving `awaiting` (answered prompts)
 
 Nothing fires when a permission dialog is dismissed, and the approval was raised by an

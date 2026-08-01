@@ -1,0 +1,317 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "Dynamic /loop lifecycle: ScheduleWakeup arms the loop annotation with an evidence-implied expiry (delaySeconds + slack), the idle session stays exactly as idle and as deliverable as one without a loop, the wakeup firing is a normal turn whose re-arm silently refreshes the expiry, and {stop: true} positively clears it.",
+  "steps": [
+    {
+      "kind": "transcript",
+      "ts_offset": 0,
+      "record": {
+        "type": "user",
+        "isSidechain": false,
+        "message": {
+          "content": "babysit the deploy until it lands"
+        }
+      },
+      "expect_state": "working"
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 1,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_wake1",
+              "name": "ScheduleWakeup",
+              "input": {
+                "delaySeconds": 1500,
+                "reason": "watching CI run",
+                "prompt": "/loop babysit the deploy"
+              }
+            }
+          ]
+        }
+      },
+      "expect_standing": [
+        {
+          "kind": "loop",
+          "source": "transcript",
+          "evidence": "transcript:ScheduleWakeup",
+          "count": 1,
+          "detail": "watching CI run",
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 2,
+      "record": {
+        "type": "system",
+        "subtype": "turn_duration",
+        "durationMs": 2000
+      },
+      "expect_state": "idle",
+      "expect_standing": [
+        {
+          "kind": "loop",
+          "source": "transcript",
+          "evidence": "transcript:ScheduleWakeup",
+          "count": 1,
+          "detail": "watching CI run",
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "pty",
+      "data": "\u001b[?1049h"
+    },
+    {
+      "kind": "timer",
+      "seconds": 2.1,
+      "expect_delivery": "safe",
+      "oracle_safe": true,
+      "expect_state": "idle",
+      "expect_standing": [
+        {
+          "kind": "loop",
+          "source": "transcript",
+          "evidence": "transcript:ScheduleWakeup",
+          "count": 1,
+          "detail": "watching CI run",
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "timer",
+      "seconds": 1398
+    },
+    {
+      "kind": "watchdog",
+      "expect_standing": [
+        {
+          "kind": "loop",
+          "source": "transcript",
+          "evidence": "transcript:ScheduleWakeup",
+          "count": 1,
+          "detail": "watching CI run",
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 0,
+      "record": {
+        "type": "user",
+        "isSidechain": false,
+        "message": {
+          "content": "/loop babysit the deploy"
+        }
+      },
+      "expect_state": "working"
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 1,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_wake2",
+              "name": "ScheduleWakeup",
+              "input": {
+                "delaySeconds": 1500,
+                "reason": "watching CI run",
+                "prompt": "/loop babysit the deploy"
+              }
+            }
+          ]
+        }
+      },
+      "expect_standing": [
+        {
+          "kind": "loop",
+          "source": "transcript",
+          "evidence": "transcript:ScheduleWakeup",
+          "count": 1,
+          "detail": "watching CI run",
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 2,
+      "record": {
+        "type": "system",
+        "subtype": "turn_duration",
+        "durationMs": 2000
+      },
+      "expect_state": "idle"
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 3,
+      "record": {
+        "type": "user",
+        "isSidechain": false,
+        "message": {
+          "content": "stop the loop please"
+        }
+      },
+      "expect_state": "working"
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 4,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_wake3",
+              "name": "ScheduleWakeup",
+              "input": {
+                "stop": true
+              }
+            }
+          ]
+        }
+      },
+      "expect_standing": []
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 5,
+      "record": {
+        "type": "system",
+        "subtype": "turn_duration",
+        "durationMs": 1000
+      },
+      "expect_state": "idle",
+      "expect_standing": []
+    },
+    {
+      "kind": "timer",
+      "seconds": 2.1,
+      "expect_delivery": "safe",
+      "oracle_safe": true,
+      "expect_state": "idle",
+      "expect_standing": []
+    }
+  ],
+  "expected": {
+    "events": [
+      {
+        "type": "turn_started",
+        "source": "transcript",
+        "scope": "root"
+      },
+      {
+        "type": "tool_use",
+        "source": "transcript",
+        "scope": "root",
+        "tool": "ScheduleWakeup"
+      },
+      {
+        "type": "turn_ended",
+        "source": "transcript",
+        "scope": "root",
+        "outcome": "completed"
+      },
+      {
+        "type": "turn_started",
+        "source": "transcript",
+        "scope": "root"
+      },
+      {
+        "type": "tool_use",
+        "source": "transcript",
+        "scope": "root",
+        "tool": "ScheduleWakeup"
+      },
+      {
+        "type": "turn_ended",
+        "source": "transcript",
+        "scope": "root",
+        "outcome": "completed"
+      },
+      {
+        "type": "turn_started",
+        "source": "transcript",
+        "scope": "root"
+      },
+      {
+        "type": "tool_use",
+        "source": "transcript",
+        "scope": "root",
+        "tool": "ScheduleWakeup"
+      },
+      {
+        "type": "turn_ended",
+        "source": "transcript",
+        "scope": "root",
+        "outcome": "completed"
+      }
+    ],
+    "states": [
+      {
+        "previous": "idle",
+        "state": "working",
+        "source": "transcript",
+        "proof": "proven"
+      },
+      {
+        "previous": "working",
+        "state": "idle",
+        "source": "transcript",
+        "proof": "proven"
+      },
+      {
+        "previous": "idle",
+        "state": "working",
+        "source": "transcript",
+        "proof": "proven"
+      },
+      {
+        "previous": "working",
+        "state": "idle",
+        "source": "transcript",
+        "proof": "proven"
+      },
+      {
+        "previous": "idle",
+        "state": "working",
+        "source": "transcript",
+        "proof": "proven"
+      },
+      {
+        "previous": "working",
+        "state": "idle",
+        "source": "transcript",
+        "proof": "proven"
+      }
+    ],
+    "standing": [],
+    "parser": {
+      "status": "ready",
+      "recognized": 9,
+      "unknown": 0,
+      "unknown_signatures": {}
+    },
+    "delivery_state": "safe",
+    "delivery_reason": "all_required_evidence_positive"
+  }
+}

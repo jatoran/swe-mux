@@ -43,8 +43,9 @@
   instead of fresh visible console windows.
 - Claude receives atomically generated per-session hook settings for `SessionStart`,
   `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
-  `PermissionRequest`, `Notification`, `Stop`, and `SessionEnd`.
-  The settings directory is removed when its owning terminal ends.
+  `PermissionRequest`, `Notification`, `SubagentStart`, `SubagentStop`, `Stop`, and
+  `SessionEnd`. The subagent pair drives the `subagents` standing-activity count
+  (`status-detection.md`). The settings directory is removed when its owning terminal ends.
 - Claude executes hook commands through Bash even on Windows. Generated commands use
   Bash-safe executable paths (for example `/d/.../python.exe` under Git Bash/MSYS), are
   written by atomic replacement, and must never use raw Windows `list2cmdline` output.

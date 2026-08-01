@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "Subagent counting falls back to the transcript when no lifecycle hook ever arrives: a Task tool_use opens the annotation, sidechain records refresh its recency, and the Task tool_result closes it. Working-state sessions carry the annotation too (the root turn is open during Task execution).",
+  "steps": [
+    {
+      "kind": "transcript",
+      "ts_offset": 0,
+      "record": {
+        "type": "user",
+        "isSidechain": false,
+        "message": {
+          "content": "delegate the search"
+        }
+      },
+      "expect_state": "working"
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 1,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_task1",
+              "name": "Task",
+              "input": {
+                "description": "search the corpus",
+                "prompt": "find the flag"
+              }
+            }
+          ]
+        }
+      },
+      "expect_state": "working",
+      "expect_standing": [
+        {
+          "kind": "subagents",
+          "source": "transcript",
+          "evidence": "transcript:Task",
+          "count": 1,
+          "detail": null,
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 30,
+      "record": {
+        "type": "assistant",
+        "isSidechain": true,
+        "message": {
+          "content": [
+            {
+              "type": "text",
+              "text": "searching"
+            }
+          ]
+        }
+      },
+      "expect_standing": [
+        {
+          "kind": "subagents",
+          "source": "transcript",
+          "evidence": "transcript:sidechain",
+          "count": 1,
+          "detail": null,
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 60,
+      "record": {
+        "type": "user",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_task1",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "found it"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expect_standing": []
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 61,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "text",
+              "text": "the flag is found"
+            }
+          ],
+          "stop_reason": "end_turn"
+        }
+      },
+      "expect_state": "idle",
+      "expect_standing": []
+    }
+  ],
+  "expected": {
+    "events": [
+      {
+        "type": "turn_started",
+        "source": "transcript",
+        "scope": "root"
+      },
+      {
+        "type": "tool_use",
+        "source": "transcript",
+        "scope": "root",
+        "tool": "Task"
+      },
+      {
+        "type": "subagent_activity",
+        "source": "transcript",
+        "scope": "subagent",
+        "kind": "started"
+      },
+      {
+        "type": "subagent_activity",
+        "source": "transcript",
+        "scope": "subagent",
+        "kind": "assistant"
+      },
+      {
+        "type": "tool_result",
+        "source": "transcript",
+        "scope": "root",
+        "tool": "Task",
+        "success": true
+      },
+      {
+        "type": "subagent_activity",
+        "source": "transcript",
+        "scope": "subagent",
+        "kind": "completed"
+      },
+      {
+        "type": "turn_ended",
+        "source": "transcript",
+        "scope": "root",
+        "outcome": "completed"
+      }
+    ],
+    "states": [
+      {
+        "previous": "idle",
+        "state": "working",
+        "source": "transcript",
+        "proof": "proven"
+      },
+      {
+        "previous": "working",
+        "state": "idle",
+        "source": "transcript",
+        "proof": "proven"
+      }
+    ],
+    "standing": [],
+    "parser": {
+      "status": "ready",
+      "recognized": 5,
+      "unknown": 0,
+      "unknown_signatures": {}
+    },
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

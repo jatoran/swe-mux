@@ -16,9 +16,12 @@ from .event_bus import EventBus
 from .models import SessionState
 from .scrollback import SCREEN_TAIL_BYTES
 from .session import (
+    STANDING_ACTIVITY_TTL_SLACK_SECONDS,
     Session,
+    clear_standing_activity,
     pty_tail_state,
     pty_tail_waiting_on_background,
+    set_standing_activity,
     transition_proof,
 )
 
@@ -135,6 +138,36 @@ CLAUDE_CONTEXT_WINDOWS = {
     "claude-haiku-4-5": 200_000,
     "claude-haiku-4-5-20251001": 200_000,
 }
+
+# Standing-activity extraction (Claude). Record shapes verified 2026-07-31
+# against live transcripts and the CLI's own tool schemas:
+# - `ScheduleWakeup` input `{delaySeconds, reason, prompt}` arms a dynamic
+#   /loop; `{stop: true}` ends it. The runtime clamps delays to [60, 3600] s.
+# - Cron jobs are session-only: in-memory, no on-disk store (`durable` is a
+#   documented no-op), gone when the CLI exits, recurring jobs auto-expired
+#   after 7 days. `CronCreate` input `{cron, prompt, recurring?}`; `CronDelete`
+#   input `{id}`. Transcript-only detection is therefore complete, and the
+#   run-scoped annotation clears already match the store's lifetime. CronList
+#   results are free text and are not parsed — the list call only refreshes.
+# - A background Bash launch carries `run_in_background: true`; its tool_result
+#   reads "Command running in background with ID: <task_id>." and completion
+#   arrives later as a user record containing `<task-notification>` with the
+#   launch's `<tool-use-id>` and a `<status>`. `TaskStop` input `{task_id}`.
+LOOP_DELAY_MIN_SECONDS = 60.0
+LOOP_DELAY_MAX_SECONDS = 3600.0
+CRON_JOB_LIFETIME_SECONDS = 7 * 86400.0
+# Background tasks have no evidence-implied duration (a watcher can legitimately
+# run for hours), so the TTL is a slow decay against missed completion evidence,
+# refreshed by every background-related record and by the CLI's own
+# background-wait footer at each turn end. Process-tree fast-clear is Phase C.
+BACKGROUND_TASKS_TTL_SECONDS = 1800.0
+# Subagent liveness is evidence-recency: any sidechain record or lifecycle hook
+# refreshes; this long without any means the fleet is gone.
+SUBAGENT_QUIET_SECONDS = 120.0
+STANDING_DETAIL_MAX_CHARS = 120
+_BACKGROUND_TASK_ID = re.compile(r"running in background with ID:\s*([A-Za-z0-9_-]+)")
+_TASK_NOTIFICATION_TOOL_USE = re.compile(r"<tool-use-id>\s*([^<\s]+)\s*</tool-use-id>")
+_TASK_NOTIFICATION_TASK = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
 
 
 def _publish_update(session: Session) -> None:
@@ -1179,7 +1212,29 @@ async def _finish_root_turn(
         # Recovery inferences stay visible in the event stream, not only the ledger.
         payload.setdefault("inferred", True)
     if outcome == "completed":
-        idle_reason = _background_wait_reason(session)
+        pty_wait = _background_wait_reason(session)
+        if pty_wait and not getattr(session, "observation_replay", False):
+            # The CLI's own footer corroborates running background work. It
+            # knows *that* tasks run, not how many, so it refreshes recency
+            # without clobbering a transcript-derived count.
+            now = _session_now(session)
+            if set_standing_activity(
+                session,
+                "background_tasks",
+                source="pty",
+                evidence="pty:background_wait_marker",
+                expires_at=now + BACKGROUND_TASKS_TTL_SECONDS,
+                now=now,
+            ):
+                _publish_update(session)
+        # UI-compat: `idle_reason` is derived from the annotation axis (kept one
+        # release); the annotation is the source of truth either way.
+        idle_reason = (
+            "waiting_on_background"
+            if pty_wait
+            or any(a.kind == "background_tasks" for a in session.record.standing_activity)
+            else None
+        )
         await _transition(
             session, events, "idle", source=source, force=force,
             evidence=evidence, inferred=inferred, idle_reason=idle_reason,
@@ -1458,6 +1513,307 @@ def foreign_conversation_hook_id(session: Session, payload: dict[str, Any]) -> s
     return native_id
 
 
+# --- standing-activity extraction ------------------------------------------
+#
+# Annotation management for the standing-engagement axis (see session.py and
+# status-detection.md § Standing-activity annotations). Everything here is
+# gated on live observation: historical catch-up must not re-arm last week's
+# loop, and an annotation set that was live before a daemon restart survives
+# via the record snapshot instead.
+
+
+def _session_now(session: Session) -> float:
+    """Wall clock, honoring the replay harness's virtual clock when present."""
+    clock = getattr(session, "clock", None)
+    if clock is not None:
+        wall = getattr(clock, "wall", None)
+        if callable(wall):
+            return float(wall())
+    return time.time()
+
+
+def _standing_now(session: Session, event: dict[str, Any]) -> float:
+    ts = _event_timestamp(event)
+    return ts if ts is not None else _session_now(session)
+
+
+def _standing_activity_count(session: Session, kind: str) -> int:
+    for activity in session.record.standing_activity:
+        if activity.kind == kind:
+            return int(activity.count)
+    return 0
+
+
+def _standing_detail(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text[:STANDING_DETAIL_MAX_CHARS] or None
+
+
+def _refresh_subagents(
+    session: Session, *, source: str, evidence: str, now: float, count: int | None = None
+) -> bool:
+    return set_standing_activity(
+        session,
+        "subagents",
+        source=source,
+        evidence=evidence,
+        expires_at=now + SUBAGENT_QUIET_SECONDS,
+        count=count,
+        now=now,
+    )
+
+
+def _drop_subagent(session: Session, *, source: str, evidence: str, now: float) -> bool:
+    count = _standing_activity_count(session, "subagents") - 1
+    if count <= 0:
+        return clear_standing_activity(session, "subagents", evidence=evidence, now=now)
+    return _refresh_subagents(session, source=source, evidence=evidence, now=now, count=count)
+
+
+def _background_open(session: Session) -> dict[str, str | None]:
+    """Open background launches this run: tool_use id -> task id (once known)."""
+    state = _observation_state(session)
+    tasks = state.setdefault("background_open", {})
+    return tasks  # type: ignore[no-any-return]
+
+
+def _sync_background_annotation(session: Session, *, evidence: str, now: float) -> bool:
+    open_tasks = _background_open(session)
+    if not open_tasks:
+        # No opens tracked this run. An annotation may still exist (adopted from
+        # a pre-restart snapshot, or PTY-corroborated); a close without a match
+        # decrements it below in _close_background_task instead.
+        return False
+    return set_standing_activity(
+        session,
+        "background_tasks",
+        source="transcript",
+        evidence=evidence,
+        expires_at=now + BACKGROUND_TASKS_TTL_SECONDS,
+        count=len(open_tasks),
+        now=now,
+    )
+
+
+def _close_background_task(
+    session: Session,
+    *,
+    evidence: str,
+    now: float,
+    tool_use_id: str | None = None,
+    task_id: str | None = None,
+) -> bool:
+    open_tasks = _background_open(session)
+    matched = None
+    if tool_use_id and tool_use_id in open_tasks:
+        matched = tool_use_id
+    elif task_id:
+        matched = next((key for key, value in open_tasks.items() if value == task_id), None)
+    if matched is not None:
+        open_tasks.pop(matched, None)
+        if open_tasks:
+            return _sync_background_annotation(session, evidence=evidence, now=now)
+        return clear_standing_activity(session, "background_tasks", evidence=evidence, now=now)
+    # A completion for a launch this run never tracked (state lost across a
+    # daemon restart): the annotation itself is the only count there is.
+    count = _standing_activity_count(session, "background_tasks")
+    if count <= 0:
+        return False
+    if count == 1:
+        return clear_standing_activity(session, "background_tasks", evidence=evidence, now=now)
+    return set_standing_activity(
+        session,
+        "background_tasks",
+        source="transcript",
+        evidence=evidence,
+        expires_at=now + BACKGROUND_TASKS_TTL_SECONDS,
+        count=count - 1,
+        now=now,
+    )
+
+
+def _extract_standing_tool_use(
+    session: Session, event: dict[str, Any], name: str, block: dict[str, Any]
+) -> None:
+    """Annotation lifecycle from one assistant tool_use record (live only)."""
+    if getattr(session, "observation_replay", False):
+        return
+    raw_input = block.get("input")
+    tool_input: dict[str, Any] = raw_input if isinstance(raw_input, dict) else {}
+    now = _standing_now(session, event)
+    state = _observation_state(session)
+    changed = False
+    if name == "ScheduleWakeup":
+        if tool_input.get("stop"):
+            changed = clear_standing_activity(
+                session, "loop", evidence="transcript:ScheduleWakeup:stop", now=now
+            )
+        else:
+            try:
+                delay = float(tool_input.get("delaySeconds") or 0.0)
+            except (TypeError, ValueError):
+                delay = 0.0
+            delay = min(max(delay, LOOP_DELAY_MIN_SECONDS), LOOP_DELAY_MAX_SECONDS)
+            changed = set_standing_activity(
+                session,
+                "loop",
+                source="transcript",
+                evidence="transcript:ScheduleWakeup",
+                expires_at=now + delay + STANDING_ACTIVITY_TTL_SLACK_SECONDS,
+                count=1,
+                detail=_standing_detail(tool_input.get("reason")),
+                now=now,
+            )
+    elif name == "CronCreate":
+        detail = _standing_detail(tool_input.get("cron"))
+        if detail and tool_input.get("recurring") is False:
+            detail = f"{detail} (once)"
+        changed = set_standing_activity(
+            session,
+            "cron",
+            source="transcript",
+            evidence="transcript:CronCreate",
+            expires_at=now + CRON_JOB_LIFETIME_SECONDS + STANDING_ACTIVITY_TTL_SLACK_SECONDS,
+            count=_standing_activity_count(session, "cron") + 1,
+            detail=detail,
+            now=now,
+        )
+    elif name == "CronDelete":
+        count = _standing_activity_count(session, "cron") - 1
+        if count <= 0:
+            changed = clear_standing_activity(
+                session, "cron", evidence="transcript:CronDelete", now=now
+            )
+        else:
+            changed = set_standing_activity(
+                session,
+                "cron",
+                source="transcript",
+                evidence="transcript:CronDelete",
+                expires_at=now + CRON_JOB_LIFETIME_SECONDS + STANDING_ACTIVITY_TTL_SLACK_SECONDS,
+                count=count,
+                now=now,
+            )
+    elif name == "CronList":
+        if _standing_activity_count(session, "cron"):
+            set_standing_activity(
+                session,
+                "cron",
+                source="transcript",
+                evidence="transcript:CronList",
+                expires_at=now + CRON_JOB_LIFETIME_SECONDS + STANDING_ACTIVITY_TTL_SLACK_SECONDS,
+                now=now,
+            )
+    elif name == "Bash" and tool_input.get("run_in_background"):
+        tool_use_id = str(block.get("id") or "")
+        if tool_use_id:
+            _background_open(session).setdefault(tool_use_id, None)
+            changed = _sync_background_annotation(
+                session, evidence="transcript:Bash:run_in_background", now=now
+            )
+    elif name == "TaskStop":
+        task_id = str(tool_input.get("task_id") or "")
+        if task_id:
+            changed = _close_background_task(
+                session, evidence="transcript:TaskStop", now=now, task_id=task_id
+            )
+    elif name in {"Task", "Agent"}:
+        # Fallback tier: hooks own the count once a SubagentStart has arrived
+        # this run; transcript launches then only refresh recency.
+        launch_count: int | None = (
+            None
+            if state.get("subagent_hooks_seen")
+            else _standing_activity_count(session, "subagents") + 1
+        )
+        changed = _refresh_subagents(
+            session, source="transcript", evidence="transcript:Task", now=now, count=launch_count
+        )
+    if changed:
+        _publish_update(session)
+
+
+def _extract_standing_tool_result(
+    session: Session, event: dict[str, Any], tool: str, tool_use_id: str, detail: str
+) -> None:
+    """Annotation lifecycle from one tool_result record (live only)."""
+    if getattr(session, "observation_replay", False):
+        return
+    now = _standing_now(session, event)
+    changed = False
+    if tool == "Bash":
+        open_tasks = _background_open(session)
+        if tool_use_id in open_tasks and open_tasks[tool_use_id] is None:
+            match = _BACKGROUND_TASK_ID.search(detail)
+            if match:
+                open_tasks[tool_use_id] = match.group(1)
+    elif tool in {"Task", "Agent"}:
+        state = _observation_state(session)
+        if state.get("subagent_hooks_seen"):
+            changed = _refresh_subagents(
+                session, source="transcript", evidence="transcript:Task:completed", now=now
+            )
+        else:
+            changed = _drop_subagent(
+                session, source="transcript", evidence="transcript:Task:completed", now=now
+            )
+    if changed:
+        _publish_update(session)
+
+
+def _extract_standing_task_notifications(
+    session: Session, event: dict[str, Any], text: str
+) -> None:
+    """Close background launches named by <task-notification> user records."""
+    if getattr(session, "observation_replay", False) or "<task-notification>" not in text:
+        return
+    now = _standing_now(session, event)
+    changed = False
+    tool_use_ids = _TASK_NOTIFICATION_TOOL_USE.findall(text)
+    task_ids = _TASK_NOTIFICATION_TASK.findall(text)
+    for tool_use_id in tool_use_ids:
+        changed = (
+            _close_background_task(
+                session, evidence="transcript:task_notification", now=now,
+                tool_use_id=tool_use_id,
+            )
+            or changed
+        )
+    if not tool_use_ids:
+        for task_id in task_ids:
+            changed = (
+                _close_background_task(
+                    session, evidence="transcript:task_notification", now=now, task_id=task_id
+                )
+                or changed
+            )
+    if changed:
+        _publish_update(session)
+
+
+def _apply_subagent_hook(session: Session, event_type: str) -> None:
+    """SubagentStart/SubagentStop lifecycle hooks own the subagent count."""
+    if getattr(session, "observation_replay", False):
+        return
+    now = _session_now(session)
+    state = _observation_state(session)
+    changed = False
+    if event_type == "SubagentStart":
+        state["subagent_hooks_seen"] = True
+        changed = _refresh_subagents(
+            session,
+            source="hook",
+            evidence="hook:SubagentStart",
+            now=now,
+            count=_standing_activity_count(session, "subagents") + 1,
+        )
+    elif event_type == "SubagentStop":
+        changed = _drop_subagent(
+            session, source="hook", evidence="hook:SubagentStop", now=now
+        )
+    if changed:
+        _publish_update(session)
+
+
 async def apply_hook_observation(
     session: Session,
     event_type: str,
@@ -1495,6 +1851,10 @@ async def apply_hook_observation(
         )
         return
     if scope == "subagent":
+        # Lifecycle hooks manage the `subagents` annotation before the scope
+        # early-return; the foreign-conversation filter above has already run,
+        # so a nested child's fleet can never count here.
+        _apply_subagent_hook(session, event_type)
         await events.emit(
             "subagent_activity",
             session_id=session.record.id,
@@ -1696,6 +2056,16 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
     event_type = event.get("type")
     message = event.get("message") or {}
     if event.get("isSidechain") is True:
+        # A sidechain record is proof a subagent is running right now: refresh
+        # the annotation's recency (creating it at count 1 when even the Task
+        # launch was missed) without touching an established count.
+        if not getattr(session, "observation_replay", False) and _refresh_subagents(
+            session,
+            source="transcript",
+            evidence="transcript:sidechain",
+            now=_standing_now(session, event),
+        ):
+            _publish_update(session)
         block_types = [
             str(block.get("type") or "unknown")
             for block in message.get("content") or []
@@ -1726,6 +2096,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                 evidence="interrupt_marker",
             )
             return
+        _extract_standing_task_notifications(session, event, text)
         has_tool_result = isinstance(content, list) and any(
             block.get("type") == "tool_result" for block in content if isinstance(block, dict)
         )
@@ -1789,6 +2160,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                         scope="subagent",
                         kind="completed",
                     )
+                _extract_standing_tool_result(session, event, tool, tool_use_id, detail)
     elif event_type == "assistant":
         # The model produced output again, so nothing is blocking it.
         await _resume_from_awaiting(session, events, event, evidence="assistant_record")
@@ -1857,6 +2229,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                         scope="subagent",
                         kind="started",
                     )
+                _extract_standing_tool_use(session, event, name, block)
         usage = message.get("usage") or {}
         if usage:
             session.record.tokens_in = sum(
