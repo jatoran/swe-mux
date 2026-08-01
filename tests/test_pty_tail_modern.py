@@ -52,9 +52,13 @@ def test_current_cli_screens_classify(fixture: str, expected: str) -> None:
     assert pty_tail_state(tail(fixture)) == expected
 
 
-def test_current_cli_screens_never_read_as_background_wait() -> None:
+def test_background_wait_reads_only_the_background_wait_screen() -> None:
+    # Captured 2026-07-31: at turn end with a task still running, the current
+    # CLI replaces its idle footer hint with "1 shell still running · check the
+    # task status" — neither pre-2.x marker exists anywhere in the stream.
     for fixture in TAILS.glob("*.bin"):
-        assert pty_tail_waiting_on_background(tail(fixture.name)) is False
+        expected = fixture.name == "background-wait.bin"
+        assert pty_tail_waiting_on_background(tail(fixture.name)) is expected, fixture.name
 
 
 def test_legacy_markers_still_classify() -> None:

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "startup_dialog_reads_idle",
+  "description": "The workspace-trust dialog blocks a fresh session while its SessionStart hook already reported idle — typed input lands in the dialog. After the screen reads approval continuously for the sustain window on a session no turn has ever run, the watchdog raises awaiting(approval); the same rule clears it when the screen moves on, and the first real turn proceeds normally.",
+  "steps": [
+    {"kind": "hook", "event": "SessionStart", "payload": {}, "expect_state": "idle"},
+    {"kind": "pty_tail", "data": "Accessing workspace: C:/scratch/repo\nQuick safety check: Is this a project you created or one you trust?\n\u276f 1. Yes, I trust this folder\n  2. No, exit\nEnter to confirm \u00b7 Esc to cancel"},
+    {"kind": "watchdog", "expect_state": "idle"},
+    {"kind": "timer", "seconds": 12},
+    {"kind": "watchdog", "expect_state": "awaiting", "expect_awaiting": "approval", "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "pty_tail", "data": "\u276f Try \"write a test\"\n\u23f5\u23f5 accept edits on (shift+tab to cycle)"},
+    {"kind": "watchdog", "expect_state": "idle"},
+    {"kind": "transcript", "ts_offset": 0, "record": {"type": "user", "isSidechain": false, "message": {"content": "hello"}}, "expect_state": "working"},
+    {"kind": "transcript", "ts_offset": 1, "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn"}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "awaiting", "source": "watchdog-pty", "proof": "inferred", "awaiting_reason": "approval"},
+      {"previous": "awaiting", "state": "idle", "source": "watchdog-pty", "proof": "inferred"},
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 2, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

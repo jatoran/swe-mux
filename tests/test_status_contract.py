@@ -11,17 +11,21 @@ import pytest
 from swe_mux.models import AwaitingReason, SessionState
 from swe_mux.session import (
     INFERRED_TRANSITION_SOURCES,
+    SCREEN_CLASSIFIER_BLIND_SECONDS,
     STATE_EVIDENCE_SOURCES,
     STATE_WATCHDOG_AWAITING_RESUME_SECONDS,
     STATE_WATCHDOG_ENDED_STUCK_SECONDS,
     STATE_WATCHDOG_PTY_STUCK_SECONDS,
+    STATE_WATCHDOG_STARTUP_DIALOG_SECONDS,
     STATUS_HEALTH_MAX_INFERRED_TERMINAL_RATIO,
     STATUS_HEALTH_MIN_TERMINALS_FOR_RATIO_ALARM,
     STATUS_HEALTH_STUCK_ACTIVE_SECONDS,
     fleet_status_health,
+    note_classifier_blindness,
     pty_tail_appears_idle,
     pty_tail_state,
     pty_tail_waiting_on_background,
+    startup_dialog_observation,
     transition_proof,
     watchdog_decision,
 )
@@ -37,13 +41,43 @@ def test_state_evidence_sources_cover_every_session_state() -> None:
     # Active states require provider evidence; the PTY may never invent work.
     assert "pty" not in STATE_EVIDENCE_SOURCES["working"]
     assert "pty" not in STATE_EVIDENCE_SOURCES["awaiting"]
-    # Inferred recovery is confined to resolving an active state: idle (a turn
-    # that ended without its marker) and working (an approval the user already
-    # answered). It may never raise `awaiting` or fabricate a lifecycle state.
+    # Inferred recovery is confined to resolving an active state — idle (a turn
+    # that ended without its marker), working (an approval the user already
+    # answered) — plus exactly one inferred path into `awaiting`: the
+    # startup-dialog rule, which may raise `awaiting(approval)` only on a
+    # session no turn has ever run (trust/update dialogs block before turn one
+    # while no proven source can ever report them). Lifecycle states stay
+    # un-inferable.
     for state, sources in STATE_EVIDENCE_SOURCES.items():
-        if state not in {"idle", "working"}:
+        if state not in {"idle", "working", "awaiting"}:
             assert not (sources & INFERRED_TRANSITION_SOURCES), state
     assert STATE_EVIDENCE_SOURCES["working"] & INFERRED_TRANSITION_SOURCES == {"watchdog-pty"}
+    assert STATE_EVIDENCE_SOURCES["awaiting"] & INFERRED_TRANSITION_SOURCES == {"watchdog-pty"}
+    # The startup rule is the only way the screen may raise a block, and it is
+    # gated on "no turn has ever run": with a turn history the same screen
+    # changes nothing.
+    assert (
+        watchdog_decision(
+            "idle",
+            stalled_seconds=10_000,
+            tail_verdict=None,
+            pty_state="approval",
+            startup_no_turn=True,
+            startup_dialog_seconds=30.0,
+        )
+        == "startup_dialog_block"
+    )
+    assert (
+        watchdog_decision(
+            "idle",
+            stalled_seconds=10_000,
+            tail_verdict=None,
+            pty_state="approval",
+            startup_no_turn=False,
+            startup_dialog_seconds=30.0,
+        )
+        == "none"
+    )
     # ...and the only inferred path into `working` starts from `awaiting`.
     assert (
         watchdog_decision(
@@ -571,3 +605,130 @@ def test_idle_reason_is_ledgered_and_cleared_by_leaving_idle() -> None:
     # ...and an ordinary idle does not inherit the previous sub-reason.
     assert session.transition("idle", None, source="transcript", evidence="end_turn")
     assert session.record.idle_reason is None
+
+
+# ---- status v2 Phase C: startup dialogs and the classifier-drift self-check
+
+
+TRUST_DIALOG = (
+    "Accessing workspace: C:/scratch/repo\n"
+    "Quick safety check: Is this a project you created or one you trust?\n"
+    "❯ 1. Yes, I trust this folder\n  2. No, exit\nEnter to confirm · Esc to cancel"
+)
+
+
+async def test_startup_dialog_blocks_and_clears_from_the_screen_alone() -> None:
+    # G7: the trust dialog blocks the session while hook-sourced idle wins the
+    # display and typed input lands in the dialog. The watchdog raises
+    # awaiting(approval) after a sustained approval screen on a session no turn
+    # has ever run, and the same rule un-blocks when the screen moves on.
+    replay = DetectionReplay("claude")
+    await replay.step({"kind": "hook", "event": "SessionStart", "payload": {}})
+    assert replay.session.record.state == "idle"
+    await replay.step({"kind": "pty_tail", "data": TRUST_DIALOG})
+    await replay.step({"kind": "watchdog"})
+    # First read only starts the sustain clock: a repaint cannot raise a block.
+    assert replay.session.record.state == "idle"
+    await replay.step(
+        {"kind": "timer", "seconds": STATE_WATCHDOG_STARTUP_DIALOG_SECONDS + 2.0}
+    )
+    await replay.step({"kind": "watchdog"})
+    assert replay.session.record.state == "awaiting"
+    assert replay.session.record.awaiting_reason == "approval"
+    assert replay.readiness.evaluate(replay.session)["delivery_state"] == "blocked"
+    # The user answered: the screen shows the idle footer again.
+    await replay.step({"kind": "pty_tail", "data": "❯ accept edits on (shift+tab to cycle)"})
+    await replay.step({"kind": "watchdog"})
+    assert replay.session.record.state == "idle"
+    assert replay.session.record.awaiting_reason is None
+
+
+async def test_startup_dialog_rule_stands_down_once_any_turn_has_run() -> None:
+    replay = DetectionReplay("claude")
+    session = replay.session
+    await replay.step({"kind": "hook", "event": "SessionStart", "payload": {}})
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 0,
+            "record": {"type": "user", "isSidechain": False, "message": {"content": "hi"}},
+        }
+    )
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 1,
+            "record": {"type": "system", "subtype": "turn_duration", "durationMs": 900},
+        }
+    )
+    assert session.record.state == "idle"
+    # A dialog-looking screen mid-session (a /config menu, a real permission
+    # prompt raced ahead of its hook) changes nothing through this rule.
+    await replay.step({"kind": "pty_tail", "data": TRUST_DIALOG})
+    await replay.step({"kind": "watchdog"})
+    await replay.step({"kind": "timer", "seconds": STATE_WATCHDOG_STARTUP_DIALOG_SECONDS * 3})
+    await replay.step({"kind": "watchdog"})
+    assert session.record.state == "idle"
+    no_turn, seconds = startup_dialog_observation(session, "approval", session.clock.wall())
+    assert no_turn is False
+    assert seconds is None
+
+
+async def test_classifier_blindness_counts_once_per_blind_window() -> None:
+    # G6: a witnessed session continuously working while every screen read
+    # returns "unknown" is the marker-drift failure mode. The self-check counts
+    # it (once per window) and never changes state.
+    replay = DetectionReplay("claude")
+    session = replay.session
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 0,
+            "record": {"type": "user", "isSidechain": False, "message": {"content": "build"}},
+        }
+    )
+    assert session.record.state == "working"
+    await replay.step({"kind": "pty_tail", "data": "a redesigned TUI with no known markers"})
+    await replay.step({"kind": "watchdog"})
+    assert "screen_classifier_blind" not in session.status_health_counters
+    await replay.step({"kind": "timer", "seconds": SCREEN_CLASSIFIER_BLIND_SECONDS + 10.0})
+    await replay.step({"kind": "watchdog"})
+    assert session.status_health_counters["screen_classifier_blind"] == 1
+    assert session.record.state == "working"
+    await replay.step({"kind": "watchdog"})
+    assert session.status_health_counters["screen_classifier_blind"] == 1
+    entry = [e for e in session.state_transitions if e.get("kind") == "screen_classifier_blind"]
+    assert len(entry) == 1
+    # A readable screen ends the window; a later blind window counts again.
+    await replay.step({"kind": "pty_tail", "data": "thinking…"})
+    await replay.step({"kind": "watchdog"})
+    await replay.step({"kind": "pty_tail", "data": "another unreadable frame"})
+    await replay.step({"kind": "watchdog"})
+    await replay.step({"kind": "timer", "seconds": SCREEN_CLASSIFIER_BLIND_SECONDS + 10.0})
+    await replay.step({"kind": "watchdog"})
+    assert session.status_health_counters["screen_classifier_blind"] == 2
+
+
+def test_classifier_blindness_never_reads_an_unwitnessed_session() -> None:
+    # An unwitnessed session's state CAME from the screen; blindness there is
+    # definitionally impossible and the counter must not fire.
+    session = ReplaySession("codex")
+    session.record.state = "working"
+    now = session.clock.wall()
+    assert note_classifier_blindness(session, "unknown", now) is False
+    assert note_classifier_blindness(session, "unknown", now + 500) is False
+    assert "screen_classifier_blind" not in session.status_health_counters
+
+
+def test_classifier_blind_fleet_alarm_needs_two_sessions() -> None:
+    one = ReplaySession("claude")
+    one.status_health_counters["screen_classifier_blind"] = 1
+    now = one.clock.wall()
+    single = fleet_status_health([one], now=now)
+    assert single["classifier_blind_sessions"] == ["replay-session"]
+    assert "screen_classifier_blind" not in single["alarm_reasons"]
+    two = ReplaySession("claude")
+    two.status_health_counters["screen_classifier_blind"] = 2
+    both = fleet_status_health([one, two], now=now)
+    assert "screen_classifier_blind" in both["alarm_reasons"]
+    assert both["consolidation_counters"]["screen_classifier_blind"] == 3

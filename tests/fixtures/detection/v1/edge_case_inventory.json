@@ -131,6 +131,21 @@
       "fixture": "claude-foreign-subagent-hook.json",
       "guard": "tests/test_standing_activity.py::test_foreign_subagent_hook_never_counts",
       "root_cause": "A nested child CLI inherits the hook wiring, so its SubagentStart/SubagentStop arrive on the parent's ingress naming the child's conversation; counting them would render the child's fleet as this session's subagents. The foreign-conversation filter runs before annotation extraction, so a foreign lifecycle hook is ledgered and dropped without touching the annotation set."
+    },
+    "startup_dialog_reads_idle": {
+      "fixture": "claude-startup-dialog.json",
+      "guard": "tests/test_status_contract.py::test_startup_dialog_blocks_and_clears_from_the_screen_alone",
+      "root_cause": "Claude's workspace-trust dialog appears after its SessionStart hook already reported idle, and Codex's trust/update dialogs appear before any evidence channel exists — so a blocked session displayed 'ready' while typed input landed in the dialog (measured live in E2E). The watchdog now raises awaiting(approval) from a sustained approval screen, but only on a session no turn has ever run, and only that rule may clear it when the screen moves on."
+    },
+    "startup_dialog_reads_idle_codex": {
+      "fixture": "codex-startup-dialog.json",
+      "guard": "tests/test_status_contract.py::test_startup_dialog_blocks_and_clears_from_the_screen_alone",
+      "root_cause": "The Codex variant of the startup-dialog gap: no session-start hook and no transcript exist before turn one, so the startup-quiet idle was the last word while a trust/update dialog blocked the pane. Same rule, same guard — the unwitnessed pair deliberately cannot act on an approval screen, so only the startup-dialog rule can represent it."
+    },
+    "screen_classifier_blind_alarm": {
+      "fixture": "claude-classifier-blind.json",
+      "guard": "tests/test_status_contract.py::test_classifier_blindness_counts_once_per_blind_window",
+      "root_cause": "The 2026-07-31 marker-drift incident ran for weeks with pty_tail_state returning unknown on every busy screen — every screen-based recovery silently disabled, discovered only by a user report. A witnessed session continuously working for the blind window while every read returns unknown now counts screen_classifier_blind (once per window, never changing state), and two blind sessions raise the fleet status-health alarm."
     }
   }
 }

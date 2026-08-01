@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "screen_classifier_blind_alarm",
+  "description": "A witnessed session continuously working while every screen read returns unknown is the marker-drift failure mode (2026-07-31 incident: weeks of CLI releases with every screen recovery silently disabled). The self-check counts it without ever changing state: the session stays working on its proven transcript evidence, and only the status-health counter records the blindness.",
+  "steps": [
+    {"kind": "transcript", "ts_offset": 0, "record": {"type": "user", "isSidechain": false, "message": {"content": "build the project"}}, "expect_state": "working"},
+    {"kind": "pty_tail", "data": "a redesigned TUI drawing frames the classifier has never seen"},
+    {"kind": "watchdog", "expect_state": "working"},
+    {"kind": "timer", "seconds": 130},
+    {"kind": "watchdog", "expect_state": "working"},
+    {"kind": "watchdog", "expect_state": "working"},
+    {"kind": "transcript", "ts_offset": 140, "record": {"type": "system", "subtype": "turn_duration", "durationMs": 140000}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 2, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

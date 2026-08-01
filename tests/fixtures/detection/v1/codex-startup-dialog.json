@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "backend": "codex",
+  "edge_case": "startup_dialog_reads_idle",
+  "description": "Codex trust/update dialogs block a fresh pane that has no hooks and no transcript yet, so the startup-quiet idle is the last word while the dialog waits. The startup-dialog rule reads the sustained approval screen and raises awaiting(approval), then clears when the dialog is gone. The unwitnessed pair correctly refuses to act on an approval screen throughout.",
+  "steps": [
+    {"kind": "pty_tail", "data": "Allow Codex to work in this folder?\n> 1. Yes, allow\n  2. No\nEnter to confirm · Esc to cancel"},
+    {"kind": "watchdog", "expect_state": "idle"},
+    {"kind": "timer", "seconds": 12},
+    {"kind": "watchdog", "expect_state": "awaiting", "expect_awaiting": "approval", "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "pty_tail", "data": "OpenAI Codex v0.5\nready\n"},
+    {"kind": "watchdog", "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [],
+    "states": [
+      {"previous": "idle", "state": "awaiting", "source": "watchdog-pty", "proof": "inferred", "awaiting_reason": "approval"},
+      {"previous": "awaiting", "state": "idle", "source": "watchdog-pty", "proof": "inferred"}
+    ],
+    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "no_root_lifecycle_evidence"
+  }
+}

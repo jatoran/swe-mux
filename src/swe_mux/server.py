@@ -3546,6 +3546,10 @@ async def get_session_state_log(request: web.Request) -> web.Response:
             "standing_activity": [
                 activity.snapshot() for activity in session.record.standing_activity
             ],
+            # The CLI's own published state for this conversation
+            # (~/.claude/sessions/<pid>.json) — corroboration only, never a
+            # transition source. None until the poller matches a file.
+            "cli_state": session.cli_state,
             "status_health": session.status_health(now),
             # Multi-device terminal arbitration. Non-zero rejections mean keystrokes
             # arrived from a client that had lost input ownership; non-zero denials

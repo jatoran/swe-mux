@@ -22,7 +22,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .adapters import BackendAdapter, SpawnOptions
+from .adapters.claude import claude_data_home
 from .background_tasks import background
+from .cli_state import CliStateMonitor
 from .event_bus import EventBus
 from .git_projects import ProjectIdentity, resolve_project
 from .history import HistoryIndex
@@ -120,6 +122,17 @@ STATE_WATCHDOG_TRANSCRIPT_QUIET_SECONDS = 3.0
 # observer stuck on the wrong sibling transcript). It fires only after a longer
 # stall and only when the CLI is provably sitting at its idle input prompt.
 STATE_WATCHDOG_PTY_STUCK_SECONDS = 60.0
+# A startup dialog (Claude workspace-trust, Codex trust/update) blocks the
+# session before any turn has ever run while hook-sourced idle wins the display.
+# The screen must read `approval` continuously for this long before the watchdog
+# raises `awaiting(approval)` — two poll passes, so a dialog flashing through a
+# repaint cannot raise a phantom block.
+STATE_WATCHDOG_STARTUP_DIALOG_SECONDS = 10.0
+# Classifier-drift self-check: a witnessed session continuously `working` for
+# this long while every screen read in the window returns "unknown" means the
+# tail classifier cannot see the current CLI at all — the 2026-07-31 failure
+# mode, previously discoverable only by a user noticing a stuck status.
+SCREEN_CLASSIFIER_BLIND_SECONDS = 120.0
 # An "awaiting" that the user has already answered is invisible to the hook that
 # raised it: nothing fires when a permission dialog is dismissed. The PTY is this
 # session's own ground truth for that — once the CLI is back to its working
@@ -162,7 +175,11 @@ STATE_EVIDENCE_SOURCES: dict[str, frozenset[str]] = {
     #     `agent-turn-complete` names the thread, otherwise reports "ready · turn
     #     complete" for the entire first turn (measured live at 200 s).
     "working": frozenset({"transcript", "hook", "watchdog-pty"}),
-    "awaiting": frozenset({"transcript", "hook"}),
+    # `watchdog-pty` covers exactly one awaiting: the startup-dialog rule, which
+    # may raise `awaiting(approval)` on a session no turn has ever run — trust
+    # and update dialogs block before the first turn while hook-sourced idle
+    # wins the display, so no proven source can ever report them.
+    "awaiting": frozenset({"transcript", "hook", "watchdog-pty"}),
     # Idle may be proven (transcript/hook boundary) or a bounded inferred
     # recovery (startup-quiet PTY fallback, quiescence watchdog, PTY backstop).
     "idle": frozenset({"transcript", "hook", "pty", "watchdog", "watchdog-pty", "daemon"}),
@@ -189,6 +206,10 @@ STATUS_HEALTH_MIN_TERMINALS_FOR_RATIO_ALARM = 20
 # The signal is the absence of *evidence*: no ledger entry at all — not even a
 # tool detail change — for this long while the session claims to be active.
 STATUS_HEALTH_STUCK_ACTIVE_SECONDS = 900.0
+# Fleet alarm bound for the classifier-drift self-check: one blind session can
+# be a strange TUI state, but two independently blind sessions mean the screen
+# classifier cannot read the current CLI generation at all.
+STATUS_HEALTH_CLASSIFIER_BLIND_SESSIONS = 2
 
 
 def session_status_health(session: Any, *, now: float | None = None) -> dict[str, Any]:
@@ -234,6 +255,11 @@ def fleet_status_health(sessions: Any, *, now: float | None = None) -> dict[str,
     contract_violations = 0
     observer_restarts = 0
     stuck_sessions: list[str] = []
+    classifier_blind_sessions: list[str] = []
+    # Fleet totals for the consolidation counters (per-session values ride each
+    # session's own counters dict): classifier blindness, CLI side-state
+    # disagreement, and deterministically observed nested children.
+    consolidation_counters: dict[str, int] = {}
     native_claims: dict[tuple[str, str], list[str]] = {}
     path_claims: dict[tuple[str, str], list[str]] = {}
     for session in sessions:
@@ -273,6 +299,19 @@ def fleet_status_health(sessions: Any, *, now: float | None = None) -> dict[str,
             and health["seconds_since_evidence"] > STATUS_HEALTH_STUCK_ACTIVE_SECONDS
         ):
             stuck_sessions.append(record.id)
+        session_counters = health["counters"]
+        if session_counters.get("screen_classifier_blind"):
+            classifier_blind_sessions.append(record.id)
+        for key in (
+            "screen_classifier_blind",
+            "cli_state_disagrees",
+            "nested_children_observed",
+            "standing_activity_expired",
+        ):
+            if session_counters.get(key):
+                consolidation_counters[key] = (
+                    consolidation_counters.get(key, 0) + session_counters[key]
+                )
     terminals = proven_terminals + inferred_terminals
     inferred_ratio = inferred_terminals / terminals if terminals else 0.0
     alarm_reasons: list[str] = []
@@ -299,6 +338,8 @@ def fleet_status_health(sessions: Any, *, now: float | None = None) -> dict[str,
     ]
     if identity_collisions:
         alarm_reasons.append("identity_collision")
+    if len(classifier_blind_sessions) >= STATUS_HEALTH_CLASSIFIER_BLIND_SESSIONS:
+        alarm_reasons.append("screen_classifier_blind")
     return {
         "terminals": {
             "proven": proven_terminals,
@@ -311,11 +352,14 @@ def fleet_status_health(sessions: Any, *, now: float | None = None) -> dict[str,
         "contract_violations": contract_violations,
         "observer_restarts": observer_restarts,
         "stuck_sessions": stuck_sessions,
+        "classifier_blind_sessions": classifier_blind_sessions,
+        "consolidation_counters": consolidation_counters,
         "identity_collisions": identity_collisions,
         "bounds": {
             "max_inferred_terminal_ratio": STATUS_HEALTH_MAX_INFERRED_TERMINAL_RATIO,
             "min_terminals_for_ratio_alarm": STATUS_HEALTH_MIN_TERMINALS_FOR_RATIO_ALARM,
             "stuck_active_seconds": STATUS_HEALTH_STUCK_ACTIVE_SECONDS,
+            "classifier_blind_sessions": STATUS_HEALTH_CLASSIFIER_BLIND_SESSIONS,
         },
         "alarm": bool(alarm_reasons),
         "alarm_reasons": alarm_reasons,
@@ -715,6 +759,8 @@ WatchdogAction = Literal[
     "resume_working",
     "begin_pty_turn",
     "end_pty_turn",
+    "startup_dialog_block",
+    "startup_dialog_clear",
 ]
 
 # What the CLI is showing right now, read from the scrollback tail. The tail
@@ -753,10 +799,14 @@ PTY_APPROVAL_MARKERS = (
 # shows the permission-mode line ("⏵⏵ accept edits on (shift+tab to cycle) …")
 # instead, and that parenthetical is its stable, mode-independent fragment.
 PTY_IDLE_MARKERS = ("? for shortcuts", "(shift+tab to cycle)")
-# The CLI's own line for "my turn is over but background work is still running"
-# (`✻ Waiting for 2 background tasks to finish`). This is an *idle sub-reason*,
-# never a state: the composer accepts input and delivery is safe either way.
-PTY_BACKGROUND_WAIT_MARKERS = ("waiting for", "background task")
+# The CLI's own line for "my turn is over but background work is still running".
+# Pre-2.x drew `✻ Waiting for 2 background tasks to finish`; the current CLI
+# (captured 2026-07-31, tests/fixtures/pty_tails/background-wait.bin) replaces
+# the idle footer hint with `1 shell still running · check the task status`,
+# whose stable fragment is "still running". This is an *idle sub-reason* /
+# `background_tasks` annotation corroboration, never a state: the composer
+# accepts input and delivery is safe either way.
+PTY_BACKGROUND_WAIT_MARKERS = ("waiting for", "background task", "still running")
 
 
 # Escape sequences ride the same byte stream as the text and break it two ways.
@@ -867,6 +917,9 @@ def watchdog_decision(
     pty_state: PtyTailState,
     awaiting_reason: str | None = None,
     unwitnessed: bool = False,
+    startup_no_turn: bool = False,
+    startup_dialog_seconds: float | None = None,
+    startup_dialog_raised: bool = False,
 ) -> WatchdogAction:
     """Pure quiescence-watchdog decision, shared with the replay harness.
 
@@ -905,6 +958,22 @@ def watchdog_decision(
             return "begin_pty_turn"
         if state == "working" and pty_state == "idle":
             return "end_pty_turn"
+    # Startup dialogs (Claude workspace-trust, Codex trust/update) block a
+    # session no turn has ever run while the displayed state reads idle: the
+    # SessionStart hook fires before the trust gate, and typed input lands in
+    # the dialog. Gated hard on "no turn yet" so this can never fight
+    # mid-conversation evidence, and on a sustained approval screen so a
+    # repaint cannot raise a phantom block. The same pair un-blocks: only the
+    # rule that raised the awaiting may clear it from the screen alone.
+    if startup_no_turn:
+        if (
+            state == "idle"
+            and pty_state == "approval"
+            and (startup_dialog_seconds or 0.0) >= STATE_WATCHDOG_STARTUP_DIALOG_SECONDS
+        ):
+            return "startup_dialog_block"
+        if state == "awaiting" and startup_dialog_raised and pty_state != "approval":
+            return "startup_dialog_clear"
     if state not in {"working", "awaiting"}:
         return "none"
     if (
@@ -935,6 +1004,69 @@ def watchdog_decision(
     return "none"
 
 
+def startup_dialog_observation(
+    session: Any, pty_state: PtyTailState, now: float
+) -> tuple[bool, float | None]:
+    """Track continuous approval-screen time for a session with no turn yet.
+
+    Returns ``(no_turn, seconds_on_approval_screen)``. Shared by the live
+    watchdog pass and the replay harness so the 10 s sustain requirement cannot
+    drift between them. The tracker resets the moment a turn runs or the screen
+    stops reading `approval`.
+    """
+    state = session.observation_state
+    no_turn = not state.get("root_turn_active") and not state.get("root_completion_seen")
+    if not no_turn or pty_state != "approval":
+        session.startup_dialog_screen_since = None
+        return no_turn, None
+    if session.startup_dialog_screen_since is None:
+        session.startup_dialog_screen_since = now
+    return True, max(0.0, now - session.startup_dialog_screen_since)
+
+
+def note_classifier_blindness(session: Any, pty_state: PtyTailState, now: float) -> bool:
+    """Count a witnessed working session whose screen classifier reads nothing.
+
+    The 2026-07-31 marker-drift incident ran for weeks with `pty_tail_state`
+    returning "unknown" on every busy screen — every screen-based recovery
+    silently disabled, discovered only by a user noticing a stuck status. This
+    turns the next CLI redesign into a counter within minutes. Zero
+    false-positive cost: it changes no state, it only counts once per
+    continuous blind window.
+    """
+    if session.record.state != "working" or session_is_unwitnessed(session):
+        session.classifier_blind_since = None
+        session.classifier_blind_counted = False
+        return False
+    if pty_state != "unknown":
+        session.classifier_blind_since = None
+        session.classifier_blind_counted = False
+        return False
+    if session.classifier_blind_since is None:
+        session.classifier_blind_since = now
+        return False
+    if (
+        session.classifier_blind_counted
+        or now - session.classifier_blind_since < SCREEN_CLASSIFIER_BLIND_SECONDS
+    ):
+        return False
+    session.classifier_blind_counted = True
+    counters = getattr(session, "status_health_counters", None)
+    if counters is not None:
+        counters["screen_classifier_blind"] = counters.get("screen_classifier_blind", 0) + 1
+    ledger = getattr(session, "state_transitions", None)
+    if ledger is not None:
+        ledger.append(
+            {
+                "ts": now,
+                "kind": "screen_classifier_blind",
+                "blind_seconds": round(now - session.classifier_blind_since, 3),
+                "state": session.record.state,
+            }
+        )
+    return True
+
+
 async def apply_watchdog_recovery(
     session: Any,
     events: EventBus,
@@ -951,6 +1083,51 @@ async def apply_watchdog_recovery(
     """
     from .observation import _begin_root_turn, _finish_root_turn, _transition
 
+    if action == "startup_dialog_block":
+        # A blocking dialog on a session no turn has ever run. Not a turn event:
+        # nothing started, nothing can finish — only the displayed state and the
+        # delivery gate change. Forced: the hook-sourced startup idle holds
+        # arbitration at hook priority and would refuse a PTY-priority block
+        # forever. Safe to reclaim because the no-turn gate guarantees no
+        # hook-raised approval can exist yet, and a new turn resets arbitration
+        # so real evidence takes ownership the moment it speaks.
+        session.observation_state["startup_dialog_raised"] = True
+        session.note_watchdog_recovery(
+            "startup_dialog_block",
+            stalled_seconds=stalled_seconds,
+            tail_verdict=tail_verdict,
+        )
+        await _transition(
+            session,
+            events,
+            "awaiting",
+            "startup dialog",
+            source="watchdog-pty",
+            force=True,
+            inferred=True,
+            awaiting_reason="approval",
+            evidence="startup_dialog",
+        )
+        return
+    if action == "startup_dialog_clear":
+        # Only the rule that raised the block may clear it from the screen
+        # alone; a hook- or transcript-raised awaiting never passes the gate.
+        session.observation_state.pop("startup_dialog_raised", None)
+        session.note_watchdog_recovery(
+            "startup_dialog_cleared",
+            stalled_seconds=stalled_seconds,
+            tail_verdict=tail_verdict,
+        )
+        await _transition(
+            session,
+            events,
+            "idle",
+            source="watchdog-pty",
+            force=True,
+            inferred=True,
+            evidence="startup_dialog_cleared",
+        )
+        return
     if action == "begin_pty_turn":
         # Opening a turn, not repairing one: go through the normal turn-start
         # path so the bookkeeping, `turn_started` event, and delivery readiness
@@ -1142,6 +1319,17 @@ class Session:
         self.observer_restart_count = 0
         self.observer_last_fault: dict[str, Any] | None = None
         self.watchdog_recoveries = 0
+        # Startup-dialog rule: when the screen began continuously reading
+        # `approval` on a session no turn has ever run (see watchdog_decision).
+        self.startup_dialog_screen_since: float | None = None
+        # Classifier-drift self-check: when the current continuous
+        # working-but-screen-unknown window began, and whether it was counted.
+        self.classifier_blind_since: float | None = None
+        self.classifier_blind_counted = False
+        # Latest CLI-published side state for this session's conversation
+        # (~/.claude/sessions/<pid>.json), corroboration only — never a
+        # transition source. None until the poller matches a file.
+        self.cli_state: dict[str, Any] | None = None
         # Status-health metrics: proven/inferred transition counts, per-source
         # inferred recoveries, contract violations, terminal outcomes, blocked
         # reopen attempts, and recent working→terminal latencies. These feed the
@@ -1565,6 +1753,10 @@ class SessionManager:
         # Collision groups the live identity sweep has already reported, so a
         # persistent (unhealable) conflict logs once rather than every pass.
         self._known_identity_collisions: set[tuple[str, str]] = set()
+        # The `cli-state` corroboration layer (status-detection.md § ladder):
+        # Claude's own per-process side state, polled on the watchdog cadence.
+        # Corroboration only in this phase — it never drives SessionState.
+        self.cli_state_monitor = CliStateMonitor(claude_data_home() / "sessions")
 
     async def spawn(
         self,
@@ -3650,6 +3842,11 @@ class SessionManager:
             with background.iteration(STATE_WATCHDOG_LOOP):
                 await self._reconcile_identity_collisions()
                 now = time.time()
+                # File I/O off the loop; counter/ledger application on it.
+                cli_states = await asyncio.to_thread(self.cli_state_monitor.poll)
+                self.cli_state_monitor.observe(
+                    cli_states, tuple(self.sessions.values()), now
+                )
                 for session in tuple(self.sessions.values()):
                     await self._watchdog_check_session(session, now)
 
@@ -3681,10 +3878,47 @@ class SessionManager:
             session, now
         ):
             return
+        # Startup dialogs also read idle sessions: a trust/update dialog blocks
+        # before any turn has ever run while hook-sourced idle wins the display.
+        # Inline rather than a method so the lightweight manager stand-ins in
+        # tests exercise this rule through the same call they already make.
+        if record.state in {"idle", "awaiting"}:
+            dialog_pty_state = self._pty_tail_state(session)
+            no_turn, dialog_seconds = startup_dialog_observation(
+                session, dialog_pty_state, now
+            )
+            if no_turn:
+                dialog_action = watchdog_decision(
+                    record.state,
+                    stalled_seconds=now - session.last_state_change_ts,
+                    tail_verdict=None,
+                    pty_state=dialog_pty_state,
+                    awaiting_reason=record.awaiting_reason,
+                    startup_no_turn=True,
+                    startup_dialog_seconds=dialog_seconds,
+                    startup_dialog_raised=bool(
+                        session.observation_state.get("startup_dialog_raised")
+                    ),
+                )
+                if dialog_action in {"startup_dialog_block", "startup_dialog_clear"}:
+                    await apply_watchdog_recovery(
+                        session,
+                        self.events,
+                        dialog_action,
+                        stalled_seconds=dialog_seconds,
+                        tail_verdict=None,
+                    )
+                    return
+        else:
+            session.startup_dialog_screen_since = None
         if record.state not in {"working", "awaiting"}:
+            # Leaving the active states ends any blind window.
+            session.classifier_blind_since = None
+            session.classifier_blind_counted = False
             return
         stalled = now - session.last_state_change_ts
         pty_state = self._pty_tail_state(session)
+        note_classifier_blindness(session, pty_state, now)
         # An answered permission prompt is resolved from the PTY alone and must
         # be checked before the transcript-quiet gate below: after approval the
         # transcript is usually *busy*, which would skip this pass entirely.

@@ -487,7 +487,10 @@ refused; only that log says which device asked and why it lost.
 `agent_run_id`, `agent_run_seq`, `native_session_id`, `agent_lifecycle_id`, and
 `observation_stale_since` beside the transcript path and its mtime. This is the endpoint for
 "which conversation am I actually looking at", and staleness is the one fault that otherwise
-presents as a perfectly healthy session (`features/backends.md`).
+presents as a perfectly healthy session (`features/backends.md`). It also carries
+`cli_state` — the CLI's own published per-process state for this conversation
+(`~/.claude/sessions/<pid>.json`; corroboration only, never a transition source) — beside
+the `standing_activity` list.
 
 `{type:"resize", cols, rows, hidden}` registers a client's fitted size, or deregisters it
 when `hidden` is true — a minimized window still reports layout and must not reshape the
@@ -550,6 +553,11 @@ GET /api/diagnostics/background
 ```
 
 `status-health` reports the fleet's transition ledger: proven/inferred counts, bounds, alarm.
+It aggregates the detection-hierarchy counters (`consolidation_counters`:
+`screen_classifier_blind`, `cli_state_disagrees`, `nested_children_observed`,
+`standing_activity_expired`) and lists `classifier_blind_sessions[]`; two or more blind
+sessions raise the alarm with reason `screen_classifier_blind`
+(`features/status-detection.md`).
 It also reports `identity_collisions[]` — live agent sessions sharing one
 `(backend, native_session_id)` or one transcript path (`{kind, backend, value, sessions}`)
 — and any entry raises the alarm with reason `identity_collision`: two sessions on one

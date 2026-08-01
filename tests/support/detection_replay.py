@@ -29,9 +29,11 @@ from swe_mux.session import (
     apply_state_transition,
     apply_watchdog_recovery,
     expire_standing_activity,
+    note_classifier_blindness,
     pty_tail_state,
     session_is_unwitnessed,
     session_status_health,
+    startup_dialog_observation,
     terminal_exit_outcome,
     watchdog_decision,
 )
@@ -146,6 +148,11 @@ class ReplaySession:
         self.watchdog_recovery_actions: dict[str, int] = {}
         self.terminal_latencies: deque[dict[str, Any]] = deque(maxlen=32)
         self.watchdog_recoveries = 0
+        # Startup-dialog and classifier-blindness tracking, mirroring Session.
+        self.startup_dialog_screen_since: float | None = None
+        self.classifier_blind_since: float | None = None
+        self.classifier_blind_counted = False
+        self.cli_state: dict[str, Any] | None = None
 
     def publish_update(self) -> None:
         return
@@ -469,12 +476,28 @@ class DetectionReplay:
         drift from _watchdog_check_session.
         """
         session = self.session
+        now = self.clock.wall()
         # Mirrors _watchdog_check_session: the annotation TTL sweep runs before
         # any other watchdog rule and owes nothing to turn state.
-        expire_standing_activity(session, now=self.clock.wall())
+        expire_standing_activity(session, now=now)
         stalled = max(0.0, self.clock.monotonic() - session.last_state_change_monotonic)
         pty_state = pty_tail_state(self.pty_tail)
         unwitnessed = session_is_unwitnessed(session)
+        # Startup-dialog tracking and the classifier-drift self-check mirror the
+        # production pass through the same shared helpers.
+        if session.record.state in {"idle", "awaiting"}:
+            startup_no_turn, dialog_seconds = startup_dialog_observation(
+                session, pty_state, now
+            )
+        else:
+            session.startup_dialog_screen_since = None
+            startup_no_turn, dialog_seconds = False, None
+        if session.record.state in {"working", "awaiting"}:
+            note_classifier_blindness(session, pty_state, now)
+        else:
+            session.classifier_blind_since = None
+            session.classifier_blind_counted = False
+        startup_raised = bool(session.observation_state.get("startup_dialog_raised"))
         # Mirrors _watchdog_check_session: the unwitnessed pair is evaluated first
         # (it is the only rule that reads an idle session), then the awaiting-resume
         # pass before the transcript tail is even read, because after an approval the
@@ -486,6 +509,9 @@ class DetectionReplay:
             pty_state=pty_state,
             awaiting_reason=session.record.awaiting_reason,
             unwitnessed=unwitnessed,
+            startup_no_turn=startup_no_turn,
+            startup_dialog_seconds=dialog_seconds,
+            startup_dialog_raised=startup_raised,
         )
         verdict: str | None = None
         if action == "none":
@@ -497,6 +523,9 @@ class DetectionReplay:
                 pty_state=pty_state,
                 awaiting_reason=session.record.awaiting_reason,
                 unwitnessed=unwitnessed,
+                startup_no_turn=startup_no_turn,
+                startup_dialog_seconds=dialog_seconds,
+                startup_dialog_raised=startup_raised,
             )
         if action == "none":
             return

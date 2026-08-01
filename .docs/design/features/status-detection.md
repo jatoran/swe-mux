@@ -14,6 +14,42 @@ Three axes stay separate and are never collapsed:
 - **`delivery_state`** — whether typed delivery would be safe (`delivery-readiness.md`).
 - **Attention** — unread/pinned UX state (`sessionAttention.ts`), client-side only.
 
+## The detection ladder
+
+The daemon sits a level above the CLIs and reads every layer it owns — not only hooks.
+Per signal class, every layer feeds the same ledger with its own `source` string:
+
+| Layer | Source tag | What it may do |
+| --- | --- | --- |
+| CLI side state (`~/.claude/sessions/<pid>.json`) | `cli-state` | Corroborate + identity (counters, ledger entries). **Never drives SessionState** — promotion to a transition source requires a release of disagreement telemetry plus its own corpus fixtures. |
+| Hooks (incl. `SubagentStart`/`SubagentStop`) | `hook` | Turn boundaries, blocks, identity (priority 2). |
+| Transcript records | `transcript` | Ordered turn evidence (priority 1) + standing-activity extraction. |
+| PTY screen classifier | `pty` / `watchdog-pty` | Recoveries, vetoes, the startup-dialog rule, drift self-check. |
+| Process tree (ProcessInspector) | `process` | Liveness; annotation corroboration/fast-clear (planned). |
+| Daemon lifecycle | `daemon` | Spawn/promotion/demotion/exit (force). |
+
+**The `cli-state` layer** (`src/swe_mux/cli_state.py`, polled on the 5 s watchdog cadence,
+stat-then-parse-on-change): Claude publishes per-process state files carrying
+`{sessionId, cwd, pid, procStart, status, statusUpdatedAt, updatedAt, version}` (verified
+2.1.220; observed `status` values `busy`/`idle`). Files map to sessions by conversation id.
+What it feeds:
+
+- **Status corroboration**: a *settled* contradiction (CLI `busy` while mux `idle`, CLI
+  `idle` while mux `working`, both sides ≥ 10 s old) counts `cli_state_disagrees` once per
+  standing fact and ledgers it (`kind: "cli_state"`). One release of this telemetry gates
+  any future promotion to a transition source.
+- **Identity corroboration**: a file in exactly one live session's cwd, bound to a
+  conversation no live session owns, updated after that session's run began, is a nested
+  child CLI observed deterministically — the signal the `bb81463` incident had to infer
+  from hook `source` fields. Counts `nested_children_observed`, once per foreign
+  conversation. Ambiguity (two live sessions in one cwd) stands down.
+- The session's own file snapshot is surfaced as `cli_state` on the state-log endpoint.
+- **Deliberately absent**: a staleness alarm. `updatedAt` is a status-change timestamp,
+  not a heartbeat — measured live: a legitimately busy session's file sat 51 minutes
+  stale mid-turn.
+
+Codex publishes no equivalent side state; this layer is Claude-only.
+
 ## Status contract
 
 `STATE_EVIDENCE_SOURCES` in `src/swe_mux/session.py` is the machine-readable contract;
@@ -24,7 +60,7 @@ Three axes stay separate and are never collapsed:
 | `starting` | daemon | Spawn/promotion of an agent backend (lifecycle ownership). |
 | `running` | daemon | Shell lifecycle (spawn or demotion back to shell). |
 | `working` | transcript, hook, watchdog-pty | A root turn began or root tool activity: user prompt / assistant / tool records in order, or `UserPromptSubmit`/`PreToolUse`/`PostToolUse` while the transcript is not authoritative. The PTY may never invent work — except under the two narrow `watchdog-pty` rules below, both of which need the CLI's own spinner to be the *last* marker on screen. |
-| `awaiting` | transcript, hook | An explicit block: approval request, `request_user_input` (question), elicitation dialog, or rate limit — always with a typed `awaiting_reason`. |
+| `awaiting` | transcript, hook, watchdog-pty | An explicit block: approval request, `request_user_input` (question), elicitation dialog, or rate limit — always with a typed `awaiting_reason`. `watchdog-pty` covers exactly one case: the startup-dialog rule below, on a session no turn has ever run. |
 | `idle` | transcript, hook, pty, watchdog, watchdog-pty, daemon | A proven turn boundary (`turn_duration`, `end_turn`+text, `task_complete`, Stop hook, `idle_prompt`, interrupt marker, catch-up settle) — or a bounded inferred recovery (startup-quiet fallback, watchdog paths below). A catch-up settle over a session already idle also emits `root_turn_settled`, which changes no state but is the only way delivery readiness can learn that a session left running across a daemon restart is at its prompt (`delivery-readiness.md`). |
 | `exited` / `crashed` | pty, daemon | Process ground truth: the exit code through `terminal_exit_outcome`. |
 
@@ -318,13 +354,34 @@ blocks the idle backstop).
   tail read. They were captured before it, so an approval raised inside that window used to
   be judged against pre-approval evidence and instantly resumed to `working`.
 - "esc to interrupt" on screen always reads busy: a genuine long tool is never cut short.
+- **Startup dialogs**: a session **no turn has ever run this agent run** whose screen
+  reads `approval` continuously for `STATE_WATCHDOG_STARTUP_DIALOG_SECONDS` (10 s) →
+  `awaiting(approval)` with evidence `startup_dialog` (source `watchdog-pty`, inferred,
+  forced — the hook-sourced startup idle holds arbitration at hook priority and would
+  refuse a PTY-priority block forever; safe because the no-turn gate guarantees no
+  hook-raised approval exists yet). Claude's workspace-trust dialog fires *after* its
+  `SessionStart` hook reported idle, and Codex's trust/update dialogs appear before any
+  evidence channel exists, so a blocked session displayed "ready" while typed input landed
+  in the dialog. Only this rule may clear its own block: screen leaves `approval` →
+  back to `idle` (`startup_dialog_cleared`). The gate means it can never fight
+  mid-conversation evidence; the first turn resets the tracker permanently. Fixtures:
+  `claude-startup-dialog`, `codex-startup-dialog`.
 
-All three classify as `inferred`, record the stall duration and tail verdict, and are
+All of these classify as `inferred`, record the stall duration and tail verdict, and are
 pinned by fixtures at their exact thresholds (`claude-watchdog-ended-stuck`,
 `claude-esc-pause-without-marker`, `codex-watchdog-unknown-tail`,
 `claude-long-tool-never-cut`, `claude-approval-resume-pty`,
 `claude-modern-spinner-resume`, `claude-pending-approval-not-cleared`,
 `codex-unwitnessed-first-turn`).
+
+The watchdog pass also runs the **classifier-drift self-check**: a witnessed session
+continuously `working` for `SCREEN_CLASSIFIER_BLIND_SECONDS` (120 s) while every screen
+read in that window returns `unknown` counts `screen_classifier_blind` (once per blind
+window) and ledgers it — changing no state. This is the 2026-07-31 marker-drift failure
+mode made self-detecting: it ran for weeks of CLI releases with every screen recovery
+silently dead, discovered only by a user report. Two independently blind sessions raise
+the fleet status-health alarm (`screen_classifier_blind` in `alarm_reasons`); an
+unwitnessed session is exempt by construction (its state *came* from the screen).
 
 ## Foreign conversations on the hook channel
 
