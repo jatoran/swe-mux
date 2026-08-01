@@ -530,6 +530,27 @@ responsive controls.
   horizontally (touch drag, scrollbar, or mouse wheel); it never wraps. Voice controls are not
   here — they are in the pane header (`voice.md`), because the rail is a scroller the user pages
   through and they kept scrolling out of reach.
+- Below the configured rail items, an agent session's Commands tab lists **the skills that
+  session's CLI can actually see** (`GET /sessions/{id}/skills`, `interfaces.md`) — the vendors'
+  own `SKILL.md` directories, not swe-mux prompt templates or rail items. These are *discovered*,
+  never configured here: the list is a window onto the CLI's state, so it groups by where each
+  skill comes from (project / global / plugins / bundled) rather than by anything the user
+  arranged, and a Rescan button refetches instead of a save button writing. Clicking inserts the
+  invocation without submitting, over the same bus — a skill invoked bare runs with no context,
+  and the point of typing it into a live composer is to say what it should act on.
+- Three things about that list are load-bearing, because a skill list that looks complete and is
+  not is worse than none. **Claude's built-in skills are compiled into the CLI binary** and cannot
+  be enumerated from disk (`/skills` is a TUI-only command), so the tab discloses that in place
+  rather than implying `/review` and `/security-review` do not exist. **A skill newer than the
+  running agent process is flagged `new`**: it is on disk, the CLI read its skills at startup, and
+  typing the invocation will not work until the agent is relaunched. **Codex's explicit-only
+  skills** (`policy.allow_implicit_invocation: false` in `agents/openai.yaml`) are flagged
+  `explicit` — real and invocable by name, but the model never reaches for one itself. Disabled
+  plugins, unreadable entries, and truncation are named in the same footer note; nothing is
+  dropped silently.
+- Skills are scoped per session, not per Project, because the CLI resolves repo skills from its
+  **live cwd** — a session sitting in a worktree sees a different set than one in the primary
+  checkout of the same repository, and the tab refetches when that cwd moves.
 - **End session** is the rail's one destructive item, so it ships in the drawer rather than on the
   strip — a kill button one mis-tap from the arrow keys is the wrong default even behind a confirm.
   Both hosts route it to the workspace's `session.kill` command, which already owns the two-click

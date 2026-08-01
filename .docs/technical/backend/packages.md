@@ -26,6 +26,7 @@ It should call domain packages rather than acquire their storage or process resp
 | `projects.py` | Project/Group validation and lifecycle | Git-derived identity, file content |
 | `project_files.py` | safe Project config, notes, tree, bounded recursive name/content search, file reads/writes | layout placement, browser drafts |
 | `project_watcher.py` | leased non-recursive directory watches | recursive Project crawl |
+| `agent_skills.py` | read-only discovery of the CLIs' own skills: per-vendor roots (user / repo / plugin / bundled), `SKILL.md` frontmatter, Claude command files, Codex `agents/openai.yaml` policy, plugin enable-gating, shadowing, 10 s cache | writing or installing skills, speaking Codex's app-server protocol, enumerating Claude's compiled-in built-ins (impossible from disk) |
 | `project_actions.py` | inert task import, normalization, exact fingerprint trust, per-step spawn requests (shell quoting, PATH/shim resolution) | automatic execution, UI placement, session ownership |
 | `project_init.py` | user-authored setup commands from the daemon config: catalog, id selection in configured order, one step per command | trust fingerprints, repository reads (there are none), spawn execution |
 | `spawn_contract.py` | spawn field validation: bounded env, cwd containment, Claude marker scrubbing | project ownership (the caller supplies the root) |
