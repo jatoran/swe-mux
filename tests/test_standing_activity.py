@@ -449,6 +449,85 @@ async def test_background_close_without_tracked_open_decrements_the_annotation()
     assert session.record.standing_activity == []
 
 
+async def test_codex_subagent_activity_arms_and_ttl_decays() -> None:
+    # Codex has no subagent lifecycle hooks: recency is the only truth, so any
+    # sub_agent_activity record opens/refreshes the annotation at count 1 and
+    # the TTL is the only clear.
+    replay = DetectionReplay("codex")
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 0,
+            "record": {"type": "event_msg", "payload": {"type": "task_started"}},
+        }
+    )
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 1,
+            "record": {
+                "type": "event_msg",
+                "payload": {"type": "sub_agent_activity", "kind": "started", "agent_path": ["a"]},
+            },
+        }
+    )
+    (activity,) = replay.session.record.standing_activity
+    assert (activity.kind, activity.count, activity.evidence) == (
+        "subagents",
+        1,
+        "transcript:sub_agent_activity",
+    )
+    await replay.step({"kind": "timer", "seconds": 300.0})
+    await replay.step({"kind": "watchdog"})
+    assert replay.session.record.standing_activity == []
+    assert replay.session.status_health_counters["standing_activity_expired"] == 1
+
+
+async def test_process_tree_fast_clears_background_tasks() -> None:
+    # A vanished process cannot still be working: the inspector clears the
+    # annotation the moment the CLI has no live descendants — and never while
+    # anything still runs under it, which also spares MCP-server children.
+    from types import SimpleNamespace
+
+    from swe_mux.processes import ProcessInspector
+
+    session = ReplaySession("claude")
+    now = session.clock.wall()
+    set_standing_activity(
+        session,
+        "background_tasks",
+        source="transcript",
+        evidence="transcript:Bash:run_in_background",
+        expires_at=now + 1800,
+        count=1,
+        since=now - 60,
+        now=now,
+    )
+    inspector = ProcessInspector.__new__(ProcessInspector)
+    inspector.sessions = SimpleNamespace(sessions={"replay-session": session})
+    root = SimpleNamespace(session_id="replay-session")
+    child = SimpleNamespace(session_id="replay-session")
+
+    # Root plus a live child: something still runs, nothing is cleared.
+    inspector._fast_clear_background_annotations([root, child], now)
+    assert [a.kind for a in session.record.standing_activity] == ["background_tasks"]
+    # A fresh annotation is not refuted by a pass that may have raced the spawn.
+    young = ReplaySession("claude")
+    set_standing_activity(
+        young, "background_tasks", source="transcript", evidence="e", now=now
+    )
+    inspector.sessions = SimpleNamespace(sessions={"replay-session": young})
+    inspector._fast_clear_background_annotations([root], now)
+    assert [a.kind for a in young.record.standing_activity] == ["background_tasks"]
+    # Root only, annotation past the grace window: fast-clear.
+    inspector.sessions = SimpleNamespace(sessions={"replay-session": session})
+    inspector._fast_clear_background_annotations([root], now)
+    assert session.record.standing_activity == []
+    assert (
+        session.state_transitions[-1]["evidence"] == "process:descendants_zero"
+    )
+
+
 # ------------------------------------------------------------- replay harness
 
 

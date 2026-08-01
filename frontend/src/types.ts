@@ -8,12 +8,31 @@ export type AwaitingReason = 'approval' | 'question' | 'elicitation' | 'rate_lim
 /** Idle-axis sibling: the turn ended but the agent will resume itself. */
 export type IdleReason = 'waiting_on_background'
 
+/** Standing-engagement annotation kinds — the fifth status axis, never states. */
+export type StandingActivityKind = 'loop' | 'cron' | 'background_tasks' | 'subagents'
+
+/**
+ * A standing engagement that outlives the turn: an armed /loop wakeup, a cron
+ * schedule, running background tasks, live subagents. Idle stays idle and
+ * delivery stays safe; annotations only add information.
+ */
+export interface StandingActivity {
+  kind: StandingActivityKind
+  source: string
+  evidence: string
+  since: number
+  expires_at: number | null
+  count: number
+  detail: string | null
+}
+
 export interface Session {
   id: string; name: string; project_id: string; backend: 'shell' | 'claude' | 'codex'
   native_session_id: string; cwd: string; exe: string; args: string[]; pid: number
   created_at: number; state: SessionState; state_detail?: string; tokens_in: number
   awaiting_reason?: AwaitingReason | null
   idle_reason?: IdleReason | null
+  standing_activity?: StandingActivity[]
   process_job_assignment:string
   tokens_out: number; context_window: number; context_pct: number; last_activity_ts: number
   git: { branch?: string; dirty: number; ahead: number; behind: number }

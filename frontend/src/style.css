@@ -250,6 +250,13 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .session-row.agent.unread .session-copy strong { color:#e6efe9 }
 .session-row.agent.unread:hover .session-copy strong { color:#f0f7f2 }
 .broadcast-flag { margin-left:5px;color:var(--amber);font-weight:600 }
+/* Standing-activity glyphs (loop/cron ⟳, background ≡, subagents ⑂): dimmed
+   companions to the state dot. Deliberately never colored like a state — the
+   dot's meaning is untouched by an armed loop or a running subagent fleet. */
+.activity-badges { display:inline-flex;align-items:center;gap:3px;margin-left:5px;color:#6d7783;font-size:9px;line-height:1;flex:none }
+.activity-badge { display:inline-flex;align-items:baseline;gap:1px }
+.activity-count { font:600 7px 'JetBrains Mono',monospace;color:#8a94a1 }
+.tab-main .activity-badges { margin-left:2px;margin-right:3px }
 /* A preview tab/row is a server its session spawned: same shape, distinct accent. */
 .stack-tabs .preview-tab { color:var(--blue) }
 .stack-tabs .preview-tab-glyph { margin-right:5px }

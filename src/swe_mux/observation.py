@@ -2520,6 +2520,16 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             scope="root",
         )
     elif payload_type == "sub_agent_activity":
+        # Codex has no subagent lifecycle hooks, so recency is the only truth:
+        # any sub-agent record refreshes (or opens) the annotation and the TTL
+        # is the only clear. Count stays 1 — the records carry no fleet size.
+        if not getattr(session, "observation_replay", False) and _refresh_subagents(
+            session,
+            source="transcript",
+            evidence="transcript:sub_agent_activity",
+            now=_standing_now(session, event),
+        ):
+            _publish_update(session)
         await events.emit(
             "subagent_activity",
             session_id=session.record.id,

@@ -1,4 +1,4 @@
-import type { Session, SessionState } from './types'
+import type { Session, SessionState, StandingActivity } from './types'
 
 // Single source of truth for rendering the user-visible session status.
 // Desktop sidebar rows, pane headers, tab strips, and the mobile unified-tab
@@ -53,14 +53,67 @@ function isAgentBackend(session: Session): boolean {
   return session.backend === 'claude' || session.backend === 'codex'
 }
 
+/** One compact affordance per standing-activity annotation. */
+export interface ActivityBadge {
+  glyph: string
+  /** Short status-line text, e.g. "loop armed", "2 background tasks". */
+  label: string
+  /** Tooltip: distinguishes loop vs cron, carries the annotation's detail. */
+  title: string
+  /** Rendered beside the glyph on dense surfaces when > 1. */
+  count?: number
+}
+
+const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
+
+/**
+ * Standing-activity badges for a session, in a stable order. Annotations are
+ * the fifth status axis — an armed /loop, a cron schedule, background tasks,
+ * live subagents — and deliberately NOT states: the dot color and the delivery
+ * gate are untouched (tests assert idle+loop still classifies as ready). Loop
+ * and cron share one glyph (sidebar density beats taxonomy); the title
+ * distinguishes them and carries the annotation's own detail.
+ */
+export function activityBadges(session: Session): ActivityBadge[] {
+  const badges: ActivityBadge[] = []
+  const annotations: StandingActivity[] = session.standing_activity ?? []
+  const byKind = (kind: string) => annotations.find(item => item.kind === kind)
+  const loop = byKind('loop')
+  if (loop) badges.push({ glyph: '⟳', label: 'loop armed', title: `loop armed${loop.detail ? ` · ${loop.detail}` : ''}` })
+  const cron = byKind('cron')
+  if (cron) {
+    const label = cron.count > 1 ? plural(cron.count, 'cron job') : 'cron scheduled'
+    badges.push({ glyph: '⟳', label, title: `${label}${cron.detail ? ` · ${cron.detail}` : ''}`, count: cron.count })
+  }
+  const background = byKind('background_tasks')
+  if (background) {
+    const label = plural(background.count, 'background task')
+    badges.push({ glyph: '≡', label, title: `${label} running${background.detail ? ` · ${background.detail}` : ''}`, count: background.count })
+  }
+  const subagents = byKind('subagents')
+  if (subagents) {
+    const label = plural(subagents.count, 'subagent')
+    badges.push({ glyph: '⑂', label, title: `${label} running${subagents.detail ? ` · ${subagents.detail}` : ''}`, count: subagents.count })
+  }
+  return badges
+}
+
 /** Status line text shown next to a session; total over SessionState. */
 export function sessionStatus(session: Session): string {
   if (!isAgentBackend(session)) return session.state
   const context = session.context_pct > 0 ? ` · ${Math.round(session.context_pct * 100)}%` : ''
   const compactions = session.compaction_count > 0 ? ` · compacted ${session.compaction_count}×` : ''
-  if (session.state === 'working') return `working${session.state_detail ? ` · ${session.state_detail}` : ''}${context}${compactions}`
-  if (session.state === 'idle') return `${idleLabel(session)}${context}${compactions}`
-  if (session.state === 'awaiting') return `${awaitingLabel(session)}${session.state_detail ? ` · ${session.state_detail}` : ''}${context}${compactions}`
+  const badges = activityBadges(session)
+  const standing = badges.map(badge => ` · ${badge.label}`).join('')
+  if (session.state === 'working') return `working${session.state_detail ? ` · ${session.state_detail}` : ''}${standing}${context}${compactions}`
+  if (session.state === 'idle') {
+    // The background annotation supersedes the derived idle_reason text: one
+    // fact must not render twice ("background work running · 2 background
+    // tasks"). With any badge present, "ready" alone keeps the line scannable.
+    const base = badges.length ? 'ready' : idleLabel(session)
+    return `${base}${standing}${context}${compactions}`
+  }
+  if (session.state === 'awaiting') return `${awaitingLabel(session)}${session.state_detail ? ` · ${session.state_detail}` : ''}${standing}${context}${compactions}`
   if (session.state === 'starting') return 'starting agent…'
   return `${session.state}${context}${compactions}`
 }

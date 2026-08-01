@@ -20,6 +20,13 @@ a PTY or authorize automation.
   are provably misreading is precisely the false-safe case this contract exists to prevent.
 - `unknown` means evidence is missing, stale, replaced, or degraded. Unknown is never safe.
 
+Standing-activity annotations (`status-detection.md` § Standing-activity annotations) are
+deliberately invisible to this classification: an idle session with an armed `/loop`, a
+cron schedule, background tasks, or a decaying subagent annotation is exactly as
+deliverable as an idle one — that is the user-facing point of modeling them as
+annotations rather than states. The corpus pins a loop-armed idle turn end evaluating
+`safe`.
+
 Every result remains `authorized: false`: the tracker classifies evidence and never grants
 authority. Two callers act on that classification, both outside this module — the Phase 4
 queue's `send_next` (a human act, with an explicit confirm for blocked/unknown) and the

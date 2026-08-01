@@ -1,5 +1,16 @@
 # Status detection v2 — standing-activity annotations + detection-hierarchy consolidation
 
+> **IMPLEMENTED 2026-07-31** — all four phases landed (A: model+plumbing, B: Claude
+> signals, C: hierarchy, D: Codex+UI), each live-verified on the isolated daemon.
+> `status-detection.md` is now the authoritative description; this file remains as the
+> design rationale. Resolved [verify] items: cron jobs are session-only/in-memory (no
+> on-disk store — transcript-only detection is complete); `~/.claude/sessions/<pid>.json`
+> `updatedAt` is a status-change stamp, NOT a heartbeat (no staleness alarm built);
+> observed `status` values are `busy`/`idle`; Codex has no side-state equivalent; the
+> current CLI's background-wait footer is "N shell(s) still running · check the task
+> status" (recaptured, pinned). Open per §7: cli-state promotion to a transition source
+> awaits a release of `cli_state_disagrees` telemetry.
+
 Implementation plan, written 2026-07-31 after the nested-child/marker-drift incident
 (commit `bb81463`, `.docs/design/features/status-detection.md` § Foreign conversations).
 Audience: the implementing agent. Everything here was verified against the live system on

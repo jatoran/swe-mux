@@ -13,7 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 from .background_tasks import background
 from .event_bus import EventBus
 from .operational_telemetry import command_hash, process_identity
-from .session import Session, SessionManager
+from .session import Session, SessionManager, clear_standing_activity
 
 try:
     import psutil
@@ -240,6 +240,7 @@ class ProcessInspector:
             for key, process in self.owned.items()
             if process.exited_at is None or now - process.exited_at < ENDED_RETENTION_SECONDS
         }
+        self._fast_clear_background_annotations(snapshots, now)
         if self.telemetry is not None and (
             startup or now - self._last_persist >= max(10.0, self.cadence * 2)
         ):
@@ -251,6 +252,49 @@ class ProcessInspector:
     def live_listeners(self) -> set[tuple[str, int, str]]:
         """`(session_id, port, host)` for every listener seen by the last reconcile."""
         return set(self._listeners)
+
+    # Grace between an annotation appearing and the process tree being trusted to
+    # refute it: a launch's child may not exist yet on the pass that races it.
+    BACKGROUND_FAST_CLEAR_MIN_AGE_SECONDS = 15.0
+
+    def _fast_clear_background_annotations(self, snapshots: list[Any], now: float) -> None:
+        """A vanished process cannot still be working — the strongest *clear*.
+
+        A `background_tasks` annotation whose session has no live descendant
+        besides the CLI root itself is cleared immediately instead of waiting
+        for its TTL. Never the reverse: descendants alone open nothing (an MCP
+        server child is not a background task), and a session with any extra
+        descendant is left to transcript evidence and the TTL — which also makes
+        a false clear structurally impossible while a task's process runs.
+        """
+        live_counts: dict[str, int] = {}
+        for item in snapshots:
+            live_counts[item.session_id] = live_counts.get(item.session_id, 0) + 1
+        for session in self.sessions.sessions.values():
+            # getattr-guarded like the rest of the inspector: tests drive it
+            # with lightweight record stand-ins.
+            record = session.record
+            if getattr(record, "backend", None) not in {"claude", "codex"}:
+                continue
+            if getattr(record, "state", None) in {"exited", "crashed"}:
+                continue
+            standing = getattr(record, "standing_activity", None) or []
+            annotation = next((a for a in standing if a.kind == "background_tasks"), None)
+            if annotation is None:
+                continue
+            if now - annotation.since < self.BACKGROUND_FAST_CLEAR_MIN_AGE_SECONDS:
+                continue
+            if live_counts.get(record.id, 0) != 1:
+                # 0 means the root itself is gone (session exit owns that);
+                # >1 means something still runs under the CLI.
+                continue
+            if clear_standing_activity(
+                session, "background_tasks", evidence="process:descendants_zero", now=now
+            ):
+                observation_state = getattr(session, "observation_state", None)
+                if isinstance(observation_state, dict):
+                    observation_state.get("background_open", {}).clear()
+                session.publish_update()
 
     async def _ensure_sampled(self, *, force: bool = False) -> None:
         """Collect a fresh sample only when the cached one is stale.

@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import type { AwaitingReason, Session, SessionState } from '../src/types.ts'
-import { awaitingLabel, idleLabel, sessionStatus, stateDotClass } from '../src/sessionStatus.ts'
+import type { AwaitingReason, Session, SessionState, StandingActivity, StandingActivityKind } from '../src/types.ts'
+import { activityBadges, awaitingLabel, idleLabel, sessionStatus, stateDotClass } from '../src/sessionStatus.ts'
 import { classifySoundEvent } from '../src/sessionSounds.ts'
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
@@ -81,6 +81,79 @@ test('a background-wait turn end does not fire the completion sound', () => {
 test('shell sessions render the raw state', () => {
   const shell = { ...agent('running'), backend: 'shell' } as unknown as Session
   assert.equal(sessionStatus(shell), 'running')
+})
+
+const ALL_ACTIVITY: StandingActivityKind[] = ['loop', 'cron', 'background_tasks', 'subagents']
+
+const annotation = (kind: StandingActivityKind, extra: Partial<StandingActivity> = {}): StandingActivity =>
+  ({ kind, source: 'transcript', evidence: 'test', since: 0, expires_at: null, count: 1, detail: null, ...extra })
+
+test('every standing-activity kind renders a glyph and a label', () => {
+  for (const kind of ALL_ACTIVITY) {
+    const badges = activityBadges(agent('idle', { standing_activity: [annotation(kind)] }))
+    assert.equal(badges.length, 1, `${kind} must render exactly one badge`)
+    assert.ok(badges[0].glyph.trim().length > 0, `${kind} needs a glyph`)
+    assert.ok(badges[0].label.trim().length > 0, `${kind} needs a label`)
+    assert.ok(badges[0].title.trim().length > 0, `${kind} needs a tooltip`)
+  }
+  assert.equal(activityBadges(agent('idle')).length, 0)
+  assert.equal(activityBadges(agent('idle', { standing_activity: [] })).length, 0)
+})
+
+test('annotations never change the dot: idle with a loop still classifies ready', () => {
+  // The user-facing point of the whole axis: green keeps meaning "ready — you
+  // can type and send". Annotations add information, never states.
+  const armed = agent('idle', { standing_activity: [annotation('loop', { detail: 'watching CI' })] })
+  assert.equal(stateDotClass(armed.state), 'state-dot idle')
+  const label = sessionStatus(armed)
+  assert.ok(label.startsWith('ready'), 'idle with a loop must still read ready')
+  assert.ok(!label.includes('awaiting'))
+  assert.ok(!label.includes('working'))
+})
+
+test('the status line composes standing activity after the state', () => {
+  assert.equal(
+    sessionStatus(agent('idle', { standing_activity: [annotation('loop')] })),
+    'ready · loop armed',
+  )
+  assert.equal(
+    sessionStatus(agent('idle', { standing_activity: [annotation('background_tasks', { count: 2 })] })),
+    'ready · 2 background tasks',
+  )
+  assert.equal(
+    sessionStatus(agent('working', { state_detail: 'Task', standing_activity: [annotation('subagents', { count: 3 })] })),
+    'working · Task · 3 subagents',
+  )
+  // Composable: several annotations render together, in a stable order.
+  assert.equal(
+    sessionStatus(agent('idle', { standing_activity: [annotation('subagents'), annotation('loop')] })),
+    'ready · loop armed · 1 subagent',
+  )
+})
+
+test('the background annotation supersedes the derived idle_reason text', () => {
+  // idle_reason is derived server-side from the same annotation; rendering
+  // both would say one fact twice.
+  const session = agent('idle', {
+    idle_reason: 'waiting_on_background',
+    standing_activity: [annotation('background_tasks', { count: 1 })],
+  })
+  assert.equal(sessionStatus(session), 'ready · 1 background task')
+  // Without the annotation (older daemon), the compat sub-reason still renders.
+  assert.equal(
+    sessionStatus(agent('idle', { idle_reason: 'waiting_on_background' })),
+    'ready · background work running',
+  )
+})
+
+test('loop and cron share one glyph; the tooltip distinguishes them', () => {
+  const both = activityBadges(agent('idle', {
+    standing_activity: [annotation('loop'), annotation('cron', { count: 2, detail: '*/5 * * * *' })],
+  }))
+  assert.equal(both.length, 2)
+  assert.equal(both[0].glyph, both[1].glyph)
+  assert.notEqual(both[0].title, both[1].title)
+  assert.ok(both[1].title.includes('*/5 * * * *'))
 })
 
 test('every surface renders through the shared mapping — no inline heuristics', () => {

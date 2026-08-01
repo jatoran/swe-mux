@@ -25,7 +25,7 @@ Per signal class, every layer feeds the same ledger with its own `source` string
 | Hooks (incl. `SubagentStart`/`SubagentStop`) | `hook` | Turn boundaries, blocks, identity (priority 2). |
 | Transcript records | `transcript` | Ordered turn evidence (priority 1) + standing-activity extraction. |
 | PTY screen classifier | `pty` / `watchdog-pty` | Recoveries, vetoes, the startup-dialog rule, drift self-check. |
-| Process tree (ProcessInspector) | `process` | Liveness; annotation corroboration/fast-clear (planned). |
+| Process tree (ProcessInspector) | `process` | Liveness; `background_tasks` fast-clear (a vanished process cannot still be working). |
 | Daemon lifecycle | `daemon` | Spawn/promotion/demotion/exit (force). |
 
 **The `cli-state` layer** (`src/swe_mux/cli_state.py`, polled on the 5 s watchdog cadence,
@@ -215,6 +215,21 @@ Record shapes verified 2026-07-31 against live transcripts and the CLI's own too
   `session_id`; the foreign filter runs first, so a nested child's fleet never counts.
   Rendered on the working axis too (`working · Task · 2 subagents`) — the root turn is
   open during Task execution.
+
+Two cross-backend sources complete the set:
+
+- **Process fast-clear** (`processes.py`): on each inspector pass, a session holding a
+  `background_tasks` annotation older than the spawn-race grace (15 s) whose CLI root has
+  **no live descendant** is cleared immediately (`process:descendants_zero`) — a vanished
+  process cannot still be working, and this is the strongest clear there is. Never the
+  reverse: descendants alone open nothing (an MCP-server child is not a background task),
+  and any extra descendant leaves the annotation to transcript evidence and the TTL —
+  which also makes a false clear structurally impossible while a task's process runs.
+- **Codex** (`_codex`): no loop/cron equivalents exist in the Codex CLI, so those
+  annotations stay empty rather than being faked, and no subagent lifecycle hooks exist —
+  any `sub_agent_activity` record opens/refreshes the `subagents` annotation at count 1
+  and the TTL is the only clear. Background tasks reach Codex through the process
+  fast-clear side only.
 
 ### Leaving `awaiting` (answered prompts)
 
@@ -462,15 +477,37 @@ through it — `frontend/test/sessionStatus.test.ts` asserts totality, the await
 affordances, that idle never renders as awaiting approval, and (by source inspection)
 that no surface reintroduces an inline heuristic.
 
+Standing activity renders through the same mapping and **never changes the dot** —
+hue variants of green fail at a glance and fail colorblind users, so green keeps meaning
+exactly "ready, you can type and send". `activityBadges(session)` yields one compact
+affordance per annotation — `⟳` for loop *and* cron (one glyph; the tooltip
+distinguishes "loop armed" from the cron cadence — sidebar density beats taxonomy),
+`≡` background tasks with count, `⑂` subagents with count — and `sessionStatus`
+composes them into the line: `ready · loop armed`, `working · Task · 3 subagents`,
+`ready · 2 background tasks` (the background annotation supersedes the derived
+`idle_reason` text so one fact never renders twice). Dense surfaces (sidebar rows, tab
+strips, the mobile projection) show the dimmed glyphs beside the dot; the full text lives
+in the status line and tooltips. Tests assert every annotation kind renders a glyph and
+label and that idle-with-loop still classifies as ready with an unchanged dot class.
+Notification policy: annotations neither add nor suppress sounds, with one exception —
+the pre-existing `waiting_on_background` turn-end sound suppression, now driven by the
+`background_tasks` annotation via the derived `idle_reason` (a loop-armed turn end still
+notifies: ready means ready).
+
 ## Key files
 
 - `src/swe_mux/session.py` — contract tables, `apply_state_transition`,
   `watchdog_decision`, `pty_tail_appears_idle`, `apply_watchdog_recovery`,
-  `session_is_unwitnessed`, `session_status_health`, `fleet_status_health`
+  `session_is_unwitnessed`, `session_status_health`, `fleet_status_health`,
+  standing-activity set management, `startup_dialog_observation`,
+  `note_classifier_blindness`
 - `src/swe_mux/observation.py` — evidence extraction, `tail_turn_state`, hook/transcript
-  handlers, `closed_by_transcript` latch, trailing-completion guard
-- `src/swe_mux/models.py` — `SessionState`, `AwaitingReason`,
-  `SessionRecord.awaiting_reason`
+  handlers, `closed_by_transcript` latch, trailing-completion guard, standing-activity
+  extractors
+- `src/swe_mux/cli_state.py` — the `cli-state` corroboration poller
+- `src/swe_mux/processes.py` — background-task process fast-clear
+- `src/swe_mux/models.py` — `SessionState`, `AwaitingReason`, `StandingActivity`,
+  `SessionRecord.awaiting_reason`/`standing_activity`
 - `src/swe_mux/server.py` — state-log and status-health endpoints
 - `tests/support/detection_replay.py`, `tests/support/status_capture.py`
 - `tests/test_status_contract.py`, `tests/test_detection_replay.py`,

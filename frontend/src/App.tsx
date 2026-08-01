@@ -86,7 +86,7 @@ import {
   setBucketSortMode, sortBuckets, sortProjects, toggleBucketCollapsed,
 } from './projectSort'
 import { reconcileSeen, isUnread, projectRailStatus, projectSetRailStatus, type ProjectRailActivity, type SeenMap } from './sessionAttention'
-import { sessionStatus, stateDotClass } from './sessionStatus'
+import { activityBadges, sessionStatus, stateDotClass } from './sessionStatus'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
@@ -129,6 +129,19 @@ function scrollStripByWheel(event:JSX.TargetedWheelEvent<HTMLDivElement>):void {
 // re-implementation because the copies drifted — the workspace tab strip read
 // `session.name` directly and so was the one place a generated title never appeared.
 const sessionName=(session:Session):string=>agentTargetName(session)
+
+// Compact standing-activity glyphs for dense surfaces (sidebar rows, tab
+// strips): the dot's color never changes — green keeps meaning "ready" — so
+// an armed loop, cron schedule, background tasks, or live subagents render as
+// dimmed glyphs beside it, with the full text in the status line and tooltip.
+const activityGlyphs=(session:Session|undefined)=>{
+  if(!session||session.pending)return null
+  const badges=activityBadges(session)
+  if(!badges.length)return null
+  return <span class="activity-badges" role="img" aria-label={badges.map(badge=>badge.label).join(', ')}>
+    {badges.map((badge,index)=><span key={index} class="activity-badge" title={badge.title}>{badge.glyph}{badge.count&&badge.count>1?<span class="activity-count">{badge.count}</span>:null}</span>)}
+  </span>
+}
 
 function workingCwd(session:Session):string {
   return session.runtime_cwd||session.spawn_cwd||session.cwd
@@ -2840,7 +2853,7 @@ export function App() {
           // titling, and a tab strip showing `claude-15036b` while the sidebar shows
           // the real name is the surface where you actually need to tell panes apart.
           const label=session?sessionName(session):child.id
-          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session?.state)}/>{label}</button>{closeTab(child,label,session)}</div>
+          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session?.state)}/>{activityGlyphs(session)}{label}</button>{closeTab(child,label,session)}</div>
         })}
       </div><div class="stack-active">{node.children
         .filter(child=>child.id===activeChild.id||(child.kind==='terminal'&&warmTerminalIds.includes(child.id)))
@@ -2921,7 +2934,7 @@ export function App() {
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Terminal tabs">
-      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setActiveId(id);openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session.state)}/>{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${confirmKillId===id?'Confirm close':'Close'} terminal: ${sessionName(session)}`} title={confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
+      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setActiveId(id);openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session.state)}/>{activityGlyphs(session)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${confirmKillId===id?'Confirm close':'Close'} terminal: ${sessionName(session)}`} title={confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
     </div><div class="stack-active">{terminalPane}</div></section>
   }
 
@@ -3044,7 +3057,7 @@ export function App() {
       :isUnread(session,seenActivity)?'unread':'read'
     return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){beginLongPress(event,(x,y)=>openSessionMenu(session,x,y,'sidebar'));beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       <span class={stateDotClass(session.state)} />
-      <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={session.backend}>{providerGlyph(session.backend as ProviderName)}</span>}{sessionName(session)}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
+      <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={session.backend}>{providerGlyph(session.backend as ProviderName)}</span>}{sessionName(session)}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}{activityGlyphs(session)}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
     </button>{showSessionNote&&sidebarNoteRow(sessionNoteId,session.project_id)}{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}{spawnedServers.map(server=>sidebarServerRow(server,session))}</div>
   }
@@ -3132,7 +3145,7 @@ export function App() {
     const preview=leaf.kind==='preview'?previews[leaf.id]:undefined
     const label=leaf.kind==='terminal'?(session?sessionName(session):leaf.id):leaf.kind==='preview'?preview?.url||leaf.id:leaf.kind==='history'?'History':leaf.kind==='queue'?queueTabLabel(leaf.id):noteTabLabel(leaf.id)
     const visibleLabel=mobileTabLabel(leaf)
-    const glyph=leaf.kind==='terminal'?<span class={stateDotClass(session?.state)}/>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':'◇'}</span>
+    const glyph=leaf.kind==='terminal'?<><span class={stateDotClass(session?.state)}/>{activityGlyphs(session)}</>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':'◇'}</span>
     // Mobile tabs carry no close button: it ate label width and was a mis-tap
     // hazard next to tab activation. Closing/killing lives in the long-press
     // menu (session menu for terminals, tab menu for resources), which is also
