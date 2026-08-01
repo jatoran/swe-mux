@@ -28,6 +28,7 @@ from swe_mux.session import (
     STATE_TRANSITION_LOG_LIMIT,
     apply_state_transition,
     apply_watchdog_recovery,
+    expire_standing_activity,
     pty_tail_state,
     session_is_unwitnessed,
     session_status_health,
@@ -216,6 +217,25 @@ class ReplaySession:
         )
 
 
+def normalized_standing_activity(session: ReplaySession) -> list[dict[str, Any]]:
+    """Golden projection of the annotation set: stable order, display fields only.
+
+    Absolute timestamps stay out so fixtures do not encode the virtual epoch;
+    whether an annotation self-expires is projected as a boolean instead.
+    """
+    return [
+        {
+            "kind": activity.kind,
+            "source": activity.source,
+            "evidence": activity.evidence,
+            "count": activity.count,
+            "detail": activity.detail,
+            "expires": activity.expires_at is not None,
+        }
+        for activity in sorted(session.record.standing_activity, key=lambda a: a.kind)
+    ]
+
+
 def normalized_event(event: MuxEvent) -> dict[str, Any]:
     item: dict[str, Any] = {"type": event.type, "source": event.source}
     for key in ("scope", "kind", "outcome", "tool", "success", "previous", "state"):
@@ -254,6 +274,7 @@ class DetectionReplay:
         self.normalized: list[dict[str, Any]] = []
         self.checkpoints: list[dict[str, Any]] = []
         self.state_checkpoints: list[dict[str, Any]] = []
+        self.standing_checkpoints: list[dict[str, Any]] = []
         self.decoder = IncrementalJsonlDecoder()
         # What the transcript file's tail would contain on disk. Regular
         # transcript steps append here too; "transcript_tail" steps append
@@ -431,6 +452,13 @@ class DetectionReplay:
                     "actual_awaiting": self.session.record.awaiting_reason,
                 }
             )
+        if "expect_standing" in step:
+            self.standing_checkpoints.append(
+                {
+                    "expected": step["expect_standing"],
+                    "actual": normalized_standing_activity(self.session),
+                }
+            )
 
     async def _watchdog_pass(self) -> None:
         """One quiescence-watchdog evaluation over the fixture's evidence.
@@ -441,6 +469,9 @@ class DetectionReplay:
         drift from _watchdog_check_session.
         """
         session = self.session
+        # Mirrors _watchdog_check_session: the annotation TTL sweep runs before
+        # any other watchdog rule and owes nothing to turn state.
+        expire_standing_activity(session, now=self.clock.wall())
         stalled = max(0.0, self.clock.monotonic() - session.last_state_change_monotonic)
         pty_state = pty_tail_state(self.pty_tail)
         unwitnessed = session_is_unwitnessed(session)
@@ -528,6 +559,8 @@ class DetectionReplay:
             "states": normalized_state_stream(self.session),
             "checkpoints": self.checkpoints,
             "state_checkpoints": self.state_checkpoints,
+            "standing_checkpoints": self.standing_checkpoints,
+            "standing_activity": normalized_standing_activity(self.session),
             "readiness": readiness,
             "health": {
                 "counters": dict(self.session.status_health_counters),

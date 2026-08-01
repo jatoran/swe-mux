@@ -108,6 +108,42 @@ while the agent has background work that will wake it back up. The UI renders
 end (the next one is the moment worth the user's attention). Cleared by every transition off
 `idle`, so a self-wake into `working` clears it with no user prompt involved.
 
+### Standing-activity annotations (the fifth axis)
+
+`SessionRecord.standing_activity` models standing engagements — an armed `/loop` wakeup
+(`loop`), a cron schedule (`cron`), running background tasks (`background_tasks`), live
+subagents (`subagents`) — as a list of
+`StandingActivity {kind, source, evidence, since, expires_at, count, detail}`. The contract:
+
+- **Not states.** SessionState, `awaiting_reason`, and `delivery_state` are untouched: a
+  loop-armed idle session is exactly as deliverable as an idle one — that is the
+  user-facing point. (`idle_reason: waiting_on_background` above will migrate onto the
+  `background_tasks` annotation once its detection sources land, kept one release for UI
+  compat.)
+- **Additive and composable.** A session can hold `loop` + `background_tasks` +
+  `subagents` simultaneously; the UI composes them.
+- **TTL'd, never latched.** Every annotation carries `expires_at` where the evidence
+  implies one (loop: schedule time + slack; subagents/background: refreshed on evidence,
+  decayed after a quiet window). The watchdog pass sweeps expiries before any other rule.
+  A wrong annotation must decay on its own — the lesson of every stuck-status incident in
+  this codebase.
+- **Run-scoped.** Every seam that resets observation identity clears the set: conversation
+  rollover, identity heal, promote, demote, session end, and the adoption-repair paths.
+  Foreign-conversation hooks (see below) are dropped *before* annotation extraction — a
+  nested child's loop is not this session's loop.
+- **Ledgered.** Additions/removals/expiries append non-transition ledger entries
+  (`kind: "standing_activity"`, action `added|updated|removed|expired`) to the transition
+  ring, and `status_health.counters.standing_activity_expired` counts decays (an expiry
+  without a positive clear is a small drift signal). A pure TTL refresh is silent —
+  subagent evidence renews at tool-record cadence and would bury the entries that matter.
+
+Add/refresh/expire/clear go through `set_standing_activity` /
+`clear_standing_activity` / `expire_standing_activity` / `clear_all_standing_activity`
+(`session.py`), shared by the live `Session` and the replay harness exactly as
+`apply_state_transition` is. The list is serialized in the record snapshot (so supervisor
+adoption round-trips it across daemon restarts), appears on `/api/sessions` rows and
+`/api/sessions/{sid}/state-log`, and rides every `update` fanout frame.
+
 ### Leaving `awaiting` (answered prompts)
 
 Nothing fires when a permission dialog is dismissed, and the approval was raised by an
