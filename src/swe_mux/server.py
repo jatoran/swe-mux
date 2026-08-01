@@ -154,6 +154,7 @@ from .spawn_contract import (
     resolve_listed_cwd,
     scrub_claude_session_markers,
 )
+from .status_timeline import StatusTimelineStore
 from .subprocess_flags import background_creation_flags, popen_outside_job
 from .supervisor_client import SupervisorClient
 from .tailscale import (
@@ -572,6 +573,7 @@ def create_app(
             web.post("/api/sessions", spawn_session),
             web.get("/api/sessions/{sid}", get_session),
             web.get("/api/sessions/{sid}/state-log", get_session_state_log),
+            web.get("/api/sessions/{sid}/diagnostic-bundle", get_session_diagnostic_bundle),
             web.get("/api/diagnostics/status-health", get_status_health),
             web.get("/api/diagnostics/background", get_background_health),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
@@ -732,6 +734,13 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         config.database_path, retention_days=config.process_evidence_retention_days
     )
     await tier0.prune()
+    # Durable per-session detection timeline: every ledger entry survives
+    # daemon restarts and session ends so status incidents stay investigable
+    # (status-detection.md § durable timeline).
+    status_timeline = StatusTimelineStore(
+        config.database_path, retention_days=config.status_timeline_retention_days
+    )
+    await status_timeline.prune()
     projects = ProjectManager(history)
     await projects.start()
     history_backfills = HistoryBackfillManager(history, projects)
@@ -781,6 +790,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         hook_spool_dir=config.data_dir / "hook-spool",
         supervisor=supervisor_client,
         attach_replay_bytes=config.attach_replay_bytes,
+        status_timeline=status_timeline,
     )
     if supervisor_client is not None:
         try:
@@ -1010,6 +1020,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         lambda: _retention_loop(automation_store, tier0, prompt_queue_store, config),
     )
     background.start(STATE_WATCHDOG_LOOP, sessions.state_watchdog_loop)
+    status_timeline.start()
     push_sender = PushSender(push_store, settings_store, events, presence=device_presence)
     background.start(PUSH_SENDER_LOOP, push_sender.run)
     reconcile_task: asyncio.Task[int] | None = None
@@ -1037,6 +1048,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         openrouter=openrouter,
         usage=usage,
         telemetry=telemetry,
+        status_timeline=status_timeline,
         tier0=tier0,
         deterministic_consumers=consumers,
         project_cards=project_cards,
@@ -1104,6 +1116,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                 "(muxd --shutdown stops everything)"
             )
         await supervisor_client.close()
+    # After sessions.shutdown(): the terminal ledger entries it appends are the
+    # final drain's whole point.
+    await status_timeline.stop()
     await telemetry.stop()
     await tier0.stop()
     await clipboard.stop()
@@ -1112,6 +1127,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     prompt_queue_store.close()
     voice_store.close()
     telemetry.close()
+    status_timeline.close()
     tier0.close()
     clipboard.close()
     reaper.close()
@@ -3497,10 +3513,19 @@ async def get_session(request: web.Request) -> web.Response:
     )
 
 
-async def get_session_state_log(request: web.Request) -> web.Response:
-    """End-detection diagnostics: recent transitions, faults, and watchdog activity."""
-    session = request.app["sessions"].resolve(request.match_info["sid"])
-    now = time.time()
+def _query_epoch(request: web.Request, key: str) -> float | None:
+    """Parse an epoch-seconds query parameter, tolerating blanks."""
+    raw = request.query.get(key)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        raise web.HTTPBadRequest(text=f"{key} must be epoch seconds") from None
+
+
+def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any]:
+    """The live half of the state-log: current fields plus the in-memory rings."""
     transcript = session.transcript_path
     transcript_mtime: float | None = None
     if transcript is not None:
@@ -3508,71 +3533,262 @@ async def get_session_state_log(request: web.Request) -> web.Response:
             transcript_mtime = transcript.stat().st_mtime
         except OSError:
             transcript_mtime = None
+    return {
+        "id": session.record.id,
+        "live": True,
+        "backend": session.record.backend,
+        "state": session.record.state,
+        "state_detail": session.record.state_detail,
+        "state_source_priority": session.state_source_priority,
+        "now": now,
+        "last_state_change_ts": session.last_state_change_ts,
+        "seconds_in_state": round(now - session.last_state_change_ts, 3),
+        "last_hook_ts": session.last_hook_ts or None,
+        "transcript_path": str(transcript) if transcript else None,
+        "transcript_mtime": transcript_mtime,
+        # Whether that path was proven or guessed. A provisional binding drives
+        # state only, so a session reporting live turns with no tokens and a
+        # placeholder conversation id is explained by this field and not a bug.
+        "transcript_provisional": session.transcript_provisional,
+        # No transcript and no hook ever: the PTY screen is the only source
+        # that can move this session, which is what licenses the
+        # begin/end_pty_turn watchdog pair.
+        "unwitnessed": session_is_unwitnessed(session),
+        "observer_restart_count": session.observer_restart_count,
+        "observer_last_fault": session.observer_last_fault,
+        "watchdog_recoveries": session.watchdog_recoveries,
+        "observation_replay": session.observation_replay,
+        # The one fault class that presents as a perfectly healthy session:
+        # the transcript parses fine, it is just not this PTY's conversation
+        # any more. Paired with the run counter, because "which conversation
+        # am I looking at" is the question this endpoint exists to answer.
+        "observation_stale_since": session.record.observation_stale_since,
+        "agent_run_id": session.record.agent_run_id,
+        "agent_run_seq": session.record.agent_run_seq,
+        "native_session_id": session.record.native_session_id,
+        "agent_lifecycle_id": session.agent_lifecycle_id,
+        "awaiting_reason": session.record.awaiting_reason,
+        "standing_activity": [
+            activity.snapshot() for activity in session.record.standing_activity
+        ],
+        # The CLI's own published state for this conversation
+        # (~/.claude/sessions/<pid>.json) — corroboration only, never a
+        # transition source. None until the poller matches a file.
+        "cli_state": session.cli_state,
+        # Last observed reading per detection-ladder layer; the flips behind
+        # these values are ledgered as `layer_reading` timeline entries.
+        "layer_readings": dict(session.layer_readings),
+        "status_health": session.status_health(now),
+        # Multi-device terminal arbitration. Non-zero rejections mean keystrokes
+        # arrived from a client that had lost input ownership; non-zero denials
+        # mean a background pane tried to take it back.
+        "input_arbitration": {
+            # The device classes the daemon believes are in use: a passive claim
+            # from any other one is refused, so this is the first thing to check
+            # when input ownership is not where it is expected to be.
+            "active_devices": sorted(app["device_presence"].active_profiles()),
+            "leading_device": app["device_presence"].leading_profile(),
+            "owner_device": session.input_owner_device,
+            "owner_epoch": session.input_owner_epoch,
+            "attached_viewports": len(session.viewports),
+            "geometry": list(session.geometry) if session.geometry else None,
+            "input_rejections": session.input_rejections,
+            "claim_denials": session.input_claim_denials,
+            "claims": list(session.claim_log),
+        },
+        # Real state changes are kept separately: a busy turn emits dozens
+        # of same-state tool detail updates that would otherwise evict the
+        # history explaining how the session reached its current state.
+        "state_changes": list(session.state_changes),
+        "transitions": list(session.state_transitions),
+    }
+
+
+async def _post_mortem_state_log(
+    app: Any, sid: str, from_ts: float | None, to_ts: float | None
+) -> web.Response:
+    """State-log for a session that no longer exists, from the durable store.
+
+    The timeline table records (session_id, agent_run_id) pairs, so the mux id
+    or any of its run ids (a history row's key) reaches the same rows.
+    """
+    store: StatusTimelineStore = app["status_timeline"]
+    timeline, truncated = await store.timeline(sid, from_ts=from_ts, to_ts=to_ts)
+    history_row = await app["history"].history_entry(sid)
+    if not timeline and not history_row:
+        raise KeyError(sid)
+    runs = await store.runs_for_session(sid)
+    if not runs and history_row:
+        runs = await store.runs_for_session(str(history_row["id"]))
     return json_response(
         {
-            "id": session.record.id,
-            "backend": session.record.backend,
-            "state": session.record.state,
-            "state_detail": session.record.state_detail,
-            "state_source_priority": session.state_source_priority,
+            "id": sid,
+            "live": False,
+            "history": history_row,
+            "runs": runs,
+            "from": from_ts,
+            "to": to_ts,
+            "timeline": timeline,
+            "timeline_truncated": truncated,
+            "timeline_sink": store.stats(),
+        }
+    )
+
+
+async def get_session_state_log(request: web.Request) -> web.Response:
+    """End-detection diagnostics: transitions, faults, watchdog and layer activity.
+
+    With `from`/`to` (epoch seconds) the response adds a `timeline` slice from
+    the durable store — the live ring is flushed first, so the slice is
+    complete up to the moment of the request. For an ended session the durable
+    timeline is the whole answer (post-mortem mode).
+    """
+    sid = request.match_info["sid"]
+    from_ts = _query_epoch(request, "from")
+    to_ts = _query_epoch(request, "to")
+    try:
+        session = request.app["sessions"].resolve(sid)
+    except KeyError:
+        return await _post_mortem_state_log(request.app, sid, from_ts, to_ts)
+    now = time.time()
+    payload = _live_state_log_payload(request.app, session, now)
+    store: StatusTimelineStore = request.app["status_timeline"]
+    if from_ts is not None or to_ts is not None:
+        await store.flush_session(session)
+        timeline, truncated = await store.timeline(
+            session.record.id, from_ts=from_ts, to_ts=to_ts
+        )
+        payload["from"] = from_ts
+        payload["to"] = to_ts
+        payload["timeline"] = timeline
+        payload["timeline_truncated"] = truncated
+    payload["timeline_sink"] = store.stats()
+    return json_response(payload)
+
+
+# Bounded transcript slice per agent run in a diagnostic bundle; the timeline
+# names the moments, the transcript shows what the agent was actually doing.
+DIAGNOSTIC_BUNDLE_MAX_MESSAGES_PER_RUN = 200
+DIAGNOSTIC_BUNDLE_DEFAULT_WINDOW_SECONDS = 3600.0
+
+
+async def _bundle_transcript_slices(
+    app: Any,
+    run_ids: list[str],
+    from_ts: float,
+    to_ts: float,
+) -> list[dict[str, Any]]:
+    """Native-timestamped transcript records inside the window, per agent run.
+
+    Reuses history indexing: each run id is a history row whose transcript
+    path is parsed through the shared cache; messages are filtered by their
+    native timestamps. Runs whose transcript is gone report that instead of
+    silently vanishing from the bundle.
+    """
+    from .history import _message_timestamp
+
+    slices: list[dict[str, Any]] = []
+    for run_id in run_ids:
+        row = await app["history"].history_entry(run_id)
+        if not row:
+            slices.append({"agent_run_id": run_id, "error": "no history row"})
+            continue
+        transcript = row.get("transcript_path")
+        if not transcript or not Path(transcript).is_file():
+            slices.append(
+                {"agent_run_id": run_id, "error": "native transcript is unavailable"}
+            )
+            continue
+        try:
+            messages, _mtime_ns, _size = await asyncio.to_thread(
+                parse_transcript_with_watermark, Path(transcript), str(row["backend"])
+            )
+        except (OSError, ValueError):
+            slices.append(
+                {"agent_run_id": run_id, "error": "native transcript is unreadable"}
+            )
+            continue
+        in_window: list[dict[str, Any]] = []
+        for message in messages:
+            ts = _message_timestamp(message.get("ts"))
+            if ts is None or ts < from_ts or ts > to_ts:
+                continue
+            in_window.append({**message, "ts_epoch": ts})
+        truncated = len(in_window) > DIAGNOSTIC_BUNDLE_MAX_MESSAGES_PER_RUN
+        slices.append(
+            {
+                "agent_run_id": run_id,
+                "transcript_path": str(transcript),
+                "messages": in_window[:DIAGNOSTIC_BUNDLE_MAX_MESSAGES_PER_RUN],
+                "truncated": truncated,
+            }
+        )
+    return slices
+
+
+async def get_session_diagnostic_bundle(request: web.Request) -> web.Response:
+    """One-fetch investigation artifact for a status incident.
+
+    Packages, for the requested window (default: the last hour): the durable
+    detection timeline, the current state-log fields (live sessions), the
+    fleet status-health aggregate, and the transcript records whose native
+    timestamps fall inside the window. STATUS_INCIDENT_RUNBOOK.md documents
+    how to read it.
+    """
+    from .session import fleet_status_health
+
+    sid = request.match_info["sid"]
+    now = time.time()
+    to_ts = _query_epoch(request, "to")
+    from_ts = _query_epoch(request, "from")
+    if to_ts is None:
+        to_ts = now
+    if from_ts is None:
+        from_ts = to_ts - DIAGNOSTIC_BUNDLE_DEFAULT_WINDOW_SECONDS
+    store: StatusTimelineStore = request.app["status_timeline"]
+    session = None
+    try:
+        session = request.app["sessions"].resolve(sid)
+    except KeyError:
+        pass
+    state_log: dict[str, Any] | None = None
+    identity = sid
+    if session is not None:
+        await store.flush_session(session)
+        state_log = _live_state_log_payload(request.app, session, now)
+        identity = session.record.id
+    timeline, truncated = await store.timeline(identity, from_ts=from_ts, to_ts=to_ts)
+    history_row = await request.app["history"].history_entry(identity)
+    if session is None and not timeline and not history_row:
+        raise KeyError(sid)
+    # Every run the window touches: the timeline's own run keys, plus the live
+    # run and the history row for sessions the durable rows do not (yet) cover.
+    run_ids = [str(entry["agent_run_id"]) for entry in timeline]
+    if session is not None:
+        run_ids.append(str(session.record.agent_run_id or session.record.id))
+    if history_row:
+        run_ids.append(str(history_row["id"]))
+    ordered_runs = list(dict.fromkeys(run_ids))
+    transcripts = await _bundle_transcript_slices(
+        request.app, ordered_runs, from_ts, to_ts
+    )
+    return json_response(
+        {
+            "id": identity,
+            "live": session is not None,
+            "from": from_ts,
+            "to": to_ts,
             "now": now,
-            "last_state_change_ts": session.last_state_change_ts,
-            "seconds_in_state": round(now - session.last_state_change_ts, 3),
-            "last_hook_ts": session.last_hook_ts or None,
-            "transcript_path": str(transcript) if transcript else None,
-            "transcript_mtime": transcript_mtime,
-            # Whether that path was proven or guessed. A provisional binding drives
-            # state only, so a session reporting live turns with no tokens and a
-            # placeholder conversation id is explained by this field and not a bug.
-            "transcript_provisional": session.transcript_provisional,
-            # No transcript and no hook ever: the PTY screen is the only source
-            # that can move this session, which is what licenses the
-            # begin/end_pty_turn watchdog pair.
-            "unwitnessed": session_is_unwitnessed(session),
-            "observer_restart_count": session.observer_restart_count,
-            "observer_last_fault": session.observer_last_fault,
-            "watchdog_recoveries": session.watchdog_recoveries,
-            "observation_replay": session.observation_replay,
-            # The one fault class that presents as a perfectly healthy session:
-            # the transcript parses fine, it is just not this PTY's conversation
-            # any more. Paired with the run counter, because "which conversation
-            # am I looking at" is the question this endpoint exists to answer.
-            "observation_stale_since": session.record.observation_stale_since,
-            "agent_run_id": session.record.agent_run_id,
-            "agent_run_seq": session.record.agent_run_seq,
-            "native_session_id": session.record.native_session_id,
-            "agent_lifecycle_id": session.agent_lifecycle_id,
-            "awaiting_reason": session.record.awaiting_reason,
-            "standing_activity": [
-                activity.snapshot() for activity in session.record.standing_activity
-            ],
-            # The CLI's own published state for this conversation
-            # (~/.claude/sessions/<pid>.json) — corroboration only, never a
-            # transition source. None until the poller matches a file.
-            "cli_state": session.cli_state,
-            "status_health": session.status_health(now),
-            # Multi-device terminal arbitration. Non-zero rejections mean keystrokes
-            # arrived from a client that had lost input ownership; non-zero denials
-            # mean a background pane tried to take it back.
-            "input_arbitration": {
-                # The device classes the daemon believes are in use: a passive claim
-                # from any other one is refused, so this is the first thing to check
-                # when input ownership is not where it is expected to be.
-                "active_devices": sorted(request.app["device_presence"].active_profiles()),
-                "leading_device": request.app["device_presence"].leading_profile(),
-                "owner_device": session.input_owner_device,
-                "owner_epoch": session.input_owner_epoch,
-                "attached_viewports": len(session.viewports),
-                "geometry": list(session.geometry) if session.geometry else None,
-                "input_rejections": session.input_rejections,
-                "claim_denials": session.input_claim_denials,
-                "claims": list(session.claim_log),
-            },
-            # Real state changes are kept separately: a busy turn emits dozens
-            # of same-state tool detail updates that would otherwise evict the
-            # history explaining how the session reached its current state.
-            "state_changes": list(session.state_changes),
-            "transitions": list(session.state_transitions),
+            "state_log": state_log,
+            "history": history_row,
+            "runs": ordered_runs,
+            "timeline": timeline,
+            "timeline_truncated": truncated,
+            "timeline_sink": store.stats(),
+            "fleet_status_health": fleet_status_health(
+                request.app["sessions"].sessions.values()
+            ),
+            "transcripts": transcripts,
         }
     )
 

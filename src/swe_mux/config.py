@@ -276,6 +276,10 @@ class Config:
     process_orphan_grace_seconds: float = 15.0
     process_evidence_retention_days: int = 30
     operational_telemetry_retention_days: int = 180
+    # Durable per-session detection timeline (status_timeline.py): chattier
+    # than the other telemetry (every ledger entry, including a busy turn's
+    # detail churn), so its window is its own knob.
+    status_timeline_retention_days: int = 30
     provider_quota_poll_minutes: int = 15
     provider_quota_turn_refresh_enabled: bool = False
     provider_quota_turn_refresh_min_minutes: int = 5
@@ -655,6 +659,8 @@ def _validate(config: Config) -> None:
         errors["process_evidence_retention_days"] = "must be between 1 and 3650"
     if not 1 <= config.operational_telemetry_retention_days <= 3650:
         errors["operational_telemetry_retention_days"] = "must be between 1 and 3650"
+    if not 1 <= config.status_timeline_retention_days <= 3650:
+        errors["status_timeline_retention_days"] = "must be between 1 and 3650"
     if not 5 <= config.provider_quota_poll_minutes <= 1440:
         errors["provider_quota_poll_minutes"] = "must be between 5 and 1440"
     if not 1 <= config.provider_quota_turn_refresh_min_minutes <= 1440:
