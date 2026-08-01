@@ -2,7 +2,8 @@
 
 ## Why this exists
 
-History, Automation, Operational Telemetry, Voice, Tier 0, and Clipboard history use separate
+History, Automation, Operational Telemetry, Status Timeline, Voice, Tier 0, and Clipboard
+history use separate
 connections and serialized executors against one WAL database. SQLite still has one writer slot. A transaction left open on
 one connection can otherwise make unrelated session spawn or PTY event writes fail with
 `database is locked`.
@@ -121,6 +122,11 @@ regression is valuable because these user-visible paths historically exposed lea
   goes through the same wrapper. `load()` also deletes rows outside the adopted window:
   they are unreachable by every later path (picker, retention, "clear history"), so leaving
   them would keep verbatim copied text on disk against this store's own bound.
+- `src/swe_mux/status_timeline.py` — the durable per-session detection timeline
+  (`status_timeline` table): a write-behind sink for the in-memory transition ledgers,
+  batched on its own worker, with time-based retention (`status_timeline_retention_days`).
+  Writes are `INSERT OR IGNORE` against the `(session_id, agent_run_id, seq)` key, so a
+  replayed batch after a failed flush cannot duplicate rows.
 - `src/swe_mux/tier0_store.py`, `src/swe_mux/deterministic_consumers.py`
 - `src/swe_mux/project_card.py` — writes one `project_cards` row per Project through
   `AutomationStore`. The row is a cache whose validity is a source fingerprint, not an age,

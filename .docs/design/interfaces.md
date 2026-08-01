@@ -491,7 +491,26 @@ refused; only that log says which device asked and why it lost.
 presents as a perfectly healthy session (`features/backends.md`). It also carries
 `cli_state` — the CLI's own published per-process state for this conversation
 (`~/.claude/sessions/<pid>.json`; corroboration only, never a transition source) — beside
-the `standing_activity` list.
+the `standing_activity` list and `layer_readings`, the last observed reading per
+detection-ladder layer.
+
+With `?from=&to=` (epoch seconds) the state-log adds `timeline`: the requested slice of the
+**durable** detection timeline (`status_timeline` table), flushed from the live ring first
+so the slice is complete to the moment of the request. For a session that no longer exists
+the same route answers in post-mortem mode (`live: false`): the durable timeline, the
+history row, and the run ids the timeline spans — the id may be the mux session id or any
+of its agent-run ids (a history row's key). `timeline_sink` reports the write-behind's
+volume/loss counters on every response.
+
+```text
+GET /api/sessions/{sid}/diagnostic-bundle?from=&to=
+```
+
+One-fetch investigation artifact for a status incident (window defaults to the last hour):
+the durable `timeline` slice, the live `state_log` fields (null for ended sessions), the
+history row, the `fleet_status_health` aggregate, and `transcripts` — the records whose
+native timestamps fall inside the window, per agent run the window touches, bounded per
+run. The investigation procedure that consumes it: `development/STATUS_INCIDENT_RUNBOOK.md`.
 
 `{type:"resize", cols, rows, hidden}` registers a client's fitted size, or deregisters it
 when `hidden` is true — a minimized window still reports layout and must not reshape the

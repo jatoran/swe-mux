@@ -116,6 +116,7 @@ class ReplaySession:
         # letting a fixture assert the conclusion directly.
         self.transcript_path: Path | None = None
         self.last_hook_ts = 0.0
+        self.last_turn_hook_ts = 0.0
         self.tool_names: dict[str, str] = {}
         self.observation_state: dict[str, Any] = {
             "root_turn_active": False,
@@ -153,6 +154,11 @@ class ReplaySession:
         self.classifier_blind_since: float | None = None
         self.classifier_blind_counted = False
         self.cli_state: dict[str, Any] | None = None
+        # Mirrors Session: last observed reading per detection-ladder layer
+        # (`note_layer_reading` tracks flips here) and the replay gate the
+        # manager-side watchdog pass consults.
+        self.layer_readings: dict[str, str] = {}
+        self.observation_replay = False
 
     def publish_update(self) -> None:
         return

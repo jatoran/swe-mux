@@ -65,6 +65,11 @@
 - Changing session status detection, the transition ledger, the state watchdog,
   awaiting sub-reasons, the detection golden corpus, or status-health diagnostics:
   `design/features/status-detection.md`, `design/features/delivery-readiness.md`
+- Changing the durable status timeline (its table, sink, layer readings, or the
+  state-log/diagnostic-bundle endpoints) or the incident investigation procedure:
+  `design/features/status-detection.md`, `design/interfaces.md`, `design/data-model.md`,
+  `technical/backend/sqlite.md`, `technical/backend/packages.md`,
+  `development/STATUS_INCIDENT_RUNBOOK.md`
 - Changing per-project automation opt-in, the enablement dependency graph, or its toggle
   surface: `design/features/automation-enablement.md`,
   `design/features/project-resources.md`, `design/data-model.md`, `design/interfaces.md`

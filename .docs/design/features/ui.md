@@ -587,6 +587,14 @@ responsive controls.
 - The keyboard toggle is also a registered command (`terminal.keyboardToggle`), not only a rail
   button, so it can be bound to a gesture or a key and reached from the palette. It routes over
   the same session-targeted terminal-action bus as copy/paste/find.
+- That command carries the default two-finger swipe-down gesture, which makes it the control a
+  touch user reaches for to push the keyboard away *wherever they are* — and outside a terminal
+  it used to be a no-op, leaving a note editor with no way to lower the keyboard at all. So it
+  is available with no terminal focused, and when the keyboard is held up by anything other than
+  the terminal's own live input it blurs that instead of toggling read/select mode on a terminal
+  the mobile workspace is not even showing. With nothing holding the keyboard up it is still a
+  plain toggle, which is what turns read mode back off. `keyboard.dismiss` is the same dismissal
+  with no terminal mode behind it, for binding a slot that should only ever hide the keyboard.
 - The keyboard toggle is a touch-only read/select mode: while on, tapping the terminal selects,
   scrolls, and positions without raising the on-screen keyboard, so selection auto-copy and
   Paste work keyboard-down; tapping the toggle again restores typing. Sending a key from the
@@ -755,6 +763,20 @@ responsive controls.
   button or a readonly field keeps its place in the tab order). This is not the terminal's
   read/select mode: nothing is made sticky, and tapping the terminal or any field once the panel
   is closed raises the keyboard again.
+- Finding that field means walking **into open shadow roots**, not reading `document.activeElement`.
+  Focus inside a shadow root retargets to the host, so the Continuity editor behind every note and
+  `.md` file — a `<textarea>` inside `attachShadow({mode:'open', delegatesFocus:true})` — reports
+  as a bare custom element that raises no keyboard, and the blur above silently did nothing over a
+  note. `deepActiveElement` descends `activeElement.shadowRoot` until it stops moving (a closed
+  root has no `activeElement`, so it stops at the host, which is the old answer and the best one
+  available). Depth is capped so a malformed tree cannot spin a handler that runs on every gesture.
+- The panels also dismiss the keyboard at **touchstart, as soon as a second finger lands**, not
+  only when the resolved command runs. A gesture's command is dispatched at touchend, but an
+  editor focuses its input on every pointerdown — that is how a tap places the caret — so a
+  two-finger swipe starting over a note *raises* the keyboard on the way in and a dismissal a
+  swipe later cannot hide that it happened. Two fingers is never text entry, so the blur is safe
+  to do immediately, and doing it in the same frame as the focus is what keeps the keyboard from
+  animating up at all. Single-finger touches are left alone: one of them is the tap that focuses.
 - Spawning a terminal closes the mobile sidebar. Every launch focuses the new tab, so every
   launch has to clear what is covering it — launching from a sidebar Project row otherwise
   focused a tab the drawer was still hiding, which reads as "the Run button did nothing". This

@@ -40,6 +40,7 @@ from .runtime_cwd import Osc7Parser, local_directory_from_osc7
 from .screen_mode import SCREEN_TOGGLE, ScreenModeParser
 from .scrollback import SCREEN_TAIL_BYTES, ScrollbackBuffer
 from .spawn_contract import infer_agent_executable_backend, scrub_claude_session_markers
+from .status_timeline import LedgerRing, StatusTimelineStore, note_layer_reading
 from .supervisor_client import RemotePtyHost, SupervisorClient, host_for_adoption
 from .terminal_arbitration import OwnerState, effective_geometry, release_owner
 from .win_jobobj import ReaperJob
@@ -1314,8 +1315,19 @@ class Session:
         # hook made every healthy idle agent look like a replaced conversation
         # 90 s after its last turn.
         self.last_turn_hook_ts = 0.0
-        self.state_transitions: deque[dict[str, Any]] = deque(maxlen=STATE_TRANSITION_LOG_LIMIT)
+        # The transition ledger is a LedgerRing rather than a plain deque: each
+        # append is stamped with a monotonic seq and the run id current at that
+        # moment, and nudges the durable status-timeline sink when the manager
+        # attached one (status_timeline.py). Producers and consumers see the
+        # same bounded-ring interface as before.
+        self.state_transitions: LedgerRing = LedgerRing(
+            STATE_TRANSITION_LOG_LIMIT,
+            run_id_provider=lambda: record.agent_run_id or record.id,
+        )
         self.state_changes: deque[dict[str, Any]] = deque(maxlen=STATE_CHANGE_LOG_LIMIT)
+        # Last observed reading per detection-ladder layer (pty_tail, cli_state,
+        # hook_recency), so `note_layer_reading` ledgers changes and only changes.
+        self.layer_readings: dict[str, str] = {}
         self.observer_restart_count = 0
         self.observer_last_fault: dict[str, Any] | None = None
         self.watchdog_recoveries = 0
@@ -1728,8 +1740,12 @@ class SessionManager:
         hook_spool_dir: Path | None = None,
         supervisor: SupervisorClient | None = None,
         attach_replay_bytes: int | None = None,
+        status_timeline: StatusTimelineStore | None = None,
     ) -> None:
         self.adapters, self.reaper, self.history, self.events = adapters, reaper, history, events
+        # Durable sink for the per-session transition ledgers; None in tests
+        # that exercise the manager without persistence.
+        self.status_timeline = status_timeline
         self.max_scrollback = max_scrollback
         # Retention budget above, replay budget here: every Session this manager
         # builds is bound by it, whether spawned or adopted from the supervisor.
@@ -1970,6 +1986,7 @@ class SessionManager:
             attach_replay_bytes=self.attach_replay_bytes,
         )
         self.sessions[sid] = session
+        self._attach_ledger_sink(session)
         if isinstance(pty, RemotePtyHost):
             self._attach_meta_sink(session)
         transcript = adapter.transcript_path(native_id, resolved_cwd)
@@ -2064,6 +2081,19 @@ class SessionManager:
 
         session.meta_sink = push
         push()
+
+    def _attach_ledger_sink(self, session: Session) -> None:
+        """Wire the transition ledger into the durable status timeline.
+
+        Same guarded-callback discipline as the meta sink: the ring nudges the
+        store's dirty set synchronously and the write happens later, batched,
+        on the store's own SQLite worker — never on a transition or the hook
+        ingress. getattr-guarded because tests build partial managers via
+        __new__ (the identity_repairs precedent).
+        """
+        store = getattr(self, "status_timeline", None)
+        if store is not None:
+            store.attach(session)
 
     @staticmethod
     def _session_meta(session: Session) -> dict[str, Any]:
@@ -2643,6 +2673,7 @@ class SessionManager:
             if record.spawn_backend == "shell" and record.backend in AGENT_BACKENDS:
                 session.agent_promoted_at = time.time()
             self.sessions[sid] = session
+            self._attach_ledger_sink(session)
             self._attach_meta_sink(session)
             # Identity repair mutates record.state directly (it runs before the
             # Session exists). Ledger it now that one does, so the state-log after
@@ -3869,6 +3900,24 @@ class SessionManager:
         if expire_standing_activity(session, now=now):
             session.publish_update()
         await self._drain_hook_spool(session)
+        # Hook-recency layer reading, before any early return: crossing the
+        # staleness threshold (or the first turn hook arriving) is ledgered
+        # once per flip, so a post-mortem can say what this layer read at any
+        # moment. `last_turn_hook_ts`, never `last_hook_ts` — idle_prompt
+        # notifications accompany no transcript activity by design.
+        # getattr-guarded for the lightweight watchdog stand-ins in tests.
+        last_turn_hook_ts = getattr(session, "last_turn_hook_ts", 0.0)
+        if last_turn_hook_ts:
+            since_turn_hook = now - last_turn_hook_ts
+            note_layer_reading(
+                session,
+                "hook_recency",
+                "stale" if since_turn_hook >= TRANSCRIPT_STALE_SECONDS else "fresh",
+                now=now,
+                detail={"seconds_since_turn_hook": round(since_turn_hook, 1)},
+            )
+        else:
+            note_layer_reading(session, "hook_recency", "never", now=now)
         if session.observation_replay:
             return
         # The unwitnessed pair runs before the active-state gate below, because it
@@ -3884,6 +3933,7 @@ class SessionManager:
         # tests exercise this rule through the same call they already make.
         if record.state in {"idle", "awaiting"}:
             dialog_pty_state = self._pty_tail_state(session)
+            note_layer_reading(session, "pty_tail", dialog_pty_state, now=now)
             no_turn, dialog_seconds = startup_dialog_observation(
                 session, dialog_pty_state, now
             )
@@ -3918,6 +3968,7 @@ class SessionManager:
             return
         stalled = now - session.last_state_change_ts
         pty_state = self._pty_tail_state(session)
+        note_layer_reading(session, "pty_tail", pty_state, now=now)
         note_classifier_blindness(session, pty_state, now)
         # An answered permission prompt is resolved from the PTY alone and must
         # be checked before the transcript-quiet gate below: after approval the
@@ -3971,6 +4022,7 @@ class SessionManager:
             return
         stalled = time.time() - session.last_state_change_ts
         pty_state = self._pty_tail_state(session)
+        note_layer_reading(session, "pty_tail", pty_state, now=now)
         # PTY ground-truth backstop. The transcript may give no proof the turn
         # ended: "unknown" (schema drift) or "open" (the tail is a tool_use/
         # tool_result, so by the record the model still owes a response). Both
@@ -4514,6 +4566,18 @@ class SessionManager:
                     "could not index ended session transcript %s",
                     session.record.id,
                     exc_info=True,
+                )
+        timeline_store = getattr(self, "status_timeline", None)
+        if timeline_store is not None:
+            # Final drain now rather than at the next batch window: an ended
+            # session's terminal entries are exactly what a post-mortem needs,
+            # and the Session object is about to lose its last strong holder.
+            try:
+                await timeline_store.flush_session(session)
+            except Exception:
+                log.exception(
+                    "could not flush status timeline for ended session %s",
+                    session.record.id,
                 )
 
     async def stop(self, sid: str) -> None:

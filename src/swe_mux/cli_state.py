@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .status_timeline import note_layer_reading
+
 log = logging.getLogger(__name__)
 
 # A disagreement is counted only when both sides are settled: the CLI's status
@@ -164,6 +166,21 @@ class CliStateMonitor:
         for session in live:
             own = by_conversation.get(session.record.native_session_id)
             session.cli_state = own.snapshot() if own is not None else None
+            # Layer reading, ledgered on change only: the file's `status` value
+            # flipping (or the file appearing/vanishing) is the whole signal —
+            # its `updatedAt` is a status-change stamp, not a heartbeat, so age
+            # is deliberately never read here.
+            note_layer_reading(
+                session,
+                "cli_state",
+                own.status if own is not None else "absent",
+                now=now,
+                detail=(
+                    {"status_updated_at": own.status_updated_at}
+                    if own is not None
+                    else None
+                ),
+            )
             if own is not None:
                 self._corroborate_status(session, own, now)
         for state in states:
