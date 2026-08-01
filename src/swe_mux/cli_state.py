@@ -2,7 +2,9 @@
 
 The CLI writes one JSON file per running process — verified live 2026-07-31 on
 2.1.220: ``{sessionId, cwd, pid, procStart, kind, name, status, statusUpdatedAt,
-updatedAt, version}`` with observed ``status`` values ``busy`` and ``idle``.
+updatedAt, version}``. Observed ``status`` values are ``busy``, ``idle``, and
+``waiting`` (measured 2026-08-01: the file reads ``waiting`` for the duration of
+a permission dialog, flipping ``busy`` → ``waiting`` → ``busy`` around it).
 This is the `cli-state` layer of the detection ladder (status-detection.md):
 hook-free, CLI-authoritative, and — in this phase — **corroboration only**. It
 never drives a SessionState transition; it feeds counters and the ledger so a
@@ -204,7 +206,13 @@ class CliStateMonitor:
         Only the two clear-cut cases count: the CLI saying ``busy`` while mux
         shows ``idle``, and the CLI saying ``idle`` while mux shows ``working``.
         ``awaiting``/``starting``/``running`` involve dialogs and lifecycle the
-        file's two-value enum cannot express.
+        comparison deliberately stays out of. ``waiting`` (the CLI's own
+        dialog status) therefore counts as neither agreement nor disagreement
+        here — it is recorded as a ``layer_reading`` instead, which is what a
+        post-mortem reads. Making it a disagreement signal for a mux session
+        showing ``working`` is a real candidate, but any expansion of this
+        layer's role is gated on a release of disagreement telemetry first
+        (status-detection.md § detection ladder).
         """
         record = session.record
         mismatch = (state.status == "busy" and record.state == "idle") or (

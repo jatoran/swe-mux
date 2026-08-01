@@ -31,13 +31,18 @@ Per signal class, every layer feeds the same ledger with its own `source` string
 **The `cli-state` layer** (`src/swe_mux/cli_state.py`, polled on the 5 s watchdog cadence,
 stat-then-parse-on-change): Claude publishes per-process state files carrying
 `{sessionId, cwd, pid, procStart, status, statusUpdatedAt, updatedAt, version}` (verified
-2.1.220; observed `status` values `busy`/`idle`). Files map to sessions by conversation id.
+2.1.220; observed `status` values `busy`, `idle`, and `waiting` — measured 2026-08-01, the
+file reads `waiting` for the duration of a permission dialog). Files map to sessions by
+conversation id.
 What it feeds:
 
 - **Status corroboration**: a *settled* contradiction (CLI `busy` while mux `idle`, CLI
   `idle` while mux `working`, both sides ≥ 10 s old) counts `cli_state_disagrees` once per
   standing fact and ledgers it (`kind: "cli_state"`). One release of this telemetry gates
-  any future promotion to a transition source.
+  any future promotion to a transition source. `waiting` is deliberately outside that
+  comparison — it is recorded as a `layer_reading` instead. Treating "CLI `waiting` while
+  mux shows `working`" as a disagreement is a real candidate for the next iteration, and
+  it goes through the same telemetry gate as any other expansion of this layer's role.
 - **Identity corroboration**: a file in exactly one live session's cwd, bound to a
   conversation no live session owns, updated after that session's run began, is a nested
   child CLI observed deterministically — the signal the `bb81463` incident had to infer

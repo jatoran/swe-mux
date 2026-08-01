@@ -317,6 +317,35 @@ def test_cli_state_layer_reading_follows_the_files_status(tmp_path: Path) -> Non
     assert [entry["reading"] for entry in readings] == ["busy", "idle", "absent"]
 
 
+def test_cli_state_waiting_is_a_layer_reading_not_a_disagreement(tmp_path: Path) -> None:
+    # Measured live 2026-08-01: the CLI publishes `waiting` for the duration of
+    # a permission dialog. It is neither of the two counted contradictions, so
+    # it must record as a reading and count nothing — a `waiting` file while
+    # mux shows `working` is a dialog, not a defect, until the telemetry gate
+    # says otherwise.
+    session = ringed_session()
+    session.record.native_session_id = OWN
+    session.record.cwd = str(tmp_path)
+    session.record.run_cwd = str(tmp_path)
+    session.record.state = "working"
+    now = session.clock.wall()
+    session.last_state_change_ts = now - 60
+    monitor = CliStateMonitor(tmp_path)
+    write_state(
+        tmp_path, 100, OWN, cwd=str(tmp_path), status="waiting",
+        status_updated_at_ms=(now - 60) * 1000,
+    )
+    monitor.observe(monitor.poll(), [session], now)
+    assert "cli_state_disagrees" not in session.status_health_counters
+    assert session.record.state == "working"
+    (reading,) = [
+        entry
+        for entry in entries_of(session, "layer_reading")
+        if entry["layer"] == "cli_state"
+    ]
+    assert reading["reading"] == "waiting"
+
+
 async def test_watchdog_pass_ledgers_pty_and_hook_recency_flips_once(tmp_path: Path) -> None:
     from swe_mux.session import SessionManager
 
