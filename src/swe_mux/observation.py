@@ -1554,8 +1554,24 @@ def _standing_detail(value: Any) -> str | None:
 
 
 def _refresh_subagents(
-    session: Session, *, source: str, evidence: str, now: float, count: int | None = None
+    session: Session,
+    *,
+    source: str,
+    evidence: str,
+    now: float,
+    count: int | None = None,
+    create: bool = True,
 ) -> bool:
+    """Refresh (or, when ``create``, open) the subagents annotation.
+
+    ``create=False`` is the refresh-only tier: once lifecycle hooks own the
+    count, transcript records for the same subagent arrive *later* on their
+    slower channel, and letting a trailing Task tool_result re-open an
+    annotation the hooks already cleared flaps it (observed live 2026-07-31:
+    cleared by SubagentStop, re-added by the trailing completion record).
+    """
+    if not create and _standing_activity_count(session, "subagents") == 0:
+        return False
     return set_standing_activity(
         session,
         "subagents",
@@ -1724,13 +1740,17 @@ def _extract_standing_tool_use(
     elif name in {"Task", "Agent"}:
         # Fallback tier: hooks own the count once a SubagentStart has arrived
         # this run; transcript launches then only refresh recency.
+        hooks_seen = bool(state.get("subagent_hooks_seen"))
         launch_count: int | None = (
-            None
-            if state.get("subagent_hooks_seen")
-            else _standing_activity_count(session, "subagents") + 1
+            None if hooks_seen else _standing_activity_count(session, "subagents") + 1
         )
         changed = _refresh_subagents(
-            session, source="transcript", evidence="transcript:Task", now=now, count=launch_count
+            session,
+            source="transcript",
+            evidence="transcript:Task",
+            now=now,
+            count=launch_count,
+            create=not hooks_seen,
         )
     if changed:
         _publish_update(session)
@@ -1754,7 +1774,11 @@ def _extract_standing_tool_result(
         state = _observation_state(session)
         if state.get("subagent_hooks_seen"):
             changed = _refresh_subagents(
-                session, source="transcript", evidence="transcript:Task:completed", now=now
+                session,
+                source="transcript",
+                evidence="transcript:Task:completed",
+                now=now,
+                create=False,
             )
         else:
             changed = _drop_subagent(
@@ -2061,13 +2085,15 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
     message = event.get("message") or {}
     if event.get("isSidechain") is True:
         # A sidechain record is proof a subagent is running right now: refresh
-        # the annotation's recency (creating it at count 1 when even the Task
-        # launch was missed) without touching an established count.
+        # the annotation's recency, creating it at count 1 only while no
+        # lifecycle hook owns the count (hooks clear faster than the transcript
+        # delivers, so a trailing sidechain record must not re-open the set).
         if not getattr(session, "observation_replay", False) and _refresh_subagents(
             session,
             source="transcript",
             evidence="transcript:sidechain",
             now=_standing_now(session, event),
+            create=not _observation_state(session).get("subagent_hooks_seen"),
         ):
             _publish_update(session)
         block_types = [

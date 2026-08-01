@@ -335,6 +335,65 @@ async def test_subagent_hooks_own_the_count_over_the_transcript_fallback() -> No
     assert activity.count == 1
 
 
+async def test_trailing_transcript_records_never_reopen_a_hook_cleared_fleet() -> None:
+    # Observed live 2026-07-31: hooks counted the subagent up and down, then the
+    # transcript's slower channel delivered the Task tool_result and sidechain
+    # records afterward — re-creating the annotation the hooks had already
+    # cleared. Refresh-tier sources must refresh only, never re-open.
+    replay = DetectionReplay("claude")
+    replay.session.record.native_session_id = OWN_CONVERSATION
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "SubagentStart",
+            "payload": {"session_id": OWN_CONVERSATION, "agent_id": "agent-1"},
+        }
+    )
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "SubagentStop",
+            "payload": {"session_id": OWN_CONVERSATION, "agent_id": "agent-1"},
+        }
+    )
+    assert replay.session.record.standing_activity == []
+    launch = {
+        "type": "assistant",
+        "isSidechain": False,
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_t1",
+                    "name": "Task",
+                    "input": {"description": "helper", "prompt": "go"},
+                }
+            ]
+        },
+    }
+    sidechain = {
+        "type": "assistant",
+        "isSidechain": True,
+        "message": {"content": [{"type": "text", "text": "trailing"}]},
+    }
+    completion = {
+        "type": "user",
+        "isSidechain": False,
+        "message": {
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_t1",
+                    "content": [{"type": "text", "text": "hi"}],
+                }
+            ]
+        },
+    }
+    for offset, record in ((1, launch), (2, sidechain), (3, completion)):
+        await replay.step({"kind": "transcript", "ts_offset": offset, "record": record})
+        assert replay.session.record.standing_activity == []
+
+
 async def test_background_close_without_tracked_open_decrements_the_annotation() -> None:
     # A daemon restart loses the open-launch map while the adopted snapshot
     # still carries the annotation; the completion notification must still
