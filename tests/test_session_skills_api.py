@@ -100,14 +100,21 @@ async def test_repo_skills_follow_the_live_cwd_not_the_spawn_cwd(
     assert payload["cwd"] == str(wandered)
 
 
-async def test_untrusted_runtime_cwd_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_untrusted_runtime_cwd_is_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     spawned = tmp_path / "primary"
     stale = tmp_path / "stale"
     write_skill(spawned / ".codex" / "skills", "primary-only")
     write_skill(stale / ".codex" / "skills", "stale-only")
     app = build(
-        record(cwd=str(spawned), spawn_cwd=str(spawned), runtime_cwd=str(stale), runtime_cwd_live=False)
+        record(
+            cwd=str(spawned),
+            spawn_cwd=str(spawned),
+            runtime_cwd=str(stale),
+            runtime_cwd_live=False,
+        )
     )
 
     async with TestClient(TestServer(app)) as client:
