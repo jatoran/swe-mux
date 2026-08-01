@@ -407,6 +407,15 @@ Rows also carry `idle_reason`, the idle-axis sibling of `awaiting_reason`:
 `delivery_state` is unchanged) while the agent has background work that will wake it back
 up. Completion sounds and push alerts skip that turn end; the next one is the moment worth
 the user's attention.
+Rows carry `standing_activity`, the standing-engagement annotation axis: a list of
+`{kind: loop|cron|background_tasks|subagents, source, evidence, since, expires_at,
+count, detail}` objects describing engagements that outlive the turn (an armed `/loop`
+wakeup, a cron schedule, running background tasks, live subagents). Annotations are not
+states — `state`, `awaiting_reason`, and `delivery_readiness` are unaffected — and each
+either self-expires (`expires_at`) or is positively cleared. The same list appears on
+`GET /sessions/{sid}/state-log` alongside the transition ledger, whose non-transition
+entries (`kind: "standing_activity"`, action `added|updated|removed|expired`) record every
+mutation (`features/status-detection.md`).
 Each row also exposes its stable terminal `note_id` and whether its lazily created note file
 currently exists. `spawn_backend` and `spawn_native_session_id` identify the immutable root
 process; `backend` and `native_session_id` may instead describe the active promoted run only

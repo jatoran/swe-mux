@@ -3543,6 +3543,9 @@ async def get_session_state_log(request: web.Request) -> web.Response:
             "native_session_id": session.record.native_session_id,
             "agent_lifecycle_id": session.agent_lifecycle_id,
             "awaiting_reason": session.record.awaiting_reason,
+            "standing_activity": [
+                activity.snapshot() for activity in session.record.standing_activity
+            ],
             "status_health": session.status_health(now),
             # Multi-device terminal arbitration. Non-zero rejections mean keystrokes
             # arrived from a client that had lost input ownership; non-zero denials

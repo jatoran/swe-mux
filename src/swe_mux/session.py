@@ -26,7 +26,13 @@ from .background_tasks import background
 from .event_bus import EventBus
 from .git_projects import ProjectIdentity, resolve_project
 from .history import HistoryIndex
-from .models import GitState, SessionRecord, SessionState
+from .models import (
+    GitState,
+    SessionRecord,
+    SessionState,
+    StandingActivity,
+    StandingActivityKind,
+)
 from .pty_host import PtyHost, merge_environment
 from .runtime_cwd import Osc7Parser, local_directory_from_osc7
 from .screen_mode import SCREEN_TOGGLE, ScreenModeParser
@@ -518,6 +524,156 @@ def apply_state_transition(
         record.awaiting_reason = awaiting_reason
     if hasattr(record, "idle_reason"):
         record.idle_reason = idle_reason
+    return True
+
+
+# --- standing-activity annotations (the fifth status axis) -------------------
+#
+# Standing engagements — an armed /loop, a cron schedule, background tasks,
+# live subagents — are annotations on the session, never states: they change
+# nothing about SessionState, awaiting_reason, or delivery. Shared by the live
+# Session and the replay harness the same way apply_state_transition is, so the
+# add/refresh/expire/clear discipline cannot drift from the golden corpus.
+# Every mutation lands in the transition ledger as a non-transition entry
+# (kind "standing_activity", action added|updated|removed|expired).
+
+# Grace added to evidence-implied expiries so a healthy re-arm (a loop wakeup
+# firing and the model re-scheduling) does not flap the annotation.
+STANDING_ACTIVITY_TTL_SLACK_SECONDS = 120.0
+# Annotations refreshed by evidence recency (subagents, background tasks)
+# decay after this long without any supporting evidence.
+STANDING_ACTIVITY_QUIET_SECONDS = 120.0
+
+
+def _standing_activity_ledger(
+    session: Any,
+    action: str,
+    activity: StandingActivity,
+    now: float,
+    evidence: str | None = None,
+) -> None:
+    ledger = getattr(session, "state_transitions", None)
+    if ledger is None:
+        return
+    ledger.append(
+        {
+            "ts": now,
+            "kind": "standing_activity",
+            "action": action,
+            "activity": activity.kind,
+            "source": activity.source,
+            "evidence": evidence if evidence is not None else activity.evidence,
+            "count": activity.count,
+            "expires_at": activity.expires_at,
+            "detail": activity.detail,
+        }
+    )
+
+
+def set_standing_activity(
+    session: Any,
+    kind: StandingActivityKind,
+    *,
+    source: str,
+    evidence: str,
+    expires_at: float | None = None,
+    count: int = 1,
+    detail: str | None = None,
+    since: float | None = None,
+    now: float | None = None,
+) -> bool:
+    """Add or refresh one annotation. Returns True when the visible set changed.
+
+    A pure TTL refresh (same count, same detail) updates the expiry silently:
+    subagent/background evidence renews at tool-record cadence, and ledgering
+    or fanning out every renewal would bury the entries that matter.
+    """
+    now = time.time() if now is None else now
+    record = session.record
+    for activity in record.standing_activity:
+        if activity.kind != kind:
+            continue
+        changed = bool(activity.count != count or activity.detail != detail)
+        activity.source = source
+        activity.evidence = evidence
+        activity.expires_at = expires_at
+        activity.count = count
+        activity.detail = detail
+        if changed:
+            _standing_activity_ledger(session, "updated", activity, now)
+        return changed
+    activity = StandingActivity(
+        kind=kind,
+        source=source,
+        evidence=evidence,
+        since=now if since is None else since,
+        expires_at=expires_at,
+        count=count,
+        detail=detail,
+    )
+    record.standing_activity.append(activity)
+    _standing_activity_ledger(session, "added", activity, now)
+    return True
+
+
+def clear_standing_activity(
+    session: Any,
+    kind: StandingActivityKind,
+    *,
+    evidence: str,
+    now: float | None = None,
+) -> bool:
+    """Positively clear one annotation. Returns True when it existed."""
+    now = time.time() if now is None else now
+    record = session.record
+    for activity in record.standing_activity:
+        if activity.kind == kind:
+            record.standing_activity.remove(activity)
+            _standing_activity_ledger(session, "removed", activity, now, evidence=evidence)
+            return True
+    return False
+
+
+def expire_standing_activity(session: Any, *, now: float | None = None) -> list[str]:
+    """TTL sweep: drop every annotation past its expiry. Returns dropped kinds.
+
+    An expiry is an annotation that was never positively cleared — usually the
+    normal decay path (a loop that stopped being re-armed), but a rising rate is
+    a drift signal, so each one also counts in status health.
+    """
+    now = time.time() if now is None else now
+    record = session.record
+    expired = [
+        activity
+        for activity in record.standing_activity
+        if activity.expires_at is not None and now >= activity.expires_at
+    ]
+    if not expired:
+        return []
+    counters = getattr(session, "status_health_counters", None)
+    for activity in expired:
+        record.standing_activity.remove(activity)
+        _standing_activity_ledger(session, "expired", activity, now)
+        if counters is not None:
+            counters["standing_activity_expired"] = (
+                counters.get("standing_activity_expired", 0) + 1
+            )
+    return [activity.kind for activity in expired]
+
+
+def clear_all_standing_activity(session: Any, *, evidence: str, now: float | None = None) -> bool:
+    """Run-scope clear for lifecycle seams (rollover, heal, promote, demote, end).
+
+    The annotations belong to the agent run that just ended; carrying any of
+    them into the successor is the annotation-axis version of cross-attribution.
+    """
+    now = time.time() if now is None else now
+    record = session.record
+    if not record.standing_activity:
+        return False
+    for activity in tuple(record.standing_activity):
+        _standing_activity_ledger(session, "removed", activity, now, evidence=evidence)
+    record.standing_activity.clear()
     return True
 
 
@@ -2036,6 +2192,11 @@ class SessionManager:
         record.parser_unknown_signatures = {}
         record.parser_schema_version = None
         record.observation_stale_since = None
+        # Annotations describe the observation identity being reset here. This is
+        # a silent record-level clear for the adoption-repair paths (no Session,
+        # no ledger yet); live callers ledger via clear_all_standing_activity
+        # *before* reaching this.
+        record.standing_activity.clear()
 
     def _reconcile_adopted_root_identity(
         self,
@@ -2591,6 +2752,7 @@ class SessionManager:
             "root_completion_seen": False,
             "codex_scope": "root",
         }
+        clear_all_standing_activity(session, evidence="promotion")
         session.record.state_detail = None
         session.state_source_priority = -1
         session.agent_promoted_at = time.time()
@@ -2656,6 +2818,7 @@ class SessionManager:
             "root_completion_seen": False,
             "codex_scope": "root",
         }
+        clear_all_standing_activity(session, evidence="demotion")
         session.observation_replay = False
         session.agent_promoted_at = None
         session.transcript_path = None
@@ -2826,6 +2989,7 @@ class SessionManager:
             "root_completion_seen": False,
             "codex_scope": "root",
         }
+        clear_all_standing_activity(session, evidence=f"conversation_rolled:{source}")
         session.observation_replay = False
         session.agent_promoted_at = time.time()
         session.state_source_priority = -1
@@ -3418,6 +3582,9 @@ class SessionManager:
             record.agent_run_seq = 0
         record.native_session_id = anchor
         session.agent_lifecycle_id = anchor
+        # Ledgered clear first: _reset_provider_observation empties the record's
+        # annotation list silently, which would leave nothing to ledger.
+        clear_all_standing_activity(session, evidence="identity_reconciled")
         self._reset_provider_observation(record)
         session.observation_state = {
             "root_turn_active": False,
@@ -3495,6 +3662,10 @@ class SessionManager:
         record = session.record
         if record.backend not in {"claude", "codex"}:
             return
+        # Annotation TTL sweep runs before any early return below: expiry is
+        # time-based and owes nothing to turn state or transcript quiet.
+        if expire_standing_activity(session, now=now):
+            session.publish_update()
         await self._drain_hook_spool(session)
         if session.observation_replay:
             return
@@ -4057,6 +4228,9 @@ class SessionManager:
             evidence=f"process_exit:{final_reason}",
             force=True,
         )
+        # A dead process holds no standing engagements; publish_exit below
+        # carries the cleared set in its final snapshot.
+        clear_all_standing_activity(session, evidence=f"process_exit:{final_reason}")
         release_pty = getattr(session.pty, "release", None)
         if callable(release_pty):
             # Session scrollback is independent of ConPTY. Detach the ended

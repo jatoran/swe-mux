@@ -23,6 +23,14 @@
 - `SessionRecord.observation_stale_since`: volatile. Set when the followed transcript is
   provably no longer this PTY's conversation and no successor could be corroborated; it
   revokes the transcript's authority over hooks and hard-blocks delivery.
+- `SessionRecord.standing_activity`: the standing-engagement annotation axis — a list of
+  `StandingActivity {kind: loop|cron|background_tasks|subagents, source, evidence, since,
+  expires_at, count, detail}`. Not states: SessionState, `awaiting_reason`, and delivery are
+  untouched. Run-scoped (cleared wherever observation identity resets — rollover, heal,
+  promote, demote, session end) and TTL'd where the evidence implies an expiry. Serialized
+  in the record snapshot, so supervisor adoption round-trips it across daemon restarts;
+  drift-tolerant like the rest of `from_snapshot` (unknown keys dropped, malformed
+  annotations skipped). Contract and detection sources: `features/status-detection.md`.
 - Git `repository_id`, project scope, root, and repository group fields are derived metadata,
   separate from canonical Project ownership.
 

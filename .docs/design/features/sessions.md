@@ -59,6 +59,12 @@ and reattachable browser viewports.
 - Agent startup state uses semantic evidence first. Claude normally becomes ready through its
   `SessionStart` hook; Codex (or a degraded Claude hook path) may use settled live PTY output as
   a startup-only, lowest-priority readiness signal until its first native transcript event.
+- Standing engagements (an armed `/loop`, a cron schedule, background tasks, live subagents)
+  are annotations on the session (`SessionRecord.standing_activity`), never states: an idle
+  session with an armed loop is exactly as idle, and as deliverable, as one without. They are
+  run-scoped — every seam that resets observation identity (rollover, heal, promote, demote,
+  end) clears them — and TTL'd so a wrong annotation decays on its own. Contract and
+  detection: `features/status-detection.md`.
 - Claude/Codex promotion preserves the parent PTY's canonical Project and records an atomic
   agent-run history lifecycle.
 - Attach, detach, browser reconnect, and pane operations never change process state.

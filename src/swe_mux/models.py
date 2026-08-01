@@ -11,6 +11,42 @@ SessionState = Literal["starting", "running", "working", "idle", "awaiting", "ex
 # limit. Free-text state_detail stays display-only; this field is the contract.
 AwaitingReason = Literal["approval", "question", "elicitation", "rate_limit"]
 
+# The standing-activity axis: an engagement that outlives the current turn — an
+# armed /loop wakeup, a cron schedule, running background tasks, live subagents.
+# Deliberately NOT states: an idle session with an armed loop is exactly as
+# idle, and as deliverable, as one without. Annotations compose (a session can
+# hold several) and every one either self-expires or is positively cleared.
+StandingActivityKind = Literal["loop", "cron", "background_tasks", "subagents"]
+
+
+@dataclass(slots=True)
+class StandingActivity:
+    kind: StandingActivityKind
+    # Same vocabulary as transition sources: cli-state|hook|transcript|pty|process.
+    source: str
+    # e.g. "transcript:ScheduleWakeup", "hook:SubagentStart".
+    evidence: str
+    since: float
+    # Self-expiry; None means "until positively cleared". A wrong annotation must
+    # decay on its own — the lesson of every stuck-status incident here.
+    expires_at: float | None = None
+    count: int = 1
+    detail: str | None = None
+
+    def snapshot(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_snapshot(cls, data: dict[str, Any]) -> StandingActivity | None:
+        known = set(cls.__dataclass_fields__)
+        kwargs = {key: value for key, value in data.items() if key in known}
+        try:
+            return cls(**kwargs)
+        except TypeError:
+            # A snapshot missing required fields (schema drift) is dropped rather
+            # than poisoning adoption of the whole record.
+            return None
+
 
 @dataclass(slots=True)
 class GitState:
@@ -50,6 +86,10 @@ class SessionRecord:
     # it invites the user to treat the session as finished. Cleared by every
     # transition off `idle`.
     idle_reason: str | None = None
+    # The fifth status axis (state / awaiting_reason / idle_reason /
+    # delivery_state / this): standing engagements that outlive the turn.
+    # Run-scoped — every site that resets observation identity clears it.
+    standing_activity: list[StandingActivity] = field(default_factory=list)
     tokens_in: int = 0
     tokens_out: int = 0
     context_window: int = 0
@@ -156,13 +196,22 @@ class SessionRecord:
         when adopting metadata written by an older one.
         """
         known = set(cls.__dataclass_fields__)
-        kwargs = {key: value for key, value in data.items() if key in known and key != "git"}
+        nested = {"git", "standing_activity"}
+        kwargs = {key: value for key, value in data.items() if key in known and key not in nested}
         record = cls(**kwargs)
         git = data.get("git")
         if isinstance(git, dict):
             record.git = GitState(
                 **{k: v for k, v in git.items() if k in GitState.__dataclass_fields__}
             )
+        standing = data.get("standing_activity")
+        if isinstance(standing, list):
+            record.standing_activity = [
+                activity
+                for item in standing
+                if isinstance(item, dict)
+                and (activity := StandingActivity.from_snapshot(item)) is not None
+            ]
         return record
 
     @property
