@@ -444,6 +444,47 @@ since *any* evidence landed.
   conversation is healed back to its anchor (`session_identity_reconciled`, trigger
   `live_sweep`).
 
+## Durable timeline (post-mortem investigability)
+
+The per-session ledger rings answer "how did this session get here" only while both the
+daemon and the session are alive: a restart wipes them, a busy turn's detail churn evicts
+old entries, and a killed session takes its ledger with it. The durable timeline
+(`status_timeline.py`, `status_timeline` table in mux.db) makes "at 12:39 this session
+showed `working` but was actually idle — what did each layer say?" answerable after the
+fact, including for sessions that no longer exist.
+
+- **A sink, not part of the contract.** `apply_state_transition` stays pure and shared
+  with the replay harness; the corpus pins that persistence never enters it. The live
+  `Session`'s ring is a `LedgerRing` that stamps each appended entry with a monotonic
+  `seq` and the `agent_run_id` current *at append time* (run-keyed so a rollover's
+  successor rows never mix with its predecessor's — the cross-run bleed incident class),
+  then nudges a guarded callback in the `meta_sink` discipline. The store batches dirty
+  sessions and drains on its own SQLite worker; nothing on the transition or hook-ingress
+  path ever waits on the database. Durable seqs continue after whatever a previous daemon
+  boot wrote, so restarts neither collide nor double-write; ring evictions between drains
+  are counted (`rows_lost_to_ring_eviction`), never silent. Sessions get a final drain in
+  `_mark_ended`, and daemon shutdown drains once more after `sessions.shutdown()`.
+- **Every ledger kind persists** — transitions *and* the non-transition kinds
+  (`watchdog_recovery`, `standing_activity`, `cli_state`, `layer_reading`,
+  `screen_classifier_blind`, `foreign_conversation_hook_ignored`, `transition_refused`,
+  `reopen_blocked`, `observer_fault`, hook-spool records) — payloads verbatim. Same-state
+  detail churn is deliberately kept (it is the evidence that a session was being
+  observed); retention bounds the volume (`status_timeline_retention_days`, default 30).
+- **Layer readings are ledgered on change.** The watchdog pass records the
+  `pty_tail_state` verdict and the hook-recency bucket (`fresh`/`stale` against
+  `TRANSCRIPT_STALE_SECONDS`, `never` before the first turn hook; always
+  `last_turn_hook_ts`, never `last_hook_ts`), and the cli-state poll records the file's
+  `status` (`busy`/`idle`/`absent`) — each as a `layer_reading` entry appended **only when
+  the reading changes**, never per 5 s pass. The reading at any instant is the last entry
+  at or before it, which is what lets a post-mortem adjudicate the displayed state
+  against every layer of the ladder without a polling firehose.
+- **Queries.** `GET /api/sessions/{sid}/state-log?from=&to=` serves the durable slice
+  (live ring flushed first, so it is complete to the request moment) and answers for
+  ended sessions in post-mortem mode; `GET /api/sessions/{sid}/diagnostic-bundle?from=&to=`
+  packages the timeline, state-log fields, fleet status-health, and the window's
+  transcript records into one artifact. The investigation procedure lives in
+  `development/STATUS_INCIDENT_RUNBOOK.md`.
+
 ## Regression defense
 
 - **Golden corpus** (`tests/fixtures/detection/v1/`): every fixture pins `expected.states`
@@ -505,6 +546,8 @@ notifies: ready means ready).
   handlers, `closed_by_transcript` latch, trailing-completion guard, standing-activity
   extractors
 - `src/swe_mux/cli_state.py` — the `cli-state` corroboration poller
+- `src/swe_mux/status_timeline.py` — `LedgerRing`, `note_layer_reading`, and the durable
+  `StatusTimelineStore` (write-behind sink, time-ranged queries, retention)
 - `src/swe_mux/processes.py` — background-task process fast-clear
 - `src/swe_mux/models.py` — `SessionState`, `AwaitingReason`, `StandingActivity`,
   `SessionRecord.awaiting_reason`/`standing_activity`

@@ -59,6 +59,17 @@
 - `context_compactions`, `tool_events`, and `transcript_telemetry_coverage`: deduplicated
   explicit provider evidence plus versioned parser coverage. These are rebuildable for one
   session after a proven identity repair; its process evidence is retained and re-attributed.
+- `status_timeline`: the durable per-session detection timeline — every transition-ledger
+  entry (transitions *and* the non-transition kinds: `watchdog_recovery`,
+  `standing_activity`, `cli_state`, `layer_reading`, `screen_classifier_blind`,
+  `foreign_conversation_hook_ignored`, `transition_refused`, `reopen_blocked`,
+  `observer_fault`, hook-spool records) keyed `(session_id, agent_run_id, seq)` with `ts`,
+  `kind`, and the entry payload verbatim as JSON. Run-keyed so a conversation rollover's
+  successor rows never mix with its predecessor's. Written behind the in-memory rings by a
+  batched sink (never on the transition path), pruned by
+  `status_timeline_retention_days` (default 30), and queried by time range for
+  post-mortems (`features/status-detection.md` § durable timeline,
+  `development/STATUS_INCIDENT_RUNBOOK.md`).
 - `tier0_facts`: deterministic no-model fact capture (file writes, commands, tests, git, tools)
   with `content_hash`, canonical `fingerprint`, the owning `agent_run_id`/`project_id`, and a
   `source_seq` pointer into the event log. Test results additionally carry structured
