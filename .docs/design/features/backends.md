@@ -224,11 +224,25 @@
   tool calls/results, duration/error evidence, named skill invocations, and compactions;
   unsupported or unknown records remain coverage diagnostics rather than inferred events.
 
+**Hook payloads are UTF-8 and must be decoded as UTF-8.** The shim reads the JSON body
+from `sys.stdin.buffer` and decodes explicitly. `sys.stdin.read()` decodes with the
+process locale encoding instead, which on Windows is the ANSI code page (cp1252) with
+`errors="surrogateescape"` — so every non-ASCII character in every hook payload was
+corrupted at ingress. `⚠️` (`E2 9A A0 EF B8 8F`) arrived as `â` `š` `\xa0` `ï` `¸` plus a
+*lone surrogate* `\udc8f`, because 0x8F is one of the five bytes cp1252 leaves undefined.
+Accents and curly quotes mojibaked silently; anything whose UTF-8 contains 0x81, 0x8D,
+0x8F, 0x90 or 0x9D became unencodable and blew up somewhere else entirely — measured
+2026-07-31, phone-pasted prompts left three sessions permanently nameless because the
+titler's slice encode raised `UnicodeEncodeError` four layers downstream. Text crossing
+this boundary is additionally scrubbed by `text_safety.utf8_safe`; see
+`automation.md` for why the observer path treats that as a hard requirement.
+
 ## Key files
 
 - Adapters: `src/swe_mux/adapters/`
 - Tailer/parsers: `src/swe_mux/observation.py`
 - Hook command: `src/swe_mux/hook_client.py`
+- Unicode boundary: `src/swe_mux/text_safety.py`
 - CLI shims: `src/swe_mux/launchers.py`, `src/swe_mux/agent_launcher.py`
 - Promotion lifecycle: `src/swe_mux/session.py`
 - Replay/readiness contract: `delivery-readiness.md`

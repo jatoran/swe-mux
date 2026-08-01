@@ -6,11 +6,12 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
 
 from .secret_store import SecretStore
+from .text_safety import utf8_safe_value
 
 OPENROUTER_ORIGIN = "https://openrouter.ai/api/v1"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -224,12 +225,17 @@ class OpenRouterClient:
         if not model:
             raise OpenRouterError("an exact OpenRouter model id is required")
         started = time.monotonic()
+        # Last line of defence, for every caller rather than each one separately.
+        # A lone surrogate anywhere in the prompt makes the whole request
+        # unserializable, and the resulting `UnicodeEncodeError` surfaces as the
+        # caller's failure rather than as bad input — see `text_safety`.
+        safe_messages = cast(list[dict[str, str]], utf8_safe_value(messages))
         payload = await self._request(
             "POST",
             "/chat/completions",
             json_body={
                 "model": model,
-                "messages": messages,
+                "messages": safe_messages,
                 "stream": False,
                 "temperature": 0,
                 "max_tokens": max_tokens,

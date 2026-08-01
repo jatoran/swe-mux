@@ -21,6 +21,7 @@ from .session import (
     pty_tail_waiting_on_background,
     transition_proof,
 )
+from .text_safety import utf8_safe
 
 log = logging.getLogger(__name__)
 
@@ -1286,7 +1287,10 @@ def _remember_user_prompt(session: Session, payload: dict[str, Any]) -> None:
     prompt = payload.get("prompt")
     if not isinstance(prompt, str):
         return
-    text = prompt.strip()
+    # Scrubbed before it is stored, not before it is used: this value is pinned to
+    # a checkpoint that outlives the daemon, so anything unencodable saved here is
+    # a fault that keeps being replayed after the source is fixed.
+    text = utf8_safe(prompt.strip())
     if text:
         session.last_user_prompt = text[:MAX_REMEMBERED_PROMPT_CHARS]
         if session.first_user_prompt is None:
