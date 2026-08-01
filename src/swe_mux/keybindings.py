@@ -88,7 +88,17 @@ KEYBINDING_COMMANDS = (
     ("terminal.clear", "Clear focused terminal", "terminal"),
     # Read/select mode: the touch control that keeps the on-screen keyboard down.
     # Bindable like any other command so it can drive a gesture or the palette.
-    ("terminal.keyboardToggle", "Toggle read/select mode in focused terminal", "terminal"),
+    # It carries the default two-finger swipe-down gesture, so it also lowers a
+    # keyboard held up outside a terminal (a note editor, a form field) rather than
+    # toggling a mode on a terminal the mobile workspace is not showing.
+    (
+        "terminal.keyboardToggle",
+        "Hide the on-screen keyboard (read/select mode in a focused terminal)",
+        "terminal",
+    ),
+    # The same dismissal with no terminal mode behind it, for anyone who wants the
+    # gesture to only ever put the keyboard away.
+    ("keyboard.dismiss", "Hide the on-screen keyboard", "view"),
     # The right-edge utility drawer (default two-finger swipe-left gesture on
     # touch; an always-visible icon rail on desktop). `drawer.toggle` reopens the
     # last tab; the per-tab ids open one directly and close it if it is showing.

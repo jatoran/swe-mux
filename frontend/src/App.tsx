@@ -68,7 +68,7 @@ import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from '
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
-import { dismissSoftKeyboard } from './mobileKeyboard'
+import { dismissSoftKeyboard, softKeyboardHolder } from './mobileKeyboard'
 import { MOBILE_TAB_ORDER_KEY, moveMobileTab, parseMobileTabOrder, pruneMobileTabOrder, serializeMobileTabOrder, type MobileTabOrder } from './mobileTabOrder'
 import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
@@ -2384,10 +2384,26 @@ export function App() {
       window.dispatchEvent(claim)
       if (!claim.defaultPrevented) setError('No focused note to search. Click into a note first.')
     } },
+    // A plain "put the keyboard away" with no sticky mode behind it. On touch this is
+    // the only way out of a note editor's keyboard: the read/select toggle below is a
+    // terminal mode, and a note has no rail button of its own.
+    { id: 'keyboard.dismiss', label: 'Hide the on-screen keyboard', category: 'view', available: true, run: () => dismissSoftKeyboard() },
     // The ⌨ read/select toggle used to exist only as a rail button, so it could
     // not be bound to a gesture or reached from the palette — on touch it is one
     // of the most-used controls, so it is a first-class command.
-    { id: 'terminal.keyboardToggle', label: 'Toggle read/select mode (on-screen keyboard) in focused terminal', category: 'terminal', available: !!active, disabledReason: 'No focused terminal', run: () => window.dispatchEvent(new CustomEvent('mux:terminal-action', { detail: { sessionId: activeId, action: 'toggleKeyboard' } })) },
+    //
+    // It also carries the default two-finger-swipe-down binding, i.e. the gesture a
+    // touch user reaches for to push the keyboard away wherever they are. So it is
+    // available with no terminal focused, and when a field outside the terminal's own
+    // live input is what is holding the keyboard up, it lowers that instead of
+    // toggling read/select mode on a terminal the mobile workspace is not even
+    // showing. With nothing holding the keyboard up it stays a plain toggle, which is
+    // what turns read mode back off.
+    { id: 'terminal.keyboardToggle', label: 'Hide the on-screen keyboard (read/select mode in a focused terminal)', category: 'terminal', available: true, run: () => {
+      const holder = softKeyboardHolder()
+      if (holder && !holder.classList.contains('mobile-terminal-live-input')) { holder.blur(); return }
+      if (activeId) window.dispatchEvent(new CustomEvent('mux:terminal-action', { detail: { sessionId: activeId, action: 'toggleKeyboard' } }))
+    } },
     // The utility drawer is a slide-in panel, so every entry point is a toggle:
     // the gesture that pulls it in pushes it back out, and a tab command run while
     // that tab is showing closes it.
@@ -2579,6 +2595,13 @@ export function App() {
       const point = centroid(event.touches)
       if (!state) state = { startX: point.x, startY: point.y, lastX: point.x, lastY: point.y, maxPointers: event.touches.length, start: Date.now(), axis: '?', claims: markPointerDragClaims() }
       else state.maxPointers = Math.max(state.maxPointers, event.touches.length)
+      // Two fingers is never text entry, so lower the keyboard the moment the second
+      // one lands rather than waiting for the command at touchend. An editor focuses
+      // its input on every pointerdown (that is how a tap places the caret), so a
+      // two-finger swipe starting over a note raises the keyboard on the way in — and
+      // a swipe later is far too late to hide that it happened. Blurring in the same
+      // frame the focus landed is what keeps it from ever animating up.
+      if (event.touches.length >= 2) dismissSoftKeyboard()
       attachMove()
     }
     const onMove = (event: TouchEvent) => {
