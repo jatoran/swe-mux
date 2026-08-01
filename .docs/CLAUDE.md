@@ -23,6 +23,9 @@
   `design/features/notifications.md`, `design/features/terminal-input.md`
 - Changing the utility drawer (tabs, desktop dock/icon rail), command-rail placement, or where
   inserted text lands: `design/features/ui.md`, `technical/frontend/packages.md`
+- Changing agent-skill discovery (which CLI directories are scanned, the metadata read from
+  them, or how the Commands tab lists them): `design/features/ui.md`, `design/interfaces.md`,
+  `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing clipboard capture, the clipboard-history ring/panel, or where inserted text lands:
   `design/features/ui.md`, `design/interfaces.md`, `design/data-model.md`,
   `technical/frontend/packages.md`, `technical/backend/packages.md`,

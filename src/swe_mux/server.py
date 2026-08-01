@@ -37,6 +37,7 @@ from aiohttp.multipart import BodyPartReader
 
 from .adapters import BackendAdapter, ClaudeAdapter, CodexAdapter, ShellAdapter
 from .agent_messaging import AgentMessagingService
+from .agent_skills import discover_skills
 from .auto_delivery import AutoDeliveryController
 from .automation import (
     MAX_SLICE_BYTES,
@@ -577,6 +578,7 @@ def create_app(
             web.get("/api/diagnostics/status-health", get_status_health),
             web.get("/api/diagnostics/background", get_background_health),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
+            web.get("/api/sessions/{sid}/skills", session_skills),
             web.patch("/api/sessions/{sid}", patch_session),
             web.delete("/api/sessions/{sid}", delete_session),
             web.post("/api/sessions/{sid}/relaunch", relaunch_session),
@@ -5555,6 +5557,44 @@ async def session_last_reply(request: web.Request) -> web.Response:
             {"error": "no assistant reply text was found in the recent transcript"}, 409
         )
     return json_response({"text": text, "agent_run_id": session.record.agent_run_id})
+
+
+async def session_skills(request: web.Request) -> web.Response:
+    """The skills this session's CLI can see, read from the directories it reads.
+
+    Scoped to the session because both inputs are: the backend decides which
+    roots exist and how a skill is invoked, and the *live* cwd decides which repo
+    skills apply — Codex resolves `.codex/skills` and `.agents/skills` from its
+    working directory, so a session sitting in a worktree sees a different set
+    than one in the primary checkout of the same Project.
+    """
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    backend = session.record.backend
+    if backend not in {"claude", "codex"}:
+        return json_response({"error": "skills are available only for agent sessions"}, 409)
+    record = session.record
+    cwd = Path(
+        (record.runtime_cwd if record.runtime_cwd_live else None)
+        or record.run_cwd
+        or record.spawn_cwd
+        or record.cwd
+    )
+    if not cwd.is_dir():
+        cwd = Path(record.spawn_cwd or record.cwd)
+    payload = await asyncio.to_thread(
+        discover_skills,
+        backend,
+        cwd,
+        refresh=request.query.get("refresh") in {"1", "true"},
+    )
+    # A CLI reads its skills at startup, so anything newer than this run exists on
+    # disk but not in the process the drawer is about to type into. Decorated per
+    # session rather than cached with the scan, which is session-independent.
+    started = record.agent_run_started_at or record.created_at
+    skills = [
+        {**skill, "added_after_start": skill["mtime"] > started} for skill in payload["skills"]
+    ]
+    return json_response({**payload, "skills": skills, "agent_run_started_at": started})
 
 
 async def voice_generate(request: web.Request) -> web.Response:

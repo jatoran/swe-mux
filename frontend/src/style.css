@@ -1600,6 +1600,28 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-grid.keys button{place-items:center;text-align:center}
 .drawer-grid button:hover{border-color:var(--accent)}
 .drawer-grid button>small{color:var(--muted);font-size:8px}
+/* Discovered agent skills: a read-only list, so rows rather than the configured
+   items' grid — a name plus the description that decides whether you want it. */
+.drawer-skills{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;border-top:1px solid var(--line)}
+.drawer-skills>header{flex:none;display:flex;align-items:center;gap:6px;padding:7px 9px;background:var(--panel2)}
+.drawer-skills h4{flex:1;margin:0;color:var(--muted);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.drawer-skills>header span{color:var(--muted);font-size:8px}
+.drawer-skills>header button{min-height:22px;padding:0 7px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
+.drawer-skills>header button:hover{border-color:var(--accent);color:var(--text)}
+.drawer-skills>input{flex:none;margin:7px 9px 0;min-height:26px;padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;font-size:9px}
+.drawer-skill-list{flex:1 1 auto;min-height:0;overflow:auto;padding-bottom:8px}
+.drawer-skill-group{display:grid;gap:4px;padding:7px 9px 0}
+.drawer-skill-group h5{margin:0;color:var(--muted);font-size:8px;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.drawer-skill-group button{display:grid;gap:2px;padding:5px 7px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.drawer-skill-group button:hover{border-color:var(--accent)}
+.drawer-skill-group button.shadowed{opacity:.55}
+.drawer-skill-group button>span{display:flex;align-items:baseline;gap:5px;flex-wrap:wrap}
+.drawer-skill-group code{font-family:'Cascadia Mono',Consolas,monospace;font-size:9px}
+.drawer-skill-group em{color:var(--muted);font-size:8px;font-style:normal}
+.drawer-skill-group small{color:var(--muted);font-size:8px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.skill-flag{padding:0 4px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:7px;font-weight:600;text-transform:uppercase}
+.skill-flag.warn{border-color:color-mix(in srgb,var(--amber) 45%,var(--line));color:var(--amber)}
+.drawer-skill-note{margin:0;padding:8px 9px;color:var(--muted);font-size:8px;line-height:1.45}
 .drawer-fields{display:grid;gap:6px;padding:8px 9px;border-top:1px solid var(--line);background:var(--panel2)}
 .drawer-fields label{display:grid;gap:3px;color:var(--muted)}
 .drawer-fields input{min-height:30px;padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}

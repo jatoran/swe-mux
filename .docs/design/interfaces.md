@@ -348,6 +348,7 @@ POST   /sessions/{id}/input
 POST   /sessions/{id}/broadcast-set
 POST   /broadcast/input
 GET    /sessions/{id}/last-reply
+GET    /sessions/{id}/skills[?refresh=1]
 ```
 
 ```ts
@@ -521,6 +522,47 @@ rather than fitting, which is what keeps two devices from resizing each other in
 `GET /sessions/{id}/last-reply` returns the newest meaningful Claude/Codex assistant turn for
 gesture-safe clipboard prefetch. Provider control acknowledgements are skipped; the route does
 not type `/copy` into the PTY.
+
+`GET /sessions/{id}/skills` lists the skills that session's CLI can see, read off disk from the
+directories the CLI itself reads (`agent_skills.py`). Agent backends only; `409` on a shell
+session. Session-scoped because both inputs are: the backend picks the roots and the invocation
+prefix, and the session's *live* cwd picks the repo roots, so a worktree session legitimately
+returns a different set than one in the primary checkout of the same Project. Scans are cached
+per (backend, cwd, home) for ten seconds; `?refresh=1` bypasses that.
+
+```ts
+interface SkillInventory {
+  backend: 'claude' | 'codex'
+  cwd: string
+  generated_at: number
+  agent_run_started_at: number
+  roots: Array<{ path: string; scope: SkillScope; kind: 'skill' | 'command'
+                 origin: string; exists: boolean; count: number }>
+  skills: Array<{
+    name: string; description: string; path: string
+    scope: SkillScope                 // 'project' | 'user' | 'plugin' | 'system'
+    origin: string                    // 'user skills', 'plugin: dev-browser', …
+    kind: 'skill' | 'command'         // Claude surfaces commands/*.md in the same list
+    invocation: string                // '/name' on Claude, '$name' on Codex
+    mtime: number
+    implicit: boolean                 // false = Codex allow_implicit_invocation: false
+    display_name: string | null       // Codex agents/openai.yaml interface
+    short_description: string | null
+    shadowed_by: string | null        // the higher-precedence root that wins the name
+    added_after_start: boolean        // newer than this agent run, so not loaded
+  }>
+  errors: Array<{ path: string; message: string }>
+  truncated: boolean
+  skipped_plugins: string[]           // installed/cached but switched off, so not scanned
+  builtin_skills_hidden: boolean      // Claude: its built-ins live in the binary
+}
+```
+
+Every root is reported whether or not it exists, because a root that quietly stopped being
+scanned (a CLI update moving one) is otherwise indistinguishable from an empty one. The
+inventory is deliberately not exhaustive in one direction and says so: Claude's built-in skills
+are compiled into the CLI and cannot be enumerated from disk, which `builtin_skills_hidden`
+declares rather than implying they do not exist.
 
 ## Voice and Conversation mode
 
