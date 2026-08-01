@@ -22,7 +22,7 @@ from swe_mux.observation import (
     foreign_conversation_hook_id,
     tail_turn_state,
 )
-from swe_mux.screen_mode import ScreenModeParser
+from swe_mux.screen_mode import BracketedPasteParser, ScreenModeParser
 from swe_mux.session import (
     STATE_CHANGE_LOG_LIMIT,
     STATE_TRANSITION_LOG_LIMIT,
@@ -131,6 +131,7 @@ class ReplaySession:
         # stream. A fixture that says nothing about the screen leaves it unknown,
         # exactly as a session whose switch predates the retained scrollback does.
         self.screen = ScreenModeParser()
+        self.bracketed_paste = BracketedPasteParser()
         self.terminal_mode: str | None = None
         self.terminal_mode_updated_at = 0.0
         # The CLI screen this session's PTY would be showing; fixtures drive it

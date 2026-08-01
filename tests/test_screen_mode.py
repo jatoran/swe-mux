@@ -8,7 +8,7 @@ undeliverable, and one that invented a toggle would do the opposite.
 
 from __future__ import annotations
 
-from swe_mux.screen_mode import ScreenModeParser
+from swe_mux.screen_mode import BracketedPasteParser, ScreenModeParser
 
 
 def test_nothing_is_claimed_until_the_child_says_something() -> None:
@@ -65,5 +65,44 @@ def test_other_private_modes_are_not_screen_switches() -> None:
 
 def test_the_carry_stays_bounded() -> None:
     parser = ScreenModeParser()
+    parser.feed(b"\x1b[?" + b"9" * 400)
+    assert len(parser._tail) <= 16
+
+
+def test_bracketed_paste_is_unknown_until_the_child_says_so() -> None:
+    parser = BracketedPasteParser()
+    assert parser.feed(b"hello world\r\n") is None
+    assert parser.enabled is None
+
+
+def test_bracketed_paste_enable_and_disable() -> None:
+    parser = BracketedPasteParser()
+    assert parser.feed(b"\x1b[?2004h") is True
+    assert parser.feed(b"typing") is True
+    assert parser.feed(b"\x1b[?2004l") is False
+
+
+def test_the_last_bracketed_paste_toggle_in_a_chunk_wins() -> None:
+    parser = BracketedPasteParser()
+    assert parser.feed(b"\x1b[?2004h" + b"x" * 64 + b"\x1b[?2004l") is False
+
+
+def test_a_bracketed_paste_toggle_split_across_reads_is_still_seen() -> None:
+    for cut in range(1, len(b"\x1b[?2004h")):
+        parser = BracketedPasteParser()
+        sequence = b"\x1b[?2004h"
+        parser.feed(b"before" + sequence[:cut])
+        assert parser.feed(sequence[cut:] + b"after") is True, cut
+
+
+def test_other_private_modes_are_not_bracketed_paste() -> None:
+    parser = BracketedPasteParser()
+    assert parser.feed(b"\x1b[?25l\x1b[?1049h\x1b[?1006h") is None
+    assert parser.feed(b"2004h") is None
+    assert parser.feed(b"\x1b[?2004h") is True
+
+
+def test_the_bracketed_paste_carry_stays_bounded() -> None:
+    parser = BracketedPasteParser()
     parser.feed(b"\x1b[?" + b"9" * 400)
     assert len(parser._tail) <= 16

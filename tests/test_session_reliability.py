@@ -13,7 +13,7 @@ from swe_mux.adapters import ShellAdapter
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.models import SessionRecord
 from swe_mux.runtime_cwd import Osc7Parser
-from swe_mux.screen_mode import ScreenModeParser
+from swe_mux.screen_mode import BracketedPasteParser, ScreenModeParser
 from swe_mux.server import session_startup_metrics
 from swe_mux.session import ScrollbackBuffer, Session, SessionManager
 
@@ -28,6 +28,7 @@ def _fake_session(max_bytes: int = 32) -> Any:
     # replay budget would silently trim the very boundaries they assert on.
     fake.attach_replay_bytes = None
     fake.screen = ScreenModeParser()
+    fake.bracketed_paste = BracketedPasteParser()
     return fake
 
 
@@ -131,6 +132,50 @@ def test_a_bounded_replay_restates_the_alternate_screen_it_cut_off() -> None:
     replay = Session.replay_bytes(fake)
     assert replay.startswith(b"\x1b[?1049h")
     assert len(replay) < 64
+
+
+def test_a_bounded_replay_restates_the_bracketed_paste_mode_it_cut_off() -> None:
+    # Agent CLIs enable bracketed paste once at startup and never restate it, so a
+    # window over a long session never carries it. A reconnecting pane resets its
+    # terminal, and without this it pastes unwrapped: xterm rewrites every newline
+    # to a carriage return, so the CLI submits the paste one line at a time and
+    # keeps only the text after the final newline.
+    fake = _fake_session(4096)
+    fake.attach_replay_bytes = 32
+    fake.bracketed_paste.feed(b"\x1b[?2004h")
+    fake.scrollback.append(b"\x1b[?2004h" + b"output\n" * 40)
+    replay = Session.replay_bytes(fake)
+    assert replay.startswith(b"\x1b[?2004h")
+
+
+def test_a_replay_carrying_its_own_bracketed_paste_toggle_is_left_alone() -> None:
+    fake = _fake_session(4096)
+    fake.attach_replay_bytes = 64
+    fake.bracketed_paste.feed(b"\x1b[?2004h")
+    fake.scrollback.append(b"filler\n" * 40 + b"\x1b[?2004ldone\n")
+    replay = Session.replay_bytes(fake)
+    assert not replay.startswith(b"\x1b[?2004h")
+    assert b"\x1b[?2004l" in replay
+
+
+def test_a_child_that_never_enabled_bracketed_paste_is_not_given_it() -> None:
+    # A plain shell has no bracketed paste; inventing it would make the shell
+    # receive literal ESC[200~ wrapper bytes on every paste.
+    fake = _fake_session(4096)
+    fake.attach_replay_bytes = 32
+    fake.scrollback.append(b"prompt$ " * 40)
+    replay = Session.replay_bytes(fake)
+    assert not replay.startswith(b"\x1b[?2004h")
+
+
+def test_both_cut_off_modes_are_restated_together() -> None:
+    fake = _fake_session(4096)
+    fake.attach_replay_bytes = 32
+    fake.screen.feed(b"\x1b[?1049h")
+    fake.bracketed_paste.feed(b"\x1b[?2004h")
+    fake.scrollback.append(b"\x1b[?1049h\x1b[?2004h" + b"repaint\n" * 40)
+    replay = Session.replay_bytes(fake)
+    assert replay.startswith(b"\x1b[?2004h\x1b[?1049h")
 
 
 def test_a_replay_that_carries_its_own_toggle_is_left_alone() -> None:
@@ -309,6 +354,7 @@ async def test_fanout_records_first_output_and_prompt_startup_milestones() -> No
         output_window=deque(),
         osc7=Osc7Parser(),
         screen=ScreenModeParser(),
+        bracketed_paste=BracketedPasteParser(),
         scrollback=ScrollbackBuffer(1024),
         publish_output=output.append,
         publish_update=lambda: updates.append(dict(record.startup_timing_ms)),

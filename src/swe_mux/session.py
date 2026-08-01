@@ -37,7 +37,12 @@ from .models import (
 )
 from .pty_host import PtyHost, merge_environment
 from .runtime_cwd import Osc7Parser, local_directory_from_osc7
-from .screen_mode import SCREEN_TOGGLE, ScreenModeParser
+from .screen_mode import (
+    BRACKETED_PASTE_TOGGLE,
+    SCREEN_TOGGLE,
+    BracketedPasteParser,
+    ScreenModeParser,
+)
 from .scrollback import SCREEN_TAIL_BYTES, ScrollbackBuffer
 from .spawn_contract import infer_agent_executable_backend, scrub_claude_session_markers
 from .status_timeline import LedgerRing, StatusTimelineStore, note_layer_reading
@@ -1390,6 +1395,7 @@ class Session:
         # attached and owns input, which makes it corroboration rather than the
         # source of record (`delivery-readiness.md`).
         self.screen = ScreenModeParser()
+        self.bracketed_paste = BracketedPasteParser()
         self.terminal_mode: str | None = None
         self.terminal_mode_updated_at = 0.0
         self.observation_state: dict[str, Any] = {
@@ -1462,9 +1468,16 @@ class Session:
         replay = self.scrollback.tail(self.attach_replay_bytes)
         if len(replay) == self.scrollback.size:
             return replay
+        preamble = b""
+        # Agent CLIs enable bracketed paste once at startup and never restate it, so
+        # a bounded window over a long session never carries it. A reconnecting pane
+        # resets its terminal, and without this it pastes unwrapped: xterm turns each
+        # newline into Enter, and the CLI submits the paste a line at a time.
+        if self.bracketed_paste.enabled and not BRACKETED_PASTE_TOGGLE.search(replay):
+            preamble += b"\x1b[?2004h"
         if self.screen.mode == "alternate" and not SCREEN_TOGGLE.search(replay):
-            return b"\x1b[?1049h" + replay
-        return replay
+            preamble += b"\x1b[?1049h"
+        return preamble + replay if preamble else replay
 
     def _schedule_resync(self, subscriber: PtySubscriber, rejected: bytes | None = None) -> None:
         if rejected is not None:
@@ -2655,6 +2668,7 @@ class SessionManager:
             # adopted session's screen mode known across a daemon restart; without
             # it the fact would be lost for the whole remaining life of the PTY.
             session.screen.feed(replay)
+            session.bracketed_paste.feed(replay)
             session.transcript_path = transcript_path
             lifecycle = meta.get("agent_lifecycle_id")
             # The lifecycle anchor is what Branch forks from and what the exit
@@ -4262,6 +4276,7 @@ class SessionManager:
             ):
                 session.output_window.popleft()
             session.screen.feed(chunk)
+            session.bracketed_paste.feed(chunk)
             prompt_uris = session.osc7.feed(chunk)
             if prompt_uris and "first_prompt" not in session.record.startup_timing_ms:
                 session.record.startup_timing_ms["first_prompt"] = round(

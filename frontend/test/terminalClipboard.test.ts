@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { MAX_TERMINAL_CLIPBOARD_CHARS, ResilientClipboardProvider, clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage } from '../src/terminalClipboard.ts'
+import { MAX_TERMINAL_CLIPBOARD_CHARS, ResilientClipboardProvider, clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, pasteNeedsManualBracketing } from '../src/terminalClipboard.ts'
 
 test('ordinary paste events prefer an image file when one is present', () => {
   const image = new Blob(['png'], { type: 'image/png' })
@@ -71,4 +71,61 @@ test('manual copy fallback runs synchronously while mobile activation is live', 
   )
   assert.equal(copied, true)
   assert.deepEqual(calls.slice(0,5), ['modern', 'focus', 'select', 'range:0:11', 'legacy'])
+})
+
+test('a multi-line paste into an agent with a stale mode is bracketed by hand', () => {
+  // The regression: unwrapped, xterm turns each newline into Enter and the CLI submits
+  // the paste line by line, leaving only the text after the last newline.
+  assert.equal(
+    pasteNeedsManualBracketing({
+      text: 'line one\nline two\nline three',
+      agentBackend: true,
+      bracketedPasteMode: false,
+    }),
+    true,
+  )
+})
+
+test('xterm is trusted to wrap once it knows the mode is on', () => {
+  assert.equal(
+    pasteNeedsManualBracketing({
+      text: 'line one\nline two',
+      agentBackend: true,
+      bracketedPasteMode: true,
+    }),
+    false,
+  )
+})
+
+test('a plain shell is never sent wrapper bytes it would print literally', () => {
+  assert.equal(
+    pasteNeedsManualBracketing({
+      text: 'line one\nline two',
+      agentBackend: false,
+      bracketedPasteMode: false,
+    }),
+    false,
+  )
+})
+
+test('single-line text is left alone, since the bug needs a newline', () => {
+  assert.equal(
+    pasteNeedsManualBracketing({
+      text: 'just one line',
+      agentBackend: true,
+      bracketedPasteMode: false,
+    }),
+    false,
+  )
+})
+
+test('a bare carriage return counts as multi-line', () => {
+  assert.equal(
+    pasteNeedsManualBracketing({
+      text: 'first\rsecond',
+      agentBackend: true,
+      bracketedPasteMode: false,
+    }),
+    true,
+  )
 })

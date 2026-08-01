@@ -123,3 +123,25 @@ export async function copyPreparedText(
   if (!modernWrite) return false
   try { await modernWrite; return true } catch { return false }
 }
+
+/**
+ * Whether a paste must be bracketed by hand instead of trusting xterm to do it.
+ *
+ * xterm wraps a paste only once it has seen the child enable bracketed paste, and an
+ * agent CLI enables it exactly once at startup. A pane that reset its terminal on
+ * reconnect can therefore believe the mode is off while the CLI still has it on.
+ * Unwrapped, xterm rewrites every newline to a carriage return, so the CLI submits the
+ * paste a line at a time and keeps only the text after the final newline.
+ *
+ * Deliberately narrow. Single-line text is unaffected by the bug, and a child that
+ * genuinely has no bracketed paste (a plain shell) must never be sent the wrapper
+ * bytes, so it only fires for multi-line text going into an agent session.
+ */
+export function pasteNeedsManualBracketing(input: {
+  text: string
+  agentBackend: boolean
+  bracketedPasteMode: boolean
+}): boolean {
+  if (!input.agentBackend || input.bracketedPasteMode) return false
+  return /[\r\n]/.test(input.text)
+}

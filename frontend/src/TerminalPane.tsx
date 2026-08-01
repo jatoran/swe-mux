@@ -26,7 +26,7 @@ import {
   type TerminalCell,
 } from './mobileInput'
 import { isMobileTerminalInput, mobileImeDelta } from './mobileTerminalIme'
-import { clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, ResilientClipboardProvider } from './terminalClipboard'
+import { clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, pasteNeedsManualBracketing, ResilientClipboardProvider } from './terminalClipboard'
 import { noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
@@ -49,6 +49,7 @@ import {
   type OwnershipView,
 } from './inputOwnership'
 import { pendingInputDecision } from './pendingInput'
+import { pastePayload } from './noteSelection'
 import { deviceIsFocused, PRESENCE_REPORTED_EVENT } from './devicePresence'
 import { localPreviewUrl } from './previewLinks'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness, type ConnectionPhase } from './liveness'
@@ -123,6 +124,35 @@ function acceptsClipboardImages(session: Session) {
   return session.backend === 'claude' || session.backend === 'codex'
 }
 
+/**
+ * Paste text, wrapping it by hand when xterm's mirror of the child's bracketed-paste
+ * mode has gone stale.
+ *
+ * xterm only wraps a paste once it has *seen* the child enable the mode, and an agent
+ * CLI enables it exactly once at startup. A pane that reset its terminal on reconnect
+ * can therefore come back believing the mode is off while the CLI still has it on.
+ * Unwrapped, xterm rewrites every newline to a carriage return, so the CLI submits the
+ * paste one line at a time and keeps only the text after the final newline.
+ *
+ * The daemon restates the mode in its replay, which fixes this at the source; this is
+ * the backstop for a session so long-lived that even retained scrollback has rolled
+ * past the enable. Restricted to multi-line text into an agent session: that is the
+ * only shape this bug can affect, so nothing else changes behaviour.
+ */
+function pasteIntoTerminal(term: Terminal, session: Session, text: string) {
+  if (pasteNeedsManualBracketing({
+    text,
+    agentBackend: acceptsClipboardImages(session),
+    bracketedPasteMode: term.modes.bracketedPasteMode,
+  })) {
+    // term.input keeps this on the normal onData path, so broadcast membership and
+    // the replay guard treat it exactly like a real paste.
+    term.input(pastePayload(text), true)
+    return
+  }
+  term.paste(text)
+}
+
 function mobileClipboardFallback(): boolean {
   return window.matchMedia('(max-width: 760px), (pointer: coarse)').matches
 }
@@ -156,7 +186,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session) {
       // Some browsers block the richer Clipboard API while still allowing text reads.
     }
   }
-  term.paste(await navigator.clipboard.readText())
+  pasteIntoTerminal(term, session, await navigator.clipboard.readText())
   term.focus()
 }
 
@@ -1150,7 +1180,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       const text=event.clipboardData.getData('text/plain')
       if(!text)return
-      event.preventDefault();resetMobileInput();term.paste(text);focusTerminalInput()
+      event.preventDefault();resetMobileInput();pasteIntoTerminal(term,session,text);focusTerminalInput()
     }
     mobileLiveInput?.addEventListener('beforeinput',mobileBeforeInput)
     mobileLiveInput?.addEventListener('input',mobileTextInput)
@@ -1575,7 +1605,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // submit with Enter, mirroring the raw onData path used by sendKey.
   const injectText=(text:string,submit?:boolean)=>{
     if(!text)return
-    termRef.current?.paste(text)
+    const target=termRef.current
+    if(target)pasteIntoTerminal(target,session,text)
     if(submit)sendKey('\r')
     else if(!keyboardOffRef.current)focusTerminalInputRef.current()
   }
@@ -1667,8 +1698,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const image=data&&clipboardImage(Array.from(data.items))
     if(image){event.preventDefault();void insertTerminalImage(termRef.current!,session,image).then(()=>{setManualPaste(false);showClipboardStatus('Pasted')}).catch(cause=>reportError(cause instanceof Error?cause.message:'Clipboard image paste failed.'));return}
     const text=data?.getData('text/plain')||''
-    if(text){event.preventDefault();termRef.current?.paste(text);focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
-  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;termRef.current?.paste(text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
+    if(text){event.preventDefault();if(termRef.current)pasteIntoTerminal(termRef.current,session,text);focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
+  }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,session,text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>
     <button role="menuitem" disabled={!termRef.current?.hasSelection()} onClick={() => runCommand('terminal.copy')}>Copy</button>
     <button role="menuitem" onClick={() => runCommand('terminal.paste')}>Paste</button>
     <button role="menuitem" onClick={() => { setMenu(null); runCommand('clipboard.open') }}>Clipboard history…</button>

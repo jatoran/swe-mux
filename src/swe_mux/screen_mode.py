@@ -20,6 +20,7 @@ SCREEN_MODES = ("normal", "alternate")
 # 1049 is what every modern TUI uses; 47 and 1047 are the older spellings, kept
 # because a child that uses them is doing exactly the same thing.
 SCREEN_TOGGLE = re.compile(rb"\x1b\[\?(?:1049|1047|47)([hl])")
+BRACKETED_PASTE_TOGGLE = re.compile(rb"\x1b\[\?2004([hl])")
 _MARKER = b"\x1b[\x3f"  # ESC [ ?
 # A private-mode introducer plus the longest parameter this cares about.
 _MAX_PARTIAL = len(_MARKER) + 5
@@ -49,11 +50,45 @@ class ScreenModeParser:
             last = match
         if last is not None:
             self.mode = "alternate" if last.group(1) == b"h" else "normal"
-        self._tail = _carry(data)
+        self._tail = _carry(data, SCREEN_TOGGLE)
         return self.mode
 
 
-def _carry(data: bytes) -> bytes:
+class BracketedPasteParser:
+    """Incrementally track whether the child has bracketed paste enabled.
+
+    Durable for the same reason the screen buffer is: the child owns the mode
+    until it changes it. What makes this worth tracking is that agent CLIs set it
+    **once and never restate it** — Claude Code emits ``\\x1b[?2004h`` 64 bytes
+    into its very first output and not again — so a bounded attach replay of a
+    long-running session carries no trace of it at all.
+
+    That matters because a reconnecting pane resets its terminal, which clears the
+    mode. Without it xterm sends a paste unwrapped *and* rewrites every newline to
+    a carriage return, so the CLI receives one Enter per line and submits the paste
+    line by line instead of inserting it — leaving only the text after the final
+    newline behind.
+    """
+
+    __slots__ = ("enabled", "_tail")
+
+    def __init__(self) -> None:
+        self.enabled: bool | None = None
+        self._tail = b""
+
+    def feed(self, chunk: bytes) -> bool | None:
+        """Apply every toggle in ``chunk`` and return the resulting mode."""
+        data = self._tail + chunk
+        last = None
+        for match in BRACKETED_PASTE_TOGGLE.finditer(data):
+            last = match
+        if last is not None:
+            self.enabled = last.group(1) == b"h"
+        self._tail = _carry(data, BRACKETED_PASTE_TOGGLE)
+        return self.enabled
+
+
+def _carry(data: bytes, toggle: re.Pattern[bytes]) -> bytes:
     """Retain only a private-mode sequence that may be split across chunks.
 
     Bounded by construction: an unterminated introducer longer than the longest
@@ -62,7 +97,7 @@ def _carry(data: bytes) -> bytes:
     with the next chunk to form one either.
     """
     start = data.rfind(_MARKER)
-    if start >= 0 and len(data) - start <= _MAX_PARTIAL and not SCREEN_TOGGLE.search(data[start:]):
+    if start >= 0 and len(data) - start <= _MAX_PARTIAL and not toggle.search(data[start:]):
         return data[start:]
     return next(
         (data[-size:] for size in range(len(_MARKER) - 1, 0, -1) if data.endswith(_MARKER[:size])),
