@@ -1572,20 +1572,21 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .utility-rail button:hover,.utility-rail button:focus-visible{border-color:var(--accent);color:var(--text)}
 .utility-rail button.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel2));color:var(--text);box-shadow:inset -2px 0 var(--accent)}
 .drawer-badge{position:absolute;top:-4px;right:-4px;min-width:14px;height:14px;padding:0 3px;display:grid;place-items:center;border-radius:7px;background:var(--amber);color:#12140c;font:600 8px 'Cascadia Mono',Consolas,monospace;font-style:normal}
-.drawer-tabs{flex:none;display:flex;flex-wrap:wrap;align-items:stretch;border-bottom:1px solid var(--line);background:var(--panel2);overflow-x:auto;scrollbar-width:none}
+.drawer-tabs-shell{position:relative;flex:none;min-width:0;display:flex;align-items:stretch;border-bottom:1px solid var(--line);background:var(--panel2)}
+.drawer-tabs-shell:after{content:"";position:absolute;z-index:2;top:0;right:30px;bottom:0;width:14px;pointer-events:none;background:linear-gradient(to right,transparent,var(--panel2))}
+.drawer-tabs{flex:1 1 auto;min-width:0;display:flex;flex-wrap:nowrap;align-items:stretch;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain}
 .drawer-tabs::-webkit-scrollbar{display:none}
 /* Icon-only tabs. They share the strip evenly but are capped, because a 17px mark centred in
    a 100px cell at the drawer's 620px maximum reads as an accident rather than a control. The
    cap leaves slack, which the close button takes by sitting at the far end. */
-/* `min-width` is set against the *narrowest* the strip can be, not against taste: eight tabs
-   plus the 30px close button must fit DRAWER_MIN_WIDTH (300px), or the last tab is parked
-   off-screen in a scrollbar-less scroller. 8 × 32 + 30 = 286. `flex-wrap` is the backstop —
-   a ninth tab wraps to a second row rather than disappearing. */
-.drawer-tabs button{position:relative;min-height:34px;flex:1 1 0;min-width:32px;max-width:58px;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;white-space:nowrap;cursor:pointer}
+/* Nine tabs do not fit the 300px minimum drawer at a legible width. The tablist therefore
+   scrolls on one row while the close control stays fixed; selection auto-scrolls into view. */
+.drawer-tabs button{position:relative;min-height:34px;flex:1 0 32px;min-width:32px;max-width:58px;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;white-space:nowrap;cursor:pointer}
 .drawer-tabs button svg{width:17px;height:17px;display:block}
 .drawer-tabs button:hover{color:var(--text)}
 .drawer-tabs button.active{border-bottom-color:var(--accent);color:var(--text);background:var(--panel)}
-.drawer-tabs .drawer-close{flex:0 0 auto;margin-left:auto;width:30px;max-width:none;padding:0;color:var(--muted);font-size:15px}
+.drawer-tabs-shell>.drawer-close{position:relative;z-index:3;flex:0 0 30px;width:30px;padding:0;border:0;border-bottom:2px solid transparent;background:var(--panel2);color:var(--muted);font:inherit;font-size:15px;cursor:pointer}
+.drawer-tabs-shell>.drawer-close:hover{color:var(--text)}
 .drawer-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
 .drawer-status{flex:none;margin:0;padding:6px 9px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .drawer-empty{margin:0;padding:22px 12px;color:var(--muted);font-size:9px;line-height:1.45;text-align:center}
@@ -1593,6 +1594,58 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-actions button{flex:1;min-height:30px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .drawer-actions button.danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red)}
 .drawer-actions button:disabled{opacity:.45;cursor:not-allowed}
+/* Agent Context: an inventory and viewer, never an editor. Mutations are isolated to the
+   preview/confirm sync and restore cards; file bodies are ordinary preformatted text. */
+.agent-context{flex:1 1 auto;min-height:0;overflow:auto;background:var(--bg)}
+.agent-context-header{position:sticky;z-index:5;top:0;display:flex;align-items:center;gap:8px;padding:8px 9px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--panel) 94%,transparent);backdrop-filter:blur(6px)}
+.agent-context-header>div{flex:1;min-width:0;display:grid;gap:2px}
+.agent-context-header strong{font-size:10px}
+.agent-context-header small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
+.agent-context-header button,.agent-context-section button,.agent-context-confirm button{min-height:27px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:8px;cursor:pointer}
+.agent-context-header button:hover:not(:disabled),.agent-context-section button:hover:not(:disabled),.agent-context-confirm button:hover:not(:disabled){border-color:var(--accent)}
+.agent-context button:disabled{opacity:.45;cursor:not-allowed}
+.agent-context-notice{margin:0;padding:7px 9px;border-bottom:1px solid color-mix(in srgb,var(--green) 45%,var(--line));background:color-mix(in srgb,var(--green) 8%,var(--panel));color:var(--green);font-size:8px;line-height:1.45}
+.agent-context-notice.error{border-color:color-mix(in srgb,var(--red) 45%,var(--line));background:color-mix(in srgb,var(--red) 8%,var(--panel));color:var(--red)}
+.agent-context-section{display:grid;gap:7px;padding:9px;border-bottom:1px solid var(--line);background:var(--panel)}
+.agent-context-section>header{display:flex;align-items:center;gap:6px}
+.agent-context-section h4{flex:1;margin:0;color:var(--text);font-size:9px;text-transform:uppercase;letter-spacing:.05em}
+.agent-context-section>p{margin:0;color:var(--muted);font-size:8px;line-height:1.45}
+.context-state,.context-comparison{flex:none;padding:1px 4px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:7px;font-style:normal;text-transform:uppercase;letter-spacing:.03em}
+.context-state.available,.context-comparison.in_sync{border-color:color-mix(in srgb,var(--green) 55%,var(--line));color:var(--green)}
+.context-state.unreadable,.context-state.too_large,.context-comparison.different{border-color:color-mix(in srgb,var(--amber) 55%,var(--line));color:var(--amber)}
+.context-state.changed{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+.context-state.focused{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+.context-state.changed-daemon{border-color:color-mix(in srgb,var(--muted) 55%,var(--line));color:var(--muted)}
+.agent-context-sources{display:grid;gap:4px}
+.agent-context-source{min-width:0;display:grid;gap:3px;padding:6px 7px!important;text-align:left!important}
+.agent-context-source.selected{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,var(--panel2))}
+.agent-context-source-main{min-width:0;display:flex;align-items:center;gap:5px}
+.agent-context-source-flags{min-width:0;display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.agent-context-source strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:9px;white-space:nowrap}
+.agent-context-source small{overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:7px;line-height:1.35;white-space:nowrap}
+.agent-context-sync{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding-top:2px}
+.agent-context-sync>strong,.agent-context-sync>small{grid-column:1/-1}
+.agent-context-sync>strong{font-size:8px}
+.agent-context-sync>small{color:var(--muted);font-size:7px;line-height:1.4}
+.agent-context-sync button{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-context-confirm{display:grid;gap:7px;padding:9px;border-bottom:1px solid color-mix(in srgb,var(--amber) 55%,var(--line));background:color-mix(in srgb,var(--amber) 6%,var(--panel))}
+.agent-context-confirm>header{display:grid;gap:3px}
+.agent-context-confirm>header strong{color:var(--amber);font-size:9px}
+.agent-context-confirm>header small,.agent-context-confirm>p{margin:0;color:var(--muted);font-size:8px;line-height:1.45}
+.agent-context-confirm pre,.agent-context-viewer pre{min-width:0;max-height:290px;margin:0;padding:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:9px/1.45 'Cascadia Mono',Consolas,monospace;overflow:auto;white-space:pre}
+.agent-context-confirm>footer{display:flex;justify-content:flex-end;gap:5px}
+.agent-context-confirm button.danger,.agent-context-backup-confirm button.danger{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
+.agent-context-viewer{display:grid;gap:7px;padding:9px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.agent-context-viewer>header{display:flex;align-items:baseline;gap:6px}
+.agent-context-viewer>header strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:9px;white-space:nowrap}
+.agent-context-viewer>header small{color:var(--muted);font-size:7px}
+.agent-context-viewer>p{margin:0;color:var(--muted);font-size:8px}
+.agent-context-viewer pre{max-height:420px;user-select:text}
+.agent-context-backup{display:flex;align-items:center;gap:6px;padding:5px 0;border-top:1px solid var(--line)}
+.agent-context-backup>span:first-child{flex:1;min-width:0;display:grid;gap:2px}
+.agent-context-backup strong{overflow:hidden;text-overflow:ellipsis;font-size:8px;white-space:nowrap}
+.agent-context-backup small{color:var(--muted);font-size:7px}
+.agent-context-backup-confirm{display:flex;gap:4px}
 /* Command grid: labelled buttons, unlike the strip's abbreviated keys. */
 .drawer-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:5px;padding:8px 9px}
 .drawer-grid.keys{grid-template-columns:repeat(auto-fill,minmax(58px,1fr));border-top:1px solid var(--line)}
@@ -1742,17 +1795,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .git-add-form button,.git-map-actions button{min-height:36px;padding:0 12px}
   .git-map-row-toggle{min-height:56px}
   .git-map-detail{padding-left:20px}
-  /* No rail on touch, so the strip is the only tab control: taller, wider, bigger marks.
-     Width is the constrained axis, not height — the overlay is `min(430px, 92vw)`, so a
-     360px phone gives the strip 331px and eight 44px tabs plus the close button need 382.
-     36px keeps all eight on one row down to a 360px phone (8 × 36 + 30 = 318); the 44px
-     height is the touch target that actually matters, and `flex-wrap` above catches any
-     narrower device by wrapping rather than hiding a tab. */
-  .drawer-tabs button{min-height:44px;min-width:36px;max-width:none}
+  /* No rail on touch, so the strip is the only tab control. It remains one row and scrolls;
+     the selected tab auto-scrolls into view while the close target stays fixed. */
+  .drawer-tabs button{min-height:44px;flex-basis:36px;min-width:36px;max-width:none}
   .drawer-tabs button svg{width:19px;height:19px}
   .drawer-grid button{min-height:46px}
   .drawer-fields input{min-height:38px;font-size:16px}
   .drawer-actions button{min-height:40px}
+  .agent-context-header button,.agent-context-section button,.agent-context-confirm button{min-height:38px}
+  .agent-context-sync{grid-template-columns:1fr}
+  .agent-context-sync>strong,.agent-context-sync>small{grid-column:auto}
 }
 @media(prefers-reduced-motion:reduce){.utility-drawer.overlay{animation:none}}
 

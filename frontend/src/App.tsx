@@ -1029,6 +1029,7 @@ export function App() {
             void loadConfig(false)
           }
           if(event.type==='project_files_changed')window.dispatchEvent(new CustomEvent('mux:project-files-changed',{detail:{projectId:event.payload?.project_id,paths:event.payload?.paths||[]}}))
+          if(event.type==='agent_context_changed')window.dispatchEvent(new CustomEvent('mux:agent-context-changed',{detail:{projectId:event.payload?.project_id}}))
           // Queue tabs and pane chips live-update off these; payloads carry ids/counts only.
           if(event.type==='queue_updated'||event.type==='queue_delivery'){window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{sessionId:event.session_id}}));refreshQueueSummary()}
           // The drawer's Git tab refetches its worktree list off this. Branch/dirty/upstream

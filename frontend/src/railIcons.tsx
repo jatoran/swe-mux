@@ -96,6 +96,15 @@ export const NotesIcon = () => <svg {...stroke}>
   <line x1="9" y1="17" x2="13" y2="17" />
 </svg>
 
+/** Brackets around linked memory nodes: context held around facts, not another document. */
+export const ContextIcon = () => <svg {...stroke}>
+  <path d="M8 3H6a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v6a2 2 0 0 0 2 2h2" />
+  <path d="M16 3h2a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v6a2 2 0 0 1-2 2h-2" />
+  <circle cx="12" cy="8" r="1.5" />
+  <circle cx="12" cy="16" r="1.5" />
+  <line x1="12" y1="9.5" x2="12" y2="14.5" />
+</svg>
+
 /** A commit line with a working tree hanging off it: a branch you are sitting in.
  *
  * Deliberately close kin to `BranchIcon` above — this tab is about branches, and the fork is
@@ -125,6 +134,7 @@ export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   queue: QueueIcon,
   files: FilesIcon,
   notes: NotesIcon,
+  context: ContextIcon,
   git: GitIcon,
   notifications: AlertsIcon,
 }

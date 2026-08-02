@@ -36,6 +36,7 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
 from .adapters import BackendAdapter, ClaudeAdapter, CodexAdapter, ShellAdapter
+from .agent_context import AgentContextConflict, AgentContextService
 from .agent_messaging import AgentMessagingService
 from .agent_skills import discover_skills
 from .auto_delivery import AutoDeliveryController
@@ -543,6 +544,23 @@ def create_app(
             ),
             web.get("/api/projects/{project_id}/automations", get_project_automations),
             web.put("/api/projects/{project_id}/automations", put_project_automations),
+            web.get("/api/projects/{project_id}/agent-context", get_agent_context),
+            web.get(
+                "/api/projects/{project_id}/agent-context/sources/{source_id}",
+                get_agent_context_source,
+            ),
+            web.post(
+                "/api/projects/{project_id}/agent-context/sync/preview",
+                preview_agent_context_sync,
+            ),
+            web.post(
+                "/api/projects/{project_id}/agent-context/sync",
+                sync_agent_context,
+            ),
+            web.post(
+                "/api/projects/{project_id}/agent-context/restore",
+                restore_agent_context,
+            ),
             web.get("/api/session-notes", list_session_notes),
             web.get("/api/projects/{project_id}/session-notes/{note_id}", get_session_note),
             web.post("/api/projects/{project_id}/session-notes/{note_id}", initialize_session_note),
@@ -746,6 +764,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await status_timeline.prune()
     projects = ProjectManager(history)
     await projects.start()
+    agent_context = AgentContextService(config.data_dir / "agent-context-backups")
+    for project in projects.projects.values():
+        agent_context.capture_project(project.root)
     history_backfills = HistoryBackfillManager(history, projects)
     reaper = ReaperJob()
     supervisor_client: SupervisorClient | None = None
@@ -1065,6 +1086,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         prompt_queue=prompt_queue,
         auto_delivery=auto_delivery,
         agent_messaging=agent_messaging,
+        agent_context=agent_context,
         settings_store=settings_store,
         clipboard=clipboard,
         push_store=push_store,
@@ -4966,6 +4988,96 @@ def _request_project(request: web.Request):  # type: ignore[no-untyped-def]
     if not project:
         raise ValueError("unknown project")
     return project
+
+
+async def get_agent_context(request: web.Request) -> web.Response:
+    """Inventory the bounded context sources the selected Project's agents can use."""
+
+    project = _request_project(request)
+    service: AgentContextService = request.app["agent_context"]
+    payload = await asyncio.to_thread(
+        service.inventory, project.id, project.name, project.root
+    )
+    return json_response(payload)
+
+
+async def get_agent_context_source(request: web.Request) -> web.Response:
+    project = _request_project(request)
+    service: AgentContextService = request.app["agent_context"]
+    payload = await asyncio.to_thread(
+        service.read_source, project.root, request.match_info["source_id"]
+    )
+    return json_response(payload)
+
+
+async def preview_agent_context_sync(request: web.Request) -> web.Response:
+    project = _request_project(request)
+    body = await request.json()
+    direction = str(body.get("direction") or "")
+    service: AgentContextService = request.app["agent_context"]
+    return json_response(
+        await asyncio.to_thread(service.preview_sync, project.root, direction)
+    )
+
+
+async def sync_agent_context(request: web.Request) -> web.Response:
+    project = _request_project(request)
+    body = await request.json()
+    direction = str(body.get("direction") or "")
+    source_revision = str(body.get("source_revision") or "")
+    target_revision = str(body.get("target_revision") or "")
+    if not source_revision or not target_revision:
+        raise ValueError("source_revision and target_revision are required")
+    service: AgentContextService = request.app["agent_context"]
+    try:
+        result = await asyncio.to_thread(
+            service.sync,
+            project.id,
+            project.root,
+            direction,
+            source_revision,
+            target_revision,
+        )
+    except AgentContextConflict as exc:
+        return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+    await request.app["events"].emit(
+        "agent_context_changed",
+        source="user",
+        operation="sync",
+        project_id=project.id,
+        direction=direction,
+        revision=result["revision"],
+    )
+    return json_response(result)
+
+
+async def restore_agent_context(request: web.Request) -> web.Response:
+    project = _request_project(request)
+    body = await request.json()
+    backup_id = str(body.get("backup_id") or "")
+    target_revision = str(body.get("target_revision") or "")
+    if not backup_id or not target_revision:
+        raise ValueError("backup_id and target_revision are required")
+    service: AgentContextService = request.app["agent_context"]
+    try:
+        result = await asyncio.to_thread(
+            service.restore,
+            project.id,
+            project.root,
+            backup_id,
+            target_revision,
+        )
+    except AgentContextConflict as exc:
+        return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+    await request.app["events"].emit(
+        "agent_context_changed",
+        source="user",
+        operation="restore",
+        project_id=project.id,
+        target=result["target"],
+        revision=result["revision"],
+    )
+    return json_response(result)
 
 
 async def list_project_files(request: web.Request) -> web.Response:

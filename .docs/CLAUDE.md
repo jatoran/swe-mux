@@ -7,6 +7,9 @@
   `design/features/projects.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing Project/session notes, files, ignores, or watches:
   `design/features/project-resources.md`, `design/data-model.md`, `design/interfaces.md`
+- Changing Agent Context discovery, root instruction sync/restore, or its drawer surface:
+  `design/features/agent-context.md`, `design/features/ui.md`, `design/interfaces.md`,
+  `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing trusted task imports, the Project Run menu, or task launch:
   `design/features/project-actions.md`, `design/features/projects.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`

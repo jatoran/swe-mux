@@ -20,9 +20,9 @@ test('injection surfaces lead, then navigators, then attention surfaces', () => 
   // into a pane instead of typing into one. Notifications is neither, and stays last.
   // Git closes the Project-scoped block: it reports on the repository behind the Project
   // rather than opening anything into a pane, so it sits with them without being a navigator.
-  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'files', 'notes', 'git', 'notifications'])
+  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'files', 'notes', 'context', 'git', 'notifications'])
   assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'session').map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue'])
-  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'project').map(tab => tab.id), ['files', 'notes', 'git'])
+  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'project').map(tab => tab.id), ['files', 'notes', 'context', 'git'])
   assert.deepEqual(DRAWER_TABS.filter(tab => isNavigatorTab(tab.id)).map(tab => tab.id), ['files', 'notes'])
   // The insert group and the navigator group must stay contiguous, so the rail reads as
   // two blocks rather than an arbitrary list.
@@ -65,7 +65,8 @@ test('tab cycling wraps in both directions', () => {
   assert.equal(nextDrawerTab('clipboard', 1), 'commands')
   assert.equal(nextDrawerTab('prompts', 1), 'queue')
   assert.equal(nextDrawerTab('queue', 1), 'files')
-  assert.equal(nextDrawerTab('notes', 1), 'git')
+  assert.equal(nextDrawerTab('notes', 1), 'context')
+  assert.equal(nextDrawerTab('context', 1), 'git')
   assert.equal(nextDrawerTab('notifications', 1), 'clipboard')
   assert.equal(nextDrawerTab('clipboard', -1), 'notifications')
   assert.equal(nextDrawerTab('prompts', -2), 'clipboard')

@@ -738,20 +738,28 @@ mux.priorResolutions(error) → "this exact error was hit in March; fix was Y"
 mux.deadEnds(subsystem)     → approaches tried and abandoned here, and why
 mux.verifiedStatus(claim)   → is this actually tested, or just declared done
 mux.searchHistory(query)    → cross-vendor transcript search (mostly built)
+mux.memorySources()         → exact Project instruction/provider-memory inventory
+mux.readMemory(source_id)   → bounded read of one attributed inventoried source
 ```
 
 The control plane's third-person, all-time, all-sessions memory becomes available
-to the first-person agent, on the agent's initiative, with no injection.
+to the first-person agent, on the agent's initiative, with no injection. The last
+two tools also expose the provider-owned memory that Phase 6's read-only Agent Context
+drawer inventories. They are exact-source reads rather than semantic matches: raw vendor
+memory is attributed context, not verified control-plane evidence.
 
 **Graded ladder of channels, by authority:**
 
 1. **Pull (agent-initiated).** The MCP tools above. Safest, primary. The agent
    decides to consult.
-2. **Instruction sync (curated, durable).** Slow-moving distilled insights — a
-   mined convention, a recurring failure mode — rendered into governed
-   sentinel-delimited sections of `CLAUDE.md` / `AGENTS.md` (roadmap Phase 6). The
-   agent sees these as standing context every session, no query needed. Right for
-   stable facts, wrong for live ones.
+2. **Instruction sync (curated, durable).** Roadmap Phase 6 begins with a read-only
+   Agent Context inspector and an explicit human-triggered whole-file
+   `CLAUDE.md ↔ AGENTS.md` overwrite in either direction. That direct copy is never
+   scheduled, watched, remembered, or exposed to agents. Slow-moving distilled
+   control-plane insights — a mined convention, a recurring failure mode — use the
+   later governed path: sentinel-delimited sections of those provider files. The agent
+   sees generated sections as standing context every session, no query needed. Right
+   for stable facts, wrong for live ones.
 3. **Human-mediated injection (queue-draft / universal commands).** Live insight →
    inert draft → human approves → it enters the agent (§13). Or `/handoff` seeds a
    new prompt with relevant provenance and dead-ends. Human in the loop, per the
@@ -897,16 +905,20 @@ very different dependency profiles:
   concurrent sessions" utility, which is useful on its own and is the cheapest way to
   prove the transport, identity, and restart-tolerance decisions above.
 - **v1 — genuinely late.** `provenance`, `priorResolutions`, `deadEnds`,
-  `verifiedStatus`. Retrieval over substrate that steps 1–5 produce; cannot ship
-  earlier and should not be faked earlier (see the precision gate above).
+  `verifiedStatus`, plus Project-scoped `memorySources` / exact `readMemory` over the
+  provider sources the Phase 6 Agent Context drawer can already inspect. The semantic
+  tools need substrate that steps 1–5 produce and cannot ship earlier; exact provider
+  reads reuse the same typed daemon inventory but land here so MCP remains a client of
+  the Phase 7 operations rather than a second filesystem implementation.
 
 Ship v0 as its own small phase, add `notify`/`requestSpawn` when the Phase 5 queue
 lands, and keep v1 in step 8 where it belongs.
 
 **Roadmap composition.** The MCP surface is a natural extension of the typed daemon
 operations Phase 7 already wants (browser, CLI, mailbox routed through shared typed
-ops — MCP is one more consumer). Instruction sync is Phase 6; the queue-draft path
-is Phase 4/5. The return path is a read API layered over machinery already
+ops — MCP is one more consumer). Agent Context inspection, manual root-file overwrite,
+and governed instruction rendering are Phase 6; the queue-draft path is Phase 4/5. The
+return path is a read API layered over machinery already
 scheduled, not a new pillar. In `ROADMAP.md` it lands in three places: **Phase 4.5**
 (v0 read/discovery), the Phase 5 agent-to-agent section (`notify`/`requestSpawn` as
 callers over the queue), and **Phase 7.5** (v1 memory tools, this document's step 8).
@@ -1099,8 +1111,11 @@ another agent can pick up mid-plan. Section links point to the design detail.
 - [ ] **8 · Cross-session + novel + mux MCP v1** (§6.6, 6.8, 6.10, 7). Interlocks, digests,
   second opinions, experience DB, and the memory half of the return path
   (`provenance`, `priorResolutions`, `deadEnds`, `verifiedStatus`) layered onto the v0
-  transport from step 2.5. Every returned record names its `agent_run_id`. Delivered as
-  `ROADMAP.md` Phase 7.5.
+  transport from step 2.5, plus exact `memorySources` / `readMemory` access to the
+  attributed provider sources inventoried by Phase 6 Agent Context. Raw provider memory
+  remains unverified, pull-only, and Project-scoped; it is never bulk-injected, written by
+  MCP, or copied into another provider's private store. Every derived record names its
+  `agent_run_id`. Delivered as `ROADMAP.md` Phase 7.5.
 
 ### UI work (design before it ships — the enablement surface is the big risk)
 
@@ -1467,9 +1482,14 @@ Universal hooks abstracts the CLIs' *signals*. The same move applies elsewhere:
   identical across backends, living in mux config. A prompt library with injection,
   and channel 3 of the return path (§7). Skill-shaped things fold into this +
   rulepacks; skills proper run inside an agent and need no third concept.
-- **Instruction/memory sync**: one canonical instruction set rendered per-backend
-  (CLAUDE.md / AGENTS.md / skills dirs), keeping them from drifting. Also return-path
-  channel 2 (§7).
+- **Agent Context + instruction/memory continuity**: first inspect Project-root
+  `CLAUDE.md` / `AGENTS.md` and provider-owned learned memory read-only; allow a human to
+  manually overwrite either root instruction file from the other with preview, conflict
+  detection, and recovery; then render one canonical instruction set into owned per-backend
+  sections and expose attributed provider memory to sibling agents as pull-only mux MCP
+  reads. No automatic file sync or provider-store replication. Also return-path channel 2
+  and the exact-source part of channel 1 (§7). The inspector and manual-overwrite first wave
+  shipped 2026-08-02; canonical rendering and MCP reads remain later work.
 - **Universal history/search**: one search across both vendors' transcripts (mostly
   built; no vendor will build the other half).
 - **Universal budgets**: spend/quota across providers in one place.

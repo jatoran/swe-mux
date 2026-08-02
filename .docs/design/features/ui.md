@@ -613,11 +613,13 @@ responsive controls.
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they
   are one gesture (mobile) or one visible click (desktop) away instead of two menu levels deep.
   Tabs, in order: **Clipboard**, **Commands** (the rail's long tail), **Prompts**, **Queue**,
-  **Files**, **Notes**, **Git**, **Alerts** (notifications). Order groups by what a tab acts on,
+  **Files**, **Notes**, **Context**, **Git**, **Alerts** (notifications). Order groups by what a tab acts on,
   and the groups must stay contiguous so the rail reads as blocks rather than a list. The first
   four are the same verb — text into the focused session. Files and Notes are the **navigators**:
-  project-scoped indexes that open a document into a pane instead of typing into one. Git closes
-  the Project-scoped block without joining them: it reads the repository behind the Project
+  project-scoped indexes that open a document into a pane instead of typing into one. Context is
+  the read-only inventory of root agent instructions and provider learned memory; unlike the
+  navigators it renders the selected body inside the drawer and opens no pane. Git closes the
+  Project-scoped block without joining them: it reads the repository behind the Project
   (branches, worktrees, dirty/upstream state) and opens nothing into a pane — see `git.md` for
   what it shows and the mutations it is allowed. Notifications is neither, and sits last. Session
   history, the process fleet, usage, and automation stay modal: they are wide, table-shaped
@@ -651,6 +653,12 @@ responsive controls.
   ordinary placement rule. This replaced the session-notes modal and its three
   scattered entry points (project context menu, app menu, `notes.browse`), all of which now open
   this tab.
+- **Context** is the Agent Context surface (`agent-context.md`). It shows root `CLAUDE.md` and
+  `AGENTS.md`, Claude's provider-owned learned Markdown memory, and an explicit Codex
+  available/disabled/unsupported state. Bodies are read-only. The only mutations are deliberate
+  whole-file instruction copies: choose either direction, review a normalized diff, confirm the
+  overwrite, and retain a revision-guarded restore point. It never watches or synchronizes in the
+  background and never writes learned memory.
 - **Alerts** shows open attention records first and dismissed ones only on request. Each row
   dismisses (or restores) and the footer clears the lot; both write `read_at` server-side, so
   the state follows the user to every device and to the dashboard inbox rather than being a
@@ -691,8 +699,10 @@ responsive controls.
   used to carry glyph *and* label: six of them measured ~444 px, which overflowed a phone
   drawer (`min(430px, 92vw)`) into a scrollbar-less scroller and silently parked the last two
   tabs off-screen. Six icons were ~234 px. Adding Files and Notes is what pushed it over, and
-  the icon-only strip is what leaves room for a seventh (Git) and an eighth (Queue) without
-  repeating that.
+  the icon-only strip is what left room for Git and Queue without repeating that. Context is the
+  ninth tab, so the mobile tablist now deliberately overflows horizontally on one row: a fade
+  signals more content, the fixed close button never scrolls away, and selecting a tab scrolls it
+  into view. It must never wrap into a second header row.
 - The marks are stroke SVG on a 24 viewBox, sized in CSS (17 px in the strip, 19 px on touch,
   16 px on the rail), never in `em`: these surfaces run a 9–12 px font. They replaced text
   glyphs for the same reason the command rail's did — a monospace font gives every glyph one
@@ -701,7 +711,8 @@ responsive controls.
   key on a Windows-first app, and `❯` read as a shell prompt right next to the tab named
   Commands. The set is now clipboard-with-clock, terminal, speech bubble, ordered lines feeding
   a chevron, folder, page, commit fork, bell — the injection tabs and the two navigators each
-  form a legible group. Queue is deliberately not an envelope: the queue is *ordered* and the
+  form a legible group. Context is brackets around linked memory nodes, distinct from both the
+  page (Notes) and folder (Files). Queue is deliberately not an envelope: the queue is *ordered* and the
   order is the whole point of it, and the chevron is what stops three lines reading as a
   hamburger menu. Git's
   fork is deliberately close kin to the command rail's Branch mark: they never appear together

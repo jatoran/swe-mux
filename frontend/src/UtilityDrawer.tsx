@@ -1,4 +1,6 @@
 import type { JSX } from 'preact'
+import { useEffect, useRef } from 'preact/hooks'
+import { AgentContextTab } from './AgentContextTab'
 import { ClipboardTab } from './ClipboardPanel'
 import { CommandsTab } from './CommandsTab'
 import { PromptsTab } from './PromptsTab'
@@ -89,13 +91,18 @@ type Props = {
 export function UtilityDrawer(props: Props) {
   const { tab, onTab, onClose, mobile, session, project } = props
   const active = drawerTab(tab)
+  const tabStrip = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    tabStrip.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [tab])
   // Acting closes the drawer on mobile (it covers the surface just acted on) and
   // leaves it open on desktop, where the column sits beside that surface and a
   // second insert (or a second file) is the common next action.
   const onDone = () => { if (mobile) onClose() }
 
   // One body per tab. A flat dispatch rather than the nested ternary this grew out of:
-  // eight branches deep, every added surface reindented the ones below it.
+  // several branches deep, every added surface used to reindent the ones below it.
   const renderBody = () => {
     switch (tab) {
       case 'clipboard':
@@ -137,6 +144,8 @@ export function UtilityDrawer(props: Props) {
           onOpenSessionNote={props.onOpenSessionNote}
           onDone={onDone}
         />
+      case 'context':
+        return <AgentContextTab project={project} session={session} />
       case 'git':
         return <GitTab project={project} sessions={props.sessions} />
       case 'notifications':
@@ -169,29 +178,31 @@ export function UtilityDrawer(props: Props) {
         onTab(nextDrawerTab(tab, event.shiftKey ? -1 : 1, props.tabs.map(item => item.id)))
       }}
     >
-      {/* Icon-only, like the desktop rail and from the same icon map. Six labelled tabs
-          measured ~444px, which overflowed a phone drawer into a scrollbar-less scroller and
-          silently parked the last two tabs off-screen; six icons are ~234px. The label
+      {/* Icon-only, like the desktop rail and from the same icon map. Labelled tabs
+          overflowed a phone drawer and silently parked later tabs off-screen; compact icons
+          fit many more, with the one-row scroller handling the remainder. The label
           survives as the accessible name and the title as the hover explanation. */}
-      <div class="drawer-tabs" role="tablist" aria-label="Panel sections">
-        {props.tabs.map(item => {
-          const Icon = DRAWER_TAB_ICONS[item.id]
-          return <button
-            key={item.id}
-            role="tab"
-            data-reorder-id={item.id}
-            aria-selected={item.id === tab}
-            aria-label={item.label}
-            class={`${item.id === tab ? 'active' : ''} ${props.draggingTab === item.id ? 'dragging' : ''}`}
-            title={`${item.title} · drag to rearrange`}
-            onPointerDown={event => props.onTabDragStart(event, item.id)}
-            onClick={() => onTab(item.id)}
-          >
-            <Icon />
-            {item.id === 'notifications' && props.unread > 0 && <i class="drawer-badge">{props.unread > 99 ? '99+' : props.unread}</i>}
-            {item.id === 'queue' && props.queuePending > 0 && <i class="drawer-badge queue-badge">{props.queuePending > 99 ? '99+' : props.queuePending}</i>}
-          </button>
-        })}
+      <div class="drawer-tabs-shell">
+        <div ref={tabStrip} class="drawer-tabs" role="tablist" aria-label="Panel sections">
+          {props.tabs.map(item => {
+            const Icon = DRAWER_TAB_ICONS[item.id]
+            return <button
+              key={item.id}
+              role="tab"
+              data-reorder-id={item.id}
+              aria-selected={item.id === tab}
+              aria-label={item.label}
+              class={`${item.id === tab ? 'active' : ''} ${props.draggingTab === item.id ? 'dragging' : ''}`}
+              title={`${item.title} · drag to rearrange`}
+              onPointerDown={event => props.onTabDragStart(event, item.id)}
+              onClick={() => onTab(item.id)}
+            >
+              <Icon />
+              {item.id === 'notifications' && props.unread > 0 && <i class="drawer-badge">{props.unread > 99 ? '99+' : props.unread}</i>}
+              {item.id === 'queue' && props.queuePending > 0 && <i class="drawer-badge queue-badge">{props.queuePending > 99 ? '99+' : props.queuePending}</i>}
+            </button>
+          })}
+        </div>
         <button class="drawer-close" aria-label="Close panel" title="Close panel" onClick={onClose}>×</button>
       </div>
       <div class="drawer-body">{body}</div>

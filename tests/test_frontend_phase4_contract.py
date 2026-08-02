@@ -224,7 +224,7 @@ def test_files_is_a_drawer_navigator_rather_than_a_workspace_tab() -> None:
 
 
 def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
-    """Six labelled tabs overflowed a phone drawer; icons do not.
+    """Nine icon tabs stay reachable in one horizontally scrolling phone row.
 
     `drawerTabs.ts` stays JSX-free so it can be unit-tested under plain type-stripping, which
     is why the icon map lives in `railIcons.tsx` and why this cross-file invariant — every tab
@@ -241,17 +241,19 @@ def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
     # silently parked the last two off-screen. Adding a tab means re-checking that on a
     # phone, which is what this assertion is for — it is a prompt, not a cap.
     #
-    # Re-checked at eight (Queue): the two `min-width` floors both had to come down, and
-    # the strip gained `flex-wrap`. Eight tabs plus the 30px close button need 286px at the
-    # desktop floor of 32px (DRAWER_MIN_WIDTH is 300) and 318px at the touch floor of 36px
-    # (a 360px phone gives the overlay 331px). Below that the strip now wraps to a second
-    # row instead of hiding the last tab, so a ninth costs vertical space rather than
-    # silently costing a surface.
+    # Re-checked at nine (Context): nine 36px touch cells do not fit beside the 30px close
+    # target on a 360px phone. Wrapping made the drawer header jump to two rows, so the
+    # tablist now scrolls on one row behind a fade; the close target sits outside that
+    # scroller and selection calls scrollIntoView.
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
-    assert len(ids) == 8, ids
-    assert "flex-wrap:wrap" in css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
-    assert ".drawer-tabs button{position:relative;min-height:34px;flex:1 1 0;min-width:32px" in css
-    assert ".drawer-tabs button{min-height:44px;min-width:36px;max-width:none}" in css
+    assert len(ids) == 9, ids
+    tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
+    assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
+    assert ".drawer-tabs-shell:after" in css
+    assert ".drawer-tabs-shell>.drawer-close" in css
+    assert ".drawer-tabs button{position:relative;min-height:34px;flex:1 0 32px" in css
+    assert ".drawer-tabs button{min-height:44px;flex-basis:36px;min-width:36px" in css
+    assert "scrollIntoView({ block: 'nearest', inline: 'nearest' })" in drawer
     icon_map = icons[icons.index("DRAWER_TAB_ICONS") :]
     for tab_id in ids:
         assert re.search(rf"^  {tab_id}: \w+Icon,$", icon_map, re.MULTILINE), tab_id

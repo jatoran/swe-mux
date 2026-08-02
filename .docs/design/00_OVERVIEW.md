@@ -43,6 +43,7 @@
 - Device presence (which device the human is at): `features/device-presence.md`
 - Project registry and Groups: `features/projects.md`
 - Project/session notes, files, ignores, and watches: `features/project-resources.md`
+- Read-only agent instructions/memory and manual root-file sync: `features/agent-context.md`
 - Trusted task discovery and the Project Run menu: `features/project-actions.md`
 - Mixed-view panes, tabs, drag/drop, and mobile projection: `features/workspace-layout.md`
 - History: `features/history.md`

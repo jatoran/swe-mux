@@ -16,7 +16,7 @@ test('the default order is the registry order', () => {
 })
 
 test('a stored arrangement round-trips and reports as custom', () => {
-  const custom: DrawerTabId[] = ['files', 'notes', 'git', 'clipboard', 'commands', 'prompts', 'queue', 'notifications']
+  const custom: DrawerTabId[] = ['files', 'notes', 'context', 'git', 'clipboard', 'commands', 'prompts', 'queue', 'notifications']
   assert.deepEqual(normalizeDrawerTabOrder(custom), custom)
   assert.ok(!isDefaultDrawerTabOrder(custom))
   assert.deepEqual(orderedDrawerTabs(custom).map(tab => tab.id), custom)
@@ -59,7 +59,7 @@ test('a tab the stored order predates lands beside its default neighbour, not at
   const custom = ['notifications', 'files', 'clipboard']
   assert.deepEqual(
     normalizeDrawerTabOrder(custom),
-    ['notifications', 'files', 'notes', 'git', 'clipboard', 'commands', 'prompts', 'queue'],
+    ['notifications', 'files', 'notes', 'context', 'git', 'clipboard', 'commands', 'prompts', 'queue'],
   )
 
   // A first tab the order predates goes to the front rather than after everything.
@@ -67,7 +67,7 @@ test('a tab the stored order predates lands beside its default neighbour, not at
 })
 
 test('keyboard cycling walks the arranged order, not the registry order', () => {
-  const custom: DrawerTabId[] = ['notes', 'files', 'git', 'clipboard', 'commands', 'prompts', 'queue', 'notifications']
+  const custom: DrawerTabId[] = ['notes', 'files', 'context', 'git', 'clipboard', 'commands', 'prompts', 'queue', 'notifications']
   assert.equal(nextDrawerTab('notes', 1, custom), 'files')
   assert.equal(nextDrawerTab('notes', -1, custom), 'notifications')
   assert.equal(nextDrawerTab('notifications', 1, custom), 'notes')

@@ -108,8 +108,8 @@ Phase 1  Evidence replay + delivery-readiness contract
                  (incl. mux.notify / mux.requestSpawn over the queue) [CP §7.2]  [done]
                 -> Phase 5.4  Agent conversation rollover (the run boundary contract)
                   -> Phase 5.5  Control-plane project card + scan timeline  [CP steps 4-5]
-                    -> Phase 6  Portable instructions and skills
-                       (instruction sync = return-path channel 2)     [CP §7]
+                    -> Phase 6  Agent Context, portable instructions, and skills
+                       (inspect + manual overwrite first; governed sync = return-path channel 2) [CP §7]
                       -> Phase 6.5  Model narration + attention ranking [CP steps 6-7]
                         -> Phase 7  Windows maturity, CLI, doctor, and soak
                           -> Phase 7.5  mux MCP v1 + cross-session memory  [CP step 8]
@@ -147,7 +147,7 @@ document and are not duplicated here.
 | 3 · Deterministic consumers | shipped (Phase 3.7) | writes drafts through the Phase 4 queue once it exists |
 | 4–5 · Project card + scan timeline | **Phase 5.5** | first model-cost layer; no Phase 5 dependency, but **needs Phase 5.4's run boundary** — a timeline that spans a conversation replacement is describing two sessions as one |
 | 6–7 · Narration + attention ranking | **Phase 6.5** | needs Phase 2 telemetry, Phase 3 notification channels, and Phase 5.4 (never rank a finding from a replaced conversation against the live one) |
-| 8 · Cross-session + mux MCP v1 | **Phase 7.5** | needs CP 4–5 substrate, the Phase 7 typed daemon operations, and Phase 5.4 run-scoped retrieval |
+| 8 · Cross-session + mux MCP v1 | **Phase 7.5** | needs CP 4–5 substrate, the Phase 6 Agent Context adapters, the Phase 7 typed daemon operations, and Phase 5.4 run-scoped retrieval |
 | §7.2 return-path write tools | shipped (Phase 5) | callers over the Phase 5 A→B queue, not a separate path |
 | §13 queue-draft channel | inside **Phase 4** | `sender_kind` + typed payload land with the queue model |
 
@@ -1163,15 +1163,83 @@ two unrelated conversations as one session's history.
 - [ ] No timeline segment, continuity window, novelty comparison, or derived title spans a
   conversation rollover, and the boundary is visible in the timeline UI.
 
-## Phase 6 — Portable instructions and skills
+## Phase 6 — Agent Context, portable instructions, and skills
 
-Cross-track note: canonical instruction rendering is **channel 2 of the control-plane return
-path** (`CONTROL_PLANE_ROADMAP.md` §7) — the durable, slow-moving half that a coding agent
-sees as standing context without querying. It is the right home for stable distilled insight
-(a mined convention, a recurring failure mode) and the wrong home for live facts, which
-belong behind the pull tools of Phases 4.5/7.5. Any control-plane output rendered into a
-provider file goes through the sentinel-delimited machinery below; nothing writes a whole
-file.
+Phase 6 starts with a deliberately small continuity feature: show the user the Project-root
+instructions and provider-owned learned memory that Claude and Codex can carry into work, then
+offer an explicit one-time whole-file copy between root `CLAUDE.md` and `AGENTS.md`. The
+viewer is read-only and the copy runs only when the user asks; there is no watcher-driven,
+startup, background, or automatic synchronization.
+
+This first wave depends only on existing Project resources, provider adapters, and the utility
+drawer; it does not need the Phase 5.5 model-cost substrate and may ship independently of that
+unfinished control-plane work. Canonical generated insight and semantic memory retrieval keep
+their Phase 5.5/7.5 dependencies.
+
+Canonical instruction rendering remains **channel 2 of the control-plane return path**
+(`CONTROL_PLANE_ROADMAP.md` §7) — the durable, slow-moving half that a coding agent sees as
+standing context without querying. It is the right home for stable distilled insight (a mined
+convention, a recurring failure mode) and the wrong home for live facts, which belong behind
+the pull tools of Phases 4.5/7.5. The first-wave whole-file copy is a direct user operation over
+two named root files; any later control-plane-generated output uses sentinel-delimited sections
+and never replaces a whole user-owned file.
+
+### First wave: Agent Context and manual instruction overwrite
+
+- **Implemented 2026-08-02.** Current-state contract: `design/features/agent-context.md`.
+- [x] Add a Project-scoped **Agent Context** utility-drawer tab after Notes and before Git.
+  It is a lookup surface, not an editor: file and memory bodies render read-only in the drawer
+  with source, scope, modified time, size, and a highlighted selected source. No Agent Context view
+  registers an insert target or opens an editable resource tab.
+- [x] Show the root `CLAUDE.md` and root `AGENTS.md` as **Project instructions**, including
+  `missing`, `in sync`, `different`, and `changed since this agent run started` states. Compare
+  normalized text so CRLF-vs-LF alone is not drift. Label this inventory "Project-root sources";
+  it does not claim to be the complete effective chain of global, local, nested, imported,
+  override, or path-scoped instructions.
+- [x] Show **Learned memory** through provider adapters. Claude inventory resolves the
+  repository-derived (or configured) auto-memory directory, identifies `MEMORY.md` as the
+  entrypoint, lists bounded topic Markdown files, and discloses that repository worktrees share
+  the source. Codex uses only a documented/stable inventory when one is available. Every adapter
+  returns typed `available | disabled | unsupported | unreadable` capability/status results;
+  an unavailable Codex inventory is shown with its reason rather than inferred by scraping an
+  undocumented private database.
+- [x] Resolve "what this agent could have loaded" from the focused session's backend, live cwd,
+  repository identity, and run start while keeping the inventory anchored to the active Project.
+  With no focused session, show the Project inventory without a loaded/current claim. A nested
+  Project or worktree that shares a provider memory store says so instead of presenting the
+  store as exclusively Project-owned.
+- [x] Expose inventory and bounded reads through typed daemon operations and allowlisted source
+  ids, never a client-supplied home-directory path. Contain Project instruction reads to the
+  canonical root; resolve provider memory only through its adapter; reject traversal/symlink
+  escapes; cap file count and UTF-8 bytes; and return explicit binary/oversize/unreadable states.
+  Reads remain Project-scoped even when the browser reaches the daemon remotely.
+- [x] Add **Sync instructions…** as the only first-wave mutation. It offers both explicit
+  directions — `CLAUDE.md → AGENTS.md` and `AGENTS.md → CLAUDE.md` — and runs once per user
+  confirmation. A missing destination may be created; an existing destination is a deliberate
+  whole-content overwrite. No memory file participates, and no direction becomes preferred,
+  remembered, scheduled, watched, or automatic.
+- [x] Before either overwrite, show the normalized comparison and deterministic diff, name the
+  exact source/target, and require confirmation. Commit with expected source and target hashes,
+  atomic replacement, conflict refusal on intervening edits, and a recoverable backup/restore
+  record. Preserve the existing destination's line-ending convention (source convention when
+  creating it), and never follow a target symlink outside the canonical Project root.
+- [x] Refresh on explicit Rescan and relevant open-drawer change events without watching every
+  provider home continuously. A read failure leaves the last successful inventory visibly stale;
+  it never turns a provider into an empty memory list and never affects a running agent.
+- [x] Accommodate the ninth drawer icon on narrow touch layouts without a silent two-row wrap.
+  Keep 44 px touch height and provide an explicit horizontal-scroll/edge-fade affordance with
+  selected-tab auto-scroll, or prove an equivalent single-row layout across the mobile matrix.
+
+### First-wave exit criteria
+
+- [x] The drawer reads root instructions and every supported provider memory source without
+  offering inline edits, arbitrary filesystem reads, or misleading unavailable-as-empty states.
+- [x] Either manual overwrite direction creates/replaces only its named root target, survives an
+  EOL-only comparison without false drift, refuses stale confirmation, and restores from backup.
+- [x] No file is written until the user confirms a displayed direction and diff; no background
+  process ever repeats or reverses that decision.
+- [x] Project switching, focused-session switching, worktrees, nested Projects, disabled memory,
+  stale inventories, remote viewing, and the narrowest supported mobile drawer are covered.
 
 ### Canonical instruction rendering
 
@@ -1180,13 +1248,14 @@ file.
 - [ ] Render only sentinel-delimited generated sections into provider files. Never overwrite
   whole files or content outside owned sentinels.
 - [ ] Add deterministic preview/diff, atomic write, source hash, generated hash, conflict
-  detection, restore/backup, dry run, and manual sync before any optional autosync.
+  detection, restore/backup, dry run, and manual sync. Do not add autosync: Phase 6 writes stay
+  explicit user actions, whether they copy a whole root file or render an owned section.
 - [ ] Add an explicit manifest mapping canonical sources to nested target paths/scopes.
   Do not recursively discover and rewrite nested instruction files by default.
 - [ ] Model nested precedence and symlink/path escape safety; a mapping cannot write outside
   the Project root or into an unapproved file.
-- [ ] Add watcher-loop suppression and multi-client conflict tests. Autosync disables itself
-  on ambiguous ownership or external edits.
+- [ ] Add watcher-loop suppression and multi-client conflict tests so external edits become a
+  visible conflict rather than a write loop or silent overwrite.
 
 ### Prompt and skill portability
 
@@ -1197,13 +1266,17 @@ file.
   installation scope.
 - [ ] Add provider adapters that validate and render metadata rather than copying entire
   skill directories blindly.
-- [ ] Start with preview/export/import and explicit sync. Require conflict detection and
-  provenance before considering autosync.
+- [ ] Start and remain with preview/export/import and explicit sync. Require conflict detection
+  and provenance; do not add autosync.
 - [ ] Never sync secrets, executable trust decisions, provider caches, generated histories,
   or unsupported metadata by content similarity.
 
 ### Phase 6 exit criteria
 
+- [x] Agent Context makes Project-root instructions and supported Claude/Codex learned memory
+  inspectable without making any body editable, and reports exact provider/scope/capability.
+- [x] Manual `CLAUDE.md ↔ AGENTS.md` overwrite remains bidirectional, previewed, conflict-safe,
+  recoverable, and user-triggered only.
 - [ ] Shared instructions render reproducibly without changing unrelated provider content,
   including explicitly mapped nested files.
 - [ ] External edits create a visible conflict instead of an overwrite loop.
@@ -1266,7 +1339,8 @@ its quality matrix with the Phase 1–6 contracts.
   a parallel implementation: authorization, readiness, bounds, and audit live in the op.
 - [ ] Add read-only CLI inspection for automation status, normalized capabilities, rules,
   firings, annotations, observer spend/budgets, provider health, delivery readiness,
-  process anomalies, quota/reset evidence, and message delivery status.
+  process anomalies, quota/reset evidence, Agent Context/provider-memory capabilities, and
+  message delivery status.
 - [ ] Permit explicit enable/disable/shadow/dry-run operations through typed APIs. Never
   accept or print an OpenRouter/provider secret through ordinary output or JSON diagnostics.
 
@@ -1325,6 +1399,11 @@ because it inherits the transport, identity, and restart contract already proven
 
 ### v1 tool surface
 
+- [ ] `mux.memorySources()` — Project-scoped inventory of the same root-instruction and
+  provider-memory sources the Agent Context drawer can read, including provider, scope,
+  capability, content hash, modified time, and entrypoint/topic kind.
+- [ ] `mux.readMemory(source_id)` — exact, bounded read of one inventoried source. The opaque id
+  resolves through the typed daemon operation; callers never submit a filesystem path.
 - [ ] `mux.provenance(file)` — who touched this, at what hash, and what tests ran on it
   (CP §6.1).
 - [ ] `mux.priorResolutions(error)` — normalized error signature to a previously verified fix
@@ -1333,6 +1412,22 @@ because it inherits the transport, identity, and restart contract already proven
 - [ ] `mux.verifiedStatus(claim)` — is this actually tested or merely declared done (CP §6.3).
 - [ ] Cross-session interlocks (CP §6.6) and digests (CP §6.8) as the human-facing half of the
   same substrate.
+
+### Provider-memory bridge
+
+- [ ] Let any authenticated Claude or Codex session read every available Agent Context memory
+  source in its own Project, regardless of which provider produced it. Cross-Project sources are
+  indistinguishable from missing; disabled, unsupported, unreadable, and stale sources remain
+  explicit results rather than empty success.
+- [ ] Keep access pull-only. Vendor memory is never injected into every prompt, copied into the
+  other vendor's private store, or written by MCP. The Phase 6 browser overwrite remains a human
+  operation limited to root `CLAUDE.md`/`AGENTS.md`; it is not an agent tool.
+- [ ] Attribute raw provider memory with provider, repository/Project scope, source id/hash, and
+  modification time. Raw memory is inspectable context, not a verified fact: it enters
+  `priorResolutions`, `deadEnds`, `provenance`, or standing instructions only through the
+  existing evidence/confidence gates and keeps its origin.
+- [ ] Reuse the Phase 6 adapters and typed daemon reads. Do not couple MCP to a provider's
+  undocumented database or silently downgrade an adapter's unsupported status to no memories.
 
 ### Retrieval precision gate
 
@@ -1357,6 +1452,9 @@ because it inherits the transport, identity, and restart contract already proven
   records, and returns empty in preference to a low-confidence match.
 - [ ] v1 adds no authority: the surface remains read-only, with writes still confined to the
   Phase 5 queue callers.
+- [ ] A Claude agent can read an available Codex memory source and a Codex agent can read an
+  available Claude source through the same Project-scoped inventory, with exact attribution and
+  no prompt-time bulk injection or provider-store mutation.
 - [ ] Enabling v1 is per-project opt-in through the existing enablement DAG, and disabling it
   leaves the Phase 4.5 v0 surface working.
 - [ ] No tool result silently merges two agent runs, and a caller can always tell which run a
@@ -1540,7 +1638,9 @@ failure behavior:
   injection into unbounded fan-out.
 - Automatic termination of suspected orphan processes.
 - Definitive identity attribution for shared-account quota usage.
-- Bidirectional whole-file instruction sync or blind cross-provider skill-directory sync.
+- Automatic/background bidirectional instruction sync or blind cross-provider skill-directory
+  sync. Phase 6's explicit, previewed, one-time root-file overwrite in either direction is the
+  approved boundary; widening it to continuous reconciliation requires a new product decision.
 - A daemon-hosted STT service absent demonstrated browser STT product limitations.
 - Native Claude/Codex theme management, ANSI rewriting, provider-native Remote Control,
   concurrent provider homes, automatic quota failover, public Funnel/LAN exposure, live

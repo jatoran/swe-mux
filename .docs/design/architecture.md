@@ -53,6 +53,8 @@ automatic fallback whenever the supervisor is unreachable.
 - `projects.py`: explicit Project and Group lifecycle.
 - `git_projects.py`: derived Git worktree/repository identity.
 - `project_files.py`: safe project config, note, directory, and file access.
+- `agent_context.py`: bounded provider-memory/instruction discovery plus revision-guarded,
+  reversible root `CLAUDE.md`/`AGENTS.md` synchronization.
 - `project_watcher.py`: leased, non-recursive watches for directories visible in open
   resource tabs.
 - `project_actions.py`: trusted discovery and normalization of VS Code, package, and native
