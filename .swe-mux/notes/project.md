@@ -5,6 +5,11 @@ id = "29a044bb-a06b-4216-95e4-39c5e91d48fb"
 ---
 # swe-mux Agentic Controle Plane (ACP)
 
+in file browser in right drawer, allow creating files/folders within right lcick context?
+
+any way to make my init-project script (C:\Users\Jatora\Desktop\Development\init-project.ps1) also add a new project in swe-mux for it?
+
+in left sidebar, add collapse/expand all button for projects. collapses each project AND each group
 
 right sidebar drawer - new addition:
 	the currently focused session's transcript, with copy commands for agent responses and user messages
