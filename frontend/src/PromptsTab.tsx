@@ -5,7 +5,7 @@ import { agentTargetName, agentTargets } from './agentTargets'
 import { clampContextMenuLeft, fitScrollingMenuInViewport } from './menuPosition'
 import { subscribeToPromptLibraryChanges } from './promptLibraryEvents'
 import { renderPromptTemplate } from './promptTemplates'
-import { stateDotClass } from './sessionStatus'
+import { sessionDotClass } from './sessionStatus'
 import type { PromptTemplate } from './PromptLibrary'
 import type { SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
 import type { Project, ProjectBackend, Session } from './types'
@@ -303,7 +303,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, sessi
         role="menuitem"
         title={`${session.backend} · ${session.state}${session.state_detail ? ` · ${session.state_detail}` : ''}`}
         onClick={() => chooseTarget(menu.item, { kind: 'session', session, submit })}
-      ><span class={stateDotClass(session.state)} />{agentTargetName(session)}</button>)}
+      ><span class={sessionDotClass(session)} />{agentTargetName(session)}</button>)}
       {!targets.length && <button role="menuitem" disabled>{project ? 'No live agent session here' : 'Select a Project first'}</button>}
       <div class="context-subtitle">NEW SESSION</div>
       <button role="menuitem" disabled={!project} onClick={() => project && chooseTarget(menu.item, { kind: 'new', backend: 'claude', projectId: project.id })}>New Claude session</button>

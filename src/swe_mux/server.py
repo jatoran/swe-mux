@@ -6532,7 +6532,17 @@ async def hook_ingress(request: web.Request) -> web.Response:
         # child's hooks must not refresh liveness, date staleness, or reach the
         # event bus as this session's activity.
         session.last_hook_ts = time.time()
-        if event_type in _TRANSCRIPT_BACKED_HOOK_EVENTS:
+        if event_type in _TRANSCRIPT_BACKED_HOOK_EVENTS and scope != "subagent":
+            # Root scope only. `last_turn_hook_ts` means "the CLI ran a turn
+            # whose records must have landed in the transcript we follow", and a
+            # *subagent's* tool call is not that: a background subagent writes
+            # nothing into the root transcript. Counting its PreToolUse/PostToolUse
+            # stream here made a session waiting on background agents look like a
+            # conversation that had been replaced — a quiet root transcript plus
+            # a "turn" hook is exactly `_note_transcript_staleness`'s trigger —
+            # so `observation_stale_since` false-fired, revoking transcript
+            # authority and painting the status line's staleness warning on a
+            # perfectly healthy session (measured live 2026-08-02, 666s).
             session.last_turn_hook_ts = session.last_hook_ts
         request.app["automation"].note_native_hook(session.record.id)
         if event_type not in _NORMALIZED_HOOK_EVENT_TYPES:

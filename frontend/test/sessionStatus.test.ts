@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import type { AwaitingReason, Session, SessionState, StandingActivity, StandingActivityKind } from '../src/types.ts'
-import { activityBadges, awaitingLabel, idleLabel, sessionStatus, stateDotClass } from '../src/sessionStatus.ts'
+import { activityBadges, awaitingLabel, idleLabel, sessionDotClass, sessionStatus, stateDotClass } from '../src/sessionStatus.ts'
 import { classifySoundEvent } from '../src/sessionSounds.ts'
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
@@ -100,15 +100,46 @@ test('every standing-activity kind renders a glyph and a label', () => {
   assert.equal(activityBadges(agent('idle', { standing_activity: [] })).length, 0)
 })
 
-test('annotations never change the dot: idle with a loop still classifies ready', () => {
-  // The user-facing point of the whole axis: green keeps meaning "ready — you
-  // can type and send". Annotations add information, never states.
+test('scheduled annotations never change the dot: idle with a loop stays green', () => {
+  // Green keeps meaning "ready — you can type and send". A loop or cron is a
+  // *scheduled* engagement with nothing running now, so it adds a glyph and
+  // nothing else.
   const armed = agent('idle', { standing_activity: [annotation('loop', { detail: 'watching CI' })] })
-  assert.equal(stateDotClass(armed.state), 'state-dot idle')
+  assert.equal(sessionDotClass(armed), 'state-dot idle')
+  assert.equal(
+    sessionDotClass(agent('idle', { standing_activity: [annotation('cron', { count: 2 })] })),
+    'state-dot idle',
+  )
   const label = sessionStatus(armed)
   assert.ok(label.startsWith('ready'), 'idle with a loop must still read ready')
   assert.ok(!label.includes('awaiting'))
   assert.ok(!label.includes('working'))
+})
+
+test('idle with running work renders the standing ring, not plain green', () => {
+  // The one standing-activity exception to the dot rule: a session whose root
+  // turn ended while subagents or background tasks still run renders a hollow
+  // blue ring — "an agent is engaged, and you can type". A shape difference,
+  // not a pulse, so it survives prefers-reduced-motion.
+  for (const kind of ['subagents', 'background_tasks'] as StandingActivityKind[]) {
+    assert.equal(
+      sessionDotClass(agent('idle', { standing_activity: [annotation(kind)] })),
+      'state-dot idle standing',
+      `idle + running ${kind} must render the standing ring`,
+    )
+  }
+  // Only the idle axis: a working session is already blue and pulsing, and a
+  // terminal state's dot is process ground truth.
+  assert.equal(
+    sessionDotClass(agent('working', { standing_activity: [annotation('subagents')] })),
+    'state-dot working',
+  )
+  assert.equal(
+    sessionDotClass(agent('exited', { standing_activity: [annotation('subagents')] })),
+    'state-dot exited',
+  )
+  // Pending mobile tabs keep the neutral fallback.
+  assert.equal(sessionDotClass(undefined), 'state-dot running')
 })
 
 test('the status line composes standing activity after the state', () => {

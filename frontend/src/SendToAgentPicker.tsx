@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { useModalFocus } from './modalFocus'
-import { stateDotClass } from './sessionStatus'
+import { sessionDotClass } from './sessionStatus'
 import {
   agentTargetName, agentTargets, backendFromTargetKey, defaultNewTarget, newTargetKey,
   retargetForProject, sessionIdFromTargetKey, sessionTargetKey,
@@ -214,7 +214,7 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
             {agents.map(session =>
               option(
                 sessionTargetKey(session.id),
-                <span class={stateDotClass(session.state)} />,
+                <span class={sessionDotClass(session)} />,
                 agentTargetName(session),
                 `${session.backend} · ${session.state}${session.state_detail ? ` · ${session.state_detail}` : ''}`,
               ),

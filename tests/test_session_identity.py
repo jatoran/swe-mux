@@ -263,6 +263,65 @@ async def test_codex_observation_fails_closed_when_a_turn_ran_off_the_file(
     assert "may have been replaced" in (record.parser_diagnostic or "")
 
 
+async def test_subagent_hooks_never_date_transcript_staleness_evidence(
+    tmp_path: Path,
+) -> None:
+    """Only root-scope turn hooks stamp `last_turn_hook_ts`.
+
+    A background subagent writes nothing into the root transcript, but its
+    PreToolUse/PostToolUse stream arrives over the same ingress. Counting that
+    stream as "the CLI ran a turn" made a session waiting on background agents
+    read as a replaced conversation — quiet root transcript + fresh turn hook
+    is exactly `_note_transcript_staleness`'s trigger — so
+    `observation_stale_since` false-fired on a healthy session (measured live
+    2026-08-02: 666 s of staleness warning while agents worked).
+    """
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from swe_mux.server import error_middleware, hook_ingress, security_middleware
+
+    record = agent_record(OWN, cwd=str(tmp_path))
+    record.state = "idle"
+    session = real_session(record, tmp_path)
+    app = web.Application(middlewares=[error_middleware, security_middleware])
+    app["sessions"] = SimpleNamespace(
+        resolve=lambda _identity: session,
+        sessions={record.id: session},
+        maybe_heal_from_own_conversation_hook=AsyncMock(),
+        roll_agent_conversation=AsyncMock(),
+    )
+    app["events"] = SimpleNamespace(emit=AsyncMock())
+    app["automation"] = SimpleNamespace(note_native_hook=lambda _sid: None)
+    app["hook_ingress_windows"] = {}
+    app.router.add_post("/api/hooks/{sid}", hook_ingress)
+    async with TestClient(TestServer(app)) as client:
+        subagent = await client.post(
+            f"/api/hooks/{record.id}",
+            json={
+                "event": "PreToolUse",
+                "payload": {"session_id": OWN, "isSidechain": True, "tool_name": "Bash"},
+            },
+            headers={"X-Mux-Hook-Secret": "secret"},
+        )
+        assert subagent.status == 200
+        # The subagent's chatter is liveness for the session (last_hook_ts) and
+        # keeps the subagents annotation alive — but it is not root-turn
+        # evidence, so the staleness clock must not move.
+        assert session.last_hook_ts > 0
+        assert session.last_turn_hook_ts == 0.0
+        root = await client.post(
+            f"/api/hooks/{record.id}",
+            json={
+                "event": "PostToolUse",
+                "payload": {"session_id": OWN, "tool_name": "Bash"},
+            },
+            headers={"X-Mux-Hook-Secret": "secret"},
+        )
+        assert root.status == 200
+        assert session.last_turn_hook_ts > 0
+
+
 async def test_a_quiet_codex_session_is_not_marked_stale(tmp_path: Path) -> None:
     """Silence is not evidence: an idle agent's transcript is quiet too.
 

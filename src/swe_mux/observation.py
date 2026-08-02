@@ -165,6 +165,11 @@ BACKGROUND_TASKS_TTL_SECONDS = 1800.0
 # Subagent liveness is evidence-recency: any sidechain record or lifecycle hook
 # refreshes; this long without any means the fleet is gone.
 SUBAGENT_QUIET_SECONDS = 120.0
+# After a SubagentStop, subagent-scoped tool hooks may only refresh (never
+# re-create) the annotation for this long: hooks are unordered and retried, so
+# the stopped agent's last PostToolUse can land after its stop, and re-opening
+# on that straggler would flap a correctly cleared annotation for a full TTL.
+SUBAGENT_REOPEN_GRACE_SECONDS = 10.0
 STANDING_DETAIL_MAX_CHARS = 120
 _BACKGROUND_TASK_ID = re.compile(r"running in background with ID:\s*([A-Za-z0-9_-]+)")
 _TASK_NOTIFICATION_TOOL_USE = re.compile(r"<tool-use-id>\s*([^<\s]+)\s*</tool-use-id>")
@@ -1819,7 +1824,33 @@ def _extract_standing_task_notifications(
 
 
 def _apply_subagent_hook(session: Session, event_type: str) -> None:
-    """SubagentStart/SubagentStop lifecycle hooks own the subagent count."""
+    """Subagent-scoped hooks: lifecycle owns the count, activity refreshes it.
+
+    ``SubagentStart``/``SubagentStop`` own the count. Every *other*
+    subagent-scoped hook (its ``PreToolUse``/``PostToolUse`` stream) is
+    liveness: it proves a subagent is still running right now.
+
+    That refresh is not a nicety, it is what keeps the annotation alive at all.
+    A background subagent writes **nothing** into the root transcript — verified
+    live 2026-08-02 on a session whose agents ran 16 minutes with zero
+    `isSidechain` records — so the transcript tier has no evidence to offer and
+    the `SUBAGENT_QUIET_SECONDS` TTL expired the annotation ~2 minutes in while
+    the agents kept working. The session then rendered a bare "ready · turn
+    complete": the root turn really had ended, but nothing said an agent was
+    still running. The tool hooks were arriving the whole time and were simply
+    dropped here.
+
+    Creating at count 1 when the launch was missed mirrors the transcript-side
+    rule for sidechain records, and is what heals a count that a lone
+    ``SubagentStop`` (starts under-counted because its ``SubagentStart``
+    predated the annotation, or was lost) had already zeroed — but only after
+    ``SUBAGENT_REOPEN_GRACE_SECONDS`` past the last stop. Hooks are unordered
+    and retried, so a straggler ``PostToolUse`` from the subagent that just
+    stopped can land seconds after its ``SubagentStop``; re-opening on it would
+    flap a correctly cleared annotation for a full TTL, the exact failure the
+    trailing-transcript rule pins. A genuinely live agent keeps streaming tool
+    hooks, so it re-creates the annotation one grace window later at most.
+    """
     if getattr(session, "observation_replay", False):
         return
     now = _session_now(session)
@@ -1835,8 +1866,22 @@ def _apply_subagent_hook(session: Session, event_type: str) -> None:
             count=_standing_activity_count(session, "subagents") + 1,
         )
     elif event_type == "SubagentStop":
+        state["subagent_stop_ts"] = now
         changed = _drop_subagent(
             session, source="hook", evidence="hook:SubagentStop", now=now
+        )
+    else:
+        stop_ts = state.get("subagent_stop_ts")
+        recent_stop = (
+            isinstance(stop_ts, (int, float))
+            and now - stop_ts < SUBAGENT_REOPEN_GRACE_SECONDS
+        )
+        changed = _refresh_subagents(
+            session,
+            source="hook",
+            evidence=f"hook:subagent:{event_type}",
+            now=now,
+            create=not recent_stop,
         )
     if changed:
         _publish_update(session)

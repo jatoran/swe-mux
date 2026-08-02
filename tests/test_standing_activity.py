@@ -394,6 +394,84 @@ async def test_trailing_transcript_records_never_reopen_a_hook_cleared_fleet() -
         assert replay.session.record.standing_activity == []
 
 
+def _subagent_tool_hook(event: str = "PreToolUse") -> dict[str, Any]:
+    """A subagent-scoped tool hook: the stream a live background agent emits."""
+    return {
+        "kind": "hook",
+        "event": event,
+        "payload": {
+            "session_id": OWN_CONVERSATION,
+            "agent_id": "agent-1",
+            "tool_name": "Bash",
+        },
+    }
+
+
+async def test_subagent_tool_hooks_keep_the_fleet_alive_without_transcript_evidence() -> None:
+    # Measured live 2026-08-02: a background subagent writes NOTHING into the
+    # root transcript (16 minutes of agent work, zero isSidechain records), so
+    # its tool-hook stream is the only recency evidence there is. Dropping it
+    # let the TTL expire the annotation ~2 minutes in while agents kept
+    # working, and the session rendered a bare "ready · turn complete".
+    replay = DetectionReplay("claude")
+    replay.session.record.native_session_id = OWN_CONVERSATION
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "SubagentStart",
+            "payload": {"session_id": OWN_CONVERSATION, "agent_id": "agent-1"},
+        }
+    )
+    # Past the original TTL, but the agent's tool hooks kept refreshing.
+    await replay.step({"kind": "timer", "seconds": 100})
+    await replay.step(_subagent_tool_hook())
+    await replay.step({"kind": "timer", "seconds": 100})
+    await replay.step({"kind": "watchdog"})
+    (activity,) = replay.session.record.standing_activity
+    assert (activity.kind, activity.count) == ("subagents", 1)
+    # Silence on every channel still decays it: liveness is recency, not a latch.
+    await replay.step({"kind": "timer", "seconds": 130})
+    await replay.step({"kind": "watchdog"})
+    assert replay.session.record.standing_activity == []
+
+
+async def test_a_stop_straggler_never_reopens_but_live_activity_heals_a_zeroed_count() -> None:
+    # Hooks are unordered and retried: the stopped agent's last PostToolUse can
+    # land seconds after its SubagentStop, and re-opening on it would flap a
+    # correctly cleared annotation for a full TTL (the hook-channel twin of the
+    # trailing-transcript rule). But a *live* agent keeps streaming tool hooks,
+    # so activity past the grace window re-creates the annotation a lone
+    # under-counted SubagentStop had zeroed.
+    replay = DetectionReplay("claude")
+    replay.session.record.native_session_id = OWN_CONVERSATION
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "SubagentStart",
+            "payload": {"session_id": OWN_CONVERSATION, "agent_id": "agent-1"},
+        }
+    )
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "SubagentStop",
+            "payload": {"session_id": OWN_CONVERSATION, "agent_id": "agent-1"},
+        }
+    )
+    assert replay.session.record.standing_activity == []
+    # The straggler: tool hook 2 s after the stop stays refresh-only.
+    await replay.step({"kind": "timer", "seconds": 2})
+    await replay.step(_subagent_tool_hook("PostToolUse"))
+    assert replay.session.record.standing_activity == []
+    # A second agent is genuinely still running: its stream continues past the
+    # grace window and heals the annotation at count 1.
+    await replay.step({"kind": "timer", "seconds": 11})
+    await replay.step(_subagent_tool_hook())
+    (activity,) = replay.session.record.standing_activity
+    assert (activity.kind, activity.count, activity.source) == ("subagents", 1, "hook")
+    assert activity.evidence == "hook:subagent:PreToolUse"
+
+
 async def test_background_close_without_tracked_open_decrements_the_annotation() -> None:
     # A daemon restart loses the open-launch map while the adopted snapshot
     # still carries the annotation; the completion notification must still

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { browserUuid } from './layout'
-import { stateDotClass } from './sessionStatus'
+import { sessionDotClass } from './sessionStatus'
 import { agentTargetName, agentTargets } from './agentTargets'
 import {
   armQueueMessage, cancelQueueMessage, editQueueMessage, enqueueMessage, fetchAutoStatus,
@@ -539,7 +539,7 @@ export function QueuePane({ sessionId, sessions, onSelectSession, onFocusTarget,
       {scope === 'session' ? (
         <>
           <header class="queue-pane-header">
-            <span class={stateDotClass(session?.state)} />
+            <span class={sessionDotClass(session ?? undefined)} />
             <strong>{targetable ? targetLabel : 'no agent focused'}</strong>
             {targetable && (
               <span class="queue-pane-status">

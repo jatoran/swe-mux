@@ -22,6 +22,36 @@ export function stateDotClass(state: SessionState | undefined): string {
 }
 
 /**
+ * Dot class for a session, adding the `standing` modifier when the root turn is
+ * idle but a standing engagement is still running (live subagents or background
+ * tasks).
+ *
+ * Rendered as a blue *ring* rather than a filled dot: blue says "an agent is
+ * engaged", and the ring says "not generating right now — you can type". It is
+ * deliberately a shape difference, not a pulse: `prefers-reduced-motion`
+ * disables the working dot's animation, so a motion-only distinction would
+ * collapse into "identical to working" for exactly the users who need it most.
+ *
+ * This is the one case where standing activity touches the dot at all. Green
+ * still means "ready and deliverable" — and so does this, which is why the ring
+ * is blue-but-hollow rather than a variant of green (hue variants of green fail
+ * at a glance and fail colorblind users). `loop`/`cron` deliberately do NOT
+ * qualify: an armed wakeup is a *scheduled* engagement with nothing running
+ * now, and the ⟳ glyph already carries it.
+ */
+export function sessionDotClass(session: Session | undefined): string {
+  if (!session) return stateDotClass(undefined)
+  const base = stateDotClass(session.state)
+  return session.state === 'idle' && hasRunningActivity(session) ? `${base} standing` : base
+}
+
+/** Whether a standing annotation represents work running *right now*. */
+export function hasRunningActivity(session: Session): boolean {
+  const annotations: StandingActivity[] = session.standing_activity ?? []
+  return annotations.some(item => item.kind === 'subagents' || item.kind === 'background_tasks')
+}
+
+/**
  * Awaiting label by typed sub-reason. `idle_prompt`-driven idle never reaches
  * here (it maps to state 'idle'), so a finished agent can never render as an
  * approval. Unknown/missing sub-reason falls back to the generic approval

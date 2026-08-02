@@ -80,8 +80,13 @@ process exit, lifecycle changes, transcript-authoritative closes) reclaiming aut
 
 **Transcript authority is revoked when the transcript is stale.** Hooks are suppressed as
 redundant only while the transcript is authoritative (`parser_status == "ready"`), which is
-correct exactly as long as the file being tailed is this PTY's conversation. When it provably
-is not — an in-CLI `/clear` or `/new` the daemon could not follow, marked by
+correct exactly as long as the file being tailed is this PTY's conversation. Staleness
+evidence (`last_turn_hook_ts`) is **root-scope only**: a subagent-scoped tool hook proves a
+*subagent* ran, not that the root conversation wrote records somewhere else — a background
+subagent writes nothing into the root transcript, so counting its stream here false-fired
+`observation_stale_since` on a healthy session waiting on its agents (measured live
+2026-08-02, 666 s of staleness warning). When the transcript provably
+is not this conversation — an in-CLI `/clear` or `/new` the daemon could not follow, marked by
 `observation_stale_since` (`backends.md`) — the suppression is what freezes the session:
 the transcript can no longer report a turn boundary and the only source that can is being
 dropped. Staleness therefore returns state to the hook/PTY fallback tiers and hard-blocks
@@ -216,7 +221,17 @@ Record shapes verified 2026-07-31 against live transcripts and the CLI's own too
   Fallback when hooks are lost: `Task`/`Agent` tool_use opens, its tool_result closes —
   but only while no lifecycle hook has arrived this run, so one subagent is never
   counted by two tiers. Any sidechain record refreshes recency (creating at count 1 if
-  even the launch was missed). Hooks arrive subagent-scoped carrying the root
+  even the launch was missed) — **and so does the subagent's own tool-hook stream**
+  (subagent-scoped `PreToolUse`/`PostToolUse`), which is not a nicety but the only
+  recency evidence a *background* subagent produces at all: measured live 2026-08-02, a
+  session whose agents ran 16 minutes wrote zero `isSidechain` records into the root
+  transcript, so without the hook refresh the TTL expired the annotation ~2 minutes in
+  while the agents kept working. Tool-hook activity may also re-create a zeroed
+  annotation at count 1 (healing a count a lone under-counted `SubagentStop` collapsed),
+  but only `SUBAGENT_REOPEN_GRACE_SECONDS` (10 s) past the last stop: hooks are
+  unordered and retried, so the stopped agent's last `PostToolUse` can land after its
+  stop, and re-opening on that straggler is the hook-channel twin of the
+  trailing-transcript flap below. Hooks arrive subagent-scoped carrying the root
   `session_id`; the foreign filter runs first, so a nested child's fleet never counts.
   Rendered on the working axis too (`working · Task · 2 subagents`) — the root turn is
   open during Task execution.
@@ -523,9 +538,19 @@ through it — `frontend/test/sessionStatus.test.ts` asserts totality, the await
 affordances, that idle never renders as awaiting approval, and (by source inspection)
 that no surface reintroduces an inline heuristic.
 
-Standing activity renders through the same mapping and **never changes the dot** —
-hue variants of green fail at a glance and fail colorblind users, so green keeps meaning
-exactly "ready, you can type and send". `activityBadges(session)` yields one compact
+Standing activity renders through the same mapping and — with one exception — **never
+changes the dot**: hue variants of green fail at a glance and fail colorblind users, so
+green keeps meaning exactly "ready, you can type and send". The exception
+(`sessionDotClass`): an *idle* session with running work — live `subagents` or
+`background_tasks`, never a merely scheduled `loop`/`cron` — renders a hollow **blue
+ring** (`state-dot idle standing`). Blue says an agent is engaged; the ring (vs the
+working dot's filled pulse) says "not generating — you can type", which is still true:
+delivery and the state axis are untouched. It is deliberately a *shape* difference, not
+a motion or green-hue one: `prefers-reduced-motion` disables the working pulse, so a
+solid-vs-pulsing distinction would collapse for exactly the users who need it, and it is
+not a green variant so ready stays unmistakable. Every dot surface (sidebar, tab strips,
+the mobile unified tabs, pickers, context menus) renders through `sessionDotClass`, so
+the ring appears wherever the dot does. `activityBadges(session)` yields one compact
 affordance per annotation — `⟳` for loop *and* cron (one glyph; the tooltip
 distinguishes "loop armed" from the cron cadence — sidebar density beats taxonomy),
 `≡` background tasks with count, `⑂` subagents with count — and `sessionStatus`
