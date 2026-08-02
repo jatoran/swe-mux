@@ -3,9 +3,31 @@ swe_mux_note = 1
 kind = "projects"
 id = "29a044bb-a06b-4216-95e4-39c5e91d48fb"
 ---
-# swe-mux project notes
+# swe-mux Agentic Controle Plane (ACP)
 
-Agentic Controle Plane (ACP)
+
+right sidebar drawer - new addition:
+	the currently focused session's transcript, with copy commands for agent responses and user messages
+	easier to view/browse through and select/copy from
+	excludes all the various tool calls? or maybe collapses them
+
+in preview panes tabs, on mobile, the right edge of content is generally slightly cut off - so it doesnt fit fully
+
+in preview panes - if an update is made to a file served on a server that im viewing in preview, will that preview update? earlier i had to have it reserve it on a different port for it to update the content. so im not sure if it was an issue with the preview tab functionality or what
+
+
+I think project/session processes should be a right sidebar drawer item
+	and we dont need the 'proc' button in agent session topbars taking up space
+	so when opened it should be filtered to the processes of the current project by default? maybe not the session, or should it be the session? kaybe project but highlighting the current session if a session is currently focused?
+
+im considering more and more if the project and session notes should be part of the tight sidebar drawer
+
+when i resume a session from session history, it should focus to that resumed session. currently it just returns me to whatever tab was focused before, without switching, after i hit the 'resume as new' button. please fix this
+
+
+
+abiliity to attach files / drag files into chats? if compatible? excel/csv etc?
+
 
 
 
@@ -31,18 +53,18 @@ task list - that an agent can check off and add comments too - maybe replace or 
 
 - preview page tabs - allow seeing the dev console logs and entering dev console commands?
 
-- should session history also include sessions in overall history for that project? not just those done in swe-mux, but ALL historical sessions associated with that project? and resume them the same way?
-
 - setting a session to "auto-approve requests" - the harness will then automatically approve requests - basically "dangerously approve permissions" but at the control plane level
 
 
-- maybe congifurable gesture zones? swipe left top half of screen does one thing, swipe left bottom half of screen does another
+- maybe configurable gesture zones? swipe left top half of screen does one thing, swipe left bottom half of screen does another
 	- what other ways to expose more UI in a clean and intuitive way?
 	- and not just on mobile/gestures?
 	- 2 finger drag down and up? would this be fine and 1 finger would still work for scroll?
 	
 
 - allow making command rail be multiple rows? on mobile and/or desktop? and configuring what is on each row
+	- So you could configure the rails, and the sidebar drawer all in that config UI that already exists
+	- and it needs to take into account if a rail row is shown on mobile, or desktop, or both, and you can have duplicates of course, just like you can with rail and sidebar
 
 
 - [ ] control plane updates
@@ -60,7 +82,7 @@ agents with swemux mcp send tasks to other projects (swe-mux sending a task to c
 
 scheduled agent runs, and repeated ones on a schedule
 
-jump to previous user messages in agent chats
+jump to previous user messages in agent chats. a quick-seek
 
 
 
@@ -95,14 +117,16 @@ memory building?
 - openrouter call - can i set this to go through my generative gateway instead of openrouter? while still leaving openrouter routing open for other people that use this and done have generative gateway?
 
 
-- optional resumption of any chat sessions that were open when you closed swe-mux
+- optional resumption of any chat sessions that were open when you last closed swe-mux (on purpose or from a crash)
 	- it starts UI and says x,y,z were open, do you want to reopen them? and you can say yes to all, not to all, or check the ones you watn to re-open
 
 
 
-- git commit message generation - based on changes and session ssince that change and the annotations since that change
-	- and eventually when we build in source control, you can hti a button next to the commit message and it will generaet that based upon the knowledge we have accumulated already (if hte project ahs those automations enabled)
+- git commit message generation - based on changes and sessions since that change and the annotations since that change
+	- and eventually when we build in source control, you can hit a button next to the commit message and it will generate that based upon the knowledge we have accumulated already (if the project has those automations enabled)
 	- THIS UPDATE SHOULD LEVERAGE THE CONTROL PLANE UPDATES
+	- .
+	- This update maybe isnt...needed anymore? If leveraging worktrees at least. Will be nice to have here and there though to have something that analyzes project, diffs, efficiently, and creates a git msg. But this requires a little bit of engineering
 
 
 - getting STT global and actually doing other things in swe-mux UI with it
@@ -139,6 +163,10 @@ memory building?
 
 
 - speak system updates:
+	- ability to move around projects in the whole UI.
+	- some sort of top level sweet mux agent keeps track of all the statuses of all current sessions has hooks into all commands. and potential endpoints. so you can use this to load it up and say hey. what's the status of everything and it will respond and say hey Ethen the session is finished since you last checked this pending session 's ending approval request from project y if you'd like me to approve it okay? etc etc
+		- so this would be capable of managing swingbox from the speak mode using all of the audio commands. Aunt, we can discuss what type of model that we use or what data it will leverage to to not have to be real-time calls but it should have all that data cached already easily accessible so it can just pull it up in a moment's notice. it will just have a cash or something that makes it easy for it to pull up data when you ask at a moment's notice and also verify things are accurate itself by checking the statuses of different agent sessions. and confirming there are no regressions or anything like that
+	- The primary purpose of this: being able to and accurately and efficiently navigate the UI hands-free. it's less of a feat for the navigation of the UI. that's fairly straightforward, but it being able to actually manage things and be up to date on statuses and being able to give you a rundown that is accurate. accurate natural language and succinct that is actually useful. one hands-free is the goal of this. hands-free is an absolute must this feature
 	- user configurable trigger word + variants		- replace "mux" with "swe"?
 
 	- expanding the voice system for use navigating swe-mux, going to open/active sessions, starting new sessions, etc.
@@ -153,4 +181,3 @@ memory building?
 	- Mux, interrupt — stops playback and sends Ctrl-C to the agent.
 	- Mux, help / list commands — displays the command list.
 	- Mux, stop listening / sleep — turns Conversation mode off.
-
