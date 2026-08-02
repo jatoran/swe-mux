@@ -154,8 +154,10 @@ the last few panes shown. A tab switch therefore costs no PTY reattach and no bu
 which is what made returning to a long Codex session visibly redraw for several seconds. The set
 is bounded and recency-ordered (`WARM_TERMINAL_PANES`), and a hidden pane behaves as a
 backgrounded tab for every shared resource — it deregisters its viewport from PTY geometry
-arbitration, cannot take input ownership, and cannot write the system clipboard. Mechanics:
-`technical/frontend/workspace-state.md` § Warm terminal panes.
+arbitration, cannot take input ownership, and cannot write the system clipboard. The hide/show
+transition itself is load-bearing: hiding withdraws the viewport immediately; showing re-fits
+and fully redraws the retained xterm instance. Mechanics: `technical/frontend/workspace-state.md`
+§ Warm terminal panes.
 
 ## Key files
 

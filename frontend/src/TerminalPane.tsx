@@ -34,7 +34,7 @@ import { railPayload, resolveRail, type RailBackend, type RailItem } from './com
 import { activatePromptRailItem } from './promptRail'
 import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { currentProfile, loadRailItems } from './deviceSettings'
-import { APP_TAIL_KEY, VIEWPORT_SETTLE_MS, appOwnsTail, attachRegistersViewport, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
+import { APP_TAIL_KEY, VIEWPORT_SETTLE_MS, appOwnsTail, attachRegistersViewport, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, reflowVisibleTerminalRenderer, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
 import { geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
 import {
   applyOwnerFrame,
@@ -222,6 +222,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // pane can say "input is on your phone" instead of silently swallowing keystrokes.
   const [inputOwnership,setInputOwnership]=useState<OwnershipView>(UNOWNED)
   const claimInputRef=useRef<(reason:ClaimReason)=>void>(()=>{})
+  // Unlike an ordinary claim, the visible Resize/Take over action must measure and
+  // register this pane before claiming it. A same-owner claim alone is a renewal and
+  // the daemon deliberately performs no geometry work for one.
+  const resizeToPaneRef=useRef<()=>void>(()=>{})
   // The grid this pane is rendering when it is not its own fit, as `cols×rows`, or ''
   // (see terminalLetterbox). The size and not just a flag, because when no *other
   // device* holds input there is no owner notice to hang it off, and a pane that
@@ -504,6 +508,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let fitFrame = 0
     let redrawFrame = 0
     let surfaceFrame = 0
+    let visibilityFrame = 0
     let surfaceConfirmTimer: number | undefined
     let invalidateAtlasOnRedraw = false
     let webgl: WebglAddon | null = null
@@ -569,10 +574,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let serverGeometry: { cols: number; rows: number } | null = null
     let sentViewport: { cols: number; rows: number; hidden: boolean } | null = null
     let letterboxed = false
-    const sendViewport = (cols: number, rows: number) => {
+    const sendViewport = (cols: number, rows: number, force = false) => {
       if (socket?.readyState !== WebSocket.OPEN) return
       const hidden = paneIsHidden()
-      if (sentViewport?.cols === cols && sentViewport.rows === rows && sentViewport.hidden === hidden) return
+      if (!force && sentViewport?.cols === cols && sentViewport.rows === rows && sentViewport.hidden === hidden) return
       sentViewport = { cols, rows, hidden }
       // `hidden` deregisters this viewport instead of registering it: a minimized
       // window still reports layout, and it must not reshape the PTY for the device
@@ -744,6 +749,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const scheduleFullRedraw = () => scheduleViewport(true)
     scheduleFitRef.current = scheduleFullRedraw
     paneVisibilityRef.current = (nowVisible: boolean) => {
+      window.cancelAnimationFrame(visibilityFrame)
       if (!nowVisible) {
         // Hidden by `display:none`, so the host measures zero and the scheduled fit
         // would return before deregistering. Send the deregistration directly.
@@ -756,11 +762,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       // Back on screen. The pane may have missed geometry changes while it had no
       // layout to measure, and its renderer may hold pixels from before the tab was
-      // resized, so this is a full redraw rather than a plain fit. The tail scroll is
-      // the same repair `finishReplay` does: output that arrived while the pane was
-      // hidden moved `baseY` without moving a viewport nobody was watching.
+      // resized, so this is a full redraw rather than a plain fit. FitAddon skips its
+      // resize when the grid is unchanged, but xterm's renderer can still hold stale
+      // pixel dimensions after `display:none`; force the same-grid renderer reflow
+      // after the scheduled fit. The tail scroll is the same repair `finishReplay`
+      // does: output that arrived while the pane was hidden moved `baseY` without
+      // moving a viewport nobody was watching.
       scheduleFullRedraw()
-      window.requestAnimationFrame(() => scrollTerminalToTail(term))
+      visibilityFrame = window.requestAnimationFrame(() => {
+        if (paneIsHidden()) return
+        reflowVisibleTerminalRenderer(term, host.current)
+        runSurfaceRedraw()
+        scrollTerminalToTail(term)
+      })
     }
     // Chromium device emulation can preserve a live WebGL context while changing
     // its emulated pixel ratio, leaving xterm interactive but visually blank.
@@ -866,6 +880,25 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       noteTerminalFocus(session.id)
     }
     claimInputRef.current = (reason: ClaimReason) => { lastInteractionAt = Date.now(); claimInput(reason) }
+    resizeToPaneRef.current = () => {
+      const box = host.current
+      if (paneIsHidden() || !terminalHostIsVisible(box)) return
+      // A letterboxed pane is using another device's font/grid. Restore the base
+      // font, synchronously fit the box the user can see, and force a viewport frame
+      // before the gesture claim. WebSocket ordering makes that registration the
+      // geometry the daemon applies whether this client already owns input or takes it
+      // from another client with the following claim.
+      resetLetterbox()
+      if (!refitVisibleTerminal(fit, box)) return
+      reflowVisibleTerminalRenderer(term, box)
+      localFit = { cols: term.cols, rows: term.rows }
+      localFitBox = { width: box.clientWidth, height: box.clientHeight }
+      serverGeometry = localFit
+      sendViewport(localFit.cols, localFit.rows, true)
+      lastInteractionAt = Date.now()
+      claimInput('gesture')
+      runSurfaceRedraw()
+    }
     const claimOnFocus = () => claimInput(claimReasonForFocus(lastInteractionAt, Date.now()))
     // The events socket and this one race on a cold load, and this one usually wins,
     // so the daemon judges the attach claim without yet knowing which device asked.
@@ -1438,7 +1471,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{} }
+    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput])
 
   const copy = async () => {
@@ -1687,13 +1720,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     <span class={findResult === 'no match' ? 'missing' : ''}>{findResult}</span>
     <button title="Close find" onClick={closeFind}>×</button>
   </div>}{ownerNotice
-    ?<div class="terminal-input-owner" role="status"><span>{ownerNotice}{letterboxActive?` · showing its ${letterboxSize}`:''}</span><button title="Take terminal input on this device" onClick={()=>{claimInputRef.current('gesture');focusTerminalInputRef.current()}}>Take over</button></div>
+    ?<div class="terminal-input-owner" role="status"><span>{ownerNotice}{letterboxActive?` · showing its ${letterboxSize}`:''}</span><button title="Take terminal input on this device" onClick={()=>{resizeToPaneRef.current();focusTerminalInputRef.current()}}>Take over</button></div>
     /* Letterboxed with nobody else visibly holding input. `inputOwnerNotice` only speaks
        when this pane was *refused*, so the case that looks most broken — a grid drawn at
        a size this pane never chose, with no explanation anywhere — was the one case that
        said nothing at all. Claiming input is the fix as well as the explanation: the owner
        dictates geometry, so taking it resizes the session to this pane. */
-    :letterboxActive&&letterboxSettled&&<div class="terminal-input-owner letterbox-notice" role="status"><span>Showing {letterboxSize} · sized elsewhere</span><button title="Size this session to this pane" onClick={()=>{claimInputRef.current('gesture');focusTerminalInputRef.current()}}>Resize</button></div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
+    :letterboxActive&&letterboxSettled&&<div class="terminal-input-owner letterbox-notice" role="status"><span>Showing {letterboxSize} · sized elsewhere</span><button title="Size this session to this pane" onClick={()=>{resizeToPaneRef.current();focusTerminalInputRef.current()}}>Resize</button></div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
     const data=event.clipboardData
     const image=data&&clipboardImage(Array.from(data.items))
     if(image){event.preventDefault();void insertTerminalImage(termRef.current!,session,image).then(()=>{setManualPaste(false);showClipboardStatus('Pasted')}).catch(cause=>reportError(cause instanceof Error?cause.message:'Clipboard image paste failed.'));return}
@@ -1726,6 +1759,9 @@ export const TerminalPane = memo(TerminalPaneImpl, (a, b) =>
   a.session.id === b.session.id &&
   a.session.backend === b.session.backend &&
   a.session.state === b.session.state &&
+  // Warm panes remain mounted. Swallowing this prop transition leaves the hidden
+  // pane registered with the daemon and prevents the shown pane's redraw.
+  a.visible === b.visible &&
   // Changes once per agent lifecycle (codex: placeholder → detected rollout id);
   // the resume-command rail button must pick up the flip.
   a.session.native_session_id === b.session.native_session_id &&

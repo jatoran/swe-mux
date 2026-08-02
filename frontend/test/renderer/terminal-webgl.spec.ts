@@ -17,7 +17,7 @@ test('WebGL survives repeated pane switches, resizes, and concurrent output', as
   const first = await terminal.screenshot()
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   const second = await terminal.screenshot()
-  const changedPixelRatio = await page.evaluate(async ({ firstPng, secondPng }) => {
+  const pixelRatios = await page.evaluate(async ({ firstPng, secondPng }) => {
     const pixels = async (base64: string) => {
       const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${base64}`)).blob())
       const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
@@ -28,21 +28,37 @@ test('WebGL survives repeated pane switches, resizes, and concurrent output', as
     const firstPixels = await pixels(firstPng)
     const secondPixels = await pixels(secondPng)
     let changed = 0
+    let foreground = 0
     for (let index = 0; index < firstPixels.length; index += 4) {
       if (Math.abs(firstPixels[index] - secondPixels[index]) > 4 ||
           Math.abs(firstPixels[index + 1] - secondPixels[index + 1]) > 4 ||
           Math.abs(firstPixels[index + 2] - secondPixels[index + 2]) > 4 ||
           Math.abs(firstPixels[index + 3] - secondPixels[index + 3]) > 4) changed += 1
+      if (Math.abs(firstPixels[index] - 9) > 8 ||
+          Math.abs(firstPixels[index + 1] - 10) > 8 ||
+          Math.abs(firstPixels[index + 2] - 12) > 8) foreground += 1
     }
-    return changed / (firstPixels.length / 4)
+    const count = firstPixels.length / 4
+    return { changed: changed / count, foreground: foreground / count }
   }, { firstPng: first.toString('base64'), secondPng: second.toString('base64') })
 
   // SwiftShader can vary a small number of antialiased edge pixels between captures.
   // Stale rows alter a substantial portion of the viewport, so keep a narrow 0.5% ceiling.
-  if (changedPixelRatio >= 0.005) {
+  if (pixelRatios.changed >= 0.005 || pixelRatios.foreground <= 0.01) {
     await testInfo.attach('first-terminal-frame', { body: first, contentType: 'image/png' })
     await testInfo.attach('second-terminal-frame', { body: second, contentType: 'image/png' })
   }
-  expect(changedPixelRatio, 'terminal pixels should remain stable after the render queue drains').toBeLessThan(0.005)
+  expect(pixelRatios.foreground, 'terminal must retain visible text after hidden-pane stress').toBeGreaterThan(0.01)
+  expect(pixelRatios.changed, 'terminal pixels should remain stable after the render queue drains').toBeLessThan(0.005)
   expect(rendererErrors.filter(error => /WebglRenderer|_updateModel|addon-webgl/i.test(error))).toEqual([])
+})
+
+test('same-grid reflow restores a stale DOM renderer surface', async ({ page }) => {
+  await page.goto('/renderer-harness.html')
+  const result = await page.evaluate(() => window.runTerminalDomDimensionRepair())
+
+  expect(result.cols).toBeGreaterThan(0)
+  expect(result.rows).toBeGreaterThan(0)
+  expect(result.afterFit).not.toEqual(result.before)
+  expect(result.afterReflow).toEqual(result.before)
 })
