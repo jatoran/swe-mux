@@ -1,5 +1,5 @@
 type TerminalDimensions = { cols: number; rows: number; refresh: (start: number, end: number) => void }
-type TerminalRendererDimensions = { cols: number; rows: number; resize: (cols: number, rows: number) => void }
+type TerminalRendererOptions = { options: { customGlyphs?: boolean } }
 type TerminalFit = { fit: () => void }
 type TerminalHost = { isConnected: boolean; clientWidth: number; clientHeight: number }
 
@@ -16,18 +16,22 @@ export function refitVisibleTerminal(fit: TerminalFit, host: TerminalHost | null
 /**
  * Recalculate xterm's renderer pixels after a pane returns from `display:none`.
  *
- * FitAddon deliberately skips `term.resize` when the grid has not changed. The DOM or
- * canvas surface can still retain dimensions from before the pane was hidden, producing a
- * terminal that occupies only part of its host. A same-grid resize reaches the renderer's
- * `handleResize` path without sending a resize frame to the PTY; viewport reporting is owned
- * separately by TerminalPane.
+ * FitAddon deliberately skips `term.resize` when the grid has not changed. The public resize
+ * method has the same early return, while the DOM or canvas surface can still retain dimensions
+ * from before the pane was hidden and occupy only part of its host. `customGlyphs` is a public,
+ * non-geometric option that xterm treats as renderer-invalidating: changing it synchronously
+ * clears the renderer, calls its `handleResize`, and refreshes every row. Restore it immediately
+ * so the repair changes no user setting and sends no resize frame to the PTY.
  */
 export function reflowVisibleTerminalRenderer(
-  term: TerminalRendererDimensions,
+  term: TerminalRendererOptions,
   host: TerminalHost | null,
 ): boolean {
-  if (!terminalHostIsVisible(host) || term.cols < 1 || term.rows < 1) return false
-  term.resize(term.cols, term.rows)
+  if (!terminalHostIsVisible(host)) return false
+  const customGlyphs = term.options.customGlyphs
+  if (typeof customGlyphs !== 'boolean') return false
+  term.options.customGlyphs = !customGlyphs
+  term.options.customGlyphs = customGlyphs
   return true
 }
 

@@ -48,8 +48,12 @@ mount-effect dependency — listing it would dispose and rebuild the terminal on
 is the cost warm panes remove. It is, however, part of `TerminalPane`'s custom memo comparator;
 without that comparison a visibility-only render is discarded before the lightweight effect can
 update the ref, withdraw the hidden viewport, or redraw the shown surface. Becoming visible again
-schedules a full redraw and a tail scroll, since output that arrived while the pane was hidden
-moved `baseY` with no viewport following it.
+schedules a fit, same-grid renderer reflow, full redraw, and tail scroll. The reflow is distinct
+from fitting: FitAddon and public `term.resize` both short-circuit when cols/rows match, while the
+DOM or canvas surface can still retain stale pixel dimensions after `display:none`. Toggling and
+immediately restoring xterm's public `customGlyphs` option reaches `RenderService.handleResize`
+without changing the cell grid or reporting a PTY resize. Output that arrived while the pane was
+hidden moved `baseY` with no viewport following it, so the tail repair remains separate.
 
 ## Viewport passes are coalesced once they get expensive
 
@@ -175,8 +179,11 @@ widening a narrow window back past 760 px restores pure layout order.
 - `frontend/test/warmPanes.test.ts`: eviction order, the on-screen and closed-tab exclusions, the
   recency cap, and (by source inspection) that a warm pane is hidden from layout/pointer/assistive
   tech, that `visible` reaches the memo comparator but never the mount deps, that the explicit
-  resize path force-registers before claiming input, and that nothing still gates on
-  `document.hidden` alone.
+  resize path reflows renderer dimensions and force-registers before claiming input, and that
+  nothing still gates on `document.hidden` alone.
+- `frontend/test/renderer/terminal-webgl.spec.ts`: browser-level WebGL hidden-pane stability and
+  DOM same-grid renderer-dimension repair; the latter proves `fit()` leaves a stale half-size
+  surface untouched and `reflowVisibleTerminalRenderer` restores it.
 - `frontend/test/previewLinks.test.ts`: loopback-only terminal link normalization.
 - Pointer behavior tests/inspection must cover threshold, exact insertion, split edges, cross-pane
   movement, Escape, lost capture, and cleanup after responsive changes.

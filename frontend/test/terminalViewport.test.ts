@@ -69,15 +69,24 @@ test('visible terminal panes refit and invalidate every rendered row', () => {
 
 test('a restored pane forces renderer dimensions even when its grid is unchanged', () => {
   const visible = { isConnected: true, clientWidth: 900, clientHeight: 500 }
-  const calls: Array<[number, number]> = []
-  const term = { cols: 120, rows: 36, resize: (cols: number, rows: number) => calls.push([cols, rows]) }
+  const calls: boolean[] = []
+  let customGlyphs = true
+  const term = {
+    options: {
+      get customGlyphs() { return customGlyphs },
+      set customGlyphs(value: boolean) { calls.push(value); customGlyphs = value },
+    },
+  }
 
   assert.equal(reflowVisibleTerminalRenderer(term, visible), true)
-  assert.deepEqual(calls, [[120, 36]])
+  assert.deepEqual(calls, [false, true])
+  assert.equal(term.options.customGlyphs, true)
 
   const hidden = { ...visible, clientWidth: 0 }
   assert.equal(reflowVisibleTerminalRenderer(term, hidden), false)
-  assert.deepEqual(calls, [[120, 36]])
+  assert.deepEqual(calls, [false, true])
+
+  assert.equal(reflowVisibleTerminalRenderer({ options: {} }, visible), false)
 })
 
 // The soft keyboard opening refits the pane, which pushes rows into scrollback and moves

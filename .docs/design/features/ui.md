@@ -273,8 +273,15 @@ responsive controls.
 - Repaints are still repaired on the events that *are* observable (pane shown, intersection,
   `visibilitychange`, `pageshow`, window focus, replay end, context loss), plus one confirmation
   pass a settle later. The terminal's memo boundary compares pane visibility so a tab-only
-  transition cannot swallow the show event before it reaches the retained xterm instance. The
-  confirmation is surface-only — atlas clear and refresh, never a refit — because a fit is
+  transition cannot swallow the show event before it reaches the retained xterm instance.
+  Pane restoration also forces xterm's renderer-dimension path after the fit: both FitAddon and
+  public `term.resize` return early when the cell grid is unchanged, even though a renderer
+  returning from `display:none` can still hold a stale pixel surface in the upper-left part of
+  its host. `reflowVisibleTerminalRenderer` temporarily toggles and restores the public,
+  non-geometric `customGlyphs` option; xterm treats that option as renderer-invalidating and
+  invokes `handleResize` without changing the grid or sending a PTY resize frame. The explicit
+  Resize action uses the same repair. The confirmation is surface-only — atlas clear and
+  refresh, never a refit — because a fit is
   `term.resize` plus a pseudoconsole resize plus a full CLI repaint, and none of that is what a
   lost paint needs. xterm's `RenderService` fires `onRender` whether or not the renderer drew
   anything, so a dropped paint is invisible to the app and is never retried by the library;
