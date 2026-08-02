@@ -54,6 +54,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import build_desktop  # noqa: E402 - sibling packaging module
 
+from swe_mux.bundle_locks import bundle_lock_holders  # noqa: E402
 from swe_mux.config import load_config  # noqa: E402
 from swe_mux.spawn_contract import scrub_claude_session_markers  # noqa: E402
 from swe_mux.subprocess_flags import popen_outside_job  # noqa: E402
@@ -361,6 +362,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "or re-run with --force."
         )
         return 2
+    # Anything foreign anchoring dist/swe-mux (a dev server behind a Preview tab,
+    # a terminal cd'd into the bundle) survives every process this script may
+    # stop — sessions descend from the supervisor, which outlives the app — so
+    # the swap is doomed no matter what. Say who is holding it BEFORE spending
+    # minutes on a build (measured live 2026-08-02: two redeploys built, stopped
+    # the app, and then died at this exact rename).
+    if not args.skip_build and abort_if_bundle_held(args, when="the swap would fail"):
+        return 2
 
     # -- rebuild (staged; the old app keeps running and serving) ------------
     if not args.skip_build:
@@ -399,6 +408,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
     # -- stop (only after a successful build) -------------------------------
+    # Re-checked here because the build takes minutes: a holder that appeared
+    # during it would still doom the swap, and aborting now leaves the running
+    # app completely untouched (the staged build is kept for the retry).
+    if not args.skip_build and abort_if_bundle_held(
+        args, when="the swap would fail; the running app was never touched"
+    ):
+        return 2
     stop_app_processes(config)
 
     # -- swap ---------------------------------------------------------------
@@ -453,6 +469,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         "check <data_dir>/desktop-daemon.log"
     )
     return 1
+
+
+def abort_if_bundle_held(args, *, when: str) -> bool:  # noqa: ANN001 - argparse.Namespace
+    """Report foreign processes anchoring dist/swe-mux. True means abort.
+
+    Only processes the stop machinery cannot release count (the app's own
+    image and its descendants are excluded by the scan), so a report here is a
+    swap that WILL fail. ``--force`` downgrades it to a warning for the case
+    where the holder is expected to exit during the build.
+    """
+    holders = bundle_lock_holders(APP_DIST)
+    if not holders:
+        return False
+    verdict = "WARNING" if args.force else "ABORT"
+    log(f"{verdict}: dist/swe-mux is held open by processes a redeploy cannot stop ({when}):")
+    for holder in holders:
+        log(f"  pid {holder['pid']} {holder['name']} ({holder['via']}: {holder['path']})")
+    if args.force:
+        log("continuing due to --force; the swap may still fail on these locks")
+        return False
+    log(
+        "These are usually a dev server/preview process or a terminal whose working "
+        "directory is inside dist/swe-mux. Stop those processes (or close their "
+        "tabs/sessions) and re-run, or re-run with --force to attempt anyway."
+    )
+    return True
 
 
 def clear_slot(path: Path, *, retry_seconds: float = SWAP_RETRY_SECONDS) -> bool:

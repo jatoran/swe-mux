@@ -23,6 +23,7 @@ It should call domain packages rather than acquire their storage or process resp
 | `background_tasks.py` | supervision and health for the daemon's long-lived loops: per-iteration fault guard, restart with capped backoff, per-loop health snapshot | PTY host processes (that is `supervisor.py`), any domain logic |
 | `logsetup.py` | rotating `daemon.log`/`access.log` handlers, faulthandler `crash.log`, runtime root-logger level control | the supervisor's logging (stdlib-inline there to keep its closure frozen) |
 | `build_support.py` | lock-safe staged frontend publication for desktop packaging | Vite compilation, runtime asset serving |
+| `bundle_locks.py` | who would block the frozen-bundle swap: exe/cwd anchors into `dist/swe-mux` from processes the redeploy cannot stop (the app's own image and its descendants are excluded), shared by the redeploy script's pre-build/pre-stop gates and the endpoint's `409 bundle_in_use` | stopping anything (reporting only), the swap itself (`packaging/redeploy_desktop.py`) |
 | `projects.py` | Project/Group validation and lifecycle | Git-derived identity, file content |
 | `project_files.py` | safe Project config, notes, tree, bounded recursive name/content search, file reads/writes | layout placement, browser drafts |
 | `project_watcher.py` | leased non-recursive directory watches | recursive Project crawl |

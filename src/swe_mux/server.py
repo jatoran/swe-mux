@@ -54,6 +54,7 @@ from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
 from .background_tasks import background
+from .bundle_locks import bundle_lock_holders, describe_holders, frozen_bundle_root
 from .clipboard_store import ClipboardStore
 from .config import Config, load_config, update_config
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
@@ -1497,6 +1498,31 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
             },
             409,
         )
+    if not force:
+        # The swap's one non-retryable step is renaming dist/swe-mux, and a
+        # foreign process anchoring it (a dev server behind a Preview tab, a
+        # terminal cd'd into the bundle) survives everything the redeploy may
+        # stop — sessions descend from the supervisor, which outlives the app.
+        # Refuse with the holders named instead of failing after minutes of
+        # build (measured live 2026-08-02: two redeploys died at this rename).
+        bundle = frozen_bundle_root() or (root / "dist" / "swe-mux")
+        holders = await asyncio.to_thread(bundle_lock_holders, bundle)
+        if holders:
+            return json_response(
+                {
+                    "error": "bundle_in_use",
+                    "message": (
+                        "the app bundle is held open, so the redeploy swap would "
+                        f"fail: {describe_holders(holders)}. This is usually a dev "
+                        "server or preview process, or a terminal whose working "
+                        "directory is inside dist/swe-mux — stop those processes "
+                        "(or close their tabs/sessions) and retry, or pass "
+                        "force=true to attempt anyway."
+                    ),
+                    "holders": holders,
+                },
+                409,
+            )
     lock_path = config.data_dir / "redeploy.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     # `_redeploy_lock_pid` already reported no live redeploy, so any file still

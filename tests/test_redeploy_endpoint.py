@@ -14,6 +14,17 @@ import pytest
 from swe_mux import server
 
 
+@pytest.fixture(autouse=True)
+def no_real_bundle_scan(monkeypatch: Any) -> None:
+    """Endpoint tests must not scan this machine's real process table.
+
+    The bundle-in-use gate enumerates live processes, which is slow and — on a
+    dev machine actually running the frozen app — environment-dependent. Tests
+    that exercise the gate override this stub with their own holders.
+    """
+    monkeypatch.setattr(server, "bundle_lock_holders", lambda _bundle: [])
+
+
 class FakeRequest:
     def __init__(self, app: dict[str, Any], body: Any = None) -> None:
         self.app = app
@@ -76,6 +87,47 @@ async def test_redeploy_refused_without_supervisor_unless_forced(
     monkeypatch.setattr(server.subprocess, "Popen", fake_popen)
     response = await server.daemon_redeploy(  # type: ignore[arg-type]
         FakeRequest(app, body={"force": True})
+    )
+    assert response.status == 202
+    assert spawned
+
+
+async def test_redeploy_refused_while_the_bundle_is_held(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A foreign process anchoring dist/swe-mux dooms the swap; refuse up front.
+
+    Measured live 2026-08-02: two redeploys built for minutes, stopped the
+    app, then died renaming dist/swe-mux because a session-spawned process
+    (which descends from the supervisor and survives the stop) held it. The
+    gate names the holder instead, before anything is built or stopped.
+    """
+    holders = [
+        {
+            "pid": 4321,
+            "name": "node.exe",
+            "via": "cwd",
+            "path": r"D:\PROJECTS\swe-mux\dist\swe-mux\_internal",
+        }
+    ]
+    monkeypatch.setattr(server, "bundle_lock_holders", lambda _bundle: holders)
+    response = await server.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
+    assert response.status == 409
+    body = _payload(response)
+    assert body["error"] == "bundle_in_use"
+    # The message is what the UI shows verbatim: it must name the process.
+    assert "pid 4321 node.exe" in body["message"]
+    assert body["holders"] == holders
+
+    # force=true attempts anyway (the holder may exit during the build).
+    spawned: list[Any] = []
+    monkeypatch.setattr(
+        server.subprocess,
+        "Popen",
+        lambda *args, **kwargs: spawned.append(args) or SimpleNamespace(pid=7),
+    )
+    response = await server.daemon_redeploy(  # type: ignore[arg-type]
+        FakeRequest(_app(tmp_path), body={"force": True})
     )
     assert response.status == 202
     assert spawned

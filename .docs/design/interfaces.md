@@ -68,8 +68,17 @@ The staged frozen-app rebuild trigger for the UI ("Rebuild + redeploy app
 (keep sessions)", `app.redeploy`; works from desktop and mobile). POST
 validates a source checkout + `uv` on PATH (`409 no_source_checkout` /
 `409 uv_not_found`), an attached supervisor (`409 supervisor_not_attached`
-unless `force=true`, same authority as restart), and a pid single-flight lock
-(`409 redeploy_in_progress`), then spawns `packaging/redeploy_desktop.py`
+unless `force=true`, same authority as restart), a pid single-flight lock
+(`409 redeploy_in_progress`), and that no foreign process anchors the bundle
+(`409 bundle_in_use`, skipped with `force=true`): the swap's one
+non-retryable step is renaming `dist/swe-mux`, and a process the redeploy
+cannot stop — typically a dev server behind a Preview tab, or a terminal
+whose cwd landed inside the bundle; sessions descend from the supervisor and
+survive the app stop — dooms it after minutes of build. The refusal's
+`message` names each holder (`holders[]`: `{pid, name, via: exe|cwd, path}`)
+so the user can stop that process or close its tab, and the same gate runs in
+`packaging/redeploy_desktop.py` itself (pre-build and again pre-stop;
+`--force` downgrades it to a warning). Then it spawns `packaging/redeploy_desktop.py`
 detached from the daemon's lifetime (log: `<data_dir>/redeploy.log`, lock:
 `<data_dir>/redeploy.lock`) and returns `202 {status: "redeploying", pid,
 log}`. The script builds into `dist/.staging` while this daemon keeps serving,

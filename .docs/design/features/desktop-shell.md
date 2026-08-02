@@ -76,9 +76,15 @@ continues to own every terminal.
   bundle is absent, and `SWE_MUX_SUPERVISOR_EXE` overrides resolution in any mode.
 - `packaging/redeploy_desktop.py` is the frozen update workflow (usable by an agent from
   inside a supervised session, or via `POST /api/daemon/redeploy` behind the UI's
-  "Rebuild + redeploy app" menu entry): preflight (dedicated supervisor running; plus a
+  "Rebuild + redeploy app" menu entry): preflight (dedicated supervisor running; a
   legacy check for `swe-mux-action.exe` terminals left over from a pre-removal bundle, which
-  nothing creates any more), then a **staged** cycle — build frontend + app bundle
+  nothing creates any more; and the **bundle-in-use gate** — `bundle_locks.py` names any
+  foreign process anchoring `dist/swe-mux` by exe or cwd, because such a process survives
+  everything the redeploy may stop (sessions descend from the supervisor) and dooms the
+  swap after minutes of build: typically a dev server behind a Preview tab or a terminal
+  whose cwd inherited into the bundle. The gate runs pre-build, again pre-stop, and in the
+  endpoint as `409 bundle_in_use`; `--force`/`force=true` downgrades it to a warning),
+  then a **staged** cycle — build frontend + app bundle
   into `dist/.staging` while the old app keeps serving, detach-stop the daemon and shell only
   after the build succeeded, swap (`dist/swe-mux` → `dist/swe-mux.prev`, staging in; renames
   retry through lock stragglers), relaunch; the fresh daemon reattaches every live session.
