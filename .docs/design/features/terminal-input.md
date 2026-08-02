@@ -65,6 +65,12 @@ otherwise a background pane wins it by default and resizes the session for whoev
 it. Deregistration is correspondingly unconditional: a pane going hidden withdraws whether
 or not it ever recorded a fit of its own.
 
+The visible **Take over** and **Resize** actions are geometry operations as well as ownership
+claims. The client restores its base font, synchronously fits the visible host, force-registers
+that measured viewport, then sends the gesture claim on the same WebSocket. Frame ordering is
+intentional: a claim by the existing owner is only a lease renewal and performs no geometry
+work, while a claim that changes owners must use the freshly registered viewport.
+
 ## Invariants
 
 - A refusal is never grounds to claim again. Clients re-claim only on displacement, at most
@@ -78,6 +84,8 @@ or not it ever recorded a fit of its own.
   cancelled on disconnect re-raises at its first await.
 - A pane never reports a size it did not measure on screen. Unmeasured dimensions are not
   a smaller viewport, they are no viewport.
+- A user-requested resize registers the freshly measured viewport before it claims input. An
+  ownership renewal alone is not a resize.
 - A persistent letterbox is stated in the pane. `inputOwnerNotice` speaks only when this
   pane was refused, so without a standalone notice the case that looks most broken —
   someone else's grid, drawn with no explanation — was the one that said nothing.

@@ -272,11 +272,13 @@ responsive controls.
   repair cannot cover this and the assumption is what has to go.
 - Repaints are still repaired on the events that *are* observable (pane shown, intersection,
   `visibilitychange`, `pageshow`, window focus, replay end, context loss), plus one confirmation
-  pass a settle later. The confirmation is surface-only — atlas clear and refresh, never a refit
-  — because a fit is `term.resize` plus a pseudoconsole resize plus a full CLI repaint, and none
-  of that is what a lost paint needs. xterm's `RenderService` fires `onRender` whether or not the
-  renderer drew anything, so a dropped paint is invisible to the app and is never retried by the
-  library; assuming a single redraw landed is what left panes half-drawn.
+  pass a settle later. The terminal's memo boundary compares pane visibility so a tab-only
+  transition cannot swallow the show event before it reaches the retained xterm instance. The
+  confirmation is surface-only — atlas clear and refresh, never a refit — because a fit is
+  `term.resize` plus a pseudoconsole resize plus a full CLI repaint, and none of that is what a
+  lost paint needs. xterm's `RenderService` fires `onRender` whether or not the renderer drew
+  anything, so a dropped paint is invisible to the app and is never retried by the library;
+  assuming a single redraw landed is what left panes half-drawn.
 - The daemon reports the host PTY to the browser as `pty_windows` in `/api/config`, and every
   terminal is constructed with it as xterm's `windowsPty`. A browser cannot detect ConPTY, and
   xterm needs it to know that lines are hard-wrapped without a wrap flag: below ConPTY build

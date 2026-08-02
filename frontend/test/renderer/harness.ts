@@ -21,7 +21,9 @@ const term = new Terminal({
 const fit = new FitAddon()
 term.loadAddon(fit)
 term.open(host)
-const webgl = new WebglAddon()
+// Match production: hidden canvases must retain the pixels xterm's render model
+// assumes are still present when unchanged cells are skipped on the next frame.
+const webgl = new WebglAddon(true)
 let webglContextLost = false
 webgl.onContextLoss(() => { webglContextLost = true })
 term.loadAddon(webgl)
@@ -54,8 +56,6 @@ window.runTerminalRendererStress = async () => {
   host.style.width = '920px'
   host.style.height = '560px'
   fit.fit()
-  webgl.clearTextureAtlas()
-  term.refresh(0, term.rows - 1)
   await frame()
   await frame()
   return { renderer: webglContextLost ? 'dom' : 'webgl', cols: term.cols, rows: term.rows }

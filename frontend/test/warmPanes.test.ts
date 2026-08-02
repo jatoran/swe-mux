@@ -90,6 +90,31 @@ test('the terminal reads pane visibility from a ref, never from its mount deps',
   assert.match(source, /const paneIsHidden = \(\) => document\.hidden \|\| !visibleRef\.current/)
 })
 
+test('terminal memoization delivers every pane visibility transition', () => {
+  // The lightweight visibility effect cannot run if the custom memo comparator
+  // swallows the only prop that changed. That leaves a hidden pane registered for
+  // PTY geometry and prevents the newly shown pane's redraw.
+  const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
+  const comparator = source.slice(source.indexOf('export const TerminalPane = memo'))
+  assert.match(comparator, /a\.visible === b\.visible/)
+})
+
+test('the visible Resize action measures and registers before claiming input', () => {
+  // A claim by the existing owner is intentionally a no-op for geometry. The action
+  // must force a fresh viewport frame first, and both buttons must use that path.
+  const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
+  const start = source.indexOf('resizeToPaneRef.current = () => {')
+  const end = source.indexOf('const claimOnFocus', start)
+  assert.ok(start >= 0 && end > start, 'resizeToPane action not found')
+  const action = source.slice(start, end)
+  const register = action.indexOf('sendViewport(localFit.cols, localFit.rows, true)')
+  const claim = action.indexOf("claimInput('gesture')")
+  assert.match(action, /refitVisibleTerminal\(fit, box\)/)
+  assert.ok(register >= 0, 'Resize must force-register the measured viewport')
+  assert.ok(claim > register, 'Resize must register the viewport before claiming input')
+  assert.equal(source.match(/onClick=\{\(\)=>\{resizeToPaneRef\.current\(\);focusTerminalInputRef\.current\(\)\}\}/g)?.length, 2)
+})
+
 test('everything that gates on being looked at asks paneIsHidden, not the document', () => {
   // A warm pane is in a visible document. Any check left on `document.hidden` would
   // treat it as on-screen and let it size the PTY, take the keyboard, or write the
