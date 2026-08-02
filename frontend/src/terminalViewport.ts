@@ -1,4 +1,5 @@
 type TerminalDimensions = { cols: number; rows: number; refresh: (start: number, end: number) => void }
+type TerminalRendererDimensions = { cols: number; rows: number; resize: (cols: number, rows: number) => void }
 type TerminalFit = { fit: () => void }
 type TerminalHost = { isConnected: boolean; clientWidth: number; clientHeight: number }
 
@@ -9,6 +10,24 @@ export function terminalHostIsVisible(host: TerminalHost | null): host is Termin
 export function refitVisibleTerminal(fit: TerminalFit, host: TerminalHost | null): boolean {
   if (!terminalHostIsVisible(host)) return false
   fit.fit()
+  return true
+}
+
+/**
+ * Recalculate xterm's renderer pixels after a pane returns from `display:none`.
+ *
+ * FitAddon deliberately skips `term.resize` when the grid has not changed. The DOM or
+ * canvas surface can still retain dimensions from before the pane was hidden, producing a
+ * terminal that occupies only part of its host. A same-grid resize reaches the renderer's
+ * `handleResize` path without sending a resize frame to the PTY; viewport reporting is owned
+ * separately by TerminalPane.
+ */
+export function reflowVisibleTerminalRenderer(
+  term: TerminalRendererDimensions,
+  host: TerminalHost | null,
+): boolean {
+  if (!terminalHostIsVisible(host) || term.cols < 1 || term.rows < 1) return false
+  term.resize(term.cols, term.rows)
   return true
 }
 

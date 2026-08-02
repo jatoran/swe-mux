@@ -52,3 +52,13 @@ test('WebGL survives repeated pane switches, resizes, and concurrent output', as
   expect(pixelRatios.changed, 'terminal pixels should remain stable after the render queue drains').toBeLessThan(0.005)
   expect(rendererErrors.filter(error => /WebglRenderer|_updateModel|addon-webgl/i.test(error))).toEqual([])
 })
+
+test('same-grid reflow restores a stale DOM renderer surface', async ({ page }) => {
+  await page.goto('/renderer-harness.html')
+  const result = await page.evaluate(() => window.runTerminalDomDimensionRepair())
+
+  expect(result.cols).toBeGreaterThan(0)
+  expect(result.rows).toBeGreaterThan(0)
+  expect(result.afterFit).not.toEqual(result.before)
+  expect(result.afterReflow).toEqual(result.before)
+})

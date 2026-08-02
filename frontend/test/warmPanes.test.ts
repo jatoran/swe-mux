@@ -99,6 +99,21 @@ test('terminal memoization delivers every pane visibility transition', () => {
   assert.match(comparator, /a\.visible === b\.visible/)
 })
 
+test('restoring a warm pane reflows same-grid renderer dimensions after fitting', () => {
+  // FitAddon skips `term.resize` when cols/rows match. That is insufficient after
+  // `display:none`: the renderer surface can still occupy the old upper-left area.
+  const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
+  const start = source.indexOf('paneVisibilityRef.current = (nowVisible: boolean) => {')
+  const end = source.indexOf('// Chromium device emulation', start)
+  assert.ok(start >= 0 && end > start, 'pane visibility handler not found')
+  const action = source.slice(start, end)
+  const fit = action.indexOf('scheduleFullRedraw()')
+  const reflow = action.indexOf('reflowVisibleTerminalRenderer(term, host.current)')
+  assert.ok(fit >= 0, 'restored pane must fit and redraw')
+  assert.ok(reflow > fit, 'same-grid renderer reflow must follow the scheduled fit')
+  assert.match(action, /if \(paneIsHidden\(\)\) return/)
+})
+
 test('the visible Resize action measures and registers before claiming input', () => {
   // A claim by the existing owner is intentionally a no-op for geometry. The action
   // must force a fresh viewport frame first, and both buttons must use that path.
@@ -110,6 +125,7 @@ test('the visible Resize action measures and registers before claiming input', (
   const register = action.indexOf('sendViewport(localFit.cols, localFit.rows, true)')
   const claim = action.indexOf("claimInput('gesture')")
   assert.match(action, /refitVisibleTerminal\(fit, box\)/)
+  assert.match(action, /reflowVisibleTerminalRenderer\(term, box\)/)
   assert.ok(register >= 0, 'Resize must force-register the measured viewport')
   assert.ok(claim > register, 'Resize must register the viewport before claiming input')
   assert.equal(source.match(/onClick=\{\(\)=>\{resizeToPaneRef\.current\(\);focusTerminalInputRef\.current\(\)\}\}/g)?.length, 2)

@@ -34,7 +34,7 @@ import { railPayload, resolveRail, type RailBackend, type RailItem } from './com
 import { activatePromptRailItem } from './promptRail'
 import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { currentProfile, loadRailItems } from './deviceSettings'
-import { APP_TAIL_KEY, VIEWPORT_SETTLE_MS, appOwnsTail, attachRegistersViewport, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
+import { APP_TAIL_KEY, VIEWPORT_SETTLE_MS, appOwnsTail, attachRegistersViewport, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, reflowVisibleTerminalRenderer, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
 import { geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
 import {
   applyOwnerFrame,
@@ -508,6 +508,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let fitFrame = 0
     let redrawFrame = 0
     let surfaceFrame = 0
+    let visibilityFrame = 0
     let surfaceConfirmTimer: number | undefined
     let invalidateAtlasOnRedraw = false
     let webgl: WebglAddon | null = null
@@ -748,6 +749,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const scheduleFullRedraw = () => scheduleViewport(true)
     scheduleFitRef.current = scheduleFullRedraw
     paneVisibilityRef.current = (nowVisible: boolean) => {
+      window.cancelAnimationFrame(visibilityFrame)
       if (!nowVisible) {
         // Hidden by `display:none`, so the host measures zero and the scheduled fit
         // would return before deregistering. Send the deregistration directly.
@@ -760,11 +762,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       // Back on screen. The pane may have missed geometry changes while it had no
       // layout to measure, and its renderer may hold pixels from before the tab was
-      // resized, so this is a full redraw rather than a plain fit. The tail scroll is
-      // the same repair `finishReplay` does: output that arrived while the pane was
-      // hidden moved `baseY` without moving a viewport nobody was watching.
+      // resized, so this is a full redraw rather than a plain fit. FitAddon skips its
+      // resize when the grid is unchanged, but xterm's renderer can still hold stale
+      // pixel dimensions after `display:none`; force the same-grid renderer reflow
+      // after the scheduled fit. The tail scroll is the same repair `finishReplay`
+      // does: output that arrived while the pane was hidden moved `baseY` without
+      // moving a viewport nobody was watching.
       scheduleFullRedraw()
-      window.requestAnimationFrame(() => scrollTerminalToTail(term))
+      visibilityFrame = window.requestAnimationFrame(() => {
+        if (paneIsHidden()) return
+        reflowVisibleTerminalRenderer(term, host.current)
+        runSurfaceRedraw()
+        scrollTerminalToTail(term)
+      })
     }
     // Chromium device emulation can preserve a live WebGL context while changing
     // its emulated pixel ratio, leaving xterm interactive but visually blank.
@@ -880,6 +890,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // from another client with the following claim.
       resetLetterbox()
       if (!refitVisibleTerminal(fit, box)) return
+      reflowVisibleTerminalRenderer(term, box)
       localFit = { cols: term.cols, rows: term.rows }
       localFitBox = { width: box.clientWidth, height: box.clientHeight }
       serverGeometry = localFit
@@ -1460,7 +1471,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{} }
+    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput])
 
   const copy = async () => {
