@@ -11,7 +11,11 @@ def test_default_and_custom_terminal_creation_keep_split_semantics_explicit() ->
     assert "void spawnTerminal()" in source
     assert "New terminal custom…" in source
     assert "profile_id: backend==='shell' ? profileId || undefined : undefined" in source
-    assert "New terminal custom in split…" in source
+    # The split-launching variant is palette-only now (no context menu reshapes the
+    # pane tree), so the registry entry is the whole surface — its label and its
+    # explicit 'horizontal' split argument are what keep the semantics distinct from
+    # the unsplit "New terminal custom…" above.
+    assert "New custom terminal in selected session split" in source
     assert "openLauncher(commandSession.project_id, 'horizontal')" in source
     assert "spawnTerminal(launcherProject, launcherSplit, launcherProfile)" in source
     assert "backend, project_id: targetProject" in source

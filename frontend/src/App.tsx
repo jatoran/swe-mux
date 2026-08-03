@@ -2076,16 +2076,6 @@ export function App() {
     setContextMenu(null)
   }
 
-  const splitExistingLeaf=async(leaf:PaneLeaf,targetProject:string,direction:SplitDirection,position:'before'|'after')=>{
-    const current=resolveLayout(layoutMap[targetProject],projects.find(project=>project.id===targetProject)?.layout)
-    const owner=stackForView(current,leaf.id)
-    const anchor=owner?.children.find(child=>child.id!==leaf.id)?.id||null
-    if(!anchor)return
-    setFocusedViewId(leaf.id);if(leaf.kind==='terminal')setActiveId(leaf.id)
-    setContextMenu(null);setTabMenu(null)
-    await updateLayout(targetProject,splitView(current,anchor,leaf,direction,position))
-  }
-
   const moveTabDirection=async(leaf:PaneLeaf,targetProject:string,direction:PaneDirection)=>{
     const current=resolveLayout(layoutMap[targetProject],projects.find(project=>project.id===targetProject)?.layout)
     const targetStackId=paneNeighborIds(current,leaf.id)[direction]
@@ -3450,20 +3440,18 @@ export function App() {
       <button onClick={() => runNamedCommand('session.copyCwd')}>Copy working directory</button>
       <button onClick={() => runNamedCommand('session.note')}>Open session note</button>
       <button onClick={()=>{setContextMenu(null);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
-      {/* Layout surgery (split / stack / dissolve) lives on the pane's own ⋯ menu and
-          nowhere else. The sidebar row and the tab strip are for picking *which* session
-          you are looking at; loading them with pane geometry made a 20-item menu you had
-          to read past every time you wanted Rename or Kill. All of it is still reachable
-          from the command palette (session.openSplit*, pane.split*, session.groupStack,
-          stack.dissolve, session.customSplit) and therefore still bindable to a key. */}
-      {contextMenu.source==='pane'&&directionRow('Open in split:',option=>void splitExistingLeaf(terminalLeaf(contextMenu.session.id),contextMenu.session.project_id,option.direction,option.position),()=>(stackForView(activeLayout,contextMenu.session.id)?.children.length||0)>1)}
-      {contextMenu.source==='pane'&&directionRow('New terminal in split:',option=>{setContextMenu(null);void spawnTerminal(contextMenu.session.project_id,option.direction,undefined,contextMenu.session.id,option.position)})}
+      {/* No session menu carries pane geometry — not the sidebar row, not the tab, not
+          the pane's own ⋯. Split / stack / dissolve answer "how is the workspace laid
+          out", which is not the question any of these menus is opened to answer, and
+          five direction rows pushed Rename and Kill past the fold in all three. The
+          layout routes are drag (direct manipulation) and the command palette, where
+          session.openSplit*, pane.split*, session.groupStack, stack.dissolve and
+          session.customSplit stay searchable and bindable. `Move tab` is the exception:
+          it reorders the strip you are looking at rather than reshaping the tree. */}
       {(contextMenu.source==='tab'||contextMenu.source==='pane')&&directionRow('Move tab:',option=>void moveTabDirection(terminalLeaf(contextMenu.session.id),contextMenu.session.project_id,option.id),direction=>!!paneNeighborIds(activeLayout,contextMenu.session.id)[direction])}
       {contextMenu.source==='mobile'&&mobileMoveRow(contextMenu.session.id)}
       <button onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
       <button onClick={()=>runNamedCommand('pane.stackNew')}>New terminal as tab</button>
-      {contextMenu.source==='pane'&&activeStack&&activeStack.children.length>1&&<button onClick={()=>runNamedCommand('stack.dissolve')}>Dissolve tab stack into splits</button>}
-      {contextMenu.source==='pane'&&<button onClick={() => runNamedCommand('session.customSplit')}>New terminal custom in split…</button>}
       {voiceStatus?.enabled&&isAgent(contextMenu.session)&&<>
         <div class="context-subtitle">READ ALOUD</div>
         {(['off','on_demand','auto'] as VoiceMode[]).map(mode=><button key={mode} onClick={()=>{void setVoiceMode(contextMenu.session,mode);setContextMenu(null)}}>{effectiveVoiceMode(contextMenu.session)===mode?'✓ ':''}{mode==='off'?'Off':mode==='on_demand'?'On demand':'Auto on reply'}</button>)}
@@ -3567,9 +3555,8 @@ export function App() {
 
     {tabMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu tab-context-menu" role="menu" aria-label={`Tab actions for ${tabMenu.label}`} style={{left:clampContextMenuLeft(tabMenu.x,innerWidth),top:Math.max(4,Math.min(tabMenu.y,innerHeight-300))}}>
       <div class="context-title"><strong>{tabMenu.label}</strong></div>
-      {/* Same rule as the session menu above: a tab strip decides what you look at, not
-          how the panes are arranged. Splitting a resource tab out is a drag; the keyboard
-          route is the palette. */}
+      {/* Same rule as the session menu above: no context menu reshapes the pane tree.
+          Splitting a resource tab out is a drag; the keyboard route is the palette. */}
       {tabMenu.source==='tab'&&directionRow('Move tab:',option=>void moveTabDirection(tabMenu.leaf,tabMenu.projectId,option.id),direction=>{const current=resolveLayout(layoutMap[tabMenu.projectId],projects.find(project=>project.id===tabMenu.projectId)?.layout);return !!paneNeighborIds(current,tabMenu.leaf.id)[direction]})}
       {tabMenu.source==='mobile'&&mobileMoveRow(tabMenu.leaf.id)}
       {tabMenu.source==='mobile'&&<button onClick={()=>{const target=tabMenu;setTabMenu(null);void spawnTerminal(target.projectId,'stack',undefined,target.leaf.id)}}>New terminal as tab</button>}

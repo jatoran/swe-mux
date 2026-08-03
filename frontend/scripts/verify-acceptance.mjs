@@ -50,7 +50,7 @@ try {
   if (!await page.getByText('Open in focused pane', { exact: true }).count()) {
     throw new Error(`Session context menu did not open; rows=${await page.locator('.session-row').count()} inactive=${await page.locator('.session-row:not(.active)').count()} errors=${errors.join('|')}`)
   }
-  // The sidebar menu no longer carries pane geometry, so the split runs as the command the
+  // No context menu carries pane geometry any more, so the split runs as the command the
   // palette and keybindings run. Dispatched rather than clicked on purpose: a real pointer
   // would dismiss the menu, and the menu is what makes this session the command's target.
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('mux:command', { detail: 'session.openSplitHorizontal' })))

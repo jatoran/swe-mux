@@ -135,19 +135,22 @@ responsive controls.
 - Context menus are source-aware. Terminal-only operations never appear on resource tabs;
   obsolete focused-terminal, detach/remove-from-group, Project-note, pane-swap, and pane-header
   minimize/close actions are absent.
-- **Pane geometry has exactly one menu: the pane's.** Open-in-split, new-terminal-in-split,
-  new-custom-terminal-in-split, stack-with-focused, and dissolve-stack render only for
-  `source==='pane'` — the pane bar's right-click and its `⋯` button. The sidebar session row
-  and the tab strip choose *which* session you are looking at; they answered a different
-  question, and carrying five direction rows put Rename and Kill below the fold in the menu
-  whose job is to act on one session. Nothing was deleted: every one has a registry command
+- **No context menu reshapes the pane tree.** Open-in-split, new-terminal-in-split,
+  new-custom-terminal-in-split, stack-with-focused, and dissolve-stack are absent from the
+  session menu on every source (sidebar row, tab, pane bar / `⋯`) and from the tab menu.
+  They answer "how is the workspace laid out", which is not the question any of those menus
+  is opened to answer, and five direction rows plus two buttons pushed Rename and Kill below
+  the fold in all of them. Layout is **drag** (direct manipulation, with split/tab-bar drop
+  previews) or the **command palette** — every action has a registry command
   (`session.openSplit*`, `pane.split*`, `session.groupStack`, `stack.dissolve`,
-  `session.customSplit`), so each stays searchable in the palette and bindable to a key, and
-  drag still splits by pointer. `Move tab` is the exception that stays on the tab menu — it
-  reorders what the strip itself shows.
-- Split/new-terminal/move commands use non-clickable labels with directional arrow buttons.
-  Only directions valid for the current desktop split tree are enabled. Mobile omits pane
-  geometry actions entirely.
+  `session.customSplit`), so each stays searchable and bindable to a key. Two deliberate
+  exceptions: `Move tab` stays on the session/tab menus because it reorders the strip you
+  are looking at rather than reshaping the tree, and the **resource** menu keeps
+  `Open in split` because a Project note or an opened file has no tab to drag until it is
+  already in a pane.
+- Move commands, and the resource menu's split, use non-clickable labels with directional
+  arrow buttons. Only directions valid for the current desktop split tree are enabled.
+  Mobile omits pane geometry actions entirely.
 - Pointer-anchored menus are re-fitted to the viewport after they mount, not merely clamped at
   open time: the inline coordinates are seeded from rough height guesses, and content that lands
   later (a Project's imported task list) can make the box much taller than the guess. The Run

@@ -279,14 +279,14 @@ def test_session_tab_context_menu_omits_redundant_focus_and_detach_actions() -> 
     assert "runNamedCommand('pane.detach')" not in app
 
 
-def test_pane_geometry_actions_live_only_on_the_pane_menu() -> None:
-    """The sidebar row and the tab strip choose a session; they do not arrange panes.
+def test_no_session_or_tab_context_menu_reshapes_the_pane_tree() -> None:
+    """Split / stack / dissolve are gone from every context menu, on every source.
 
-    Both menus used to carry the full set of split/stack/dissolve controls, which put
-    five direction rows and two buttons ahead of Rename and Kill in a menu whose whole
-    job is to act on one session. They now render only under source==='pane' (the pane
-    bar and its ⋯ button). Nothing was deleted: each still has a palette command, so it
-    stays searchable and bindable.
+    They used to render on the sidebar row, the tab, and the pane's own ⋯ menu, where
+    five direction rows and two buttons pushed Rename and Kill past the fold in a menu
+    opened to act on one session. Layout is now drag (direct manipulation) or the
+    command palette. `Move tab` stays: it reorders the strip you are looking at rather
+    than reshaping the tree.
     """
     app = (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(
         encoding="utf-8"
@@ -294,16 +294,20 @@ def test_pane_geometry_actions_live_only_on_the_pane_menu() -> None:
     session_menu = app[app.index("{contextMenu &&") : app.index("{projectMenu &&")]
     tab_menu = app[app.index("{tabMenu&&") : app.index("Close tab</button>")]
 
-    for gated in ("Open in split:", "New terminal in split:"):
-        assert f"contextMenu.source==='pane'&&directionRow('{gated}'" in session_menu
-        assert f"source!=='mobile'&&directionRow('{gated}'" not in session_menu
-        assert gated not in tab_menu
-    assert "contextMenu.source==='pane'&&activeStack" in session_menu
-    assert "runNamedCommand('session.groupStack')" not in session_menu
-    assert (
-        "contextMenu.source==='pane'&&<button onClick={() => "
-        "runNamedCommand('session.customSplit')}" in session_menu
-    )
+    for menu in (session_menu, tab_menu):
+        assert "Open in split:" not in menu
+        assert "New terminal in split:" not in menu
+        assert "Stack with focused terminal" not in menu
+        assert "Dissolve tab stack into splits" not in menu
+        assert "New terminal custom in split" not in menu
+        assert "runNamedCommand('session.groupStack')" not in menu
+        assert "runNamedCommand('stack.dissolve')" not in menu
+        assert "runNamedCommand('session.customSplit')" not in menu
+        # The one directional row that survives, and the reason the helper is still here.
+        assert "directionRow('Move tab:'" in menu
+    # `splitExistingLeaf` existed only to serve those rows; nothing may reintroduce a
+    # caller without also reintroducing the menu entry this test forbids.
+    assert "splitExistingLeaf" not in app
     # Removed from the menus, not from the app: these are the routes that keep them
     # usable, and each is bindable because it is a registry entry.
     for command in (
@@ -351,8 +355,12 @@ def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None
     # every plain trigger must call it rather than hand it the click event.
     assert 'class="project-trigger" onClick={()=>openProjectsManager()}' in app
     assert "directionRow('Move tab:'" in app
+    # Only the resource menu still splits from a menu — a Project note or an opened file
+    # has no tab to drag until it is already in a pane, so removing it there would leave
+    # no way in. The session/tab menus lost theirs; see
+    # test_no_session_or_tab_context_menu_reshapes_the_pane_tree.
     assert "directionRow('Open in split:'" in app
-    assert "directionRow('New terminal in split:'" in app
+    assert "splitNoteResource(noteMenu.resourceId" in app
     assert "export function paneNeighborIds" in layout
     assert "Swap pane with next" not in app
     assert (

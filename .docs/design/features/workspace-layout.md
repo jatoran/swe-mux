@@ -71,9 +71,9 @@ PaneLeaf = terminal | note | preview | history | queue
 - Tab strips carry no new-tab button on any platform. The Project Run menu is the single
   launcher (desktop top bar, collapsed-rail `▶`, mobile toolbar, sidebar project row); an
   unsplit launch lands as a tab in the focused pane, which is what the old `+` did minus the
-  backend choice. Explicit placement stays on the **pane** context menu (see `ui.md` §
-  context menus), plus drag and the command palette. A tab strip with nothing in it is not
-  rendered, so an empty workspace shows only its stage.
+  backend choice. Explicit placement is **drag or the command palette**; no context menu
+  carries it (see `ui.md` § context menus). A tab strip with nothing in it is not rendered,
+  so an empty workspace shows only its stage.
 - Layout changes update the local `layoutValues` ref and rendered map immediately, then serialize
   per-Project PATCH requests behind an optimistic `layout_revision`. Later writes cannot be
   overwritten by an earlier response. A stale revision refreshes authoritative Project state.
