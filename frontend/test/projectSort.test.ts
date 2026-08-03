@@ -2,10 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Project, Session } from '../src/types.ts'
 import {
-  EMPTY_SIDEBAR_ORDER, UNGROUPED_BUCKET_ID, bucketActivity, bucketSortMode, isBucketCollapsed,
+  EMPTY_SIDEBAR_ORDER, UNGROUPED_BUCKET_ID, bucketActivity, isBucketCollapsed,
   loadSidebarOrder, mergeVisibleOrder, placeUngrouped, projectActivity, projectSortLabel,
-  pruneSidebarOrder, sectionSortLabel, serializeSidebarOrder, setBucketSortMode, sortBuckets,
-  sortProjects, toggleBucketCollapsed,
+  pruneSidebarOrder, sectionSortLabel, serializeSidebarOrder, setAllBucketsCollapsed,
+  setProjectSortMode, sortBuckets, sortProjects, toggleBucketCollapsed,
 } from '../src/projectSort.ts'
 
 const project = (id: string, name: string, extra: Partial<Project> = {}) =>
@@ -20,12 +20,13 @@ test('sidebar order load tolerates missing, malformed, and unknown modes', () =>
   assert.deepEqual(loadSidebarOrder(null), EMPTY_SIDEBAR_ORDER)
   assert.deepEqual(loadSidebarOrder('not json'), EMPTY_SIDEBAR_ORDER)
   assert.deepEqual(loadSidebarOrder('[1,2]'), EMPTY_SIDEBAR_ORDER)
-  assert.deepEqual(loadSidebarOrder('{"sort":{"g1":"nonsense","g2":"name"},"ungroupedIndex":1}'), {
-    sort: { g2: 'name' },
+  assert.deepEqual(loadSidebarOrder('{"projectSort":"name","ungroupedIndex":1}'), {
+    projectSort: 'name',
     sectionSort: 'custom',
     ungroupedIndex: 1,
     collapsed: [],
   })
+  assert.equal(loadSidebarOrder('{"projectSort":"nonsense"}').projectSort, 'custom')
   // A negative or fractional slot would splice somewhere nobody asked for.
   assert.equal(loadSidebarOrder('{"ungroupedIndex":-2}').ungroupedIndex, null)
   assert.equal(loadSidebarOrder('{"ungroupedIndex":1.5}').ungroupedIndex, null)
@@ -34,20 +35,26 @@ test('sidebar order load tolerates missing, malformed, and unknown modes', () =>
   assert.equal(loadSidebarOrder('{"sectionSort":"created-desc"}').sectionSort, 'custom')
   assert.equal(loadSidebarOrder('{"sectionSort":"activity"}').sectionSort, 'activity')
   assert.deepEqual(loadSidebarOrder('{"collapsed":["g1",7,"g2"]}').collapsed, ['g1', 'g2'])
-  // A blob written before sections could collapse must still load.
-  assert.deepEqual(loadSidebarOrder('{"sort":{"g1":"name"}}'), {
-    sort: { g1: 'name' }, sectionSort: 'custom', ungroupedIndex: null, collapsed: [],
-  })
 })
 
-test('sidebar order round-trips and never persists the custom default', () => {
+test('a legacy per-bucket sort map migrates to the single mode that replaced it', () => {
+  // Sort used to be stored per bucket id. Whichever bucket was actually set wins;
+  // dropping it instead would silently reset the sidebar on upgrade.
+  assert.equal(loadSidebarOrder('{"sort":{"g1":"name"}}').projectSort, 'name')
+  assert.equal(loadSidebarOrder('{"sort":{"g1":"nonsense","g2":"activity"}}').projectSort, 'activity')
+  assert.equal(loadSidebarOrder('{"sort":{"g1":"custom"}}').projectSort, 'custom')
+  assert.equal(loadSidebarOrder('{"sort":"nonsense"}').projectSort, 'custom')
+  // An explicit new-format value always beats the legacy map.
+  assert.equal(loadSidebarOrder('{"projectSort":"created","sort":{"g1":"name"}}').projectSort, 'created')
+  // And the legacy key is not written back, so the migration fires exactly once.
+  assert.equal(serializeSidebarOrder(loadSidebarOrder('{"sort":{"g1":"name"}}')).includes('"sort"'), false)
+})
+
+test('sidebar order round-trips', () => {
   const stored = prefs({
-    sort: { g1: 'name', g2: 'custom' }, sectionSort: 'activity', ungroupedIndex: 0,
-    collapsed: ['g2'],
+    projectSort: 'name', sectionSort: 'activity', ungroupedIndex: 0, collapsed: ['g2'],
   })
-  assert.deepEqual(loadSidebarOrder(serializeSidebarOrder(stored)), {
-    sort: { g1: 'name' }, sectionSort: 'activity', ungroupedIndex: 0, collapsed: ['g2'],
-  })
+  assert.deepEqual(loadSidebarOrder(serializeSidebarOrder(stored)), stored)
 })
 
 test('collapsing a section toggles without mutating the input', () => {
@@ -59,22 +66,27 @@ test('collapsing a section toggles without mutating the input', () => {
   assert.deepEqual(toggleBucketCollapsed(folded, 'g1').collapsed, [])
 })
 
-test('bucket sort mode set/read, with custom clearing the entry', () => {
-  const named = setBucketSortMode(EMPTY_SIDEBAR_ORDER, 'g1', 'activity')
-  assert.equal(bucketSortMode(named, 'g1'), 'activity')
-  assert.equal(bucketSortMode(named, 'g2'), 'custom')
-  const cleared = setBucketSortMode(named, 'g1', 'custom')
-  assert.deepEqual(cleared.sort, {})
+test('collapse-all folds every section and expand-all clears the list outright', () => {
+  const folded = setAllBucketsCollapsed(EMPTY_SIDEBAR_ORDER, ['g1', 'g1', UNGROUPED_BUCKET_ID], true)
+  assert.deepEqual(folded.collapsed, ['g1', UNGROUPED_BUCKET_ID])
+  // Expanding clears rather than subtracting, so a stale id from a Group that
+  // vanished while folded cannot survive an explicit "expand everything".
+  const stale = prefs({ collapsed: ['g1', 'gone'] })
+  assert.deepEqual(setAllBucketsCollapsed(stale, ['g1'], false).collapsed, [])
+})
+
+test('project sort mode set/read, keeping identity when unchanged', () => {
+  const named = setProjectSortMode(EMPTY_SIDEBAR_ORDER, 'activity')
+  assert.equal(named.projectSort, 'activity')
+  assert.equal(setProjectSortMode(named, 'custom').projectSort, 'custom')
   // Setting the mode it already has must not churn a new object into state.
-  assert.equal(setBucketSortMode(named, 'g1', 'activity'), named)
+  assert.equal(setProjectSortMode(named, 'activity'), named)
 })
 
 test('pruneSidebarOrder drops buckets that no longer exist and keeps identity otherwise', () => {
-  const stored = prefs({ sort: { g1: 'name', gone: 'activity' }, collapsed: ['g1', 'gone'] })
+  const stored = prefs({ collapsed: ['g1', 'gone'] })
   const pruned = pruneSidebarOrder(stored, ['g1', UNGROUPED_BUCKET_ID])
-  assert.deepEqual(pruned.sort, { g1: 'name' })
-  // Collapse is per bucket too: a deleted Group's fold would otherwise be inherited
-  // by whatever bucket id came back.
+  // A deleted Group's fold would otherwise be inherited by whatever bucket id came back.
   assert.deepEqual(pruned.collapsed, ['g1'])
   assert.equal(pruneSidebarOrder(stored, ['g1', 'gone']), stored)
 })

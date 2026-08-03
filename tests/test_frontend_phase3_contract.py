@@ -136,35 +136,71 @@ def test_drag_reorder_keeps_native_source_mounted_and_commits_latest_preview() -
     assert ".drop-zone-tabs" in css
 
 
-def test_sidebar_sections_carry_a_sort_control_and_reorder_by_their_header() -> None:
+def test_the_sidebar_toolbar_owns_sort_and_fold_for_the_whole_tree() -> None:
+    """One sort and one fold control, above the tree, not per section.
+
+    Sort was per bucket (a ⇅ on every Group header) on the theory that a hand-arranged
+    shortlist and an alphabetical pile should coexist; nobody varied it, so it became a
+    single mode applied to every bucket. Collapse-all is new: folding a long sidebar
+    used to mean clicking every Project and every Group in turn.
+    """
     root = Path(__file__).parents[1] / "frontend" / "src"
     app = (root / "App.tsx").read_text(encoding="utf-8")
     css = (root / "style.css").read_text(encoding="utf-8")
     sort = (root / "projectSort.ts").read_text(encoding="utf-8")
 
-    # Sort is per section, so a Group and the ungrouped remainder can differ.
-    assert "bucketSortMode(sidebarOrder,bucket.id)" in app
-    assert 'class={`bucket-sort ${sortMode===\'custom\'?\'\':\'active\'}`}' in app
-    assert "setSidebarOrder(setBucketSortMode(sidebarOrder,sortMenu.bucketId,option.id))" in app
-    # Placing a Project by hand is what returns its section to Manual order.
-    assert "setSidebarOrder(setBucketSortMode(sidebarOrder,bucketId,'custom'))" in app
+    # One mode for every bucket, read straight off the prefs.
+    assert "sortProjects(items,sidebarOrder.projectSort,activityStamps)" in app
+    assert "setSidebarOrder(setProjectSortMode(sidebarOrder,option.id))" in app
+    assert "bucketSortMode" not in app and "setBucketSortMode" not in app
+    assert "bucketSortMode" not in sort
+    # Placing a Project by hand is what returns Projects to Manual order.
+    assert "setSidebarOrder(setProjectSortMode(sidebarOrder,'custom'))" in app
+    # The controls live in a toolbar above the scrolling tree, not inside it.
+    assert 'class="sidebar-tools"' in app
+    assert app.index('class="sidebar-tools"') < app.index('class="project-tree"')
+    assert "setAllFolded(!allFolded)" in app
+    assert "setAllCollapsed(displayProjects.map(project=>project.id),folded)" in app
+    assert "setAllBucketsCollapsed(sidebarOrder,displayBucketIds,folded)" in app
+    # Fold-all flips to Expand only once nothing on screen is left to collapse.
+    assert "displayProjects.every(project=>collapsedProjects.has(project.id))" in app
+    assert "displayBucketIds.every(bucketId=>isBucketCollapsed(sidebarOrder,bucketId))" in app
     # The header doubles as the section's drag handle; its buttons keep the pointer.
     assert "beginBucketPointerDrag(event,bucket.id,bucket.name)" in app
     assert "data-reorder-id={bucket.id}" in app
     assert "'PUT','/api/project-groups/order'" in app
-    assert ".sidebar-project-bucket>header .bucket-sort" in css
+    assert ".sidebar-tools .sidebar-sort.active" in css
     assert '.sidebar-project-bucket[data-pointer-drop-indicator="insert-before"]' in css
     for mode in ("custom", "activity", "name", "name-desc", "created-desc", "created"):
         assert f"id: '{mode}'" in sort
 
 
-def test_sections_sort_and_collapse_from_the_same_header() -> None:
+def test_a_group_can_be_renamed_from_the_sidebar_but_not_deleted() -> None:
+    """The × next to the fold toggle could dissolve a Group in one stray click.
+
+    Removing it leaves no delete path in the UI; that is the intent. A Group is emptied
+    instead — reassign its Projects and it stops rendering, because a Group with no
+    Projects in it is not a sidebar section. The endpoint is untouched.
+    """
+    app = (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert 'class="bucket-rename" title="Rename group"' in app
+    # The handler and its only call site, not the word: the comment left where the
+    # function was names it on purpose, so the next reader does not re-add it blind.
+    assert "const deleteGroup=" not in app
+    assert "deleteGroup(group)" not in app
+    assert "'DELETE',`/api/project-groups/" not in app
+    assert "Remove group (projects become ungrouped)" not in app
+
+
+def test_sections_sort_from_the_toolbar_and_collapse_from_their_header() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
     app = (root / "App.tsx").read_text(encoding="utf-8")
     css = (root / "style.css").read_text(encoding="utf-8")
     sort = (root / "projectSort.ts").read_text(encoding="utf-8")
 
-    # Section ordering rides the same ⇅ control, one level up, behind a MenuGroup.
+    # Section ordering rides the toolbar's ⇅, one level up, behind a MenuGroup.
     assert 'MenuGroup id="sections"' in app or "MenuGroup id='sections'" in app
     assert "sortBuckets(allBuckets,sidebarOrder.sectionSort,activityStamps)" in app
     assert "setSidebarOrder({...sidebarOrder,sectionSort:option.id})" in app

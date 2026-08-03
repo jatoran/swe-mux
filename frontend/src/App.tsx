@@ -76,13 +76,13 @@ import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from 
 import { horizontalWheelDelta } from './wheelScroll'
 import {
   COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
-  projectInitials, projectOpenWork, serializeCollapsedProjects, toggleCollapsed,
+  projectInitials, projectOpenWork, serializeCollapsedProjects, setAllCollapsed, toggleCollapsed,
 } from './sidebarProjects'
 import {
   PROJECT_SORT_OPTIONS, SECTION_SORT_OPTIONS, SIDEBAR_ORDER_KEY, UNGROUPED_BUCKET_ID,
-  bucketSortMode, isBucketCollapsed, loadSidebarOrder, mergeVisibleOrder, placeUngrouped,
+  isBucketCollapsed, loadSidebarOrder, mergeVisibleOrder, placeUngrouped,
   projectActivity, projectSortLabel, pruneSidebarOrder, sectionSortLabel, serializeSidebarOrder,
-  setBucketSortMode, sortBuckets, sortProjects, toggleBucketCollapsed,
+  setAllBucketsCollapsed, setProjectSortMode, sortBuckets, sortProjects, toggleBucketCollapsed,
 } from './projectSort'
 import { reconcileSeen, isUnread, projectRailStatus, projectSetRailStatus, type ProjectRailActivity, type SeenMap } from './sessionAttention'
 import { activityBadges, sessionDotClass, sessionStatus, stateDotClass } from './sessionStatus'
@@ -369,7 +369,7 @@ export function App() {
     setSidebarOrderState(next)
     localStorage.setItem(SIDEBAR_ORDER_KEY,serializeSidebarOrder(next))
   }
-  const [sortMenu,setSortMenu]=useState<{bucketId:string;bucketName:string;x:number;y:number}|null>(null)
+  const [sortMenu,setSortMenu]=useState<{x:number;y:number}|null>(null)
   const [dragStackTab,setDragStackTabState]=useState<StackTabDrag|null>(null)
   const dragStackTabRef=useRef<StackTabDrag|null>(null)
   const suppressDragClickRef=useRef<string|null>(null)
@@ -1082,7 +1082,7 @@ export function App() {
       : visibleProjects.filter(project=>project.group_id===bucketId)
     // `visibleProjects` is already in manual order, which sortProjects treats as the
     // tie-break, so every mode falls back to what the user arranged by hand.
-    return {id:bucketId,name:group?group.name:'Projects',items:sortProjects(items,bucketSortMode(sidebarOrder,bucketId),activityStamps)}
+    return {id:bucketId,name:group?group.name:'Projects',items:sortProjects(items,sidebarOrder.projectSort,activityStamps)}
   })
   // Sections sort by the same contract their contents do: manual order in, stable
   // sort out, so the arrangement underneath a sort is never lost.
@@ -1096,7 +1096,14 @@ export function App() {
   // does not remove the Projects from the rail or the numbered shortcuts.
   const displayProjects=projectBuckets.flatMap(bucket=>bucket.items)
   const displayProjectIds=mergeVisibleOrder(orderedProjects.map(project=>project.id),displayProjects.map(project=>project.id))
-  // A deleted Group would otherwise leave its sort mode behind forever, and the
+  // Which way the toolbar's fold control points. "Everything on screen is folded"
+  // rather than "anything is", so the button only offers Expand once there is
+  // genuinely nothing left to collapse — a half-folded tree still reads as untidy,
+  // and one more click finishes the job instead of undoing it.
+  const allFolded=!!projectBuckets.length
+    &&displayProjects.every(project=>collapsedProjects.has(project.id))
+    &&displayBucketIds.every(bucketId=>isBucketCollapsed(sidebarOrder,bucketId))
+  // A deleted Group would otherwise leave its folded flag behind forever, and the
   // stored blob is what a recreated bucket id would silently inherit.
   useEffect(()=>{
     const pruned=pruneSidebarOrder(sidebarOrder,bucketIds)
@@ -1262,19 +1269,20 @@ export function App() {
   // The sort button stops its own pointer-down so the header drag never starts under
   // it, which also keeps that event from reaching the document's dismiss handler —
   // so opening this menu has to close whatever else was open itself.
-  const openSortMenu=(bucketId:string,bucketName:string,x:number,y:number)=>{
+  const openSortMenu=(x:number,y:number)=>{
     setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setMainMenuOpen(false)
-    setSortMenu({bucketId,bucketName,x,y})
+    setSortMenu({x,y})
   }
   const bucketIdFor=(project:Project)=>
     project.group_id&&projectGroups.some(group=>group.id===project.group_id)?project.group_id:UNGROUPED_BUCKET_ID
   /** Write a manual Project order. Placing a Project by hand is the statement that
-   *  this bucket is hand-arranged, so it drops the bucket's sort back to Manual and
-   *  freezes whatever was on screen into positions — otherwise the next render would
-   *  re-sort the move away and the drag would look broken. */
-  const commitProjectOrder=async(nextIds:string[],bucketId:string)=>{
+   *  Projects are hand-arranged, so it drops the sort back to Manual and freezes
+   *  whatever was on screen into positions — otherwise the next render would re-sort
+   *  the move away and the drag would look broken. It took the drag's bucket when the
+   *  mode was per section; one global mode needs no such argument. */
+  const commitProjectOrder=async(nextIds:string[])=>{
     if(nextIds.join('\0')===displayProjectIds.join('\0'))return
-    setSidebarOrder(setBucketSortMode(sidebarOrder,bucketId,'custom'))
+    setSidebarOrder(setProjectSortMode(sidebarOrder,'custom'))
     // The daemon validates against its own position order, not the sorted view.
     const expected=orderedProjects.map(project=>project.id)
     const positions=new Map(nextIds.map((id,index)=>[id,index]))
@@ -1297,7 +1305,7 @@ export function App() {
     const from=ids.indexOf(project.id),to=ids.indexOf(other.id)
     ;[ids[from],ids[to]]=[ids[to],ids[from]]
     setProjectMenu(null)
-    void commitProjectOrder(ids,bucketId)
+    void commitProjectOrder(ids)
   }
   const beginProjectPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,project:Project,bucketId:string,peerIds:string[])=>{
     const bucket=event.currentTarget.closest<HTMLElement>('.sidebar-project-bucket')
@@ -1314,7 +1322,7 @@ export function App() {
         const targetElement=Array.from(bucket.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).find(item=>item.dataset.reorderId===target.id)||null
         showPointerDropIndicator(targetElement,`insert-${target.side}`)
       },
-      ()=>{const current=dragProjectRef.current;setDragProject(null);if(current)void commitProjectOrder(current.previewIds,current.bucketId)},
+      ()=>{const current=dragProjectRef.current;setDragProject(null);if(current)void commitProjectOrder(current.previewIds)},
       ()=>setDragProject(null),
     )
   }
@@ -1682,11 +1690,11 @@ export function App() {
     setGroupEdit(null)
   }
 
-  const deleteGroup=async(group:ProjectGroup)=>{
-    await api('DELETE',`/api/project-groups/${group.id}`)
-    setProjectGroups(items=>items.filter(item=>item.id!==group.id))
-    setProjects(items=>items.map(item=>item.group_id===group.id?{...item,group_id:null}:item))
-  }
+  // No deleteGroup: the sidebar header's × was its only caller and is gone. A Group
+  // is emptied rather than deleted now — reassign its Projects (Projects manager, or
+  // the session menu's Group select) and it stops rendering, since a Group with no
+  // Projects in it is not a sidebar section. DELETE /api/project-groups/{id} still
+  // exists if this ever needs a home in the Projects registry.
 
   const openRename = (target: RenameTarget) => {
     setContextMenu(null)
@@ -1753,6 +1761,18 @@ export function App() {
     localStorage.setItem(COLLAPSED_PROJECTS_KEY,serializeCollapsedProjects(next))
     return next
   })
+
+  /** Fold or unfold the whole tree — every Project row and every section. One control
+   *  for both levels because "tidy the sidebar" is one intent, and folding only the
+   *  Projects would leave the section headers claiming space for nothing.
+   *  Only what is on screen is folded: a Project hidden from the sidebar has no row to
+   *  collapse, and adding its id would silently pre-fold it if it were ever shown. */
+  const setAllFolded=(folded:boolean)=>{
+    const next=setAllCollapsed(displayProjects.map(project=>project.id),folded)
+    setCollapsedProjects(next)
+    localStorage.setItem(COLLAPSED_PROJECTS_KEY,serializeCollapsedProjects(next))
+    setSidebarOrder(setAllBucketsCollapsed(sidebarOrder,displayBucketIds,folded))
+  }
 
   // Hiding a project only removes it from the sidebar; its record, notes, and
   // layout stay in the registry. We refuse while live work is attached so a
@@ -3215,11 +3235,20 @@ export function App() {
         <div class="app-identity"><strong>swe_mux</strong><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span>{activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
+        {/* One toolbar for the whole tree. Both controls used to live per section —
+            a ⇅ on every Group header for a sort nobody varied between them, and no
+            fold-everything at all, so tidying a long sidebar meant clicking each
+            Project and each Group in turn. Above the tree rather than inside it so
+            it does not scroll away from a sidebar that is long enough to need it. */}
+        {!!projectBuckets.length&&<div class="sidebar-tools">
+          <button class="sidebar-tool" aria-label={allFolded?'Expand all Projects and Groups':'Collapse all Projects and Groups'} title={allFolded?'Expand all Projects and Groups':'Collapse all Projects and Groups'} onClick={()=>setAllFolded(!allFolded)}>{allFolded?'⊞':'⊟'}</button>
+          <span class="sidebar-tools-label">{allFolded?'expand all':'collapse all'}</span>
+          <button class={`sidebar-tool sidebar-sort ${sidebarOrder.projectSort==='custom'&&sidebarOrder.sectionSort==='custom'?'':'active'}`} aria-haspopup="menu" aria-expanded={!!sortMenu} aria-label="Sort Projects and Groups" title={`Sort — Projects: ${projectSortLabel(sidebarOrder.projectSort)} · Groups: ${sectionSortLabel(sidebarOrder.sectionSort)}`} onClick={event=>{event.stopPropagation();if(sortMenu){setSortMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openSortMenu(rect.right,rect.bottom+4)}}>⇅</button>
+        </div>}
         <div class="project-tree">
           {visibleProjects.length===0&&<button data-tutorial="empty-project" class="empty-project-cta" onClick={()=>openProjectsManager()}><strong>{projects.length?'No Projects shown':'Create your first Project'}</strong><small>{projects.length?'Open Projects to show or add an active Project.':'Open Projects to add a canonical folder.'}</small></button>}
           {projectBuckets.map(bucket=>{
             const peerIds=bucket.items.map(item=>item.id)
-            const sortMode=bucketSortMode(sidebarOrder,bucket.id)
             const bucketCollapsed=isBucketCollapsed(sidebarOrder,bucket.id)
             // Folding a section hides whichever Project holds the waiting agent, so
             // the header has to answer for all of them: a count for how much is live,
@@ -3234,8 +3263,12 @@ export function App() {
             <header title={`${bucket.name} — click to ${bucketCollapsed?'expand':'collapse'}, drag to reorder`} onPointerDown={event=>beginBucketPointerDrag(event,bucket.id,bucket.name)} onClick={()=>{if(suppressDragClickRef.current===`bucket:${bucket.id}`){suppressDragClickRef.current=null;return}setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))}}>
               <span class="bucket-chevron" aria-hidden="true">{bucketCollapsed?'▸':'▾'}</span><span>{bucket.name}</span>
               {bucketStatus&&bucketStatus.liveCount>0&&<span class={`bucket-collapsed-badge activity-${bucketStatus.activity} ${bucketStatus.unread?'unread':''}`} title={`${bucketStatus.liveCount} live session${bucketStatus.liveCount===1?'':'s'} · ${projectRailActivityLabel[bucketStatus.activity]}${bucketStatus.unread?' · unread output':''}`}><i aria-hidden="true"/>{bucketStatus.liveCount}</span>}
-              <button class={`bucket-sort ${sortMode==='custom'?'':'active'}`} aria-haspopup="menu" aria-expanded={sortMenu?.bucketId===bucket.id} aria-label={`Sort projects in ${bucket.name}`} title={`Sort projects in ${bucket.name} — ${projectSortLabel(sortMode)}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();if(sortMenu?.bucketId===bucket.id){setSortMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openSortMenu(bucket.id,bucket.name,rect.left,rect.bottom+4)}}>⇅</button>
-              {bucket.id!==UNGROUPED_BUCKET_ID&&<><button title="Rename group" onPointerDown={event=>event.stopPropagation()} onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)setGroupEdit({id:group.id,name:group.name})}}>✎</button><button title="Remove group (projects become ungrouped)" onPointerDown={event=>event.stopPropagation()} onClick={()=>{const group=projectGroups.find(item=>item.id===bucket.id);if(group)void deleteGroup(group)}}>×</button></>}</header>{!bucketCollapsed&&bucket.items.map(project => {
+              {/* Rename only. Sort moved to the sidebar toolbar, and delete is gone
+                  from the sidebar entirely — a header button one pixel from the fold
+                  toggle should not be able to dissolve a Group. Emptying a Group still
+                  removes it from the sidebar, since a Group with no Projects in it is
+                  not rendered. */}
+              {bucket.id!==UNGROUPED_BUCKET_ID&&<button class="bucket-rename" title="Rename group" aria-label={`Rename group ${bucket.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();const group=projectGroups.find(item=>item.id===bucket.id);if(group)setGroupEdit({id:group.id,name:group.name})}}>✎</button>}</header>{!bucketCollapsed&&bucket.items.map(project => {
             const children = sessions
               .filter(session => session.project_id === project.id)
               .sort((a,b)=>a.created_at-b.created_at||a.id.localeCompare(b.id))
@@ -3499,16 +3532,18 @@ export function App() {
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('app.redeploy')}}>Rebuild + redeploy app (keep sessions)</button>
     </div>}
 
-    {/* Per bucket, not global: Groups are how unlike things get separated, so a
-        hand-arranged shortlist and an alphabetical pile can coexist. */}
-    {sortMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Sort projects in ${sortMenu.bucketName}`} style={{left:clampContextMenuLeft(sortMenu.x,innerWidth),top:Math.max(4,Math.min(sortMenu.y,innerHeight-330))}}>
-      <div class="context-title"><strong>SORT · {sortMenu.bucketName}</strong></div>
+    {/* One sort for the whole sidebar. It was per section once, so a hand-arranged
+        shortlist and an alphabetical pile could coexist; that put a ⇅ on every Group
+        header for a preference that in practice was set the same everywhere, so the
+        modes collapsed into one and the control moved to the sidebar toolbar. */}
+    {sortMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Sort Projects and Groups" style={{left:clampContextMenuLeft(sortMenu.x,innerWidth),top:Math.max(4,Math.min(sortMenu.y,innerHeight-330))}}>
+      <div class="context-title"><strong>SORT PROJECTS</strong></div>
       {PROJECT_SORT_OPTIONS.map(option=>{
-        const active=bucketSortMode(sidebarOrder,sortMenu.bucketId)===option.id
-        return <button key={option.id} title={option.hint} aria-checked={active} role="menuitemradio" onClick={()=>{setSidebarOrder(setBucketSortMode(sidebarOrder,sortMenu.bucketId,option.id));setSortMenu(null)}}>{active?'✓ ':''}{option.label}</button>
+        const active=sidebarOrder.projectSort===option.id
+        return <button key={option.id} title={option.hint} aria-checked={active} role="menuitemradio" onClick={()=>{setSidebarOrder(setProjectSortMode(sidebarOrder,option.id));setSortMenu(null)}}>{active?'✓ ':''}{option.label}</button>
       })}
       <div class="context-rule"/>
-      {/* One level up, from the same control: a header's ⇅ already means "how is
+      {/* One level up, from the same control: the toolbar's ⇅ already means "how is
           this list ordered", and the sidebar has no section-level header to hang a
           separate control on. Behind a MenuGroup so the common case stays flat, and
           carrying its current mode in the label since the section order has no

@@ -45,6 +45,15 @@ export function toggleCollapsed(ids: Set<string>, id: string): Set<string> {
   return next
 }
 
+/** Fold or unfold every Project at once, for the sidebar's collapse-all control.
+ *  Collapsing takes the ids on screen; expanding clears the set outright rather than
+ *  subtracting them, so ids left behind by a Project that was hidden or deleted while
+ *  collapsed cannot survive an explicit "expand everything" and re-fold it if it
+ *  comes back. */
+export function setAllCollapsed(projectIds: string[], collapsed: boolean): Set<string> {
+  return collapsed ? new Set(projectIds) : new Set()
+}
+
 /** Sessions that still hold a live process (a "starting" session counts; a
  *  pending optimistic row does not, and exited/crashed rows are inert). */
 export function liveSessionsFor(sessions: Session[], projectId: string): Session[] {

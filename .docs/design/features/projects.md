@@ -40,18 +40,27 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
 - The sidebar renders only visible Projects, grouped into sections: one per Group, plus the
   ungrouped remainder labelled `PROJECTS`. The remainder is a section like any other — it
   sorts, reorders, and folds on the same terms, and orders by its visible name.
-- Each section header carries a sort control (`⇅`) covering **two levels**. Flat, and acting on
-  that section's Projects: Manual order, Recently active, Name A→Z / Z→A, Newest / Oldest first.
-  Behind a `Sort Groups` group, acting on the sections themselves: Manual order, Recently
-  active, Name A→Z / Z→A. Both live on the header because a header's `⇅` already means "how is
-  this list ordered" and the sidebar has no section-level header to hang a second control on;
-  the submenu keeps the common case one click deep and carries its current mode in its label,
-  since section order has no always-visible indicator of its own. The submenu is named for
-  Groups, the app's own word for these, even though it also orders the ungrouped remainder —
-  its tooltip carries that, and "sections" was jargon nothing else in the UI used.
-- Project sorting is per section because Groups are how unlike things are separated — a
-  hand-arranged shortlist and a long alphabetical pile are both legitimate, and one global mode
-  cannot be both. Section sorting is necessarily one setting. Both are device-local.
+- A toolbar above the tree carries a sort control (`⇅`) covering **two levels**. Flat, and acting
+  on Projects in every section: Manual order, Recently active, Name A→Z / Z→A, Newest / Oldest
+  first. Behind a `Sort Groups` group, acting on the sections themselves: Manual order, Recently
+  active, Name A→Z / Z→A. Both live on one control because `⇅` already means "how is this list
+  ordered"; the submenu keeps the common case one click deep and carries its current mode in its
+  label, since section order has no always-visible indicator of its own. The submenu is named for
+  Groups, the app's own word for these, even though it also orders the ungrouped remainder — its
+  tooltip carries that, and "sections" was jargon nothing else in the UI used.
+- Project sorting is **one global mode**, applied inside every section. It was per section
+  originally, on the argument that a hand-arranged shortlist and a long alphabetical pile are both
+  legitimate; that put a `⇅` on every section header for a preference set the same everywhere, so
+  the modes collapsed into one and the control moved off the headers. A device upgrading from the
+  per-section format keeps whichever mode it had actually set (see `loadSidebarOrder`), rather
+  than being silently reset to Manual. Section sorting is necessarily one setting. Both are
+  device-local.
+- The same toolbar carries `⊟`/`⊞`, which folds or unfolds **every Project row and every section**
+  at once, so tidying a long sidebar is one click rather than one per row. It offers Expand only
+  once nothing on screen is folded open; expanding clears the stored fold lists outright rather
+  than subtracting the visible ids, so an id left behind by something hidden or deleted while
+  folded cannot survive and re-fold it later. Only what is on screen is folded — a Project hidden
+  from the sidebar has no row to collapse.
 - Sections have no date modes: neither a Group record nor the synthetic remainder is dated, and
   "newest Group first" does not earn a column. A section's "Recently active" is the latest
   activity of any Project in it, so a Group ranks on the work inside it rather than its age; an
@@ -65,6 +74,10 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   fold, disambiguated by the drag swallowing the click it ends with, exactly as a Project row
   resolves drag-versus-select. Collapsing is presentation only: the folded Projects keep their
   place in the collapsed rail, the numbered shortcuts, and every order.
+- A section header's only button is `✎` (rename). It carried a `×` that deleted the Group and
+  ungrouped its Projects; that sat a pixel from the fold toggle and dissolved a Group on a stray
+  click, so the sidebar no longer deletes Groups at all. Emptying one has the same visible effect,
+  since a Group with no Projects in it is not rendered as a section.
 - A folded section reports both a live-session count and the strongest agent state inside it,
   in the collapsed rail's colours. A count alone would let an agent waiting for approval
   disappear behind the fold, which is the one thing collapsing must not hide.

@@ -1,11 +1,15 @@
-// Sidebar ordering: how the Projects inside one bucket are sorted, and where the
-// buckets themselves sit. Pure so the guard logic can be unit tested under the node
+// Sidebar ordering: how Projects are sorted inside their sections, and where the
+// sections themselves sit. Pure so the guard logic can be unit tested under the node
 // type-stripping runner; the caller supplies the records and the activity map.
 //
 // A "bucket" is one sidebar section: a Project Group, or the `ungrouped` remainder
-// that the sidebar labels PROJECTS. Sorting is per bucket because groups are how a
-// person separates unlike things — one may be a hand-arranged shortlist while
-// another is a long alphabetical pile, and a single global mode cannot be both.
+// that the sidebar labels PROJECTS. Project sort is **one global mode** applied to
+// every bucket. It used to be per bucket, on the theory that a hand-arranged
+// shortlist and an alphabetical pile should coexist; in practice that put a ⇅ on
+// every section header for a preference nobody varied, so the control moved to a
+// single sidebar toolbar and the modes collapsed with it. Section order is a
+// separate mode because it sorts different things (see SectionSortMode), but it is
+// set from the same control.
 import type { Project, Session } from './types'
 
 export type ProjectSortMode =
@@ -68,8 +72,8 @@ export function sectionSortLabel(mode: SectionSortMode): string {
 }
 
 export interface SidebarOrderPrefs {
-  /** Sort mode per bucket id; an absent bucket is `custom`. */
-  sort: Record<string, ProjectSortMode>
+  /** How Projects are ordered inside every bucket. */
+  projectSort: ProjectSortMode
   /** How the buckets themselves are ordered. */
   sectionSort: SectionSortMode
   /** Slot the ungrouped bucket occupies among the Groups; null pins it last.
@@ -83,10 +87,22 @@ export interface SidebarOrderPrefs {
 }
 
 export const EMPTY_SIDEBAR_ORDER: SidebarOrderPrefs = {
-  sort: {},
+  projectSort: 'custom',
   sectionSort: 'custom',
   ungroupedIndex: null,
   collapsed: [],
+}
+
+/** Legacy per-bucket sort map → the single mode that replaced it. Whichever bucket
+ *  the user had actually set wins; with several set, the first in stored key order
+ *  does. Arbitrary between two explicit choices, but the alternative is silently
+ *  dropping a preference on upgrade, and one ⇅ click re-states it. */
+function migrateBucketSort(value: unknown): ProjectSortMode | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  for (const mode of Object.values(value as Record<string, unknown>)) {
+    if (isProjectSortMode(mode) && mode !== 'custom') return mode
+  }
+  return null
 }
 
 export function loadSidebarOrder(raw: string | null): SidebarOrderPrefs {
@@ -95,17 +111,14 @@ export function loadSidebarOrder(raw: string | null): SidebarOrderPrefs {
     const parsed: unknown = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return EMPTY_SIDEBAR_ORDER
     const record = parsed as {
-      sort?: unknown; sectionSort?: unknown; ungroupedIndex?: unknown; collapsed?: unknown
-    }
-    const sort: Record<string, ProjectSortMode> = {}
-    if (record.sort && typeof record.sort === 'object' && !Array.isArray(record.sort)) {
-      for (const [bucketId, mode] of Object.entries(record.sort as Record<string, unknown>)) {
-        if (isProjectSortMode(mode) && mode !== 'custom') sort[bucketId] = mode
-      }
+      projectSort?: unknown; sort?: unknown
+      sectionSort?: unknown; ungroupedIndex?: unknown; collapsed?: unknown
     }
     const index = record.ungroupedIndex
     return {
-      sort,
+      projectSort: isProjectSortMode(record.projectSort)
+        ? record.projectSort
+        : migrateBucketSort(record.sort) || 'custom',
       sectionSort: isSectionSortMode(record.sectionSort) ? record.sectionSort : 'custom',
       ungroupedIndex: typeof index === 'number' && Number.isInteger(index) && index >= 0
         ? index
@@ -120,13 +133,10 @@ export function loadSidebarOrder(raw: string | null): SidebarOrderPrefs {
 }
 
 export function serializeSidebarOrder(prefs: SidebarOrderPrefs): string {
-  // `custom` is the default, so storing it would only grow the blob with entries
-  // that mean "nothing set" and keep buckets alive after their Group is deleted.
-  const sort = Object.fromEntries(
-    Object.entries(prefs.sort).filter(([, mode]) => mode !== 'custom'),
-  )
+  // The legacy `sort` map is deliberately not written back: once this has saved
+  // once, the migration above can never fire again for this device.
   return JSON.stringify({
-    sort,
+    projectSort: prefs.projectSort,
     sectionSort: prefs.sectionSort,
     ungroupedIndex: prefs.ungroupedIndex,
     collapsed: prefs.collapsed,
@@ -136,14 +146,8 @@ export function serializeSidebarOrder(prefs: SidebarOrderPrefs): string {
 /** Drop per-bucket state for buckets that no longer exist (deleted Groups). */
 export function pruneSidebarOrder(prefs: SidebarOrderPrefs, bucketIds: string[]): SidebarOrderPrefs {
   const live = new Set(bucketIds)
-  const sort = Object.fromEntries(
-    Object.entries(prefs.sort).filter(([bucketId]) => live.has(bucketId)),
-  )
   const collapsed = prefs.collapsed.filter(bucketId => live.has(bucketId))
-  return Object.keys(sort).length === Object.keys(prefs.sort).length
-    && collapsed.length === prefs.collapsed.length
-    ? prefs
-    : { ...prefs, sort, collapsed }
+  return collapsed.length === prefs.collapsed.length ? prefs : { ...prefs, collapsed }
 }
 
 export function isBucketCollapsed(prefs: SidebarOrderPrefs, bucketId: string): boolean {
@@ -162,20 +166,23 @@ export function toggleBucketCollapsed(
   }
 }
 
-export function bucketSortMode(prefs: SidebarOrderPrefs, bucketId: string): ProjectSortMode {
-  return prefs.sort[bucketId] || 'custom'
+/** Fold or unfold every section at once, for the sidebar's collapse-all control.
+ *  Collapsing takes the ids on screen; expanding clears the list outright rather
+ *  than subtracting them, so a stale id left by a Group that vanished while folded
+ *  cannot survive an explicit "expand everything". */
+export function setAllBucketsCollapsed(
+  prefs: SidebarOrderPrefs,
+  bucketIds: string[],
+  collapsed: boolean,
+): SidebarOrderPrefs {
+  return { ...prefs, collapsed: collapsed ? [...new Set(bucketIds)] : [] }
 }
 
-export function setBucketSortMode(
+export function setProjectSortMode(
   prefs: SidebarOrderPrefs,
-  bucketId: string,
   mode: ProjectSortMode,
 ): SidebarOrderPrefs {
-  if (bucketSortMode(prefs, bucketId) === mode) return prefs
-  const sort = { ...prefs.sort }
-  if (mode === 'custom') delete sort[bucketId]
-  else sort[bucketId] = mode
-  return { ...prefs, sort }
+  return prefs.projectSort === mode ? prefs : { ...prefs, projectSort: mode }
 }
 
 /** Live sessions only refresh `last_activity_ts` on the WebSocket, so a project
