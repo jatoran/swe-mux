@@ -1598,6 +1598,48 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-actions button{flex:1;min-height:30px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .drawer-actions button.danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red)}
 .drawer-actions button:disabled{opacity:.45;cursor:not-allowed}
+/* Transcript: a reading column. Text sets larger than the rest of the drawer because this
+   is the one surface whose whole job is prose a human reads at length, and the drawer's 8-9px
+   dense-index type is unreadable for that. `position:relative` on the host anchors the
+   jump-to-latest pill over the body. */
+.transcript-tab{position:relative;flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
+.transcript-tab-head{flex:none;display:flex;align-items:center;gap:8px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
+.transcript-tab-head>div{flex:1;min-width:0;display:grid;gap:2px}
+.transcript-tab-head strong{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.transcript-tab-head span{color:var(--muted);font-size:8px}
+.transcript-tab-head>button{flex:none;min-height:26px;padding:0 9px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:9px;cursor:pointer}
+.transcript-tab-head>button:disabled{opacity:.45;cursor:not-allowed}
+.transcript-tab-head>button.copied{border-color:var(--accent);color:var(--accent)}
+.transcript-note{flex:none;margin:0;padding:6px 9px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px;line-height:1.45}
+.transcript-note.warn{color:var(--amber);background:color-mix(in srgb,var(--amber) 12%,transparent)}
+.transcript-note.error{color:var(--red);background:color-mix(in srgb,var(--red) 12%,transparent)}
+.transcript-tab-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.transcript-message{padding:8px 9px;border-bottom:1px solid var(--line)}
+/* The user's turns carry the tint. An agent's replies are the bulk of the column, so
+   tinting those would tint everything and distinguish nothing. */
+.transcript-message.user{background:color-mix(in srgb,var(--accent) 7%,transparent)}
+.transcript-message>header{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.transcript-speaker{flex:1;min-width:0;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}
+.transcript-message.user .transcript-speaker{color:var(--accent)}
+.transcript-message>header time{flex:none;color:var(--muted);font-size:8px}
+.transcript-copy{flex:none;min-height:20px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
+.transcript-copy:hover{color:var(--text)}
+.transcript-copy.copied{border-color:var(--accent);color:var(--accent)}
+/* `pre-wrap` keeps the agent's own line breaks and indentation, which is as close to
+   rendering its markdown as this column goes; `anywhere` stops one long path or URL from
+   forcing the whole drawer to scroll sideways. */
+.transcript-message p{margin:0;font-size:10px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.transcript-message p.clamped{max-height:220px;overflow:hidden;mask-image:linear-gradient(180deg,#000 70%,transparent)}
+.transcript-expand{margin-top:4px;padding:0;border:0;background:none;color:var(--accent);font:inherit;font-size:8px;cursor:pointer}
+.transcript-jump{position:absolute;right:12px;bottom:12px;z-index:4;min-height:26px;padding:0 10px;border:1px solid var(--accent);border-radius:13px;background:var(--panel);color:var(--accent);font:inherit;font-size:9px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35)}
+/* Off-screen, not `display:none`: the synchronous copy fallback has to be able to focus
+   and select it, which a hidden element cannot be. */
+.transcript-manual{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
+@media (max-width:760px){
+  .transcript-copy{min-height:28px;padding:0 10px}
+  .transcript-tab-head>button{min-height:32px}
+}
+
 /* Agent Context: an inventory and viewer, never an editor. Mutations are isolated to the
    preview/confirm sync and restore cards; file bodies are ordinary preformatted text. */
 .agent-context{flex:1 1 auto;min-height:0;overflow:auto;background:var(--bg)}

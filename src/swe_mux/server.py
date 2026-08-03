@@ -167,7 +167,12 @@ from .tailscale import (
 )
 from .terminal_arbitration import ClaimReason, ClaimRequest, evaluate_claim
 from .tier0_store import Tier0Context, Tier0Store
-from .transcript_view import parse_transcript_with_watermark
+from .transcript_view import (
+    CONVERSATION_DEFAULT_LIMIT,
+    CONVERSATION_MAX_LIMIT,
+    conversation_view_cached,
+    parse_transcript_with_watermark,
+)
 from .usage import UsageManager
 from .voice import VoiceError, VoiceService, VoiceStore, clip_snapshot, last_reply_text
 from .win_jobobj import ReaperJob
@@ -597,6 +602,7 @@ def create_app(
             web.get("/api/diagnostics/status-health", get_status_health),
             web.get("/api/diagnostics/background", get_background_health),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
+            web.get("/api/sessions/{sid}/transcript", session_transcript),
             web.get("/api/sessions/{sid}/skills", session_skills),
             web.patch("/api/sessions/{sid}", patch_session),
             web.delete("/api/sessions/{sid}", delete_session),
@@ -5695,6 +5701,61 @@ async def session_last_reply(request: web.Request) -> web.Response:
             {"error": "no assistant reply text was found in the recent transcript"}, 409
         )
     return json_response({"text": text, "agent_run_id": session.record.agent_run_id})
+
+
+# A parse this misses is a blank reading column, never a wrong one, so the
+# budget is generous: the largest Codex rollout on record (550 MB) parses in
+# about a second, and the byte cap in `conversation_view` bounds the rest.
+CONVERSATION_PARSE_TIMEOUT_SECONDS = 5.0
+
+
+async def session_transcript(request: web.Request) -> web.Response:
+    """The focused session's readable conversation, for the drawer's reader tab.
+
+    Deliberately NOT `/api/history/{sid}/transcript`: that endpoint reindexes the
+    run's searchable messages and loads its annotations on every call, which is
+    right for opening a history entry once and wrong for a surface that refreshes
+    whenever a turn ends. This one only reads.
+
+    Every "there is nothing to show" case answers 200 with a `reason` rather than
+    an error status. A shell pane and an agent that has not written its first
+    record yet are ordinary states of a passive view, not failures, and the tab
+    renders a sentence for each.
+    """
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    record = session.record
+    try:
+        limit = int(request.query.get("limit") or CONVERSATION_DEFAULT_LIMIT)
+    except ValueError:
+        raise web.HTTPBadRequest(text="limit must be an integer") from None
+    limit = max(1, min(limit, CONVERSATION_MAX_LIMIT))
+    empty: dict[str, Any] = {
+        "session_id": record.id,
+        "agent_run_id": record.agent_run_id,
+        "backend": record.backend,
+        # The transcript observer can end up following a conversation that is no
+        # longer this PTY's. The reader is the one surface where that is plainly
+        # visible, so it reports the doubt instead of presenting a sibling's
+        # conversation as this session's.
+        "observation_stale_since": record.observation_stale_since,
+        "messages": [],
+        "hidden": 0,
+        "truncated": False,
+        "reason": None,
+    }
+    if record.backend not in {"claude", "codex"}:
+        return json_response({**empty, "reason": "not_agent"})
+    path = session.transcript_path
+    if path is None or not path.is_file():
+        return json_response({**empty, "reason": "no_transcript"})
+    try:
+        view = await asyncio.wait_for(
+            asyncio.to_thread(conversation_view_cached, path, record.backend, limit=limit),
+            timeout=CONVERSATION_PARSE_TIMEOUT_SECONDS,
+        )
+    except (OSError, TimeoutError):
+        return json_response({**empty, "reason": "unreadable"})
+    return json_response({**empty, **view})
 
 
 async def session_skills(request: web.Request) -> web.Response:

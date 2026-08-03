@@ -111,6 +111,7 @@ KEYBINDING_COMMANDS = (
     ("drawer.clipboard", "Side panel: always clipboard history", "clipboard"),
     ("drawer.commands", "Side panel: always session commands", "terminal"),
     ("drawer.prompts", "Side panel: always prompt templates", "input"),
+    ("drawer.transcript", "Side panel: always this session's transcript", "terminal"),
     ("drawer.files", "Side panel: always project files", "view"),
     ("drawer.notes", "Side panel: always project and session notes", "view"),
     ("drawer.notifications", "Side panel: always notifications", "view"),

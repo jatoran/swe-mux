@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from collections import OrderedDict
 from datetime import datetime
@@ -129,10 +130,12 @@ def transcript_time_summary(
     }
 
 
-def parse_transcript(
-    path: Path, backend: str, *, max_bytes: int | None = None
-) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = []
+def read_transcript_events(path: Path, max_bytes: int | None = None) -> list[dict[str, Any]]:
+    """Every JSON object record in the file, or in its trailing ``max_bytes``.
+
+    Shared by the indexing parse and the human-facing conversation view so the
+    two can never disagree about which bytes a transcript is made of.
+    """
     events: list[dict[str, Any]] = []
     if max_bytes is None:
         # Stream: a months-long conversation is hundreds of MB, and reading it
@@ -146,20 +149,28 @@ def parse_transcript(
                     continue
                 if isinstance(event, dict):
                     events.append(event)
-    else:
-        with path.open("rb") as handle:
-            size = handle.seek(0, 2)
-            handle.seek(max(0, size - max_bytes))
-            raw = handle.read(max_bytes)
-        if size > max_bytes:
-            _, _, raw = raw.partition(b"\n")
-        for line in raw.decode("utf-8", "replace").splitlines():
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(event, dict):
-                events.append(event)
+        return events
+    with path.open("rb") as handle:
+        size = handle.seek(0, 2)
+        handle.seek(max(0, size - max_bytes))
+        raw = handle.read(max_bytes)
+    if size > max_bytes:
+        _, _, raw = raw.partition(b"\n")
+    for line in raw.decode("utf-8", "replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def parse_transcript(
+    path: Path, backend: str, *, max_bytes: int | None = None
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    events = read_transcript_events(path, max_bytes)
     codex_response_messages = backend == "codex" and any(
         event.get("type") == "response_item"
         and (event.get("payload") or {}).get("type") == "message"
@@ -250,6 +261,206 @@ def parse_transcript_with_watermark(
         while len(_cache) > _CACHE_MAX:
             _cache.popitem(last=False)
     return result, stat.st_mtime_ns, stat.st_size
+
+
+# --------------------------------------------------------------------------
+# Conversation view
+#
+# What was *said*, for a human to read and copy: the user's turns and the
+# agent's replies, with tool calls and CLI machinery removed. A separate
+# reduction from `searchable_transcript_messages` because the two answer
+# opposite questions — search wants recall over everything text-shaped, a
+# reading column wants only the conversation.
+#
+# The hard part is not tool calls (Claude writes those as records with no text
+# block, so the parse already drops them; Codex's synthesized `tool_use` blocks
+# are dropped here). It is that both CLIs write their own machinery into the
+# transcript as `user` records: slash-command expansions, skill bodies, shell
+# escapes, interrupt markers, environment blocks. Rendered verbatim those bury
+# the handful of things the human actually typed.
+#
+# **Every rule below fails open.** A record is hidden only on positive evidence
+# that it is machinery; an unrecognised shape is shown. Leaking a
+# `<local-command-stdout>` into the column is a blemish, whereas hiding a
+# message the user wrote is the surface lying about the conversation, and a
+# CLI that renames a field must not be able to silently empty the view.
+
+CONVERSATION_MAX_BYTES = 64 * 1024 * 1024
+CONVERSATION_DEFAULT_LIMIT = 200
+CONVERSATION_MAX_LIMIT = 1000
+
+# Claude appends these to a genuine prompt rather than replacing it, so they are
+# stripped from the text instead of hiding the message that carries them.
+_SYSTEM_REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+
+# Wrapper tags Claude writes as `user` records. Only consulted when the record
+# carries no `origin` (older CLI builds), since `origin.kind` is authoritative.
+_CLAUDE_MACHINERY_PREFIXES = (
+    "<command-name>",
+    "<command-message>",
+    "<command-args>",
+    "<local-command-stdout>",
+    "<local-command-stderr>",
+    "<local-command-caveat>",
+    "<bash-input>",
+    "<bash-stdout>",
+    "<bash-stderr>",
+    "<task-notification>",
+    "<system-reminder>",
+    "[Request interrupted",
+)
+
+# Codex has no per-record provenance, so its machinery is recognised by shape.
+# `<environment_context>` is the harness reporting cwd/shell/date; `<skill>` is a
+# skill body injected mid-conversation. The opening `# AGENTS.md instructions`
+# block is deliberately NOT here: it is the instruction set the run was given,
+# and seeing it at the top of the conversation is wanted.
+_CODEX_MACHINERY_PREFIXES = ("<environment_context>", "<skill>")
+
+
+def _message_text(blocks: Any) -> str:
+    """The text a human would have read, with Claude's reminder spans removed."""
+    parts = [
+        str(block.get("text") or "")
+        for block in blocks or []
+        if isinstance(block, dict) and block.get("type") == "text" and block.get("text")
+    ]
+    return _SYSTEM_REMINDER.sub("", "\n".join(parts)).strip()
+
+
+def _claude_user_is_machinery(event: dict[str, Any], text: str) -> bool:
+    """Whether a Claude ``user`` record is CLI machinery rather than a human turn.
+
+    Claude stamps provenance on the record itself: a typed prompt carries
+    ``origin: {"kind": "human"}`` alongside ``promptSource``, while the CLI's own
+    injections either carry a different ``origin.kind`` (``task-notification``),
+    set ``isMeta`` (skill bodies, local-command caveats), or name the message
+    they interrupted. Reading those fields beats matching on wrapper tags, which
+    is why the tag list is only the fallback for records that predate them.
+    """
+    if event.get("isMeta") is True:
+        return True
+    if event.get("interruptedMessageId") is not None:
+        return True
+    origin = event.get("origin")
+    if isinstance(origin, dict) and origin.get("kind"):
+        return str(origin["kind"]) != "human"
+    return text.startswith(_CLAUDE_MACHINERY_PREFIXES)
+
+
+def _conversation_records(
+    events: list[dict[str, Any]], backend: str
+) -> tuple[list[dict[str, Any]], int]:
+    """``(kept, hidden_count)`` conversational text records, in file order."""
+    kept: list[dict[str, Any]] = []
+    hidden = 0
+    # Same precedence rule the indexing parse uses: when a Codex rollout carries
+    # current `response_item/message` records, its legacy `event_msg` copies are
+    # duplicates of them.
+    codex_response_messages = backend == "codex" and any(
+        event.get("type") == "response_item"
+        and (event.get("payload") or {}).get("type") == "message"
+        and (event.get("payload") or {}).get("role") in {"user", "assistant"}
+        for event in events
+    )
+    for event in events:
+        message = _native_conversation_message(event, backend)
+        if message is None:
+            continue
+        if backend == "codex" and codex_response_messages and event.get("type") != "response_item":
+            continue
+        text = _message_text(message.get("content"))
+        if not text:
+            hidden += 1
+            continue
+        if message["role"] == "user":
+            machinery = (
+                _claude_user_is_machinery(event, text)
+                if backend == "claude"
+                else text.startswith(_CODEX_MACHINERY_PREFIXES)
+            )
+            if machinery:
+                hidden += 1
+                continue
+        kept.append({"role": message["role"], "ts": message.get("ts"), "text": text})
+    return kept, hidden
+
+
+def _merge_assistant_runs(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fold an agent's turn back into one message.
+
+    Both CLIs split a reply across several records whenever a tool call
+    interrupts it, so one answer arrives as narration, tool, narration, tool,
+    conclusion. With the tool records gone those fragments are one thing the
+    agent said, and copying a fragment is never what the reader wanted. The
+    timestamp kept is the fragment that started the turn.
+    """
+    merged: list[dict[str, Any]] = []
+    for record in records:
+        previous = merged[-1] if merged else None
+        if previous and previous["role"] == "assistant" and record["role"] == "assistant":
+            previous["text"] = f"{previous['text']}\n\n{record['text']}"
+            continue
+        merged.append(dict(record))
+    return merged
+
+
+def conversation_view(
+    path: Path, backend: str, *, limit: int = CONVERSATION_DEFAULT_LIMIT
+) -> dict[str, Any]:
+    """The readable conversation in a transcript, newest ``limit`` messages.
+
+    ``truncated`` covers both bounds that can drop older messages: the message
+    limit, and the byte cap that keeps one pathological transcript (a 550 MB
+    Codex rollout exists in the wild) from stalling a request. Ordinals number
+    the returned messages, so they are stable for one response and not across a
+    truncation boundary; they are display keys, never persistent identity.
+    """
+    size = path.stat().st_size
+    max_bytes = CONVERSATION_MAX_BYTES if size > CONVERSATION_MAX_BYTES else None
+    records, hidden = _conversation_records(read_transcript_events(path, max_bytes), backend)
+    messages = _merge_assistant_runs(records)
+    truncated = max_bytes is not None
+    if len(messages) > limit:
+        messages = messages[-limit:]
+        truncated = True
+    return {
+        "messages": [{"ordinal": index, **message} for index, message in enumerate(messages)],
+        "hidden": hidden,
+        "truncated": truncated,
+    }
+
+
+_conversation_cache: OrderedDict[tuple[str, int, int, str, int], dict[str, Any]] = OrderedDict()
+_conversation_cache_lock = threading.Lock()
+_CONVERSATION_CACHE_MAX = 8
+
+
+def conversation_view_cached(
+    path: Path, backend: str, *, limit: int = CONVERSATION_DEFAULT_LIMIT
+) -> dict[str, Any]:
+    """``conversation_view`` keyed on (path, mtime_ns, size, backend, limit).
+
+    A live agent invalidates this on every append, which is correct and is why
+    the cap above exists. It pays for the other case: switching drawer tabs on
+    an idle session re-requests the same view, and re-parsing a finished
+    conversation to produce a byte-identical answer is pure waste. The returned
+    dict is SHARED and must be treated as read-only.
+    """
+    stat = path.stat()
+    key = (str(path), stat.st_mtime_ns, stat.st_size, backend, limit)
+    with _conversation_cache_lock:
+        hit = _conversation_cache.get(key)
+        if hit is not None:
+            _conversation_cache.move_to_end(key)
+            return hit
+    result = conversation_view(path, backend, limit=limit)
+    with _conversation_cache_lock:
+        _conversation_cache[key] = result
+        _conversation_cache.move_to_end(key)
+        while len(_conversation_cache) > _CONVERSATION_CACHE_MAX:
+            _conversation_cache.popitem(last=False)
+    return result
 
 
 def searchable_transcript_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

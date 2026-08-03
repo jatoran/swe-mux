@@ -6,6 +6,7 @@ import { CommandsTab } from './CommandsTab'
 import { PromptsTab } from './PromptsTab'
 import { NotesTab } from './NotesTab'
 import { QueuePane, type QueueScope } from './QueuePane'
+import { TranscriptTab } from './TranscriptTab'
 import { GitTab } from './GitTab'
 import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
@@ -123,6 +124,11 @@ export function UtilityDrawer(props: Props) {
           onOpenAsTab={sessionId => { props.onQueueOpenAsTab(sessionId); onDone() }}
           openRequest={props.queueOpenRequest}
         />
+      case 'transcript':
+        // No `onDone`. Every other session-scoped tab closes the mobile drawer once
+        // it has acted, because it acted on the terminal underneath; this one is
+        // read there, and closing it after each copy would end the reading.
+        return <TranscriptTab session={session} />
       case 'files':
         return project
           ? <ProjectResource

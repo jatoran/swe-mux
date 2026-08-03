@@ -83,6 +83,17 @@ export const QueueIcon = () => <svg {...stroke}>
   <polyline points="17 8 21 12 17 16" />
 </svg>
 
+/** Two bubbles, tails on opposite sides: an exchange, read back.
+ *
+ * Deliberately built from the same bubble as `PromptsIcon` and deliberately doubled, because
+ * the difference between the two tabs is exactly one of number — that one holds a message you
+ * are about to send, this one holds both halves of what was already said. Body lines are
+ * omitted: at 17px a second bubble and three strokes inside it is mud. */
+export const TranscriptIcon = () => <svg {...stroke}>
+  <path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5v4A1.5 1.5 0 0 1 13.5 10H7l-4 3z" />
+  <path d="M21 14.5A1.5 1.5 0 0 0 19.5 13h-9A1.5 1.5 0 0 0 9 14.5v4A1.5 1.5 0 0 0 10.5 20H17l4 3z" />
+</svg>
+
 /** A folder. A folder *tree* is the truer picture but turns to mud at this size. */
 export const FilesIcon = () => <svg {...stroke}>
   <path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.7.9L11.5 8H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
@@ -132,6 +143,7 @@ export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   commands: CommandsIcon,
   prompts: PromptsIcon,
   queue: QueueIcon,
+  transcript: TranscriptIcon,
   files: FilesIcon,
   notes: NotesIcon,
   context: ContextIcon,

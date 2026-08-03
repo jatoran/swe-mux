@@ -387,6 +387,7 @@ POST   /sessions/{id}/input
 POST   /sessions/{id}/broadcast-set
 POST   /broadcast/input
 GET    /sessions/{id}/last-reply
+GET    /sessions/{id}/transcript[?limit=]
 GET    /sessions/{id}/skills[?refresh=1]
 ```
 
@@ -561,6 +562,21 @@ rather than fitting, which is what keeps two devices from resizing each other in
 `GET /sessions/{id}/last-reply` returns the newest meaningful Claude/Codex assistant turn for
 gesture-safe clipboard prefetch. Provider control acknowledgements are skipped; the route does
 not type `/copy` into the PTY.
+
+`GET /sessions/{id}/transcript` returns the live session's readable conversation for the drawer's
+Transcript tab: `{messages:[{ordinal,role,ts,text}], hidden, truncated, observation_stale_since,
+reason}`. Tool calls and CLI machinery are classified out and agent turns are merged
+(`transcript_view.conversation_view`, see `ui.md`); `hidden` counts what was withheld so the
+filtering is never invisible, and `ordinal` numbers the returned window rather than the
+conversation, making it a display key and not an identity. Deliberately **not**
+`/history/{id}/transcript`, which reindexes the run's searchable messages and loads its
+annotations on every call: right for opening an entry once, wrong for a surface that refreshes on
+every turn. This route only reads. Bounded twice — newest `limit` messages (default 200, max
+1000) and a 64 MB tail — with `truncated` set by either; the cap exists because Codex rollouts
+reach hundreds of MB. Nothing to show is a `200` with a `reason`
+(`not_agent`/`no_transcript`/`unreadable`), because a shell pane and an agent that has not spoken
+yet are ordinary states of a passive view, not failures. No redaction: unlike the MCP surface,
+the reader is the machine's owner and needs the literal text to copy.
 
 `GET /sessions/{id}/skills` lists the skills that session's CLI can see, read off disk from the
 directories the CLI itself reads (`agent_skills.py`). Agent backends only; `409` on a shell

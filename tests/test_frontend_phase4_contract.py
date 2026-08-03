@@ -228,7 +228,7 @@ def test_files_is_a_drawer_navigator_rather_than_a_workspace_tab() -> None:
 
 
 def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
-    """Nine icon tabs stay reachable in one horizontally scrolling phone row.
+    """Ten icon tabs stay reachable in one horizontally scrolling phone row.
 
     `drawerTabs.ts` stays JSX-free so it can be unit-tested under plain type-stripping, which
     is why the icon map lives in `railIcons.tsx` and why this cross-file invariant — every tab
@@ -249,8 +249,14 @@ def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
     # target on a 360px phone. Wrapping made the drawer header jump to two rows, so the
     # tablist now scrolls on one row behind a fade; the close target sits outside that
     # scroller and selection calls scrollIntoView.
+    #
+    # Re-checked at ten (Transcript): the tenth cell overflows the same 360px row the ninth
+    # already did, and lands in the same scroller, which is the arrangement that made the
+    # count stop mattering. What still has to hold is the machinery below it — one row, a
+    # fade that says there is more, and scrollIntoView on selection — so a tab is never
+    # silently off-screen with nothing to say so.
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
-    assert len(ids) == 9, ids
+    assert len(ids) == 10, ids
     tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
     assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
     assert ".drawer-tabs-shell:after" in css
@@ -436,6 +442,48 @@ def test_browser_title_stays_stable_without_attention_count() -> None:
 
     assert "<title>swe-mux</title>" in index
     assert "document.title" not in combined
+
+
+def test_the_transcript_tab_reads_and_only_reads() -> None:
+    """The drawer's one inert session surface, and the three rules that keep it inert.
+
+    Every other session-scoped tab exists to put text into an agent. Mixing that into
+    the surface meant for reviewing what already happened is how a stray tap becomes a
+    message nobody wrote, so the absence of an insert path is a contract rather than an
+    omission — including the `onDone` every sibling takes, which on mobile would close
+    the drawer after each copy and end the reading.
+    """
+    drawer = source("UtilityDrawer.tsx")
+    tab = source("TranscriptTab.tsx")
+    view = source("transcriptView.ts")
+
+    assert "<TranscriptTab session={session} />" in drawer
+    for injection in ("onInsert", "onDone", "onSend", "/input"):
+        assert injection not in tab, injection
+
+    # Copy is this tab's only verb and agent replies run to kilobytes, so they stay out
+    # of the clipboard ring rather than evicting the snippets it exists to hand back.
+    assert "withoutClipboardCapture" in tab
+    assert "suppressDepth > 0" in source("clipboardHistory.ts")
+
+    # The drawer unmounts a tab body on every tab switch, so anything that has to
+    # survive that cannot be component state. The scroll place is the whole reason this
+    # module exists separately from the component.
+    assert "rememberTranscriptScroll" in view and "recallTranscriptScroll" in view
+    assert "let scrollMemory" in view
+    assert "useState" not in view
+
+    # Refreshed by turn boundaries, which are the only moment a conversation gains a
+    # message. A timer would re-read a whole transcript to learn nothing for most of an
+    # agent's working minute.
+    assert "TURN_ENDED_EVENT" in tab and "turn_ended" in source("App.tsx")
+    assert "setInterval" not in tab
+
+    # A reader already scrolled up is not carried along by an arriving message; it is
+    # offered as a button instead. Yanking the column mid-sentence every time an agent
+    # speaks is what makes a live log unreadable.
+    assert "isPinnedToBottom" in tab
+    assert "transcript-jump" in tab and ".transcript-jump{" in source("style.css")
 
 
 def test_history_filters_fit_narrow_split_panes() -> None:

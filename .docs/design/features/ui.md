@@ -647,9 +647,11 @@ responsive controls.
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they
   are one gesture (mobile) or one visible click (desktop) away instead of two menu levels deep.
   Tabs, in order: **Clipboard**, **Commands** (the rail's long tail), **Prompts**, **Queue**,
+  **Transcript**,
   **Files**, **Notes**, **Context**, **Git**, **Alerts** (notifications). Order groups by what a tab acts on,
   and the groups must stay contiguous so the rail reads as blocks rather than a list. The first
-  four are the same verb — text into the focused session. Files and Notes are the **navigators**:
+  four are the same verb — text into the focused session — and Transcript closes that block by
+  reading the same session back. Files and Notes are the **navigators**:
   project-scoped indexes that open a document into a pane instead of typing into one. Context is
   the read-only inventory of root agent instructions and provider learned memory; unlike the
   navigators it renders the selected body inside the drawer and opens no pane. Git closes the
@@ -669,6 +671,46 @@ responsive controls.
   safe moment to interrupt this agent") is read off the terminal, and only the docked column
   leaves the terminal on screen. It also absorbs the former Mailbox modal as two extra scopes,
   so one message store has one surface. Its rail icon badges the fleet-wide pending count.
+- **Transcript** is the drawer's one *inert* session surface: the focused session's conversation
+  as prose you can scroll and copy, without touching the live terminal or scrolling it back.
+  Deliberately no composer, no insert, no send. Every neighbouring tab exists to put text into an
+  agent, and mixing that into the surface for reviewing what already happened is how a stray tap
+  becomes a message nobody wrote. Copy is the only verb: per message, or the whole conversation
+  with speakers. It is a drawer tab and not a pane because the point is to read *beside* the
+  terminal rather than in place of it; the cost is that the drawer unmounts a tab body on every
+  switch, which is why the scroll place is kept outside the component.
+- **What the reader shows is a filtered conversation, not the transcript.** Tool calls are gone
+  entirely — not collapsed, not summarised. So is CLI machinery that both providers write into
+  the transcript as `user` records: slash-command expansions and their output, `!` shell escapes,
+  skill bodies injected mid-conversation, interrupt markers, Claude's `<system-reminder>` spans
+  (stripped from the prompt that carries them rather than hiding it), and Codex's
+  `<environment_context>`. The opening `# AGENTS.md instructions` block **stays**: it is the brief
+  the run was given, and reading a Codex conversation without it starts in the middle.
+  Classification is the daemon's (`transcript_view.conversation_view`), so history search can
+  inherit the same distinction later, and it reads Claude's per-record provenance
+  (`origin.kind === "human"`, `isMeta`, `interruptedMessageId`) rather than matching wrapper tags,
+  which is both more accurate and version-durable. **The rules fail open**: a record is hidden
+  only on positive evidence that it is machinery, because leaking a `<local-command-stdout>` is a
+  blemish while hiding something the user typed is the surface lying about the conversation. The
+  count of what was withheld is shown, so the filtering is never invisible.
+- An agent's turn arrives as several records whenever a tool call interrupts it. With the tool
+  records gone those fragments are one thing the agent said, so they are **merged into one
+  message** — otherwise the copy button would copy "Let me check the registry." instead of the
+  answer.
+- Reading placement follows one rule: open at the newest message, and let only a reader *already*
+  at the bottom be carried along by new ones. Scrolled up, the position holds and the arrival
+  becomes a "N new" button. A live log that yanks the column mid-sentence every time an agent
+  speaks cannot be read at all, which is the failure this tab exists to fix. Returning to a
+  session still focused restores where reading stopped; moving to another session starts at its
+  newest message, and nothing is remembered per session beyond the one you are on.
+- It refreshes on turn boundaries (the events socket's `turn_ended`), never on a timer: that is
+  the only moment a conversation can gain a message, and polling would re-read a whole transcript
+  to learn nothing for most of an agent's working minute. A pane whose conversation rolled over
+  (`/clear`, `/new`) reloads onto the new run; the retired conversation stays in History, which
+  is also where anything older than the loaded window lives.
+- When the transcript observer's link to the PTY has gone stale, the tab **says so** rather than
+  presenting another conversation as this session's. Everywhere else that fault reads as odd
+  telemetry; here it would be a stranger's words under this session's name.
 - **Files** is a navigator, not a peer of the terminals it opens files next to, so it costs a
   drawer tab rather than a permanent workspace tab. As a pane it forced the layout to route
   every placement rule around it (an unanchored open, a Files-focused open, and session-note

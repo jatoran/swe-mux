@@ -20,8 +20,10 @@ test('injection surfaces lead, then navigators, then attention surfaces', () => 
   // into a pane instead of typing into one. Notifications is neither, and stays last.
   // Git closes the Project-scoped block: it reports on the repository behind the Project
   // rather than opening anything into a pane, so it sits with them without being a navigator.
-  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'files', 'notes', 'context', 'git', 'notifications'])
-  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'session').map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue'])
+  // Transcript closes the session block: session-scoped like the four before it, but it
+  // reads that session back instead of writing into it.
+  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript', 'files', 'notes', 'context', 'git', 'notifications'])
+  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'session').map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript'])
   assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'project').map(tab => tab.id), ['files', 'notes', 'context', 'git'])
   assert.deepEqual(DRAWER_TABS.filter(tab => isNavigatorTab(tab.id)).map(tab => tab.id), ['files', 'notes'])
   // The insert group and the navigator group must stay contiguous, so the rail reads as
@@ -64,7 +66,8 @@ test('dock width is bounded and survives junk in localStorage', () => {
 test('tab cycling wraps in both directions', () => {
   assert.equal(nextDrawerTab('clipboard', 1), 'commands')
   assert.equal(nextDrawerTab('prompts', 1), 'queue')
-  assert.equal(nextDrawerTab('queue', 1), 'files')
+  assert.equal(nextDrawerTab('queue', 1), 'transcript')
+  assert.equal(nextDrawerTab('transcript', 1), 'files')
   assert.equal(nextDrawerTab('notes', 1), 'context')
   assert.equal(nextDrawerTab('context', 1), 'git')
   assert.equal(nextDrawerTab('notifications', 1), 'clipboard')

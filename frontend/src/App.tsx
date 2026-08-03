@@ -60,6 +60,7 @@ import { Settings } from './Settings'
 import { GuidedTutorial, type TutorialStepId } from './GuidedTutorial'
 import { completeTutorial, emitTutorialAction, resetTutorial, shouldStartTutorial } from './tutorial'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
+import { TURN_ENDED_EVENT } from './transcriptView'
 import { applyNoteEditorConfig } from './noteEditorSettings'
 import { applyUiScale, watchUiScaleProfile } from './uiScale'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command } from './commands'
@@ -1000,6 +1001,10 @@ export function App() {
           const eventProject=projectsRef.current.find(item=>item.id===(eventSession?.project_id||String(soundEvent.payload?.project_id||'')))
           if (!isReplay) handleSessionSound(soundEvent,eventProject?.effective_options?.notification_sounds_enabled!==false)
           if (['notification','notification_created'].includes(event.type)) void loadNotifications(true)
+          // The drawer's transcript reader refreshes on this rather than on a timer.
+          // Replayed turns are re-broadcast on purpose: a reconnect is exactly when the
+          // reader's copy is stalest, and a reread is cheap and idempotent.
+          if (event.type === 'turn_ended') window.dispatchEvent(new CustomEvent(TURN_ENDED_EVENT, { detail: { sessionId: event.session_id } }))
           if (event.type === 'voice_clip_ready' || event.type === 'voice_clip_failed') {
             const clipId = String(event.payload?.clip_id || '')
             window.dispatchEvent(new CustomEvent('mux:voice-clip', { detail: {

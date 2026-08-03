@@ -135,6 +135,26 @@ let context: CaptureContext = {
 }
 const dedupe = new CaptureDedupe()
 let installed = false
+let suppressDepth = 0
+
+/**
+ * Run a copy that must not enter the ring, and return whatever it returns.
+ *
+ * For surfaces whose copies are documents rather than snippets — the transcript
+ * reader, above all, where copying is the primary act and one agent reply can be
+ * kilobytes. Capturing those would evict the short things the ring exists to hand
+ * back, which is the opposite of helping.
+ *
+ * The guard only needs to span the *synchronous* part of a copy: both hooks (the
+ * patched `writeText` and the document-level `copy` listener) fire before
+ * `copyPreparedText` reaches its first `await`, so wrapping the call that starts
+ * it is enough even though the promise settles later. Depth-counted so nesting
+ * cannot leave capture switched off.
+ */
+export function withoutClipboardCapture<T>(run: () => T): T {
+  suppressDepth += 1
+  try { return run() } finally { suppressDepth -= 1 }
+}
 
 /** Point capture at live app state (focused session, device class, on/off). */
 export function configureClipboardCapture(next: Partial<CaptureContext>): void {
@@ -146,6 +166,7 @@ export function configureClipboardCapture(next: Partial<CaptureContext>): void {
  * error over the copy the user actually asked for.
  */
 export function captureCopy(text: unknown, source: string): void {
+  if (suppressDepth > 0) return
   if (!context.enabled() || !shouldCapture(text)) return
   if (!dedupe.accept(text)) return
   void api<ClipboardCaptureResult>('POST', '/api/clipboard', {

@@ -34,7 +34,7 @@ It should call domain packages rather than acquire their storage or process resp
 | `spawn_contract.py` | spawn field validation: bounded env, cwd containment, Claude marker scrubbing | project ownership (the caller supplies the root) |
 | `history.py` | shared schema, Project/layout persistence, run history, search index | live PTY lifecycle |
 | `history_backfill.py` | bounded cancellable complete-history jobs | durable job scheduling, native file mutation |
-| `transcript_view.py` | bounded Claude/Codex conversation parsing | process state, transcript writes |
+| `transcript_view.py` | bounded Claude/Codex conversation parsing; the human-readable `conversation_view` reduction (CLI machinery classified out, agent turns merged, byte/message capped, own LRU) | process state, transcript writes, redaction (the reader is the machine's owner) |
 | `layouts.py` | layout-v6 validation and migrations | UI focus or drag state |
 | `operational_telemetry.py` | process/quota/reset/context/tool evidence; provider-evidence reset after proven session-identity repair | credentials, automatic process killing |
 | `status_timeline.py` | durable per-session detection timeline: `LedgerRing` (seq/run-id stamping + guarded sink nudge), write-behind batched drain into `status_timeline`, time-ranged/post-mortem queries, retention, `note_layer_reading` (on-change layer entries) | the transition contract itself (`apply_state_transition` never touches persistence), state decisions, HTTP handlers (`server.py`) |

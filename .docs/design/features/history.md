@@ -62,6 +62,14 @@
   compounded over repeated resumes (`… resumed resumed`) and, for an inherited run, renamed an
   entry the pane shares rather than replaces. The row's `auto_named` flag carries over too, so
   a conversation nobody renamed stays auto-titleable and a renamed one stays pinned.
+- **Live sessions read their own transcript through a separate route.** The drawer's Transcript
+  tab (`ui.md`) uses `GET /sessions/{id}/transcript`, not the history transcript route: the
+  history route reindexes a run's searchable messages and loads its annotations on every call,
+  which is right for opening an entry once and wrong for a surface that refreshes on every turn.
+  Both parse the same native files through `transcript_view.py` and neither mutates them; they
+  differ in what they reduce to. History indexes everything text-shaped, because search wants
+  recall. The reader keeps only what was said, because a reading column wants only the
+  conversation.
 - Index deletion never deletes or edits the native transcript.
 - When session adoption proves that a lifecycle bug indexed another live session's transcript,
   the false run is quarantined (`agent_visible=0`), its rebuildable message/index cursor is
@@ -118,5 +126,6 @@
 - `src/swe_mux/reconcile.py`
 - `src/swe_mux/history_backfill.py`
 - `src/swe_mux/transcript_view.py`
+- `frontend/src/TranscriptTab.tsx`, `frontend/src/transcriptView.ts`
 - `src/swe_mux/operational_telemetry.py`
 - `frontend/src/HistoryBrowser.tsx`
