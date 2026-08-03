@@ -5,33 +5,38 @@ id = "29a044bb-a06b-4216-95e4-39c5e91d48fb"
 ---
 # swe-mux Agentic Controle Plane (ACP)
 
-in file browser in right drawer, allow creating files/folders within right lcick context?
+
+in the agent context right sidebar drawer section - can we also show global claude/agents files as well
+
+
+OPINIONS.md
+VOICE.md
+symlinking agents and claude
+rtk hmm
+
+codex:
+	Treat the 703 MiB log database as suspect. Do not modify it while Codex processes are using it. A controlled cleanup would require stopping all Codex processes, backing up the SQLite files, and letting Codex recreate the diagnostic database. That is an upstream workaround, not a supported swe-mux operation.
+
+
+
+maybe a global notes scratchpad. project agnostic
+
+
+on mobile, all current agents were idle, but I kept getting notifications that agent is ready. or that it was waiting for my input. annoying.
+	make sure this is still happening after rebuilding supervisor
+
+
+
+
+- setting a session to "auto-approve requests" - the harness will then automatically approve requests - basically "dangerously approve permissions" but at the control plane level
+	- lots of requests are very benign (create vscode task, access skills/claude config to read).
+	- These should be able to be approved by swe-mux itself
+
+
+
 
 any way to make my init-project script (C:\Users\Jatora\Desktop\Development\init-project.ps1) also add a new project in swe-mux for it?
-
-in left sidebar, add collapse/expand all button for projects. collapses each project AND each group
-
-right sidebar drawer - new addition:
-	the currently focused session's transcript, with copy commands for agent responses and user messages
-	easier to view/browse through and select/copy from
-	excludes all the various tool calls? or maybe collapses them
-
-in preview panes tabs, on mobile, the right edge of content is generally slightly cut off - so it doesnt fit fully
-
-in preview panes - if an update is made to a file served on a server that im viewing in preview, will that preview update? earlier i had to have it reserve it on a different port for it to update the content. so im not sure if it was an issue with the preview tab functionality or what
-
-
-I think project/session processes should be a right sidebar drawer item
-	and we dont need the 'proc' button in agent session topbars taking up space
-	so when opened it should be filtered to the processes of the current project by default? maybe not the session, or should it be the session? kaybe project but highlighting the current session if a session is currently focused?
-
-im considering more and more if the project and session notes should be part of the tight sidebar drawer
-
-when i resume a session from session history, it should focus to that resumed session. currently it just returns me to whatever tab was focused before, without switching, after i hit the 'resume as new' button. please fix this
-
-
-
-abiliity to attach files / drag files into chats? if compatible? excel/csv etc?
+	will this require swe-mux daemon to have an API of some sort that other applications can tap into?
 
 
 
@@ -41,14 +46,13 @@ Test automations/control plane before proceeding through remaining roadmap
 	Ensure everything is firing and working properly across the control plane/automation/observation hierarchy
 
 
-gestures for switching between projects
-
 task list - that an agent can check off and add comments too - maybe replace or supercede the observability inbox
 
 - custom tasks - not just vscode tasks. probably good to just not rely on vscode conventions while still allowing importing of them though, but you can just define ur own swe-mux scripts for a project. agents can do that easily once the swemux mcp is up and can be queried for swe-mux development type info
 
 - command rail commands: 
-	- copy nth response
+	- copy nth response - perhaps leveraging the right sidebar's session message viewer to make this easier? or whatever the source of its data is
+		- when u hit the copy nth button it then brings up a quick number selector for quick tap/click of the number
 
 	- quick-model changes. tap it and it expands into a model and effort picker that then does the switch on claude/codex?
 
@@ -57,8 +61,6 @@ task list - that an agent can check off and add comments too - maybe replace or 
 - allow users to select their text renderer from options (continuity, etc)
 
 - preview page tabs - allow seeing the dev console logs and entering dev console commands?
-
-- setting a session to "auto-approve requests" - the harness will then automatically approve requests - basically "dangerously approve permissions" but at the control plane level
 
 
 - maybe configurable gesture zones? swipe left top half of screen does one thing, swipe left bottom half of screen does another
@@ -143,21 +145,7 @@ memory building?
 	- Persist the talk on/off intent globally (a single client-side or per-user flag), so "talk is on" is a property of the workspace, not of whichever pane happened to own it — matching your mental model.
 	
 	- Scope: (1) and (2) are the real work (one refactor of ConversationControl into an App-level singleton plus a focus-change effect). (3) and (4) are small. Want me to write this up as a concrete implementation plan, or start with just the mobile "talk follows the focused session" behavior since that's the most visible gap?
-	
 
-
-- Transcript-first agent view
-	- Claude/Codex sessions should eventually have a clean message transcript and native multiline composer by default, with “Live terminal” as a toggle. Raw terminal streaming remains invaluable, but it should not be the primary phone interface.
-
-	- something like this in it:
-		- a heatmap/sidebar for agent chats for jumping around to user/agent replies quickly
-			- maintained by the system, overlaid on window or something
-			- also able to selectively copy them to clipboard without even jumping to them or having to do `/copy`
-			- probably a local processing of raw transcripts involved to make this possible and actually performant?
-
-- AMBIENT AGENT IDEAS
-	- Monitor the active transcript at intervals - giving a running status of what it is actually doing
-		- The agent would need to hold a bit of context, but it just needs to give a small annotation on what is happening. Specifically what the agent is chasing down in that moment, tracing its path as it does different things and WHY it does them
 
 
 - schedule new sessions and messages for a space/project. cron schedule or one-offs, etc
