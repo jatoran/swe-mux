@@ -76,7 +76,7 @@ import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettin
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { dismissSoftKeyboard, softKeyboardHolder } from './mobileKeyboard'
 import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
-import { focusMemoryWith, parseFocusMemory, parseViewPreference, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
+import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import { reorderForHover, reorderTargetFromContainer, type DropSide, type ReorderAxis } from './dragReorder'
 import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from './pointerDragClaim'
 import { horizontalWheelDelta } from './wheelScroll'
@@ -249,6 +249,10 @@ export function App() {
   const [projectId, setProjectId] = useState('')
   const [activeId, setActiveId] = useState<string | null>(null)
   const [focusedViewId,setFocusedViewId]=useState<string|null>(null)
+  // A view we have asked to focus that this project's layout does not hold yet. Set by
+  // `requestFocusView` and consumed by the reconciliation effect; see
+  // `reconcileFocusView` for why the intent has to outlive the refresh.
+  const pendingFocusId=useRef<string|null>(null)
   const [layoutMap, setLayoutMap] = useState<Record<string, PaneLayout>>({})
   const layoutValues=useRef<Record<string,PaneLayout>>({})
   const [broadcast, setBroadcast] = useState(false)
@@ -1184,11 +1188,24 @@ export function App() {
   )
 
   useEffect(()=>{
-    if(!activeLayout.root){if(focusedViewId)setFocusedViewId(null);return}
-    if(focusedViewId&&stackForView(activeLayout,focusedViewId))return
-    const next=paneStacks(activeLayout)[0]?.active_child_id||null
-    setFocusedViewId(next)
+    const {focus,keepRequest}=reconcileFocusView({
+      requested:pendingFocusId.current,
+      focused:focusedViewId,
+      hasRoot:!!activeLayout.root,
+      holdsRequested:!!pendingFocusId.current&&!!stackForView(activeLayout,pendingFocusId.current),
+      holdsFocused:!!focusedViewId&&!!stackForView(activeLayout,focusedViewId),
+      firstPaneActive:paneStacks(activeLayout)[0]?.active_child_id||null,
+    })
+    if(!keepRequest)pendingFocusId.current=null
+    if(focus!==focusedViewId)setFocusedViewId(focus)
   },[projectId,activeLayout,focusedViewId])
+
+  /** Focus a view now, and again the moment the layout that holds it arrives.
+   *
+   *  For panes the daemon creates on our behalf, where the response names the leaf but
+   *  the layout carrying it is a refresh behind. A plain `setFocusedViewId` is undone by
+   *  the reconciliation above before that refresh lands. */
+  const requestFocusView=(id:string)=>{pendingFocusId.current=id;setFocusedViewId(id)}
 
   useEffect(()=>{
     if(!window.matchMedia('(max-width:760px)').matches)return
@@ -2216,7 +2233,7 @@ export function App() {
     setReviewState(current=>current?{...current,loading:true,error:''}:current)
     try{
       const result=await api<{session:Session}>('POST',`/api/history/${reviewState.entry.id}/second-opinion`,{confirm:true,preview_token:reviewState.preview.preview_token,instructions:reviewState.instructions,backend:reviewState.preview.backend,project_id:reviewState.project,target_session_id:activeId})
-      setReviewState(null);await refresh();setProjectId(result.session.project_id);setActiveId(result.session.id)
+      setReviewState(null);await refresh();setProjectId(result.session.project_id);setActiveId(result.session.id);requestFocusView(result.session.id)
     }catch(cause){setReviewState(current=>current?{...current,loading:false,error:cause instanceof Error?cause.message:String(cause)}:current)}
   }
 
@@ -2224,8 +2241,16 @@ export function App() {
     try {
       const targetProject = entry.project_id || projectId
       const resumed = await api<Session>('POST', `/api/history/${entry.id}/resume`, { project_id: targetProject, target_session_id: targetProject === projectId ? activeId : undefined })
-      setSessions(items => [...items, resumed]); setProjectId(resumed.project_id); setActiveId(resumed.id); setFocusedViewId(resumed.id)
+      // `requestFocusView`, not `setFocusedViewId`: the daemon attached the pane and set
+      // it active in its own layout, but this client sees that layout only after the
+      // refresh below. Plain focus would be reconciled away in the gap and the resumed
+      // conversation would open behind whatever tab the History browser was opened from.
+      setSessions(items => [...items, resumed]); setProjectId(resumed.project_id); setActiveId(resumed.id); requestFocusView(resumed.id)
       setHistoryOpen(false)
+      // The workspace is behind a full-screen overlay and, on a phone, possibly a drawer
+      // too. Focusing a pane nobody can see is not focusing it. Mobile-only for the side
+      // panel: on desktop that is a docked column beside the workspace, not over it.
+      setSidebarOpen(false); if(mobileWorkspace)setClipboardOpen(false)
       await refresh()
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
@@ -2236,7 +2261,7 @@ export function App() {
   const branchSession = async (session: Session) => {
     try {
       const result = await api<{ session: Session; source: string }>('POST', `/api/sessions/${session.id}/branch`, { target_session_id: session.id, direction: 'after' })
-      setSessions(items => [...items, result.session]); setActiveId(result.session.id); setFocusedViewId(result.session.id)
+      setSessions(items => [...items, result.session]); setActiveId(result.session.id); requestFocusView(result.session.id)
       await refresh()
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
@@ -2250,6 +2275,9 @@ export function App() {
       const resumed = await api<Session>('POST', `/api/history/${session.agent_run_id || session.id}/resume`, { project_id: session.project_id })
       setSessions(items => [...items, resumed])
       setActiveId(resumed.id)
+      // The replacement takes the original's place in the layout, so focus has to move
+      // with it: the leaf it was on is about to stop existing.
+      requestFocusView(resumed.id)
       setContextMenu(null)
       await updateLayout(session.project_id, replaceTerminal(layoutMap[session.project_id] || emptyLayout(), session.id, resumed.id))
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }

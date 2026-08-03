@@ -51,6 +51,47 @@ export function resolveInitialFocus(
   return { projectId, sessionId }
 }
 
+/** What focus should become once the layout has settled, given a view we asked for.
+ *
+ * Flows that spawn a pane on the daemon — history resume, branch, second opinion —
+ * learn the new leaf's id from the response but only learn *where it sits* on the next
+ * layout refresh. Calling for that focus immediately is not enough on its own: until
+ * the refresh lands the id names nothing in the layout, and reconciliation reasonably
+ * reads that as stale focus and falls back to the pane's current tab. The resumed
+ * session then opens behind the tab you started from, which is the whole bug.
+ *
+ * So a request outlives the refresh it is waiting for — however many that takes, which
+ * matters because a refresh already in flight can have been snapshotted before the
+ * spawn committed. It is dropped only when something else deliberately lands on a real
+ * leaf while we wait (a tab click, a project switch): that is a choice the user just
+ * made, and it outranks a request the layout still cannot satisfy. Without that, the
+ * pane would jump out from under them when the refresh finally arrived.
+ *
+ * `null` means "leave focus alone"; `keepRequest` says whether the request is still
+ * outstanding. Pure so the ordering can be tested without a layout tree or a clock.
+ */
+export function reconcileFocusView(
+  { requested, focused, hasRoot, holdsRequested, holdsFocused, firstPaneActive }: {
+    requested: string | null
+    focused: string | null
+    hasRoot: boolean
+    holdsRequested: boolean
+    holdsFocused: boolean
+    firstPaneActive: string | null
+  },
+): { focus: string | null; keepRequest: boolean } {
+  if (requested) {
+    if (holdsRequested) return { focus: requested, keepRequest: false }
+    // Still waiting. Hold focus wherever it is rather than falling back, or the
+    // fallback becomes the answer and the arriving pane never gets focus.
+    if (focused === requested || !focused || !holdsFocused) return { focus: focused, keepRequest: true }
+    return { focus: focused, keepRequest: false }
+  }
+  if (!hasRoot) return { focus: null, keepRequest: false }
+  if (focused && holdsFocused) return { focus: focused, keepRequest: false }
+  return { focus: firstPaneActive, keepRequest: false }
+}
+
 export function focusMemoryWith(memory: FocusMemory, projectId: string, sessionId: string | null, viewId: string | null = null): FocusMemory {
   const byProject = { ...memory.byProject }
   if (sessionId) byProject[projectId] = sessionId

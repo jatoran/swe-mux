@@ -58,6 +58,12 @@
   resolves transcripts by working directory, so that writes a different file). Only those
   record a `resume` lineage edge — an inherited run is the same run, and an edge to itself
   would read as a fork that never happened.
+- **Resuming lands you in the resumed pane.** The daemon attaches it and makes it its stack's
+  active tab; the browser also focuses it, closing the History overlay (and, on a phone, the
+  sidebar) so the pane it just focused is actually on screen. Focus is *requested* rather than
+  set, because the client learns the new leaf's id from the response but learns where it sits
+  only on the next layout refresh — see `ui.md` for why a plain focus in that gap is undone,
+  and which other flows share the mechanism.
 - **A resumed pane carries the conversation's name, unsuffixed.** The old `"<name> resumed"`
   compounded over repeated resumes (`… resumed resumed`) and, for an inherited run, renamed an
   entry the pane shares rather than replaces. The row's `auto_named` flag carries over too, so

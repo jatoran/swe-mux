@@ -507,3 +507,33 @@ def test_history_filters_fit_narrow_split_panes() -> None:
     assert "Time: last message" in history
     assert "timestampLabel(message.ts)" in history
     assert "Started {timestampLabel(historyStart(entry))}" in history
+
+
+def test_daemon_spawned_panes_request_focus_rather_than_setting_it() -> None:
+    """A pane the daemon creates is focused through the pending-request path.
+
+    These flows learn the new leaf's id from their response but learn where it sits
+    only on the next layout refresh. A bare `setFocusedViewId` in that gap is read as
+    stale focus by the reconciliation effect and replaced with the pane's current tab,
+    so the resumed/branched session opens *behind* the tab it was started from. The
+    ordering itself is `reconcileFocusView` in `viewState.ts`, unit-tested there; what
+    is pinned here is that the call sites actually go through it.
+    """
+    app = source("App.tsx")
+
+    for flow in ("resumeHistoryEntry", "branchSession", "resumeSession", "confirmSecondOpinion"):
+        body = re.search(rf"const {flow} = ?async[^\n]*\n(.*?)\n  \}}\n", app, re.DOTALL)
+        assert body, f"{flow} is no longer a recognisable handler"
+        assert "requestFocusView(" in body.group(1), f"{flow} must request focus, not set it"
+        assert "setFocusedViewId(" not in body.group(1), (
+            f"{flow} sets focus directly, which the layout refresh will undo"
+        )
+
+    # The request is held in a ref and consulted by the reconciliation effect, or it
+    # would be dropped by the very render it exists to survive.
+    assert (
+        "const requestFocusView=(id:string)=>"
+        "{pendingFocusId.current=id;setFocusedViewId(id)}"
+    ) in app
+    assert "requested:pendingFocusId.current" in app
+    assert "if(!keepRequest)pendingFocusId.current=null" in app

@@ -393,14 +393,28 @@ responsive controls.
 
 - Focus is device-local and URL-addressable by Project/session. Reload prefers a valid URL
   target, then remembered focus, then a visible fallback.
-- Mobile's top row is `[nav] [quota] [Project name] [Run]`: navigation and the two provider
-  quota boxes at the left, the Project name taking the slack in the middle, Run pinned to the
-  far right. It has no separate session dropdown. The Project name is a real button: a single
-  tap opens the Project menu (long-press and right-click stay equivalent), because reaching a
-  menu should never require a hold on touch.
-- The bar is flex with `nowrap`, not grid. Only the Project name flexes and the other three are
-  content-sized; expressed as grid, the `auto` track next to the name's `1fr` absorbed the
-  slack and left the quota boxes stranded mid-bar.
+- Focus naming a view this Project's layout does not hold is treated as stale and replaced with
+  the first pane's active tab. That is right for a view that was closed elsewhere and wrong for
+  one that has not arrived yet, and both look identical at that instant. So a flow whose pane
+  the *daemon* creates — history resume, Branch, second opinion — **requests** focus rather than
+  setting it: the response names the new leaf, but the layout carrying it is a refresh behind,
+  and a plain focus in that gap is reconciled away before the pane appears. The symptom is
+  specific and was live for resume: the new session starts, and you are left looking at the tab
+  you started from. A request is held until the leaf actually exists — not for one refresh, but
+  however many it takes, since `refresh()` is deduplicated and the one a flow awaits can have
+  been snapshotted before its own spawn committed. It is dropped early only if something else
+  lands on a real leaf while waiting (a tab click, a project switch), which is a choice the user
+  just made and outranks a request the layout still cannot satisfy. Ordering lives in
+  `reconcileFocusView` (`viewState.ts`), kept pure so it is testable without a layout tree.
+- Focusing a pane is not enough if something is covering it. These flows also close the
+  full-screen overlay they were started from and, on a phone, the navigation drawer; the side
+  panel closes on mobile only, since on desktop it is a docked column beside the workspace
+  rather than over it.
+- Mobile's top row has no separate session dropdown. The Project name is a real button: a
+  single tap opens the Project menu (long-press and right-click stay equivalent), because
+  reaching a menu should never require a hold on touch.
+- The bar is flex with `nowrap`, not grid: expressed as grid, the `auto` track next to the
+  name's `1fr` absorbed the slack and left the quota boxes stranded mid-bar.
 - The bar is `[nav] [quota] [Project name] [Run] [side panel]`. Only the Project name flexes;
   everything else is content-sized, and the name is the one thing that can give, since it
   ellipsizes and the Project it names also appears in the sidebar and the tab strip. Measured
