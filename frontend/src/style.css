@@ -1476,6 +1476,40 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* A note is open in exactly one place, so the tab it left keeps its slot and says where it
    went rather than quietly rendering a second, conflicting editor. */
 .workspace-leaf-placeholder.note-in-drawer span{max-width:44ch}
+/* Processes tab: the watch half of process inspection. Rollups per session plus the loopback
+   servers they are running; trees, evidence, and terminate stay in the modal inspector, which
+   the footer links to. Reads the sample App already polls, so an open panel costs nothing. */
+.processes-tab{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.processes-filters{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:6px 9px;border-bottom:1px solid var(--line)}
+.processes-filters select{min-width:0;height:calc(30px*var(--ui-scale));padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
+.processes-filters select:focus{outline:0;border-color:var(--green)}
+.processes-filters button{min-height:calc(30px*var(--ui-scale));padding:0 9px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;cursor:pointer}
+.processes-filters button:hover{color:var(--text)}
+.processes-totals{flex:none;margin:0;padding:5px 9px;border-bottom:1px solid var(--line);background:var(--panel2);color:var(--muted);font-size:8px}
+.processes-body{flex:1 1 auto;min-height:0;overflow:auto}
+.processes-empty{padding:14px 10px;color:var(--muted);font-size:9px;text-align:center}
+.process-watch-row{border-bottom:1px solid var(--line)}
+/* The focused terminal's row is pinned first by the model; the bar is what says why it is
+   there, since "first" alone reads as arbitrary once the list is more than a few rows. */
+.process-watch-row.focused{border-left:2px solid var(--accent)}
+.process-watch-heading{width:100%;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:3px;border:0;background:transparent;color:var(--text);padding:7px 9px;text-align:left;cursor:pointer}
+.process-watch-heading:hover,.process-watch-heading:focus-visible{background:var(--panel2)}
+.process-watch-heading>span{min-width:0;display:flex;align-items:center;gap:6px;max-width:100%}
+.process-watch-heading strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:500}
+.process-watch-heading small{color:var(--muted);font-size:8px}
+.process-watch-project{font-style:normal;margin-right:6px;padding:0 4px;border:1px solid var(--line);border-radius:8px}
+.process-watch-server{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:6px;padding:0 9px 6px 9px}
+.process-watch-server>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--green);font-size:9px}
+.process-watch-server button{min-height:24px;padding:0 7px;border:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
+.process-watch-server button:hover{background:var(--panel2);color:var(--text)}
+.processes-footnote{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px;padding:6px 9px;border-top:1px solid var(--line);color:var(--muted);font-size:8px;line-height:1.4}
+.processes-footnote button{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:9px;white-space:nowrap;cursor:pointer}
+@media(max-width:760px){
+  .processes-filters select,.processes-filters button{height:calc(38px*var(--ui-scale));min-height:calc(38px*var(--ui-scale))}
+  .process-watch-heading{min-height:48px}
+  .process-watch-server button{min-height:38px;font-size:9px}
+  .processes-footnote button{min-height:38px}
+}
 /* Files tab: the browser fills the drawer column. Its own header carries the Project
    root, which is the only thing identifying which tree this is once it left the pane
    tree (a pane had a tab strip to say so; a drawer tab says only "Files"). */

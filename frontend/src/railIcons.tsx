@@ -131,6 +131,15 @@ export const GitIcon = () => <svg {...stroke}>
   <path d="M16 12H12a6 6 0 0 1-6-6" />
 </svg>
 
+/** A pulse on a screen: something running, and whether it is doing anything.
+ *
+ * Not a gauge or a chip — this tab is about live activity per session, and the trace is the one
+ * mark that reads as "running" rather than "capacity". */
+export const ProcessesIcon = () => <svg {...stroke}>
+  <rect x="2" y="4" width="20" height="16" rx="2" />
+  <path d="M5 13h3l2-4 2.5 7 2-3h4.5" />
+</svg>
+
 /** A bell. The one concept here with a mark everyone already knows. */
 export const AlertsIcon = () => <svg {...stroke}>
   <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
@@ -148,5 +157,6 @@ export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   notes: NotesIcon,
   context: ContextIcon,
   git: GitIcon,
+  processes: ProcessesIcon,
   notifications: AlertsIcon,
 }

@@ -11,6 +11,8 @@ import { GitTab } from './GitTab'
 import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
 import { drawerTab, nextDrawerTab, type DrawerTab, type DrawerTabId } from './drawerTabs'
+import { ProcessesTab } from './ProcessesTab'
+import type { WatchScope, WatchSnapshot } from './processWatch'
 import { parseNoteResourceId } from './layout'
 import type { NotePlacement } from './NotesTab'
 import { DRAWER_TAB_ICONS } from './railIcons'
@@ -67,6 +69,17 @@ type Props = {
   focusedNote: { projectId: string; noteId: string; label: string } | null
   onOpenProjectNote: (projectId: string, place: NotePlacement) => void
   onOpenSessionNote: (projectId: string, noteId: string, place: NotePlacement) => void
+  /** Processes: the fleet sample `App` already polls. Passed in rather than fetched here so an
+   *  open panel adds no process enumeration to the daemon's loop — see `ProcessesTab`. */
+  processSnapshot: WatchSnapshot
+  projects: Project[]
+  processScope: WatchScope
+  onProcessScope: (scope: WatchScope) => void
+  onRefreshProcesses: () => void
+  /** Register a detected loopback server as a preview tab beside its session. */
+  onOpenPreview: (sessionId: string, url: string) => void
+  /** Escape hatch to the modal inspector, prefiltered to the tab's current scope. */
+  onOpenInspector: (projectId: string | null) => void
   /** Notes: the note this Project's drawer is editing, or null to show the index. A note has
    *  one live editor per browser (see `drawerNotes.ts`), so this is also what tells the
    *  matching pane leaf to stand down. */
@@ -233,6 +246,21 @@ export function UtilityDrawer(props: Props) {
         return <AgentContextTab project={project} session={session} />
       case 'git':
         return <GitTab project={project} sessions={props.sessions} />
+      case 'processes':
+        return <ProcessesTab
+          snapshot={props.processSnapshot}
+          sessions={props.sessions}
+          projects={props.projects}
+          projectId={project?.id || ''}
+          focusedSessionId={session?.id || null}
+          scope={props.processScope}
+          onScope={props.onProcessScope}
+          onSelectSession={props.onOpenSession}
+          onOpenPreview={props.onOpenPreview}
+          onOpenInspector={props.onOpenInspector}
+          onRefresh={props.onRefreshProcesses}
+          onDone={onDone}
+        />
       case 'notifications':
         return <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} onChanged={props.onNotificationsChanged} />
     }

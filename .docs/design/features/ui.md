@@ -524,7 +524,9 @@ responsive controls.
   collapses to nothing when no strip is rendered.
 - The pane tools row carries `note`, `queue[:N]` (agent sessions only — focuses that session
   and opens the drawer's Queue tab on it, the count is its pending items;
-  `features/prompt-queue.md`), `proc`, and the `⋯` session menu.
+  `features/prompt-queue.md`), and the `⋯` session menu. Every labelled chip here **reports
+  state** — empty/written/open, or a pending count — which is the bar for occupying a bar that
+  also has to fit the session name and path; `proc` did not, and went to the drawer.
 - The Queue tab's `auto:` line is a status as much as a control: on/off and the bounds
   actually in force (sends left, minutes left, quiet hours, why it is off), disclosing the
   toggle and the separate "accept agent messages armed" switch. It is unavailable — with the
@@ -674,9 +676,11 @@ responsive controls.
   pane and never writes. Git closes the
   Project-scoped block without joining them: it reads the repository behind the Project
   (branches, worktrees, dirty/upstream state) and opens nothing into a pane — see `git.md` for
-  what it shows and the mutations it is allowed. Notifications is neither, and sits last. Session
-  history, the process fleet, usage, and automation stay modal: they are wide, table-shaped
-  surfaces that a ~380 px column serves badly.
+  what it shows and the mutations it is allowed. **Processes** closes that block for the same
+  shape of reason: Project-scoped, reports rather than opens, and see below for the split it
+  represents. Notifications is neither, and sits last. Session history, usage, and automation
+  stay modal, as does the process *inspector*: they are wide, table-shaped surfaces that a
+  ~380 px column serves badly.
 - The injection tabs share the verb but not the routing. Clipboard inserts land in the
   last-focused surface, editor or terminal. **Prompts** inserts are terminals-only and its rows
   additionally answer right-click / long-press with a target menu (a live agent session in this
@@ -779,6 +783,35 @@ responsive controls.
   whole-file instruction copies: choose either direction, review a normalized diff, confirm the
   overwrite, and retain a revision-guarded restore point. It never watches or synchronizes in the
   background and never writes learned memory.
+- **Processes** is the *watch* half of process inspection; the modal inspector keeps the *act*
+  half. The split is what makes a column viable at all. Watching is "which of my sessions are
+  running something, is that dev server up" — a handful of numbers and a link, and a question you
+  ask with a terminal in front of you, which is the same argument that put Queue here. Acting is
+  the full tree with parent lineage, evidence state and confidence, and the
+  interrupt/terminate/terminate-tree row; those need width to read and a visible confirm step to
+  be safe, and a 300 px column with a confirm-on-second-click destructive button is how someone
+  kills the wrong tree. **Nothing in the tab terminates anything.** `Full inspector` in the footer
+  opens the modal, prefiltered to whatever the tab is scoped to.
+- Rows are per session, not per process: a session's tree is mostly bookkeeping (`cmd`, `conhost`,
+  the agent CLI), so a per-process column would be a wall of noise around the one row that
+  matters. Each row is a rollup (process count, CPU, working set) plus the loopback servers that
+  session is listening on, which are the only actionable things here — `preview` registers one as
+  a tab beside its session, `copy` takes the URL. Ended processes are dropped rather than greyed:
+  they support no action here and are already excluded from every total in the app.
+- Scoped to the active Project by default, with **the focused session's row pinned first and
+  marked**. That combination is deliberate. Session-scoped would read empty most of the time (most
+  sessions are an agent CLI and a conhost) and would churn its whole body on every focus change,
+  the same objection that sank a focus-following Notes tab; Project-scoped answers the question
+  people actually have, and the pin answers "what is *this* session running" without a scope
+  change. `All projects` is one click away and the choice survives a tab switch.
+- **It starts no poll of its own**, reading the fleet sample `App` already refreshes for the
+  sidebar's resource summary and its spawned-server rows. The reconcile walk behind that data
+  holds the GIL on Windows (`processes-and-previews.md` § Sampling cost), so a panel left open
+  all day must cost the daemon nothing extra. Any future addition here inherits that rule.
+- The pane header lost its `proc` chip when this shipped. It was the only pane tool carrying no
+  state of its own — `note` reports empty/written/open, `queue` its pending count — so it was pure
+  navigation, and on a phone it cost 40 px of a bar that also has to fit the session name and
+  path. The session context menu and the palette still open the inspector directly.
 - **Alerts** shows open attention records first and dismissed ones only on request. Each row
   dismisses (or restores) and the footer clears the lot; both write `read_at` server-side, so
   the state follows the user to every device and to the dashboard inbox rather than being a
@@ -819,10 +852,12 @@ responsive controls.
   used to carry glyph *and* label: six of them measured ~444 px, which overflowed a phone
   drawer (`min(430px, 92vw)`) into a scrollbar-less scroller and silently parked the last two
   tabs off-screen. Six icons were ~234 px. Adding Files and Notes is what pushed it over, and
-  the icon-only strip is what left room for Git and Queue without repeating that. Context is the
-  ninth tab, so the mobile tablist now deliberately overflows horizontally on one row: a fade
-  signals more content, the fixed close button never scrolls away, and selecting a tab scrolls it
-  into view. It must never wrap into a second header row.
+  the icon-only strip is what left room for Git and Queue without repeating that. Past the ninth
+  (Context) the mobile tablist deliberately overflows horizontally on one row: a fade signals
+  more content, the fixed close button never scrolls away, and selecting a tab scrolls it into
+  view. It must never wrap into a second header row. Every tab added since — Transcript,
+  Processes — inherits that, and the scroller is why the count is not itself a reason to refuse
+  one; the bar is whether the surface belongs beside a terminal.
 - The marks are stroke SVG on a 24 viewBox, sized in CSS (17 px in the strip, 19 px on touch,
   16 px on the rail), never in `em`: these surfaces run a 9–12 px font. They replaced text
   glyphs for the same reason the command rail's did — a monospace font gives every glyph one
@@ -830,9 +865,11 @@ responsive controls.
   way to normalize it. Two of the old glyphs were also simply wrong: `⌘` is the macOS Command
   key on a Windows-first app, and `❯` read as a shell prompt right next to the tab named
   Commands. The set is now clipboard-with-clock, terminal, speech bubble, ordered lines feeding
-  a chevron, folder, page, commit fork, bell — the injection tabs and the two navigators each
-  form a legible group. Context is brackets around linked memory nodes, distinct from both the
-  page (Notes) and folder (Files). Queue is deliberately not an envelope: the queue is *ordered* and the
+  a chevron, folder, page, commit fork, pulse trace, bell — the injection tabs and the two
+  navigators each form a legible group. Context is brackets around linked memory nodes, distinct
+  from both the page (Notes) and folder (Files). Processes is a pulse on a screen rather than a
+  gauge or a chip: the tab is about live activity per session, and the trace is the one mark that
+  reads as "running" instead of "capacity". Queue is deliberately not an envelope: the queue is *ordered* and the
   order is the whole point of it, and the chevron is what stops three lines reading as a
   hamburger menu. Git's
   fork is deliberately close kin to the command rail's Branch mark: they never appear together

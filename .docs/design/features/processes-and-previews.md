@@ -62,8 +62,21 @@
   just revalidated. Matching children against the last sample's owned set by raw PID let a
   child that respawned since (a dev server restarting) survive the action while the user
   believed the tree was gone.
-- The inspector opens from session/terminal right-click, pane-header `proc`, sidebar
-  `: menu` Process fleet, or the command palette. Fleet mode uses the coherent all-session
+- Inspection is split in two. The **Processes drawer tab** is the watch surface: one rollup row
+  per session (process count, CPU, working set) plus the loopback servers it is listening on,
+  scoped to the active Project with the focused session's row pinned first, and `preview`/`copy`
+  as its only actions. The **modal inspector** keeps everything that needs width or a
+  confirmation: the process tree, parent lineage, evidence state/reason/confidence, the ended
+  toggle, add-preview-by-URL, and interrupt/terminate/terminate-tree. **The drawer tab cannot
+  terminate anything**, deliberately — a two-click destructive confirm in a 300 px column is how
+  the wrong tree gets killed. It reads the fleet sample the frontend already polls and starts no
+  loop of its own, so leaving it open adds no process enumeration (see § Sampling cost); its
+  `Full inspector` button opens the modal prefiltered to the tab's scope.
+- The inspector opens from session/terminal right-click, the drawer tab's `Full inspector`,
+  sidebar
+  `: menu` Process fleet, or the command palette. The pane header's `proc` chip is gone: it was
+  the only pane tool with no state of its own, and the drawer tab covers what it was for. Fleet
+  mode uses the coherent all-session
   snapshot when available and falls back to aggregating session-scoped snapshots for an
   older running daemon; listener rows expose the preview action at the point of discovery.
   The coherent snapshot also exposes daemon/infrastructure members as a separate tree with
@@ -233,7 +246,9 @@ more — swe-mux does not reap or share language servers.
 - Proxy and runtime bridge: `src/swe_mux/server.py`
 - Durable evidence: `src/swe_mux/operational_telemetry.py`
 - Job boundary: `src/swe_mux/win_jobobj.py`, `src/swe_mux/session.py`
-- Inspector: `frontend/src/ProcessPanel.tsx`
+- Inspector (the act surface, modal): `frontend/src/ProcessPanel.tsx`
+- Drawer watch tab: `frontend/src/ProcessesTab.tsx`, `frontend/src/processWatch.ts` (the pure row
+  model: rollups, focused-first ordering, ended-process rules)
 - Resource summary: `frontend/src/ResourceUsage.tsx`, `frontend/src/resourceTotals.ts`
 - Duplicate tooling classification: `frontend/src/resourceTooling.ts`
 - Preview leaf + capture/region UI: `frontend/src/PreviewPane.tsx`

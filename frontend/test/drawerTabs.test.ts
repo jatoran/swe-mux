@@ -21,10 +21,12 @@ test('injection surfaces lead, then navigators, then attention surfaces', () => 
   // Git closes the Project-scoped block: it reports on the repository behind the Project
   // rather than opening anything into a pane, so it sits with them without being a navigator.
   // Transcript closes the session block: session-scoped like the four before it, but it
-  // reads that session back instead of writing into it.
-  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript', 'files', 'notes', 'context', 'git', 'notifications'])
+  // reads that session back instead of writing into it. Processes closes the Project block
+  // for the same shape of reason as Git: Project-scoped, reports rather than opens, and is
+  // the watch half of a surface whose acting half stays modal.
+  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript', 'files', 'notes', 'context', 'git', 'processes', 'notifications'])
   assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'session').map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript'])
-  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'project').map(tab => tab.id), ['files', 'notes', 'context', 'git'])
+  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'project').map(tab => tab.id), ['files', 'notes', 'context', 'git', 'processes'])
   assert.deepEqual(DRAWER_TABS.filter(tab => isNavigatorTab(tab.id)).map(tab => tab.id), ['files', 'notes'])
   // The insert group and the navigator group must stay contiguous, so the rail reads as
   // two blocks rather than an arbitrary list.
@@ -46,7 +48,8 @@ test('a stored tab is restored, anything else falls back to clipboard', () => {
   assert.equal(parseDrawerTab('commands'), 'commands')
   assert.equal(parseDrawerTab('notifications'), 'notifications')
   assert.equal(parseDrawerTab(null), 'clipboard')
-  assert.equal(parseDrawerTab('processes'), 'clipboard')
+  assert.equal(parseDrawerTab('processes'), 'processes')
+  assert.equal(parseDrawerTab('usage'), 'clipboard')
   assert.equal(drawerTab('prompts').label, 'Prompts')
   // An unknown id must still yield a tab rather than crashing the host.
   assert.equal(drawerTab('nope' as never).id, 'clipboard')

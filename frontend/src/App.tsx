@@ -45,6 +45,7 @@ import {
   DRAWER_NOTE_KEY, claimDrawerNote, drawerNoteFor, isDrawerOwned, parseDrawerNotes,
   pruneDrawerNotes, releaseDrawerNote, serializeDrawerNotes, type DrawerNoteMap,
 } from './drawerNotes'
+import type { WatchScope } from './processWatch'
 import { DRAWER_TAB_ICONS } from './railIcons'
 import { CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture } from './clipboardHistory'
 import { insertIntoFocusedSurface } from './insertTarget'
@@ -268,6 +269,12 @@ export function App() {
   const [historyScope,setHistoryScope]=useState('')
   const [historyOpen,setHistoryOpen]=useState(false)
   const [processScope,setProcessScope]=useState<string|null>(null)
+  // The drawer tab's scope: '' is every Project, anything else is that Project. Kept here (not
+  // in the tab) so switching tabs and coming back does not silently reset what you were
+  // watching. Project-scoped by default, like every other Project-scoped tab — a session-scoped
+  // processes view would churn its whole body on each focus change and read empty most of the
+  // time, since most sessions are just their agent CLI and a conhost.
+  const [processWatchScope,setProcessWatchScope]=useState<WatchScope>('')
   // Which Project's templates join the global ones. Unlike the other surfaces
   // this is additive rather than restrictive, so the app menu still passes the
   // active Project: opening "unscoped" would remove templates, not filters.
@@ -3047,7 +3054,11 @@ export function App() {
         <div><span class={`pane-state ${session.state}${session.observation_stale_since?' observation-stale':''}`} title={[session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}{session.observation_stale_since?' · stale':''}</span></div>
         <div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>
         <div class="pane-voice">{paneVoice}</div>
-        <div class="pane-tools"><button data-tutorial="session-note" class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button>{isAgent(session)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}<button class="pane-tool-label" aria-label={`Inspect processes for ${sessionName(session)}`} title="Processes and previews" onClick={() => {setActiveId(session.id);openProcessViewer(session)}}>proc</button><button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
+        <div class="pane-tools"><button data-tutorial="session-note" class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button>{isAgent(session)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{/* No `proc` chip. It was the only pane tool carrying no state of its own — `note` reports
+            empty/written/open and `queue` its pending count, while `proc` was pure navigation — and
+            on a phone it cost 40px of a bar that also has to fit the session name and path. What it
+            opened is now the drawer's Processes tab, which pins this session's row first, and the
+            session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
       {voiceStripNode}
       <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} visible={paneVisible} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
@@ -3423,6 +3434,19 @@ export function App() {
         onSendToAgent={request=>{if(mobileWorkspace)setClipboardOpen(false);setSendToAgent(request)}}
         queueOpenRequest={queueOpen.token?queueOpen:undefined}
         onQueueOpenAsTab={sessionId=>void openQueueTab(sessionId)}
+        processSnapshot={processFleet}
+        projects={projects}
+        // '' (all Projects) is the stored default; an unscoped tab means the Project the
+        // drawer is sitting beside, so it resolves to the active one at render time and
+        // follows a Project switch instead of pinning whichever was active when it opened.
+        processScope={processWatchScope&&projects.some(project=>project.id===processWatchScope)?processWatchScope:(projectId||'')}
+        onProcessScope={setProcessWatchScope}
+        onRefreshProcesses={()=>void loadProcesses()}
+        onOpenPreview={(sessionId,url)=>{
+          const owner=sessions.find(item=>item.id===sessionId)
+          if(owner)void openDetectedServer({url},owner)
+        }}
+        onOpenInspector={scope=>openProcessViewer(null,scope)}
         queuePending={queuePendingTotal}
         notesAllProjects={notesAllProjects}
         onNotesAllProjects={setNotesAllProjects}

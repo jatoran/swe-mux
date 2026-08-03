@@ -27,7 +27,7 @@
 // the terminal, a modal covers it; the docked column is the one placement that keeps the
 // target and the control on screen together.
 
-export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'queue' | 'transcript' | 'files' | 'notes' | 'context' | 'git' | 'notifications'
+export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'queue' | 'transcript' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'notifications'
 
 /** What a tab acts on: the focused terminal, the active Project, or the app itself. */
 export type DrawerTabScope = 'session' | 'project' | 'app'
@@ -54,6 +54,7 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'notes', label: 'Notes', title: 'Notes — read and write Project and session notes here, or open one in a pane', scope: 'project' },
   { id: 'context', label: 'Context', title: 'Context — view agent instructions and learned project memory', scope: 'project' },
   { id: 'git', label: 'Git', title: 'Git — worktree map and commit graph for this Project', scope: 'project' },
+  { id: 'processes', label: 'Processes', title: 'Processes — what this Project’s sessions are running, and what they are serving', scope: 'project' },
   { id: 'notifications', label: 'Alerts', title: 'Alerts — notifications and attention records', scope: 'app' },
 ]
 
