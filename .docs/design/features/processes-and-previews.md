@@ -191,6 +191,10 @@ more — swe-mux does not reap or share language servers.
 - HTTP methods, bodies, queries, root-relative HTML/CSS/module paths, runtime fetch/XHR,
   EventSource, WebSocket messages, and negotiated HMR subprotocols traverse the bridge.
   Browser Origin is replaced with the registered loopback origin for common dev servers.
+- Root-relative `src`/`href`/`action` values created after load traverse the same bridge.
+  The injected runtime intercepts DOM attribute/property writes and HTML insertion, with a
+  mutation fallback for detached fragments; external, protocol-relative, `data:`, and `blob:`
+  destinations keep browser-native behavior.
 - Rewriting covers `src`/`href`/`action` attributes **and inline `<script>` bodies**, because a
   module specifier inside an inline script is unreachable by attribute rewriting: the
   `@vitejs/plugin-react` preamble imports `/@react-refresh` that way, and an unprefixed miss
@@ -206,6 +210,12 @@ more — swe-mux does not reap or share language servers.
   30-second per-read timeout, no wall-clock total, and 32 concurrent requests. WebSocket
   connects time out after 10 seconds; messages are capped at 4 MiB with 16 concurrent bridges,
   30-minute idle timeout, and 12-hour lifetime. Clients may reconnect normally.
+- Preview responses use `Cache-Control: no-cache` and preserve upstream validators, so a manual
+  refresh revalidates same-URL assets instead of requiring a new port to escape an upstream
+  `max-age`. HMR/live reload remains server-owned; a plain server still needs manual refresh,
+  and server code without an autoreloader still needs a same-port process restart.
+- Preview chrome is width-contained by a shrinkable grid column. On mobile, the header action
+  rail scrolls inside the tab while the viewport and iframe remain within the visible width.
 - The iframe intentionally omits `allow-same-origin`, preventing preview code from reading
   the parent swe-mux application/API. Sandboxed `Origin: null` requests receive narrowly
   scoped CORS handling only on their registered preview route.

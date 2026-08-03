@@ -26,6 +26,17 @@ def test_browser_access_has_no_mux_bearer_path_and_previews_use_proxy() -> None:
     assert "allow-same-origin" not in preview
 
 
+def test_mobile_preview_grid_cannot_expand_past_its_tab() -> None:
+    css = (Path(__file__).parents[1] / "frontend" / "src" / "style.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".preview-pane{width:100%;min-width:0;min-height:0;display:grid;" in css
+    assert "grid-template-columns:minmax(0,1fr)" in css
+    assert ".preview-frame{width:100%;min-width:0;max-width:100%" in css
+    assert ".preview-frame iframe{display:block;max-width:100%;width:100%" in css
+
+
 def test_settings_exposes_direct_tailnet_listener_and_optional_serve() -> None:
     settings = (Path(__file__).parents[1] / "frontend" / "src" / "Settings.tsx").read_text(
         encoding="utf-8"

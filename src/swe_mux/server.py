@@ -6191,6 +6191,89 @@ const route=function(value){{
     return url.toString();
   }} catch (_) {{ return value; }}
 }};
+const urlAttributes=new Set(["src","href","action"]);
+const routeAttribute=function(value){{
+  const raw=String(value);
+  if(raw.startsWith("/")&&!raw.startsWith("//"))return route(raw);
+  try {{
+    const url=new URL(raw,location.href);
+    if(projectRoutes[canonicalOrigin(url)])return route(raw);
+  }} catch (_) {{}}
+  return value;
+}};
+const rewriteMarkup=function(value){{
+  const source=String(value);
+  return source.replace(/(\\b(?:src|href|action)\\s*=\\s*["'])([^"']+)/gi,
+    function(_,start,target){{return start+routeAttribute(target);}});
+}};
+const nativeSetAttribute=Element.prototype.setAttribute;
+Element.prototype.setAttribute=function(name,value){{
+  const next=urlAttributes.has(String(name).toLowerCase())?routeAttribute(value):value;
+  return nativeSetAttribute.call(this,name,next);
+}};
+const patchMarkupProperty=function(name){{
+  const descriptor=Object.getOwnPropertyDescriptor(Element.prototype,name);
+  if(!descriptor||typeof descriptor.set!=="function")return;
+  try {{
+    Object.defineProperty(Element.prototype,name,{{
+      configurable:descriptor.configurable,
+      enumerable:descriptor.enumerable,
+      get:descriptor.get,
+      set:function(value){{descriptor.set.call(this,rewriteMarkup(value));}}
+    }});
+  }} catch (_) {{}}
+}};
+patchMarkupProperty("innerHTML");
+patchMarkupProperty("outerHTML");
+const nativeInsertAdjacentHTML=Element.prototype.insertAdjacentHTML;
+Element.prototype.insertAdjacentHTML=function(position,value){{
+  return nativeInsertAdjacentHTML.call(this,position,rewriteMarkup(value));
+}};
+const patchUrlProperty=function(constructorName,name){{
+  const constructor=window[constructorName];
+  if(!constructor)return;
+  const descriptor=Object.getOwnPropertyDescriptor(constructor.prototype,name);
+  if(!descriptor||typeof descriptor.set!=="function")return;
+  try {{
+    Object.defineProperty(constructor.prototype,name,{{
+      configurable:descriptor.configurable,
+      enumerable:descriptor.enumerable,
+      get:descriptor.get,
+      set:function(value){{descriptor.set.call(this,routeAttribute(value));}}
+    }});
+  }} catch (_) {{}}
+}};
+[
+  ["HTMLImageElement","src"],
+  ["HTMLScriptElement","src"],
+  ["HTMLIFrameElement","src"],
+  ["HTMLSourceElement","src"],
+  ["HTMLMediaElement","src"],
+  ["HTMLLinkElement","href"],
+  ["HTMLAnchorElement","href"],
+  ["HTMLAreaElement","href"],
+  ["HTMLFormElement","action"]
+].forEach(function(entry){{patchUrlProperty(entry[0],entry[1]);}});
+const rerouteOwnAttributes=function(element){{
+  urlAttributes.forEach(function(name){{
+    if(!element.hasAttribute(name))return;
+    const current=element.getAttribute(name);
+    const next=routeAttribute(current);
+    if(next!==current)nativeSetAttribute.call(element,name,next);
+  }});
+}};
+const rerouteTree=function(node){{
+  if(!(node instanceof Element))return;
+  rerouteOwnAttributes(node);
+  node.querySelectorAll("[src],[href],[action]").forEach(rerouteOwnAttributes);
+}};
+new MutationObserver(function(records){{
+  records.forEach(function(record){{
+    if(record.type==="attributes")rerouteOwnAttributes(record.target);
+    else record.addedNodes.forEach(rerouteTree);
+  }});
+}}).observe(document,{{subtree:true,childList:true,attributes:true,
+  attributeFilter:["src","href","action"]}});
 const NativeWebSocket=window.WebSocket;
 window.WebSocket=class extends NativeWebSocket{{
   constructor(url,protocols){{super(route(url),protocols);}}
@@ -6479,7 +6562,12 @@ async def preview_proxy(request: web.Request) -> web.StreamResponse:
                     name: value
                     for name, value in upstream.headers.items()
                     if name.casefold() in _PROXY_RESPONSE_HEADERS
+                    and name.casefold() not in {"cache-control", "expires"}
                 }
+                # A Preview is a development viewport. Revalidate every resource so
+                # replacing same-URL HTML, bundles, or images cannot require a new
+                # port merely to escape an upstream max-age cache entry.
+                response_headers["Cache-Control"] = "no-cache"
                 location = upstream.headers.get("Location")
                 if location:
                     resolved = urlsplit(origin)._replace(path="", query="", fragment="")

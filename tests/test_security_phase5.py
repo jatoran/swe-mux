@@ -252,6 +252,18 @@ def test_preview_bridge_routes_event_streams_and_publishes_its_mount_point() -> 
     assert b'const prefix="/preview/preview-id/"' in rewritten
 
 
+def test_preview_bridge_routes_resources_created_after_page_load() -> None:
+    rewritten = rewrite_preview_html(b"<html><head></head></html>", "/preview/preview-id/")
+
+    assert b"Element.prototype.setAttribute=function" in rewritten
+    assert rb"source.replace(/(\b(?:src|href|action)\s*=\s*" in rewritten
+    assert b"\x08" not in rewritten
+    assert b'patchMarkupProperty("innerHTML")' in rewritten
+    assert b"Element.prototype.insertAdjacentHTML=function" in rewritten
+    assert b'["HTMLImageElement","src"]' in rewritten
+    assert b"new MutationObserver" in rewritten
+
+
 def test_preview_html_routes_other_project_loopback_services_through_mux() -> None:
     rewritten = rewrite_preview_html(
         b"<html><head></head></html>",
@@ -491,7 +503,15 @@ async def test_preview_proxy_streams_identity_binary_passthrough() -> None:
     raw = bytes(range(256)) * 400  # 102400 binary bytes
 
     async def binary(_: web.Request) -> web.Response:
-        return web.Response(body=raw, headers={"Content-Type": "image/png"})
+        return web.Response(
+            body=raw,
+            headers={
+                "Content-Type": "image/png",
+                "Cache-Control": "public, max-age=300",
+                "Expires": "Wed, 21 Oct 2037 07:28:00 GMT",
+                "ETag": '"image-v1"',
+            },
+        )
 
     upstream_app = web.Application()
     upstream_app.router.add_get("/img.png", binary)
@@ -501,6 +521,9 @@ async def test_preview_proxy_streams_identity_binary_passthrough() -> None:
             response = await client.get("/preview/preview-a/img.png")
             assert response.status == 200
             assert response.headers["X-Content-Type-Options"] == "nosniff"
+            assert response.headers["Cache-Control"] == "no-cache"
+            assert "Expires" not in response.headers
+            assert response.headers["ETag"] == '"image-v1"'
             body = await response.read()
             assert body == raw
 
