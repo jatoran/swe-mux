@@ -279,14 +279,13 @@ def test_session_tab_context_menu_omits_redundant_focus_and_detach_actions() -> 
     assert "runNamedCommand('pane.detach')" not in app
 
 
-def test_no_session_or_tab_context_menu_reshapes_the_pane_tree() -> None:
-    """Split / stack / dissolve are gone from every context menu, on every source.
+def test_no_desktop_context_menu_touches_the_pane_tree() -> None:
+    """Split, stack, dissolve AND move-tab are gone from the session and tab menus.
 
     They used to render on the sidebar row, the tab, and the pane's own ⋯ menu, where
-    five direction rows and two buttons pushed Rename and Kill past the fold in a menu
-    opened to act on one session. Layout is now drag (direct manipulation) or the
-    command palette. `Move tab` stays: it reorders the strip you are looking at rather
-    than reshaping the tree.
+    the direction rows and their buttons pushed Rename and Kill past the fold in a menu
+    opened to act on one session. Desktop layout is now drag (direct manipulation) or
+    the command palette.
     """
     app = (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(
         encoding="utf-8"
@@ -300,16 +299,22 @@ def test_no_session_or_tab_context_menu_reshapes_the_pane_tree() -> None:
         assert "Stack with focused terminal" not in menu
         assert "Dissolve tab stack into splits" not in menu
         assert "New terminal custom in split" not in menu
+        assert "directionRow('Move tab:'" not in menu
         assert "runNamedCommand('session.groupStack')" not in menu
         assert "runNamedCommand('stack.dissolve')" not in menu
         assert "runNamedCommand('session.customSplit')" not in menu
-        # The one directional row that survives, and the reason the helper is still here.
-        assert "directionRow('Move tab:'" in menu
-    # `splitExistingLeaf` existed only to serve those rows; nothing may reintroduce a
-    # caller without also reintroducing the menu entry this test forbids.
+        # Touch keeps its row: it permutes a device-local rail order rather than the
+        # pane tree, and it is the only reordering gesture a phone has (no drag-reorder
+        # on the rail, no palette). test_mobile_workspace_... owns the no-layout-write
+        # half of that contract.
+        assert "mobileMoveRow" in menu
+    # These existed only to serve those rows; nothing may reintroduce a caller without
+    # also reintroducing the menu entry this test forbids.
     assert "splitExistingLeaf" not in app
+    assert app.count("moveTabDirection") == 2  # the definition, and the palette command
     # Removed from the menus, not from the app: these are the routes that keep them
-    # usable, and each is bindable because it is a registry entry.
+    # usable, and each is bindable because it is a registry entry. pane.moveTab* was
+    # added with this change so moving a tab between panes keeps a keyboard route.
     for command in (
         "session.openSplitHorizontal",
         "session.openSplitVertical",
@@ -320,6 +325,7 @@ def test_no_session_or_tab_context_menu_reshapes_the_pane_tree() -> None:
         "session.customSplit",
     ):
         assert f"id: '{command}'" in app or f"id:'{command}'" in app
+    assert "id: `pane.moveTab${option.id[0].toUpperCase()}${option.id.slice(1)}`" in app
 
 
 def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None:
@@ -354,14 +360,16 @@ def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None
     # openProjectsManager takes an optional focus (which Project, which tab), so
     # every plain trigger must call it rather than hand it the click event.
     assert 'class="project-trigger" onClick={()=>openProjectsManager()}' in app
-    assert "directionRow('Move tab:'" in app
-    # Only the resource menu still splits from a menu — a Project note or an opened file
-    # has no tab to drag until it is already in a pane, so removing it there would leave
-    # no way in. The session/tab menus lost theirs; see
-    # test_no_session_or_tab_context_menu_reshapes_the_pane_tree.
+    # Only the resource menu still drives layout from a menu — a Project note or an
+    # opened file has no tab to drag until it is already in a pane, so removing it there
+    # would leave no way in. The session/tab menus lost theirs, Move tab included; see
+    # test_no_desktop_context_menu_touches_the_pane_tree.
     assert "directionRow('Open in split:'" in app
+    assert "directionRow('Move tab:'" not in app
     assert "splitNoteResource(noteMenu.resourceId" in app
+    # Still the availability oracle for the direction rows and now for pane.moveTab*.
     assert "export function paneNeighborIds" in layout
+    assert "paneNeighborIds(activeLayout, leaf.id)[option.id]" in app
     assert "Swap pane with next" not in app
     assert (
         "Open project note…</button>"

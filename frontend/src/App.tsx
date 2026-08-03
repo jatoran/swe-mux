@@ -2453,6 +2453,20 @@ export function App() {
     { id: 'pane.splitVertical', label: 'Split focused pane below', category: 'pane', available: !!activeProject, disabledReason: 'No Project selected', run: () => void spawnTerminal(projectId, 'vertical') },
     { id: 'pane.stackNew', label: 'New terminal as tab in focused pane', category: 'pane', available: !!activeProject, disabledReason: 'No Project selected', run:()=>void spawnTerminal(projectId,'stack') },
     { id:'stack.dissolve',label:'Dissolve focused tab stack into splits',category:'pane',available:!!activeStack&&activeStack.children.length>1,disabledReason:'Focused pane has only one tab',run:()=>activeStack&&void updateLayout(projectId,dissolveStack(activeLayout,activeStack.id))},
+    // Added when `Move tab` left the context menus: drag covers it by pointer, but
+    // without these there would be no keyboard route to move a tab between panes at
+    // all, and nothing to bind a key to. One per direction, availability read from the
+    // live split tree so a direction with no neighbour says why it is disabled.
+    ...paneDirectionOptions.map((option): Command => {
+      const leaf = focusedTabId ? leaves(activeLayout).find(item => item.id === focusedTabId) || null : null
+      return {
+        id: `pane.moveTab${option.id[0].toUpperCase()}${option.id.slice(1)}`,
+        label: `Move focused tab ${option.id}`, category: 'pane',
+        available: !!leaf && !!paneNeighborIds(activeLayout, leaf.id)[option.id],
+        disabledReason: 'No pane in that direction',
+        run: () => { if (leaf) void moveTabDirection(leaf, projectId, option.id) },
+      }
+    }),
     { id: 'pane.zoom', label: zoomedId ? 'Restore pane layout' : 'Zoom focused pane', category: 'pane', available: !!focusedTabId && workspacePanes.length > 1, disabledReason: 'Zoom requires multiple panes', run: () => setZoomedId(zoomedId ? null : focusedTabId) },
     { id: 'pane.next', label: 'Focus next pane', category: 'pane', available: workspacePanes.length > 1, disabledReason: 'Only one pane is open', run: () => focusRelativePane(1) },
     { id: 'pane.previous', label: 'Focus previous pane', category: 'pane', available: workspacePanes.length > 1, disabledReason: 'Only one pane is open', run: () => focusRelativePane(-1) },
@@ -3440,15 +3454,17 @@ export function App() {
       <button onClick={() => runNamedCommand('session.copyCwd')}>Copy working directory</button>
       <button onClick={() => runNamedCommand('session.note')}>Open session note</button>
       <button onClick={()=>{setContextMenu(null);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
-      {/* No session menu carries pane geometry — not the sidebar row, not the tab, not
-          the pane's own ⋯. Split / stack / dissolve answer "how is the workspace laid
-          out", which is not the question any of these menus is opened to answer, and
-          five direction rows pushed Rename and Kill past the fold in all three. The
-          layout routes are drag (direct manipulation) and the command palette, where
-          session.openSplit*, pane.split*, session.groupStack, stack.dissolve and
-          session.customSplit stay searchable and bindable. `Move tab` is the exception:
-          it reorders the strip you are looking at rather than reshaping the tree. */}
-      {(contextMenu.source==='tab'||contextMenu.source==='pane')&&directionRow('Move tab:',option=>void moveTabDirection(terminalLeaf(contextMenu.session.id),contextMenu.session.project_id,option.id),direction=>!!paneNeighborIds(activeLayout,contextMenu.session.id)[direction])}
+      {/* No desktop context menu touches the pane tree at all — not split, stack or
+          dissolve, and not Move tab either. They answer "how is the workspace laid out",
+          which is not the question a menu opened on a session or a tab is asked, and the
+          direction rows pushed Rename and Kill past the fold on every source. Desktop
+          layout is drag (direct manipulation) or the palette, where session.openSplit*,
+          pane.split*, pane.moveTab*, session.groupStack, stack.dissolve and
+          session.customSplit stay searchable and bindable.
+          The mobile row below is NOT that action and is deliberately kept: touch has no
+          drag-reorder (a swipe on the rail scrolls it) and no palette, so this is the
+          only way to reorder a phone's rail — and it only permutes a device-local order,
+          never the pane tree. Removing it would strand mobile reordering entirely. */}
       {contextMenu.source==='mobile'&&mobileMoveRow(contextMenu.session.id)}
       <button onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
       <button onClick={()=>runNamedCommand('pane.stackNew')}>New terminal as tab</button>
@@ -3555,9 +3571,10 @@ export function App() {
 
     {tabMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu tab-context-menu" role="menu" aria-label={`Tab actions for ${tabMenu.label}`} style={{left:clampContextMenuLeft(tabMenu.x,innerWidth),top:Math.max(4,Math.min(tabMenu.y,innerHeight-300))}}>
       <div class="context-title"><strong>{tabMenu.label}</strong></div>
-      {/* Same rule as the session menu above: no context menu reshapes the pane tree.
-          Splitting a resource tab out is a drag; the keyboard route is the palette. */}
-      {tabMenu.source==='tab'&&directionRow('Move tab:',option=>void moveTabDirection(tabMenu.leaf,tabMenu.projectId,option.id),direction=>{const current=resolveLayout(layoutMap[tabMenu.projectId],projects.find(project=>project.id===tabMenu.projectId)?.layout);return !!paneNeighborIds(current,tabMenu.leaf.id)[direction]})}
+      {/* Same rule as the session menu above: no desktop context menu reshapes the pane
+          tree. Moving or splitting a resource tab is a drag; the keyboard route is the
+          palette. The mobile row stays for the reason given there — it is the only
+          reordering gesture touch has, and it never leaves the device. */}
       {tabMenu.source==='mobile'&&mobileMoveRow(tabMenu.leaf.id)}
       {tabMenu.source==='mobile'&&<button onClick={()=>{const target=tabMenu;setTabMenu(null);void spawnTerminal(target.projectId,'stack',undefined,target.leaf.id)}}>New terminal as tab</button>}
       <div class="context-rule"/><button onClick={()=>{

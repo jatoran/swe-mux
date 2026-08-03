@@ -134,6 +134,11 @@ PaneLeaf = terminal | note | preview | history | queue
   only: the layout remains authoritative for membership, no layout revision is written, and no
   request is issued, so a phone's rail order can never reach the desktop pane tree or another
   client. Ordering is per device by design, not synced.
+  This row is now mobile-*only*: the desktop `Move tab` row (which moved a leaf between panes)
+  was removed from the session and tab menus along with the rest of the pane geometry, leaving
+  drag and `pane.moveTab*` there. It survives here because it is a different action with no
+  substitute — touch has no drag-reorder on the rail and no command palette, so removing it
+  would leave a phone unable to reorder at all.
 - A tab the saved order predates is merged in beside its layout predecessor rather than appended,
   so a session launched from a given tab still appears next to it. Once a device has its own
   order, later desktop reordering no longer moves those tabs on that device.
