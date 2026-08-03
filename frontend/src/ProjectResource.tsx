@@ -177,12 +177,23 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       const payload=await api<NotePayload|FilePayload>('GET',path,undefined,{timeoutMs:REQUEST_TIMEOUT_MS})
       // A newer request owns the outcome; this one is neither a success nor a failure.
       if(isNote&&requestGeneration!==noteLoadGeneration.current)return true
-      const next='markdown' in payload?payload.markdown:payload.text||''
-      setRevision(payload.revision);setText(next);setBaseline(next);setStatus(payload.status);setSaveState('idle')
+      const stored='markdown' in payload?payload.markdown:payload.text||''
+      // Local work the daemon may not have yet outranks what it just sent us. This is the
+      // handoff case: a note moving between the drawer and a pane unmounts one editor and
+      // mounts this one against the same save-queue entry, and the flush that unmount fired
+      // can still be in flight while this GET is answered from the older file. Without this,
+      // arriving would silently show — and then save — the pre-move text.
+      const unsaved=autosaved?noteSaveQueue.pendingText(noteKey):null
+      const next=unsaved??stored
+      setRevision(payload.revision);setText(next);setBaseline(stored);setStatus(payload.status)
+      setSaveState(unsaved===null?'idle':'modified')
       if(autosaved){
         // The queue owns the daemon storage revision; the editor starts fresh at 0. Remounting
         // it on a fresh load shows the new text while ordinary edits keep cursor/undo history.
         noteSaveQueue.reset(noteKey,saveTarget(),payload.revision)
+        // `reset` clears the queue deliberately (it is the "this is now the truth" signal), so
+        // carried-over work has to be re-armed after it or it would never commit.
+        if(unsaved!==null)noteSaveQueue.submit(noteKey,unsaved)
         setLoadGeneration(generation=>generation+1)
       }
       loadedOnce.current=true

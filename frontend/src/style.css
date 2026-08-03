@@ -637,8 +637,11 @@ body {
   flex:1;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;
   gap:8px;background:var(--bg);color:var(--muted)
 }
-.workspace-leaf-placeholder.note-unavailable { flex-direction:column }
-.workspace-leaf-placeholder.note-unavailable button { min-height:29px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer }
+.workspace-leaf-placeholder.note-unavailable,
+.workspace-leaf-placeholder.note-in-drawer { flex-direction:column;padding:0 16px;text-align:center }
+.workspace-leaf-placeholder.note-unavailable button,
+.workspace-leaf-placeholder.note-in-drawer button { min-height:29px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer }
+.workspace-leaf-placeholder.note-in-drawer strong { color:var(--text) }
 .note-pane-back { display:none }
 .worktree-create-modal { width:min(620px,calc(100vw - 24px)) }
 .modal-note { padding:9px 12px;border:1px solid var(--line);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
@@ -1443,12 +1446,36 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .notes-tab .session-notes-group>h3,.notes-tab .session-note-row span,.notes-tab .session-note-row small{font-size:8px}
 .notes-tab .session-note-row strong{font-size:10px}
 .notes-pinned{display:grid;border-bottom:1px solid var(--line)}
-.note-pin-row{display:flex;align-items:baseline;gap:7px;min-height:32px;padding:6px 9px;border:0;border-left:2px solid var(--accent);background:var(--panel2);color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.note-pin-shell{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;background:var(--panel2)}
+.note-pin-row{min-width:0;display:flex;align-items:baseline;gap:7px;min-height:32px;padding:6px 9px;border:0;border-left:2px solid var(--accent);background:var(--panel2);color:var(--text);font:inherit;text-align:left;cursor:pointer}
 .note-pin-row:hover,.note-pin-row:focus-visible{background:var(--panel)}
-.note-pin-row+.note-pin-row{border-top:1px solid var(--line)}
+.note-pin-shell+.note-pin-shell{border-top:1px solid var(--line)}
 .note-pin-kind{flex:none;color:var(--muted);font-size:8px}
 .note-pin-row strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}
+/* Every note row selects into the panel; this is the escape hatch to a pane. Kept to a glyph
+   so the row's own text keeps the width — the label lives in the title and the aria-label. */
+.note-open-as-tab{flex:none;align-self:stretch;min-width:26px;padding:0 7px;border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;cursor:pointer}
+.note-open-as-tab:hover,.note-open-as-tab:focus-visible{background:var(--panel);color:var(--text)}
+.session-note-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch}
+.session-note-row>.note-open-as-tab{border-bottom:1px solid var(--line)}
 .notes-footnote{flex:none;margin:0;padding:6px 9px;border-top:1px solid var(--line);color:var(--muted);font-size:8px;line-height:1.4}
+/* The drawer's note editor. Kept mounted while another tab is showing (cursor, undo, and the
+   insert-routing handle all die with it), so `hidden` has to beat this rule's own display. */
+.drawer-note-host{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.drawer-note-host[hidden]{display:none}
+.drawer-note-bar{flex:none;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:6px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.drawer-note-bar button{min-height:28px;padding:0 8px;border:0;background:transparent;color:var(--muted);font:inherit;cursor:pointer;white-space:nowrap}
+.drawer-note-bar button:hover,.drawer-note-bar button:focus-visible{background:var(--panel);color:var(--text)}
+.drawer-note-kind{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px;text-align:center}
+/* The editor's own header repeats the Project and save state, which at column width is the
+   only thing that fits beside the identity the bar above already gives. */
+.utility-drawer .drawer-note-host .project-resource{flex:1 1 auto;height:auto;min-height:0}
+.utility-drawer .drawer-note-host .project-resource>header{min-height:26px;padding:4px 9px}
+.utility-drawer .drawer-note-host .project-resource>header>div{gap:0}
+.utility-drawer .drawer-note-host .resource-actions button{min-width:0;padding:0 6px;font-size:9px}
+/* A note is open in exactly one place, so the tab it left keeps its slot and says where it
+   went rather than quietly rendering a second, conflicting editor. */
+.workspace-leaf-placeholder.note-in-drawer span{max-width:44ch}
 /* Files tab: the browser fills the drawer column. Its own header carries the Project
    root, which is the only thing identifying which tree this is once it left the pane
    tree (a pane had a tab strip to say so; a drawer tab says only "Files"). */
@@ -1459,6 +1486,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .notes-tab .session-notes-filters{grid-template-columns:minmax(0,1fr)}
   .notes-tab .session-notes-filters input,.notes-tab .session-notes-filters select{height:calc(38px*var(--ui-scale));font-size:16px}
   .note-pin-row{min-height:44px}
+  /* Touch targets: the glyph is narrow by design on desktop, but it is a real destination. */
+  .note-open-as-tab{min-width:44px}
+  .drawer-note-bar button{min-height:40px}
 }
 .history-layer{z-index:85}
 .history-modal{width:min(1200px,calc(100vw - 24px));height:min(88vh,900px);max-height:calc(100dvh - 24px);display:flex;flex-direction:column;padding:0}

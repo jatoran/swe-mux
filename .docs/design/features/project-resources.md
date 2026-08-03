@@ -39,15 +39,34 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
 - The browser's per-session note signal is content, not file presence: a note created by a stray
   chip click stays readable and writable but earns no sidebar row until it holds text. Note
   authorization still keys on file existence, so an empty note is never locked out.
-- The **Notes** drawer tab lists notes; it never edits one. The Project note is pinned first and
-  is always present even when empty (it is the one note every Project has). The focused terminal's
-  note is pinned second when it holds text. Below them sits every other session note with content,
-  searchable over owner, Project, and excerpt, scoped to this Project or to all of them.
-  Selecting any row opens that note through the ordinary placement rule above.
-- It is an index rather than a drawer-hosted editor for a concrete reason: the drawer unmounts a
-  tab body on every tab switch, so an editor there would lose cursor and undo history on each
-  switch, and `insertTarget` would drop its editor handle the moment you switched to Clipboard —
-  routing the insert to a terminal instead, silently. Editing stays in panes.
+- The **Notes** drawer tab is both the index and a second host for the editor. The Project note is
+  pinned first and is always present even when empty (it is the one note every Project has). The
+  focused terminal's note is pinned second when it holds text. Below them sits every other session
+  note with content, searchable over owner, Project, and excerpt, scoped to this Project or to all
+  of them. Selecting a row opens that note **in the drawer**; the row's `⇥` opens it as a pane tab
+  through the ordinary placement rule above instead.
+- **A note has exactly one live editor per browser, and that is a correctness requirement.**
+  `noteSaveQueue` holds one entry per `(Project, resource)` at module scope, so two mounted
+  editors share it: each submits its whole document, newest wins, and the loser's text is dropped
+  with nothing for the daemon to flag, because the revision each holds is correct. The second
+  editor's load then calls `reset`, discarding whatever the first had pending. Two devices are
+  safe by contrast — separate queues and revisions, so the second write 409s into the conflict
+  banner — which is why only same-browser duplication has to be structurally prevented.
+- The drawer's claim is therefore exclusive: while it holds a note, that note's pane leaf keeps
+  its place in the layout but renders an "open in the panel" placeholder, and every pane placement
+  (sidebar row, pane `note` chip, tab menu open/split, drag, `notes.open`) releases the claim
+  first so it cannot land on that placeholder. The claim is **device-local** and stored per
+  Project (`mux.drawer.note.v1`), never in `project.layout`, which is shared: a phone must not be
+  able to rearrange the desktop's panes. It also only applies while the drawer is open, so closing
+  the panel hands the note back to its pane and reopening resumes.
+- Moving between hosts unmounts one editor and mounts the other, which is lossless because the
+  save queue outlives both. The unmount flushes, and the arriving editor adopts any text the
+  daemon has not acknowledged yet (`noteSaveQueue.pendingText`, which covers both debounced typing
+  and the snapshot a running PUT is carrying) rather than the copy its own GET returned — that GET
+  can be answered from the pre-flush file. Cursor and undo history do not survive a move; they do
+  survive drawer tab switches, because the Notes body is kept mounted and hidden rather than
+  unmounted (see `ui.md` — the other half of that is `insertTarget`, which refuses a detached
+  editor and would otherwise route a Clipboard paste into a terminal).
 - The tab replaced the session-notes modal and is reached from a Project's sidebar context menu
   (scoped to that Project), the main menu, the `notes.browse`/`notes.browseProject` commands, and
   its own icon on the desktop rail.
@@ -282,7 +301,9 @@ on read (`workspace-layout.md`).
 - `src/swe_mux/file_manager.py`
 - `frontend/src/ProjectResource.tsx`
 - `frontend/src/ProjectNoteEditor.tsx`
-- `frontend/src/NotesTab.tsx` (the notes index; hosted by `UtilityDrawer.tsx`)
+- `frontend/src/NotesTab.tsx` (the notes index; hosted by `UtilityDrawer.tsx`, which also hosts
+  the drawer's note editor)
+- `frontend/src/drawerNotes.ts` (which note the drawer holds, and why one host at a time)
 - `frontend/src/layout.ts` (`openAnchorId`, `openTab`)
 - `frontend/src/editorText.ts`
 - `frontend/src/noteSaveQueue.ts`

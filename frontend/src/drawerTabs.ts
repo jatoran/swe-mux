@@ -12,10 +12,12 @@
 // focused session's conversation back. It closes that block rather than opening it
 // because the block is ordered by what you do to a session, and reading is what you do
 // between the doing.
-// Then the *navigators* (files, notes): project-scoped indexes that open a document into a
-// pane rather than injecting text — narrow-column surfaces that used to cost a
-// permanent workspace tab each. Context follows them as a read-only view of the files
-// agents themselves consume. Git closes the Project-scoped block: it reads the
+// Then the *navigators* (files, notes): project-scoped indexes over documents rather than
+// surfaces that inject text — narrow-column surfaces that used to cost a permanent
+// workspace tab each. Files opens what you pick into a pane; Notes hosts the editor itself
+// and opens into a pane only on request, because reading or adding to a note without
+// leaving the session on screen is what the tab is for on a phone. Context follows them as
+// a read-only view of the files agents themselves consume. Git closes the Project-scoped block: it reads the
 // repository behind the Project rather than opening anything, so it is not a navigator,
 // but it acts on the same thing they do. Notifications is neither, and stays last.
 //
@@ -49,7 +51,7 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'queue', label: 'Queue', title: 'Queue — messages staged for this agent, and the mailbox', scope: 'session' },
   { id: 'transcript', label: 'Transcript', title: 'Transcript — read and copy this session’s conversation', scope: 'session' },
   { id: 'files', label: 'Files', title: 'Files — browse or search this Project, then open into a pane', scope: 'project' },
-  { id: 'notes', label: 'Notes', title: 'Notes — Project and session notes, opened into a pane', scope: 'project' },
+  { id: 'notes', label: 'Notes', title: 'Notes — read and write Project and session notes here, or open one in a pane', scope: 'project' },
   { id: 'context', label: 'Context', title: 'Context — view agent instructions and learned project memory', scope: 'project' },
   { id: 'git', label: 'Git', title: 'Git — worktree map and commit graph for this Project', scope: 'project' },
   { id: 'notifications', label: 'Alerts', title: 'Alerts — notifications and attention records', scope: 'app' },

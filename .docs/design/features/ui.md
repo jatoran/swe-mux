@@ -666,9 +666,12 @@ responsive controls.
   and the groups must stay contiguous so the rail reads as blocks rather than a list. The first
   four are the same verb — text into the focused session — and Transcript closes that block by
   reading the same session back. Files and Notes are the **navigators**:
-  project-scoped indexes that open a document into a pane instead of typing into one. Context is
-  the read-only inventory of root agent instructions and provider learned memory; unlike the
-  navigators it renders the selected body inside the drawer and opens no pane. Git closes the
+  project-scoped indexes over documents rather than surfaces that type into one. Files opens what
+  you select into a pane; Notes can do that too but opens *into the drawer* by default, because
+  reading or adding to a note without leaving the session on screen is the whole point of it on a
+  phone. Context is the read-only inventory of root agent instructions and provider learned
+  memory; like the drawer's note editor it renders inside the drawer, and unlike it never opens a
+  pane and never writes. Git closes the
   Project-scoped block without joining them: it reads the repository behind the Project
   (branches, worktrees, dirty/upstream state) and opens nothing into a pane — see `git.md` for
   what it shows and the mutations it is allowed. Notifications is neither, and sits last. Session
@@ -733,16 +736,43 @@ responsive controls.
   outside the layout, and on desktop the drawer is an in-flow column, so a file row can still be
   dragged onto any pane. The one real cost is that Files and Clipboard can no longer be visible
   at once — the drawer shows one tab at a time — which is the trade the tab model makes.
-- **Notes** is an index, not an editor. Notes stay ordinary pane tabs because the drawer unmounts
-  a tab body on every switch: hosting the editor there would destroy cursor and undo history on
-  each tab change, and would break insert routing outright (switching to Clipboard detaches the
-  very editor the insert was meant for, so the text would silently land in a terminal). The tab
-  pins the Project note first and unconditionally, pins the focused terminal's note second when
-  that note holds text, then lists every other session note with content, searchable and scoped
-  to this Project or to all of them. Selecting a row opens the note into a pane through the
-  ordinary placement rule. This replaced the session-notes modal and its three
-  scattered entry points (project context menu, app menu, `notes.browse`), all of which now open
-  this tab.
+- **Notes** is an index *and* an editor, and a note is open in exactly one of the two hosts at a
+  time. The tab pins the Project note first and unconditionally, pins the focused terminal's note
+  second when that note holds text, then lists every other session note with content, searchable
+  and scoped to this Project or to all of them. Selecting a row opens that note **in the drawer**;
+  the `⇥` on each row opens it as a workspace tab instead. From inside the drawer editor, `‹ Notes`
+  returns to the index and `⇥ tab` moves the note into a pane. This replaced the session-notes
+  modal and its three scattered entry points (project context menu, app menu, `notes.browse`), all
+  of which now open this tab.
+- **Why one host at a time is a rule and not a preference.** `noteSaveQueue` keys one entry per
+  `(Project, resource)` at module scope, so two mounted editors on one note share it: each submits
+  its whole document, newest wins, and the loser's text is dropped with no conflict for the daemon
+  to detect, since the revision each holds is correct. Mounting the second is worse — its load
+  calls `reset`, which discards whatever the first had pending. Two *devices* are safe by
+  contrast (separate queues, separate revisions, so the second write 409s into the ordinary
+  conflict banner); only same-browser duplication is silent. So claiming a note for the drawer
+  makes its pane leaf render an "open in the panel" placeholder, and **every** pane placement —
+  a sidebar row, the pane `note` chip, the tab menu's open/split rows, a drag — releases the claim
+  first, because a placement that landed on the placeholder would look like it did nothing.
+- **The claim is device-local and never touches the layout.** `project.layout` is persisted
+  server-side and shared, so removing the leaf would let a phone rearrange the desktop's panes.
+  The leaf keeps its slot and only stands down. The claim is stored per Project
+  (`mux.drawer.note.v1`), so switching Projects and back restores what the drawer was holding, and
+  it is scoped to an *open* drawer: closing the panel hands the note back to its pane, which keeps
+  the placeholder from ever pointing at a panel that is not on screen. Reopening resumes.
+- **The Notes body is the one drawer body kept mounted across tab switches**, hidden rather than
+  unmounted. Both reasons are load-bearing: an editor unmounted on every switch loses cursor and
+  undo history, and `insertTarget` refuses a detached editor handle, so switching to Clipboard to
+  paste *into the note* would route the paste to a terminal instead — silently, into an agent's
+  prompt. That failure is why this tab was an index only for as long as it was; keeping the body
+  mounted is what makes hosting an editor safe. No other tab needs it, so no other tab gets it.
+  Moving a note between hosts is still an unmount and a remount, which is lossless because the
+  save queue outlives both: the arriving editor adopts any text the daemon has not acknowledged
+  (`pendingText`) instead of the copy it was just served.
+- On mobile, an insert normally closes the drawer, since it covers the terminal the text was for.
+  When the text landed in the note the panel is hosting, it stays open and returns to the note
+  instead — closing would hide the result that was just asked for. Desktop does not move at all,
+  because the column sits beside the workspace and a second insert is the common next action.
 - **Context** is the Agent Context surface (`agent-context.md`). It shows root `CLAUDE.md` and
   `AGENTS.md`, Claude's provider-owned learned Markdown memory, and an explicit Codex
   available/disabled/unsupported state. Bodies are read-only. The only mutations are deliberate

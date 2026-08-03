@@ -2,13 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import type { Project } from './types'
 
-// The drawer's Notes tab: an index of every note, not an editor.
+// The drawer's Notes tab: the index half of the Notes surface.
 //
-// Notes are documents you author, so they stay ordinary pane tabs — the drawer
-// unmounts a tab body on every switch, which would cost cursor/undo history and
-// would break insert routing (switching to Clipboard would detach the very editor
-// the insert was meant for). What belongs here is *finding* a note. Selecting a
-// row opens it into the workspace through the ordinary companion placement rule.
+// Selecting a row opens that note **in the drawer**, which is the point of the tab on a
+// phone: reading or adding to a note without leaving the session you are watching. The `⇥`
+// on each row is the other half, opening it as an ordinary workspace tab instead — better on
+// desktop, where a pane is wider than a 380 px column and two notes can be on screen at once.
+//
+// The two are mutually exclusive per browser and the drawer host enforces it; `drawerNotes.ts`
+// explains why that is a correctness rule rather than tidiness (one save queue per note, so a
+// second live editor silently overwrites the first).
 //
 // The Project note is pinned first and always present, even empty: it is the one
 // note that exists for every Project. The focused terminal's note is pinned second
@@ -22,14 +25,18 @@ export type SessionNoteSummary = {
   owner_label:string;owner_backend?:string|null;owner_live:boolean;owner_known:boolean
 }
 
+/** Where a selected note should be opened. Both hosts are real placements, not a preview and
+ *  a real one, and a note lives in exactly one of them at a time. */
+export type NotePlacement='drawer'|'tab'
+
 type Props={
   project?:Project
   allProjects:boolean
   onAllProjects:(value:boolean)=>void
   /** The focused terminal's note, when it holds text. Pinned above the listing. */
   focusedNote:{projectId:string;noteId:string;label:string}|null
-  onOpenProjectNote:(projectId:string)=>void
-  onOpenSessionNote:(projectId:string,noteId:string)=>void
+  onOpenProjectNote:(projectId:string,place:NotePlacement)=>void
+  onOpenSessionNote:(projectId:string,noteId:string,place:NotePlacement)=>void
   onDone:()=>void
 }
 
@@ -88,9 +95,19 @@ export function NotesTab({project,allProjects,onAllProjects,focusedNote,onOpenPr
     return [...buckets.entries()]
   },[shown,allProjects])
 
-  const openSession=(projectId:string,noteId:string)=>{onOpenSessionNote(projectId,noteId);onDone()}
+  // Opening into the drawer replaces this index in place, so `onDone` (which closes the whole
+  // panel on mobile) would hide the note it was just asked to show. Only a pane placement
+  // hands the screen back.
+  const openSession=(projectId:string,noteId:string,place:NotePlacement)=>{
+    onOpenSessionNote(projectId,noteId,place)
+    if(place==='tab')onDone()
+  }
+  const openProject=(projectId:string,place:NotePlacement)=>{
+    onOpenProjectNote(projectId,place)
+    if(place==='tab')onDone()
+  }
   const noteRow=(note:SessionNoteSummary)=><article class="session-note-row" key={`${note.project_id}:${note.note_id}`}>
-    <button onClick={()=>openSession(note.project_id,note.note_id)} title={`Open the session note for ${note.owner_label}`}>
+    <button onClick={()=>openSession(note.project_id,note.note_id,'drawer')} title={`Open the session note for ${note.owner_label} in this panel`}>
       <strong>
         {note.owner_backend&&<span class={`agent-prefix ${note.owner_backend}`}>[{note.owner_backend}]</span>}
         {note.owner_label}
@@ -99,6 +116,7 @@ export function NotesTab({project,allProjects,onAllProjects,focusedNote,onOpenPr
       <span>{new Date(note.updated_at*1000).toLocaleString()} · {sizeLabel(note.bytes)}</span>
       <small>{note.excerpt}</small>
     </button>
+    <button class="note-open-as-tab" aria-label={`Open the session note for ${note.owner_label} as a workspace tab`} title="Open as a workspace tab instead" onClick={()=>openSession(note.project_id,note.note_id,'tab')}>⇥</button>
   </article>
 
   return <div class="notes-tab">
@@ -121,13 +139,19 @@ export function NotesTab({project,allProjects,onAllProjects,focusedNote,onOpenPr
           where you are right now, and hiding them behind a query would be a trap. */}
       <div class="notes-pinned">
         {project
-          ?<button class="note-pin-row" title={`Open the Project note for ${project.name}`} onClick={()=>{onOpenProjectNote(project.id);onDone()}}>
-            <span class="note-pin-kind">Project note</span><strong>{project.name}</strong>
-          </button>
+          ?<div class="note-pin-shell">
+            <button class="note-pin-row" title={`Open the Project note for ${project.name} in this panel`} onClick={()=>openProject(project.id,'drawer')}>
+              <span class="note-pin-kind">Project note</span><strong>{project.name}</strong>
+            </button>
+            <button class="note-open-as-tab" aria-label={`Open the Project note for ${project.name} as a workspace tab`} title="Open as a workspace tab instead" onClick={()=>openProject(project.id,'tab')}>⇥</button>
+          </div>
           :<p class="session-notes-state">Select a Project to see its note.</p>}
-        {focusedNote&&<button class="note-pin-row" title={`Open the session note for ${focusedNote.label}`} onClick={()=>openSession(focusedNote.projectId,focusedNote.noteId)}>
-          <span class="note-pin-kind">Session note</span><strong>{focusedNote.label}</strong>
-        </button>}
+        {focusedNote&&<div class="note-pin-shell">
+          <button class="note-pin-row" title={`Open the session note for ${focusedNote.label} in this panel`} onClick={()=>openSession(focusedNote.projectId,focusedNote.noteId,'drawer')}>
+            <span class="note-pin-kind">Session note</span><strong>{focusedNote.label}</strong>
+          </button>
+          <button class="note-open-as-tab" aria-label={`Open the session note for ${focusedNote.label} as a workspace tab`} title="Open as a workspace tab instead" onClick={()=>openSession(focusedNote.projectId,focusedNote.noteId,'tab')}>⇥</button>
+        </div>}
       </div>
       {!items&&!error&&<p class="session-notes-state">Reading session notes…</p>}
       {items&&!error&&!shown.length&&<p class="session-notes-state">
@@ -147,6 +171,6 @@ export function NotesTab({project,allProjects,onAllProjects,focusedNote,onOpenPr
           </section>}
       </div>}
     </div>
-    <p class="notes-footnote">Notes outlive their terminals. Opening one puts it in a pane.</p>
+    <p class="notes-footnote">Notes outlive their terminals. Selecting one opens it here; <b>⇥</b> puts it in a pane instead.</p>
   </div>
 }

@@ -11,6 +11,8 @@ import { GitTab } from './GitTab'
 import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
 import { drawerTab, nextDrawerTab, type DrawerTab, type DrawerTabId } from './drawerTabs'
+import { parseNoteResourceId } from './layout'
+import type { NotePlacement } from './NotesTab'
 import { DRAWER_TAB_ICONS } from './railIcons'
 import type { SendToAgentRequest, SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
 import type { Project, ProjectBackend, Session } from './types'
@@ -63,8 +65,16 @@ type Props = {
   notesAllProjects: boolean
   onNotesAllProjects: (value: boolean) => void
   focusedNote: { projectId: string; noteId: string; label: string } | null
-  onOpenProjectNote: (projectId: string) => void
-  onOpenSessionNote: (projectId: string, noteId: string) => void
+  onOpenProjectNote: (projectId: string, place: NotePlacement) => void
+  onOpenSessionNote: (projectId: string, noteId: string, place: NotePlacement) => void
+  /** Notes: the note this Project's drawer is editing, or null to show the index. A note has
+   *  one live editor per browser (see `drawerNotes.ts`), so this is also what tells the
+   *  matching pane leaf to stand down. */
+  drawerNoteId: string | null
+  /** Give the note back to the workspace and return to the index. */
+  onCloseDrawerNote: () => void
+  /** Give it back and put it in a pane, focused. */
+  onPopDrawerNoteToTab: (resourceId: string) => void
   /** Tabs in the user's arranged order, and the pointer-drag that rearranges them. Both come
    *  from the caller because the desktop icon rail renders the same order and the same drag,
    *  and the two must never disagree about it. */
@@ -102,12 +112,77 @@ export function UtilityDrawer(props: Props) {
   // second insert (or a second file) is the common next action.
   const onDone = () => { if (mobile) onClose() }
 
+  const noteIdentity = props.drawerNoteId ? parseNoteResourceId(props.drawerNoteId) : null
+  // `file` is a legal parse but never a drawer note: files are the Files tab's business, and
+  // the claim is only ever written from the Notes index.
+  const drawerNote = props.drawerNoteId && project && noteIdentity && noteIdentity.kind !== 'file'
+    ? { resourceId: props.drawerNoteId, identity: noteIdentity }
+    : null
+  const drawerNoteLabel = drawerNote?.identity.kind === 'session-note' ? 'Session note' : 'Project note'
+
+  // Where the last Clipboard insert landed. `ClipboardTab` reports its own outcome to
+  // `onInsert` and then calls `onDone` with nothing, so the two are joined here rather than by
+  // widening that contract for one caller.
+  const lastInsert = useRef<'terminal' | 'editor' | 'none'>('none')
+  const insertText = (text: string) => {
+    const target = props.onInsert(text)
+    lastInsert.current = target
+    return target
+  }
+  /**
+   * On mobile, inserting normally closes the drawer: it covers the terminal the text was for.
+   * When the text went into the note *this panel is hosting*, closing would hide the very
+   * result that was asked for, so the panel stays and returns to the note. Desktop is
+   * unchanged — the column sits beside the workspace, and a second insert is the common next
+   * action, so nothing should move.
+   */
+  const onInsertDone = () => {
+    if (!mobile) return
+    if (drawerNote && lastInsert.current === 'editor') { onTab('notes'); return }
+    onDone()
+  }
+
+  /**
+   * The one body kept mounted across tab switches, and the only one that needs to be.
+   *
+   * Two things break if this unmounts. Cursor position and undo history die on every switch,
+   * which makes the panel unusable for writing. Worse, `insertTarget` refuses a detached
+   * editor handle (`isConnected`), so switching to Clipboard to paste *into this note* would
+   * route the paste to a terminal instead — silently, and into an agent's prompt. That is the
+   * exact failure the "Notes is an index, not an editor" rule used to avoid by not hosting an
+   * editor at all; keeping it mounted is what makes hosting one safe.
+   *
+   * `hidden` rather than conditional rendering for the same reason, and the CSS backs it up
+   * (`.drawer-note-host[hidden]` must stay `display:none` even though the class sets a flex
+   * layout, since a class rule would otherwise beat the UA default).
+   */
+  const noteHost = drawerNote && project
+    ? <div class="drawer-note-host" hidden={tab !== 'notes'}>
+      <div class="drawer-note-bar">
+        <button class="drawer-note-back" title="Back to the note index" onClick={props.onCloseDrawerNote}>‹ Notes</button>
+        <span class="drawer-note-kind">{drawerNoteLabel}</span>
+        <button
+          class="drawer-note-pop"
+          title="Move this note into a workspace tab. A note is only ever open in one place, so it leaves the panel."
+          onClick={() => { props.onPopDrawerNoteToTab(drawerNote.resourceId); onDone() }}
+        >⇥ tab</button>
+      </div>
+      <ProjectResource
+        key={`drawer-note:${project.id}:${drawerNote.resourceId}`}
+        project={project}
+        resource={drawerNote.identity}
+        onOpenFile={path => { props.onOpenFile(path); onDone() }}
+        onSendToAgent={props.onSendToAgent}
+      />
+    </div>
+    : null
+
   // One body per tab. A flat dispatch rather than the nested ternary this grew out of:
   // several branches deep, every added surface used to reindent the ones below it.
   const renderBody = () => {
     switch (tab) {
       case 'clipboard':
-        return <ClipboardTab onInsert={props.onInsert} onDone={onDone} onOpenSettings={() => props.onOpenSettings('Input')} />
+        return <ClipboardTab onInsert={insertText} onDone={onInsertDone} onOpenSettings={() => props.onOpenSettings('Input')} />
       case 'commands':
         return <CommandsTab session={session} onDone={onDone} onOpenSettings={() => props.onOpenSettings('Command rail')} />
       case 'prompts':
@@ -141,15 +216,19 @@ export function UtilityDrawer(props: Props) {
           />
           : <p class="drawer-empty">Select a Project to browse its files.</p>
       case 'notes':
-        return <NotesTab
-          project={project}
-          allProjects={props.notesAllProjects}
-          onAllProjects={props.onNotesAllProjects}
-          focusedNote={props.focusedNote}
-          onOpenProjectNote={props.onOpenProjectNote}
-          onOpenSessionNote={props.onOpenSessionNote}
-          onDone={onDone}
-        />
+        // `noteHost` is rendered outside this switch and covers the tab when a note is
+        // claimed, so the index only draws when there is none.
+        return drawerNote
+          ? null
+          : <NotesTab
+            project={project}
+            allProjects={props.notesAllProjects}
+            onAllProjects={props.onNotesAllProjects}
+            focusedNote={props.focusedNote}
+            onOpenProjectNote={props.onOpenProjectNote}
+            onOpenSessionNote={props.onOpenSessionNote}
+            onDone={onDone}
+          />
       case 'context':
         return <AgentContextTab project={project} session={session} />
       case 'git':
@@ -211,7 +290,7 @@ export function UtilityDrawer(props: Props) {
         </div>
         <button class="drawer-close" aria-label="Close panel" title="Close panel" onClick={onClose}>×</button>
       </div>
-      <div class="drawer-body">{body}</div>
+      <div class="drawer-body">{noteHost}{body}</div>
     </aside>
   </>
 }
