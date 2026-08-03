@@ -8,6 +8,7 @@ dependencies = [
   "aiohttp>=3.11",
   "edge-tts>=7.0",
   "faster-whisper>=1.2",
+  "pillow>=11.0; sys_platform == 'win32'",
   "psutil>=6.1",
   "pywebpush>=2.0",
   "pywinpty>=3.0.2; sys_platform == 'win32'",
@@ -21,7 +22,6 @@ swe-mux = "swe_mux.desktop:main"
 
 [project.optional-dependencies]
 desktop = [
-  "pillow>=11.0; sys_platform == 'win32'",
   "pystray>=0.19.5; sys_platform == 'win32'",
   "pywebview>=5.4; sys_platform == 'win32'",
 ]

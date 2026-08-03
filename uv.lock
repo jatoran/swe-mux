@@ -1675,6 +1675,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "edge-tts" },
     { name = "faster-whisper" },
+    { name = "pillow", marker = "sys_platform == 'win32'" },
     { name = "psutil" },
     { name = "pywebpush" },
     { name = "pywinpty", marker = "sys_platform == 'win32'" },
@@ -1683,7 +1684,6 @@ dependencies = [
 
 [package.optional-dependencies]
 desktop = [
-    { name = "pillow", marker = "sys_platform == 'win32'" },
     { name = "pystray", marker = "sys_platform == 'win32'" },
     { name = "pywebview", marker = "sys_platform == 'win32'" },
 ]
@@ -1707,7 +1707,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.11" },
     { name = "edge-tts", specifier = ">=7.0" },
     { name = "faster-whisper", specifier = ">=1.2" },
-    { name = "pillow", marker = "sys_platform == 'win32' and extra == 'desktop'", specifier = ">=11.0" },
+    { name = "pillow", marker = "sys_platform == 'win32'", specifier = ">=11.0" },
     { name = "playwright", marker = "extra == 'preview-capture'", specifier = ">=1.49" },
     { name = "psutil", specifier = ">=6.1" },
     { name = "pystray", marker = "sys_platform == 'win32' and extra == 'desktop'", specifier = ">=0.19.5" },

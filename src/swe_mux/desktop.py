@@ -510,6 +510,7 @@ class DesktopRuntime:
         ).start()
         try:
             webview.start(
+                debug=False,
                 private_mode=False,
                 storage_path=str(self.config.data_dir / "webview"),
             )

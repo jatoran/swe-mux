@@ -37,6 +37,10 @@ continues to own every terminal.
   shells and agents remain attached only through ConPTY; background work never flashes a console.
 - WebView2 uses persistent `<data_dir>/webview` storage and enables text selection. External
   links continue in the system browser.
+- Production WebView2 runs with browser accelerator keys disabled by pywebview, so desktop-only
+  bindings such as `Ctrl+Tab` reach the SPA. An ordinary Chrome/Edge tab keeps those browser
+  shortcuts instead; the same saved mapping is harmless there because the page never receives
+  the chord.
 - Window close is cancelled and hidden. Minimize hides after the native transition. Tray Open
   shows/restores the same window; Open in browser preserves the ordinary browser surface.
 - Start with Windows writes the exact current executable/config command to the current-user Run
