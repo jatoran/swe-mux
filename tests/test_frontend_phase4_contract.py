@@ -30,22 +30,21 @@ def test_mobile_workspace_and_recovery_contracts_remain_available() -> None:
         ".pane-stack:not(.focused-pane):not(.empty-workspace-pane):not(.mobile-unified-workspace){display:none}"
         in css
     )
-    # Pane geometry used to be excluded from mobile by name (`source!=='mobile'`).
-    # It is now included by name on one source only — the pane menu — which excludes
-    # mobile, the sidebar, and the tab strip in one rule.
-    # test_pane_geometry_actions_live_only_on_the_pane_menu owns that invariant.
+    # Mobile menus carry no geometry or ordering controls at all now — the touch
+    # `Move tab` row went the way of the desktop ones.
+    # test_no_context_menu_reorders_or_reshapes_anything owns that invariant.
     assert "contextMenu.source!=='mobile'" not in combined
-    assert "contextMenu.source==='mobile'&&mobileMoveRow" in combined
+    assert "mobileMoveRow" not in combined
     assert "tabMenu.source==='mobile'" in combined
-    # Mobile rail order is a device-local permutation of the projection. It must
-    # never write layout: that is the only thing keeping a phone's reordering
-    # from rearranging the desktop pane tree for every client.
-    assert "MOBILE_TAB_ORDER_KEY" in combined
-    app = source("App.tsx")
-    move_slot = app.split("const moveMobileTabSlot=")[1].split("const mobileMoveRow=")[0]
-    assert "updateLayout" not in move_slot
-    assert "api(" not in move_slot
-    assert "'mux.mobileTabOrder.v1'" in source("mobileTabOrder.ts")
+    # The device-local rail permutation went with the row that was its only writer.
+    # Orphaning it would have been worse than removing it: a phone that had already
+    # saved an order would have stayed pinned to it, with no surface able to change
+    # or clear it. Rail order is the layout projection, full stop.
+    assert "MOBILE_TAB_ORDER_KEY" not in combined
+    assert "mux.mobileTabOrder.v1" not in combined
+    assert not (ROOT / "frontend" / "src" / "mobileTabOrder.ts").exists()
+    assert "orderMobileTabs" not in combined
+    assert "savedOrder" not in combined
     assert "beginWorkspaceTabDrag" in combined
     assert "beginProjectPointerDrag" in combined
     assert "beginSessionPointerDrag" in combined

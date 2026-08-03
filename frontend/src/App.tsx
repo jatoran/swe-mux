@@ -69,7 +69,6 @@ import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { dismissSoftKeyboard, softKeyboardHolder } from './mobileKeyboard'
-import { MOBILE_TAB_ORDER_KEY, moveMobileTab, parseMobileTabOrder, pruneMobileTabOrder, serializeMobileTabOrder, type MobileTabOrder } from './mobileTabOrder'
 import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import { reorderForHover, reorderTargetFromContainer, type DropSide, type ReorderAxis } from './dragReorder'
@@ -527,9 +526,6 @@ export function App() {
   // started). Purely visual, so it never enters layout or Project state.
   const [mobileHud,setMobileHud]=useState('')
   const mobileHudTimer=useRef<number|null>(null)
-  // Device-local rail permutation, per project. Never sent to the daemon: it
-  // reorders the mobile projection only, so it cannot alter the desktop layout.
-  const [mobileTabOrder,setMobileTabOrder]=useState<MobileTabOrder>(()=>parseMobileTabOrder(localStorage.getItem(MOBILE_TAB_ORDER_KEY)))
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
   const [profiles, setProfiles] = useState<ShellProfile[]>([])
   const [defaultProfile, setDefaultProfile] = useState('default')
@@ -2210,7 +2206,7 @@ export function App() {
 
   const navigateMobileTab = (offset: number) => {
     const layout = layoutValues.current[projectId] || activeLayout
-    const projection = mobileWorkspaceProjection(layout, focusedViewId, activeId, mobileTabOrder[projectId])
+    const projection = mobileWorkspaceProjection(layout, focusedViewId, activeId)
     const tabs = projection.tabs
     if (tabs.length < 2) return
     const index = projection.selected ? tabs.findIndex(tab => tab.id === projection.selected!.id) : -1
@@ -3119,31 +3115,7 @@ export function App() {
   }
   const projectPreviewIds=dragProject?.previewIds||displayProjectIds
 
-  const mobileProjection=mobileWorkspaceProjection(activeLayout,focusedViewId,activeId,mobileTabOrder[projectId])
-  // Reordering stores the full displayed order for this project, so the saved
-  // permutation self-heals: ids the save predated are already merged in at their
-  // layout-relative position by the projection before it is written back.
-  const moveMobileTabSlot=(leafId:string,direction:'left'|'right')=>{
-    if(!projectId)return
-    const next=moveMobileTab(mobileProjection.tabs.map(tab=>tab.id),leafId,direction)
-    if(!next)return
-    // The active project is always retained, so a write that lands before the
-    // project list has loaded cannot prune away the order it just saved.
-    const updated=pruneMobileTabOrder({...mobileTabOrder,[projectId]:next},[projectId,...projects.map(project=>project.id)])
-    setMobileTabOrder(updated)
-    localStorage.setItem(MOBILE_TAB_ORDER_KEY,serializeMobileTabOrder(updated))
-    navigator.vibrate?.(10)
-  }
-  // Left/right only: the mobile rail is flat, so this permutes the rail rather
-  // than moving a leaf between panes the way the desktop 'Move tab' row does.
-  const mobileMoveRow=(leafId:string)=>{
-    const ids=mobileProjection.tabs.map(tab=>tab.id)
-    const index=ids.indexOf(leafId)
-    return <div class="context-direction-row"><span>Move tab:</span><div>
-      <button aria-label="Move tab left" title="Move this tab one slot left (this device only)" disabled={index<=0} onClick={()=>moveMobileTabSlot(leafId,'left')}>◀</button>
-      <button aria-label="Move tab right" title="Move this tab one slot right (this device only)" disabled={index<0||index>=ids.length-1} onClick={()=>moveMobileTabSlot(leafId,'right')}>▶</button>
-    </div></div>
-  }
+  const mobileProjection=mobileWorkspaceProjection(activeLayout,focusedViewId,activeId)
   const activateMobileTab=(leaf:PaneLeaf)=>{
     setFocusedViewId(leaf.id)
     if(leaf.kind==='terminal')setActiveId(leaf.id)
@@ -3454,18 +3426,16 @@ export function App() {
       <button onClick={() => runNamedCommand('session.copyCwd')}>Copy working directory</button>
       <button onClick={() => runNamedCommand('session.note')}>Open session note</button>
       <button onClick={()=>{setContextMenu(null);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
-      {/* No desktop context menu touches the pane tree at all — not split, stack or
-          dissolve, and not Move tab either. They answer "how is the workspace laid out",
-          which is not the question a menu opened on a session or a tab is asked, and the
-          direction rows pushed Rename and Kill past the fold on every source. Desktop
-          layout is drag (direct manipulation) or the palette, where session.openSplit*,
-          pane.split*, pane.moveTab*, session.groupStack, stack.dissolve and
-          session.customSplit stay searchable and bindable.
-          The mobile row below is NOT that action and is deliberately kept: touch has no
-          drag-reorder (a swipe on the rail scrolls it) and no palette, so this is the
-          only way to reorder a phone's rail — and it only permutes a device-local order,
-          never the pane tree. Removing it would strand mobile reordering entirely. */}
-      {contextMenu.source==='mobile'&&mobileMoveRow(contextMenu.session.id)}
+      {/* No context menu touches tab order or pane geometry on any platform — not split,
+          stack, dissolve, or move. They answer "how is the workspace laid out", which is
+          not the question a menu opened on a session or a tab is asked, and the direction
+          rows pushed Rename and Kill past the fold on every source. Desktop layout is drag
+          or the palette (session.openSplit*, pane.split*, pane.moveTab*,
+          session.groupStack, stack.dissolve, session.customSplit). Mobile has neither, so
+          its rail is simply the projection's order — see mobileWorkspace. The device-local
+          permutation overlay that used to back the touch row went with it, deliberately:
+          left in place it could not be written any more, but a phone that had already
+          saved one would have stayed permanently pinned to it with no way out. */}
       <button onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
       <button onClick={()=>runNamedCommand('pane.stackNew')}>New terminal as tab</button>
       {voiceStatus?.enabled&&isAgent(contextMenu.session)&&<>
@@ -3571,11 +3541,9 @@ export function App() {
 
     {tabMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu tab-context-menu" role="menu" aria-label={`Tab actions for ${tabMenu.label}`} style={{left:clampContextMenuLeft(tabMenu.x,innerWidth),top:Math.max(4,Math.min(tabMenu.y,innerHeight-300))}}>
       <div class="context-title"><strong>{tabMenu.label}</strong></div>
-      {/* Same rule as the session menu above: no desktop context menu reshapes the pane
-          tree. Moving or splitting a resource tab is a drag; the keyboard route is the
-          palette. The mobile row stays for the reason given there — it is the only
-          reordering gesture touch has, and it never leaves the device. */}
-      {tabMenu.source==='mobile'&&mobileMoveRow(tabMenu.leaf.id)}
+      {/* Same rule as the session menu above, on every platform: no context menu moves,
+          splits or reorders. Rearranging a resource tab is a drag; the keyboard route is
+          the palette. */}
       {tabMenu.source==='mobile'&&<button onClick={()=>{const target=tabMenu;setTabMenu(null);void spawnTerminal(target.projectId,'stack',undefined,target.leaf.id)}}>New terminal as tab</button>}
       <div class="context-rule"/><button onClick={()=>{
         const target=tabMenu;setTabMenu(null)

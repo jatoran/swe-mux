@@ -1,22 +1,20 @@
 import type { PaneLayout, PaneLeaf, PaneNode } from './layout'
-// Explicit extension: this module is exercised by the node type-stripping test
-// runner, which does not resolve extensionless specifiers.
-import { orderMobileTabs } from './mobileTabOrder.ts'
 
 export type MobileWorkspaceProjection = {
   tabs:PaneLeaf[]
   selected:PaneLeaf|null
 }
 
-// `savedOrder` is the device-local rail permutation (mobileTabOrder). It only
-// reorders what the layout already contains, so every consumer of `tabs` —
-// rendering, swipe navigation, focus-after-close — follows one order without
-// the layout itself ever being rewritten.
+// Rail order is derived from the layout, full stop: depth-first over the tree,
+// each stack's children in order. A device-local permutation overlay used to sit
+// on top of this, driven by a `Move tab` row in the mobile long-press menu. Both
+// are gone — no context menu reorders anything now — and the overlay could not
+// simply be orphaned, because a phone that had already saved a permutation would
+// have kept applying it forever with nothing able to write it again.
 export function mobileWorkspaceProjection(
   layout:PaneLayout,
   focusedViewId:string|null,
   activeTerminalId:string|null,
-  savedOrder?:readonly string[],
 ):MobileWorkspaceProjection {
   const layoutTabs:PaneLeaf[]=[]
   let firstPaneActive:string|null=null
@@ -30,7 +28,7 @@ export function mobileWorkspaceProjection(
     visit(node.first);visit(node.second)
   }
   visit(layout.root)
-  const tabs=orderMobileTabs(layoutTabs,savedOrder)
+  const tabs=layoutTabs
   const preferred=[
     focusedViewId,
     activeTerminalId,

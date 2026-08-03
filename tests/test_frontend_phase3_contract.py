@@ -279,13 +279,15 @@ def test_session_tab_context_menu_omits_redundant_focus_and_detach_actions() -> 
     assert "runNamedCommand('pane.detach')" not in app
 
 
-def test_no_desktop_context_menu_touches_the_pane_tree() -> None:
-    """Split, stack, dissolve AND move-tab are gone from the session and tab menus.
+def test_no_context_menu_reorders_or_reshapes_anything() -> None:
+    """Split, stack, dissolve and move-tab are gone from the session and tab menus.
 
-    They used to render on the sidebar row, the tab, and the pane's own ⋯ menu, where
-    the direction rows and their buttons pushed Rename and Kill past the fold in a menu
-    opened to act on one session. Desktop layout is now drag (direct manipulation) or
-    the command palette.
+    On every source and every platform, mobile included. They used to render on the
+    sidebar row, the tab, the pane's own ⋯ menu, and (as a rail permutation) the touch
+    long-press menu, where the direction rows and their buttons pushed Rename and Kill
+    past the fold in a menu opened to act on one session. Layout is now drag (direct
+    manipulation) or the command palette, and the mobile rail is simply the projection's
+    order.
     """
     app = (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(
         encoding="utf-8"
@@ -300,17 +302,14 @@ def test_no_desktop_context_menu_touches_the_pane_tree() -> None:
         assert "Dissolve tab stack into splits" not in menu
         assert "New terminal custom in split" not in menu
         assert "directionRow('Move tab:'" not in menu
+        assert "mobileMoveRow" not in menu
         assert "runNamedCommand('session.groupStack')" not in menu
         assert "runNamedCommand('stack.dissolve')" not in menu
         assert "runNamedCommand('session.customSplit')" not in menu
-        # Touch keeps its row: it permutes a device-local rail order rather than the
-        # pane tree, and it is the only reordering gesture a phone has (no drag-reorder
-        # on the rail, no palette). test_mobile_workspace_... owns the no-layout-write
-        # half of that contract.
-        assert "mobileMoveRow" in menu
     # These existed only to serve those rows; nothing may reintroduce a caller without
     # also reintroducing the menu entry this test forbids.
     assert "splitExistingLeaf" not in app
+    assert "moveMobileTabSlot" not in app
     assert app.count("moveTabDirection") == 2  # the definition, and the palette command
     # Removed from the menus, not from the app: these are the routes that keep them
     # usable, and each is bindable because it is a registry entry. pane.moveTab* was

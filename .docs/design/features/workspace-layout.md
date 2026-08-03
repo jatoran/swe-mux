@@ -128,24 +128,17 @@ PaneLeaf = terminal | note | preview | history | queue
   pane when no selection exists. Activating it also updates that pane's active child.
 - Mobile never rewrites split geometry, pane membership, or tab order merely because it is
   narrow. Returning to desktop restores the saved pane tree.
-- The rail can still be rearranged *on the device*. A mobile tab's long-press menu (the session
-  menu for terminals, the tab menu for resources) carries a left/right **Move tab** row that
-  permutes a device-local order overlay stored per Project in local storage. It is a permutation
-  only: the layout remains authoritative for membership, no layout revision is written, and no
-  request is issued, so a phone's rail order can never reach the desktop pane tree or another
-  client. Ordering is per device by design, not synced.
-  This row is now mobile-*only*: the desktop `Move tab` row (which moved a leaf between panes)
-  was removed from the session and tab menus along with the rest of the pane geometry, leaving
-  drag and `pane.moveTab*` there. It survives here because it is a different action with no
-  substitute — touch has no drag-reorder on the rail and no command palette, so removing it
-  would leave a phone unable to reorder at all.
-- A tab the saved order predates is merged in beside its layout predecessor rather than appended,
-  so a session launched from a given tab still appears next to it. Once a device has its own
-  order, later desktop reordering no longer moves those tabs on that device.
-- Mobile menus omit split, cross-pane directional move, dissolve, and zoom controls: the mobile
-  Move tab row permutes the flat rail rather than moving a leaf between panes. Touch scrolling
-  never initiates tab reorder. Terminals always use xterm's built-in DOM renderer—even when desktop is
-  configured to prefer WebGL—because responsive pixel-ratio changes can strand WebGL canvases.
+- **The rail is not reorderable on the device.** Its order is the projection's, derived from the
+  pane tree. A left/right **Move tab** row in the mobile long-press menu used to permute a
+  device-local order overlay (`mux.mobileTabOrder.v1`, per Project in local storage); it was
+  removed when context menus stopped carrying tab ordering and pane geometry, and the overlay went
+  with it rather than being orphaned — with no writer left, a device that had already saved an
+  order would have stayed pinned to it permanently. Reorder from a desktop client instead; the
+  rail follows.
+- Mobile menus carry no geometry or ordering controls at all: no split, no cross-pane directional
+  move, no rail permutation, no dissolve, no zoom. Touch scrolling never initiates tab reorder.
+  Terminals always use xterm's built-in DOM renderer—even when desktop is configured to prefer
+  WebGL—because responsive pixel-ratio changes can strand WebGL canvases.
 - Terminal long-press is an xterm selection gesture, not a pane/session context-menu gesture.
   Dragging before the hold threshold scrolls; dragging after selection extends the selected
   buffer span. Copy actions remain explicit and touch-sized.

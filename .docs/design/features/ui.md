@@ -135,24 +135,25 @@ responsive controls.
 - Context menus are source-aware. Terminal-only operations never appear on resource tabs;
   obsolete focused-terminal, detach/remove-from-group, Project-note, pane-swap, and pane-header
   minimize/close actions are absent.
-- **No desktop context menu touches the pane tree.** Open-in-split, new-terminal-in-split,
-  new-custom-terminal-in-split, stack-with-focused, dissolve-stack, and move-tab are absent
-  from the session menu on every source (sidebar row, tab, pane bar / `⋯`) and from the tab
-  menu. They answer "how is the workspace laid out", which is not the question any of those
-  menus is opened to answer, and the direction rows pushed Rename and Kill below the fold in
-  all of them. Layout is **drag** (direct manipulation, with split/tab-bar drop previews) or
-  the **command palette** — every action has a registry command (`session.openSplit*`,
-  `pane.split*`, `pane.moveTab*`, `session.groupStack`, `stack.dissolve`,
-  `session.customSplit`), so each stays searchable and bindable to a key. `pane.moveTab*`
-  exists *because* the row was removed: drag covers moving a tab between panes by pointer,
-  and without those four commands there would be no keyboard route to it and nothing to bind.
-- Two menus keep a directional row, each because the general rule would leave no way in.
-  The **resource** menu keeps `Open in split`: a Project note or an opened file has no tab to
-  drag until it is already in a pane. **Mobile** keeps `Move tab` (see `workspace-layout.md` §
-  mobile projection): it permutes a device-local rail order rather than the pane tree, and
-  touch has neither drag-reorder nor a palette, so it is a phone's only reordering gesture.
-- Those rows use non-clickable labels with directional arrow buttons. Only directions valid
-  for the current split tree are enabled. Mobile omits pane geometry actions entirely.
+- **No context menu reorders or reshapes anything, on any platform.** Open-in-split,
+  new-terminal-in-split, new-custom-terminal-in-split, stack-with-focused, dissolve-stack, and
+  move-tab are absent from the session menu on every source (sidebar row, tab, pane bar / `⋯`),
+  from the tab menu, and from the mobile long-press menus. They answer "how is the workspace
+  laid out", which is not the question any of those menus is opened to answer, and the
+  direction rows pushed Rename and Kill below the fold in all of them. Layout is **drag**
+  (direct manipulation, with split/tab-bar drop previews) or the **command palette** — every
+  action has a registry command (`session.openSplit*`, `pane.split*`, `pane.moveTab*`,
+  `session.groupStack`, `stack.dissolve`, `session.customSplit`), so each stays searchable and
+  bindable to a key. `pane.moveTab*` exists *because* the row was removed: drag covers moving a
+  tab between panes by pointer, and without those four commands there would be no keyboard
+  route to it and nothing to bind.
+- Touch has neither of those routes, so mobile simply does not reorder: the rail follows the
+  layout projection, and the device-local permutation the touch row used to write was deleted
+  along with it rather than left orphaned (see `workspace-layout.md` § mobile projection).
+- The **resource** menu is the one exception that keeps a directional row — `Open in split`,
+  because a Project note or an opened file has no tab to drag until it is already in a pane.
+  It uses a non-clickable label with directional arrow buttons, enabling only directions valid
+  for the current split tree.
 - Pointer-anchored menus are re-fitted to the viewport after they mount, not merely clamped at
   open time: the inline coordinates are seeded from rough height guesses, and content that lands
   later (a Project's imported task list) can make the box much taller than the guess. The Run

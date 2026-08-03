@@ -32,16 +32,13 @@ test('mobile workspace falls back to the first pane active tab and chooses an ad
   assert.equal(adjacentMobileTab(projection.tabs,'preview-a')?.id,'history:archive')
 })
 
-test('a device-local order permutes the rail without changing membership',()=>{
-  const projection=mobileWorkspaceProjection(layout,null,null,['history:archive','term-a','note-a','term-b','preview-a'])
-  assert.deepEqual(projection.tabs.map(tab=>tab.id),['history:archive','term-a','note-a','term-b','preview-a'])
-  // Swipe order and close-focus adjacency both read the reordered rail.
-  assert.equal(adjacentMobileTab(projection.tabs,'history:archive')?.id,'term-a')
-})
-
-test('a saved order cannot invent or drop tabs, and merges what it predates',()=>{
-  // 'ghost' is gone from the layout and is ignored; note-a/term-b/history are
-  // absent from the save and land after their layout predecessor.
-  const projection=mobileWorkspaceProjection(layout,null,null,['ghost','preview-a','term-a'])
-  assert.deepEqual(projection.tabs.map(tab=>tab.id),['preview-a','history:archive','term-a','note-a','term-b'])
+test('rail order is the layout, with no device-local permutation left to apply',()=>{
+  // The mobile `Move tab` row and the mobileTabOrder overlay behind it were removed
+  // together: an orphaned overlay would have kept permuting a phone that had already
+  // saved one, unwritable and inescapable. The projection takes no order argument at
+  // all now, so there is nowhere for a stale permutation to re-enter.
+  assert.equal(mobileWorkspaceProjection.length,3)
+  const projection=mobileWorkspaceProjection(layout,null,'term-b')
+  assert.deepEqual(projection.tabs.map(tab=>tab.id),['term-a','note-a','term-b','preview-a','history:archive'])
+  assert.equal(adjacentMobileTab(projection.tabs,'term-a')?.id,'note-a')
 })
