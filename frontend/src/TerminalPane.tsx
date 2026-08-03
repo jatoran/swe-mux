@@ -36,6 +36,7 @@ import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { currentProfile, loadRailItems } from './deviceSettings'
 import { APP_TAIL_KEY, VIEWPORT_SETTLE_MS, appOwnsTail, attachRegistersViewport, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, reflowVisibleTerminalRenderer, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
 import { geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
+import { scaledFontSize } from './uiScale'
 import {
   applyOwnerFrame,
   applyOwnerReleased,
@@ -68,7 +69,17 @@ import {
 
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 
-/** The pane's normal font size. A letterboxed pane renders below it and never above. */
+/**
+ * The pane's normal font size at 100% chrome scale. A letterboxed pane renders below
+ * whatever this resolves to, and never above it.
+ *
+ * Multiplied by the user's UI scale, so terminal type moves with the rest of the
+ * interface instead of staying put while everything around it grows. That does change
+ * the grid this pane proposes — a bigger font fits fewer columns and rows in the same
+ * box — and that proposal is what cross-device arbitration reduces. Intended: it is no
+ * different from resizing the window, and the alternative is a device rendering a grid
+ * whose type its owner asked to be able to read.
+ */
 const BASE_FONT_SIZE = 11
 
 /**
@@ -94,6 +105,13 @@ interface Props {
   /** ConPTY compatibility descriptor from the daemon; undefined off Windows. */
   windowsPty?: WindowsPtyCompatibility
   mobileInput: MobileInputSettings
+  /**
+   * The chrome scale, applied to this pane's font. Deliberately not in the terminal's
+   * construction effect: font size is live-assignable, and rebuilding the terminal (as
+   * `scrollback` has to) would drop the socket and replay the whole buffer to change a
+   * number xterm will take directly.
+   */
+  uiScale: number
   /**
    * Whether this pane is the one on screen in its stack. A false value is a *warm*
    * pane (`warmPanes.ts`): fully live, deliberately kept mounted so returning to it
@@ -190,8 +208,14 @@ async function pasteBrowserClipboard(term: Terminal, session: Session) {
   term.focus()
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, visible, onConfigureRail, onBranch }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, onConfigureRail, onBranch }: Props) {
   const host = useRef<HTMLDivElement>(null)
+  // Held in a ref rather than closed over: every reader below lives inside the
+  // terminal's construction effect, which must not re-run just because a font moved.
+  const baseFont = scaledFontSize(BASE_FONT_SIZE, uiScale)
+  const baseFontRef = useRef(baseFont)
+  baseFontRef.current = baseFont
+  const applyBaseFontRef = useRef<() => void>(() => {})
   const termRef = useRef<Terminal | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
@@ -388,7 +412,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     reportStartup('pane_mounted')
     const term = new Terminal({
       cursorBlink: true, cursorStyle: 'bar', fontFamily: '"Cascadia Mono", Consolas, monospace',
-      fontSize: BASE_FONT_SIZE, fontWeight: '600', fontWeightBold: '600', lineHeight: 1.2, scrollback, allowProposedApi: true,
+      fontSize: baseFontRef.current, fontWeight: '600', fontWeightBold: '600', lineHeight: 1.2, scrollback, allowProposedApi: true,
       screenReaderMode: false,
       // Passed at construction, not assigned later: below ConPTY build 21376 this
       // both disables reflow and installs the wrapped-line heuristic in the parser,
@@ -597,10 +621,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // A letterboxed pane renders at a smaller font, and a proposal measured there
       // would tell the daemon this pane wants columns nobody on this device could read
       // — and that is the number the shared PTY would then be sized to.
-      const fontSize = term.options.fontSize ?? BASE_FONT_SIZE
-      if (fontSize !== BASE_FONT_SIZE) term.options.fontSize = BASE_FONT_SIZE
+      const base = baseFontRef.current
+      const fontSize = term.options.fontSize ?? base
+      if (fontSize !== base) term.options.fontSize = base
       const proposed = fit.proposeDimensions()
-      if (fontSize !== BASE_FONT_SIZE) term.options.fontSize = fontSize
+      if (fontSize !== base) term.options.fontSize = fontSize
       if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return
       localFit = { cols: proposed.cols, rows: proposed.rows }
       localFitBox = size
@@ -619,9 +644,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         rows: target.rows,
         hostWidth: box.clientWidth,
         hostHeight: box.clientHeight,
-        baseFontSize: BASE_FONT_SIZE,
+        baseFontSize: baseFontRef.current,
       })
-      const fontSize = term.options.fontSize ?? BASE_FONT_SIZE
+      const fontSize = term.options.fontSize ?? baseFontRef.current
       const next = fitFont(fontSize)
       if (next === fontSize) return
       term.options.fontSize = next
@@ -640,7 +665,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (!letterboxed) return
       letterboxed = false
       setLetterboxSize('')
-      term.options.fontSize = BASE_FONT_SIZE
+      term.options.fontSize = baseFontRef.current
     }
     const applyGeometry = () => {
       if (serverGeometry && !geometryMatchesFit(serverGeometry, localFit)) {
@@ -655,7 +680,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (letterboxed) {
         letterboxed = false
         setLetterboxSize('')
-        term.options.fontSize = BASE_FONT_SIZE
+        term.options.fontSize = baseFontRef.current
       }
       refitVisibleTerminal(fit, host.current)
     }
@@ -700,6 +725,22 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           armSurfaceConfirmation(fullRedraw)
         })
       })
+    }
+    // The chrome scale moved, so this pane's font did. Re-measure through the ordinary
+    // pass: this device proposes whatever grid its new type fits and arbitration settles
+    // it, exactly as a window resize does. Deliberately *not* `resizeToPaneRef`, which
+    // claims the geometry — changing your own font is not a decision to take the shared
+    // PTY away from another device.
+    applyBaseFontRef.current = () => {
+      if (term.options.fontSize === baseFontRef.current) return
+      // A letterboxed pane sits on a fitted font derived from the base. `applyGeometry`
+      // recomputes that from the new base, so assigning here would only flash the wrong
+      // size for a frame.
+      if (!letterboxed) term.options.fontSize = baseFontRef.current
+      // The cached fit was measured at the old font and would otherwise be believed.
+      localFit = null
+      localFitBox = null
+      runViewportPass()
     }
     // Repaint the surface again, without touching geometry.
     //
@@ -1471,8 +1512,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{} }
+    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput])
+
+  // Its own effect on purpose: the one above owns the terminal's whole lifetime, so
+  // listing the scale in its deps would dispose the terminal, drop the socket and
+  // replay the entire buffer to change a number xterm takes directly.
+  useEffect(() => { applyBaseFontRef.current() }, [uiScale])
 
   const copy = async () => {
     const term = termRef.current
@@ -1776,5 +1822,7 @@ export const TerminalPane = memo(TerminalPaneImpl, (a, b) =>
   // Identity-stable per machine (App value-compares it), so this only differs on
   // the single boot transition from "config not loaded yet" to the real value.
   a.windowsPty === b.windowsPty &&
-  a.mobileInput === b.mobileInput,
+  a.mobileInput === b.mobileInput &&
+  // Without this the memo swallows the change and the pane keeps the old font.
+  a.uiScale === b.uiScale,
 )

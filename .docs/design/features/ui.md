@@ -258,9 +258,9 @@ responsive controls.
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
   the editor package rather than hand-listed, so it cannot drift from what the editor binds.
-- Appearance exposes **chrome scale**, one multiplier on the size of every non-terminal
-  surface, stored **separately for desktop and mobile**. Both default to `1.0`, so installing
-  the build that added it changes nothing on screen; it only moves when the user moves it.
+- Appearance exposes **chrome scale**, one multiplier on the size of every surface, stored
+  **separately for desktop and mobile**. Both default to `1.0`, so installing the build that
+  added it changes nothing on screen; it only moves when the user moves it.
   - It is a *scale* and not a font size on purpose. All chrome type is already one number —
     `style.css` forces `font-size:var(--ui-font-size)` onto every element inside `.app-shell`
     that is not the terminal, with an `!important` that beats the ~165 per-rule font sizes
@@ -285,6 +285,28 @@ responsive controls.
       panel *maxima* (`height:min(760px, 100dvh - 42px)`) — those are viewport-bound — or
       widths the user already drags (the sidebar, the docked drawer).
     - The steps stop at 1.4 because past it the fixed values start to crowd.
+  - **The terminal follows the scale too, but not through CSS.** xterm owns its font and
+    derives the cell grid from it, so `TerminalPane` is handed the scale as a number and
+    multiplies its own base size by it. Two decimals, matching `--ui-font-size` exactly:
+    that `calc()` does no rounding, and rounding to whole pixels would make 1.1 and 1.25
+    render identical terminal type while the chrome beside them moved. A bigger font fits
+    fewer columns and rows in the same box, so this pane proposes a smaller grid, and that
+    proposal is what cross-device arbitration reduces — intended, and no different from
+    resizing the window. The alternative is a device rendering a grid whose type its owner
+    just said they cannot read. It is applied live, in its own effect: font size is
+    assignable on a running terminal, and putting the scale in the construction effect's
+    deps would dispose the terminal and replay the whole buffer to change a number.
+  - **A popover portalled to the body carries `ui-portal`**, which is in the normalizer's
+    selector list alongside `.app-shell *`. The account and resource popovers render through
+    `createPortal` so a narrow or collapsed sidebar cannot clip them, which also put them
+    outside the only rule that overrides per-element px sizes — they stayed at a fixed
+    7.5–9 px at every setting while the chrome around them moved. The class is the contract;
+    a contract test fails any `createPortal(…, document.body)` root that omits it.
+  - A corollary worth stating, because it has been violated twice: **a px `font-size` written
+    in a rule under `.app-shell` does nothing.** The normalizer's `!important` beats it at any
+    specificity. Chrome type is one number; a surface that wants emphasis uses colour, weight
+    is already fixed at 600, and anything else needs the normalizer changed rather than
+    worked around.
   - Because every conversion is `<n>px` → `calc(<n>px*var(--ui-scale))`, substituting
     `--ui-scale: 1` back into the stylesheet reproduces the pre-feature file exactly. That
     is the check to re-run if this is ever extended: the default must stay inert.
@@ -300,9 +322,12 @@ responsive controls.
     editable from either device — sizing the phone from the desktop is the point, since the
     phone is the harder device to type on — and the panel says which of the two the window
     you are looking at is currently using.
-  - Excluded from it entirely: the terminal, which has its own font size and whose cell grid
-    feeds cross-device viewport arbitration (`features/terminal-input.md`), and the note
-    editor, whose typography is its own `--continuity-*` setting under Notes.
+  - Excluded from it entirely: only the note editor, whose typography is its own
+    `--continuity-*` setting under Notes. The terminal was excluded at first — it has its own
+    font size and its cell grid feeds cross-device viewport arbitration
+    (`features/terminal-input.md`) — but leaving the largest surface in the window at a fixed
+    size while everything around it grew is not what the setting is asked for, and the
+    arbitration consequence turned out to be the correct behaviour rather than the objection.
 - Terminals exposes `auto | webgl | dom` renderer selection. `auto` preserves accelerated WebGL
   on desktop with automatic DOM fallback; mobile and Codex terminals always use DOM regardless
   of the preference so their scrollback remains stable.
@@ -418,8 +443,11 @@ responsive controls.
 - The bar is `[nav] [quota] [Project name] [Run] [side panel]`. Only the Project name flexes;
   everything else is content-sized, and the name is the one thing that can give, since it
   ellipsizes and the Project it names also appears in the sidebar and the tab strip. Measured
-  at 320–430 px, the fixed items take ~262 px, so the name keeps 36 px at the narrowest phone
-  and ~106 px at 390 px.
+  in-page (the chip renders at `--ui-font-size`, so measuring it outside `.app-shell` reads
+  ~20 px per chip too narrow): the fixed items take ~299 px at 100%, leaving the name ~90 px
+  at 390 px and 20 px at 320 px. At 140% the chips grow to ~101 px each and the name is down
+  to ~49 px at 390 px — tight, ellipsized, and still one row, which is the trade the scale
+  setting is asking for.
 - Mobile quota is **two boxes, one per provider**, each carrying every window that provider
   reports over the weekly reset countdown (`90/80/74` over `4d8h`) — see the quota-chip rules
   above. It previously showed a single number — whichever provider's weekly window was furthest

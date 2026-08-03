@@ -125,3 +125,62 @@ def test_no_unintended_rule_pins_a_height_the_base_scales() -> None:
     # Keep the allowlist honest: an entry that no longer conflicts is stale.
     stale = set(INTENTIONAL_PINS) - (scaled & pinned)
     assert not stale, f"INTENTIONAL_PINS entries no longer conflict: {sorted(stale)}"
+
+
+def test_portalled_overlays_are_normalized_like_the_rest_of_the_chrome() -> None:
+    """A popover rendered into `document.body` still has to follow the scale.
+
+    The normalizer is scoped to `.app-shell *`, and the account/resource popovers
+    escape it deliberately (`createPortal`) so a narrow or collapsed sidebar cannot
+    clip them. Nothing then overrode their own px font sizes, so they rendered at a
+    fixed size at every setting — measured: every labelled row stayed at 7.5-9px while
+    the chrome beside it went 11px → 15.4px. That is the surface where the quota
+    numbers are actually read, so it is the worst one to leave behind.
+    """
+    css = (SRC / "style.css").read_text(encoding="utf-8")
+    accounts = (SRC / "ProviderAccounts.tsx").read_text(encoding="utf-8")
+    resources = (SRC / "ResourceUsage.tsx").read_text(encoding="utf-8")
+
+    assert ".ui-portal,\n.ui-portal * {" in css
+    assert ".ui-portal *::before,.ui-portal *::after {" in css
+    # Every root handed to createPortal carries the class, or it silently opts out.
+    for name, source in (("ProviderAccounts", accounts), ("ResourceUsage", resources)):
+        for portal in re.finditer(r"createPortal\((\w+),\s*document\.body\)", source):
+            root = re.search(
+                rf"const {portal.group(1)}\s*=[^\n]*?class=\"([^\"]*)\"", source
+            )
+            assert root, f"{name}: cannot find the root element for {portal.group(1)}"
+            assert "ui-portal" in root.group(1).split(), (
+                f"{name} portals {portal.group(1)} to the body without `ui-portal`, "
+                "so it will not follow the UI scale"
+            )
+
+
+def test_the_terminal_font_follows_the_chrome_scale() -> None:
+    """xterm owns its font, so CSS cannot reach it and the scale is passed as a number.
+
+    Pinned because the wiring has three halves that are individually inert: the prop
+    has to reach the pane, the memo has to let the change through, and the apply has to
+    happen outside the construction effect (listing it there would dispose the terminal
+    and replay the whole buffer to change a font size).
+    """
+    app = (SRC / "App.tsx").read_text(encoding="utf-8")
+    pane = (SRC / "TerminalPane.tsx").read_text(encoding="utf-8")
+
+    assert "uiScale={uiScale}" in app
+    assert "setUiScale(applyUiScale(config))" in app
+    assert "watchUiScaleProfile(setUiScale)" in app
+
+    assert "const baseFont = scaledFontSize(BASE_FONT_SIZE, uiScale)" in pane
+    assert "useEffect(() => { applyBaseFontRef.current() }, [uiScale])" in pane
+    assert "a.uiScale === b.uiScale," in pane
+    # A scale change must not be in the terminal's construction deps.
+    lifetime = re.search(r"\n  \}, \[session\.id, keybindings,[^\]]*\]\)", pane)
+    assert lifetime, "the terminal lifetime effect's dep list has moved"
+    assert "uiScale" not in lifetime.group(0)
+    # Nothing may read the unscaled constant once the terminal exists; every site that
+    # used to has to go through the ref, or a pane silently keeps the 100% font.
+    body = pane.split("function TerminalPaneImpl", 1)[1]
+    assert "BASE_FONT_SIZE" not in body.replace(
+        "const baseFont = scaledFontSize(BASE_FONT_SIZE, uiScale)", ""
+    )

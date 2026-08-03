@@ -16,9 +16,15 @@
  * touch floors deliberately stay fixed: they are not type-derived, and leaving
  * them still is what keeps a scaled-up UI looking dense rather than inflated.
  *
- * Excluded on purpose: the terminal (its own `BASE_FONT_SIZE`, and it feeds
- * cross-device viewport arbitration) and the Continuity note editor (its own
- * `--continuity-*` properties, already configurable).
+ * The terminal follows it too, but not through CSS: xterm owns its own font and
+ * derives the cell grid from it, so the scale is handed to `TerminalPane` as a
+ * number and multiplied into its base font size there. That does change the
+ * columns and rows this device proposes — a bigger font means fewer of both — and
+ * that proposal feeds cross-device viewport arbitration. Which is the correct
+ * result rather than a hazard: it is what a smaller window already does, and a
+ * device rendering type it cannot fit is exactly what arbitration exists to
+ * catch. Only the Continuity note editor is still excluded, having its own
+ * `--continuity-*` properties that are already configurable.
  *
  * The value is split desktop/mobile because the same UI is driven from a browser
  * and a phone, and one number cannot say "the phone is too small but the desktop
@@ -58,12 +64,28 @@ export function uiScaleFrom(config: Record<string, unknown>, profile: SettingsPr
   return UI_SCALE_STEPS.find(step => Math.abs(step - raw) < 1e-9) ?? DEFAULT_UI_SCALE
 }
 
+/**
+ * A base size in px at the current scale, for the surfaces CSS cannot reach.
+ *
+ * Two decimals, not whole pixels: the steps land on 9.9 / 12.1 / 13.75 / 15.4, and
+ * rounding those to integers would make 1.1 and 1.25 render identically in the
+ * terminal while the chrome beside it moved — `--ui-font-size` is a raw `calc()` and
+ * does no rounding. xterm accepts fractional sizes and derives cell metrics from
+ * them, so matching it exactly is what keeps the two surfaces the same size.
+ */
+export const scaledFontSize = (basePx: number, scale: number): number =>
+  Math.round(basePx * scale * 100) / 100
+
 let current: Record<string, unknown> | null = null
 
-/** Write the scale for this device's class. Idempotent; safe to call on every config apply. */
-export function applyUiScale(config: Record<string, unknown>): void {
+/** Write the scale for this device's class. Idempotent; safe to call on every config
+ *  apply. Returns the resolved step, because the terminal needs it as a number rather
+ *  than as a custom property. */
+export function applyUiScale(config: Record<string, unknown>): UiScale {
   current = config
-  writeUiScale(uiScaleFrom(config, currentProfile()))
+  const scale = uiScaleFrom(config, currentProfile())
+  writeUiScale(scale)
+  return scale
 }
 
 function writeUiScale(scale: UiScale): void {
@@ -80,9 +102,9 @@ function writeUiScale(scale: UiScale): void {
  * across the breakpoint switches which config key applies, and without this it
  * would keep the desktop scale while rendering the mobile layout.
  */
-export function watchUiScaleProfile(): () => void {
+export function watchUiScaleProfile(onChange?: (scale: UiScale) => void): () => void {
   const query = window.matchMedia(MOBILE_QUERY)
-  const update = () => { if (current) applyUiScale(current) }
+  const update = () => { if (current) onChange?.(applyUiScale(current)) }
   query.addEventListener('change', update)
   return () => query.removeEventListener('change', update)
 }

@@ -157,13 +157,14 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
    (`5h/weekly[/fable]`, no percent signs — see `quotaChipSegments`), the weekly reset
    countdown under it. Two of these have to fit beside nav, the Project title, Run, and the
    drawer toggle, so the box is sized to its content and the digits carry the contrast rather
-   than a border. The values run a point larger than the countdown: they are what the chip is
-   read for, and at 8px three of them blur into one number. */
-.toolbar-quota{min-width:0;height:calc(36px*var(--ui-scale));padding:1px 5px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;line-height:1.15;cursor:pointer;display:grid;grid-template-columns:auto auto;grid-template-rows:auto auto;align-items:center;justify-items:center;column-gap:3px}
-.toolbar-quota .provider-glyph{grid-row:1;font-size:10px;line-height:1;color:var(--text)}
-.toolbar-quota .provider-mark{width:10px;height:10px;display:block}
-.toolbar-quota>strong{grid-row:1;font-size:9px;font-weight:600;color:var(--text);white-space:nowrap}
-.toolbar-quota>small{grid-row:2;grid-column:1/-1;color:var(--muted);font-size:8px;white-space:nowrap}
+   than a border. No font sizes here: chrome type is one number set by `--ui-font-size`, and
+   a px size written in this block is simply overridden by that `!important` normalizer.
+   Colour, weight-by-colour, and the grid are what this box can actually vary. */
+.toolbar-quota{min-width:0;height:calc(36px*var(--ui-scale));padding:1px 5px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);cursor:pointer;display:grid;grid-template-columns:auto auto;grid-template-rows:auto auto;align-items:center;justify-items:center;column-gap:3px}
+.toolbar-quota .provider-glyph{grid-row:1;color:var(--text)}
+.toolbar-quota .provider-mark{width:1em;height:1em;display:block}
+.toolbar-quota>strong{grid-row:1;color:var(--text);white-space:nowrap}
+.toolbar-quota>small{grid-row:2;grid-column:1/-1;color:var(--muted);white-space:nowrap}
 .toolbar-quota:hover,.toolbar-quota:focus-visible{border-color:var(--green)}
 /* Each window is banded individually, so the chip says which one is hot rather than only
    that something is. The button's own band is the worst of them and drives the border. */
@@ -356,7 +357,16 @@ body {
 .app-shell {
   background:var(--bg);
 }
-.app-shell *:not(.xterm):not(.xterm *) {
+/* `.ui-portal` is the same surface by a different parent. A popover rendered with
+   `createPortal(…, document.body)` — the account and resource ones, which escape the
+   sidebar so a narrow or collapsed column cannot clip them — sits outside `.app-shell`
+   and so was missed by the normalizer entirely. It kept whatever px font each of its
+   own rules had asked for and did not move with the scale at all, which is a
+   particularly bad surface to leave behind: the popover is where the quota numbers are
+   actually read. Anything portalled to the body must carry the class. */
+.app-shell *:not(.xterm):not(.xterm *),
+.ui-portal,
+.ui-portal * {
   font-family:var(--ui-font)!important;
   font-size:var(--ui-font-size)!important;
   font-weight:600!important;
@@ -366,7 +376,9 @@ body {
   font-feature-settings:'liga' 0,'calt' 0;
 }
 .app-shell :not(.xterm):not(.xterm *)::before,
-.app-shell :not(.xterm):not(.xterm *)::after {
+.app-shell :not(.xterm):not(.xterm *)::after,
+.ui-portal::before,.ui-portal::after,
+.ui-portal *::before,.ui-portal *::after {
   font-family:var(--ui-font)!important;
   font-size:var(--ui-font-size)!important;
   font-weight:600!important;

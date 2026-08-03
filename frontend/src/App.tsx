@@ -67,7 +67,7 @@ import { completeTutorial, emitTutorialAction, resetTutorial, shouldStartTutoria
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { TURN_ENDED_EVENT } from './transcriptView'
 import { applyNoteEditorConfig } from './noteEditorSettings'
-import { applyUiScale, watchUiScaleProfile } from './uiScale'
+import { DEFAULT_UI_SCALE, applyUiScale, watchUiScaleProfile, type UiScale } from './uiScale'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command } from './commands'
 import { copyPreparedText } from './terminalClipboard'
 import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from './fileClipboard'
@@ -426,6 +426,10 @@ export function App() {
   const [clipboardEnabled,setClipboardEnabled]=useState(true)
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [terminalRenderer, setTerminalRenderer] = useState<TerminalRendererPreference>('auto')
+  // Chrome scale as a number. Every other surface reads it as a CSS custom property, but
+  // xterm owns its own font and derives the cell grid from it, so the terminal has to be
+  // handed the value rather than inheriting it.
+  const [uiScale, setUiScale] = useState<UiScale>(DEFAULT_UI_SCALE)
   const [windowsPty, setWindowsPty] = useState<WindowsPtyCompatibility | undefined>(undefined)
   const [mobileInput, setMobileInput] = useState<MobileInputSettings>(defaultMobileInputSettings)
   const [mobileGestures, setMobileGestures] = useState<MobileGestureSettings>(defaultMobileGestureSettings)
@@ -809,7 +813,7 @@ export function App() {
   const applyConfig = (config:AppConfig, includeTheme:boolean) => {
     if (includeTheme) { configureCustomTheme(config.custom_theme); applyTheme(config.theme) }
     applyNoteEditorConfig(config)
-    applyUiScale(config)
+    setUiScale(applyUiScale(config))
     setXtermScrollback(config.xterm_scrollback_lines)
     setTerminalRenderer(config.terminal_renderer)
     // Value-compared for the same reason as mobileInput below: this feeds
@@ -920,7 +924,7 @@ export function App() {
 
   // Chrome scale is stored per device class, so crossing the breakpoint changes
   // which stored value applies — not just the layout.
-  useEffect(() => watchUiScaleProfile(), [])
+  useEffect(() => watchUiScaleProfile(setUiScale), [])
 
   useEffect(() => {
     const viewport = window.visualViewport
@@ -3089,7 +3093,7 @@ export function App() {
             session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
       {voiceStripNode}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} visible={paneVisible} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Terminal tabs">

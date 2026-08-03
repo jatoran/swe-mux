@@ -62,7 +62,7 @@ export function ResourceUsageSummary({snapshot,sessions,projects,compact=false,o
     window.addEventListener('resize',reposition);window.addEventListener('scroll',reposition,true);window.addEventListener('pointerdown',dismiss);window.addEventListener('keydown',key)
     return()=>{window.removeEventListener('resize',reposition);window.removeEventListener('scroll',reposition,true);window.removeEventListener('pointerdown',dismiss);window.removeEventListener('keydown',key)}
   },[open])
-  const popup=open&&<div ref={popover} class="account-popover resource-usage-popover" style={popoverStyle} role="dialog" aria-label="Swe-mux resource usage">
+  const popup=open&&<div ref={popover} class="account-popover resource-usage-popover ui-portal" style={popoverStyle} role="dialog" aria-label="Swe-mux resource usage">
     <header><div><strong>OWNED RESOURCES</strong><span>daemon + session process trees</span></div><button aria-label="Close resource usage" onClick={()=>setOpen(false)}>×</button></header>
     {!snapshot&&<p class="resource-usage-empty">Loading owned process usage…</p>}
     {snapshot&&!snapshot.available&&<p class="resource-usage-empty">{snapshot.diagnostic||'Process resource inspection is unavailable.'}</p>}

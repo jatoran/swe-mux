@@ -4,6 +4,7 @@ import {
   DEFAULT_UI_SCALE,
   UI_SCALE_BASE_PX,
   UI_SCALE_STEPS,
+  scaledFontSize,
   uiScaleFrom,
   uiScaleLabel,
 } from '../src/uiScale.ts'
@@ -58,4 +59,23 @@ test('1 is the default, so an untouched install renders at the historical size',
   assert.equal(DEFAULT_UI_SCALE, 1.0)
   assert.equal(UI_SCALE_BASE_PX, 11)
   assert.ok(UI_SCALE_STEPS.includes(DEFAULT_UI_SCALE))
+})
+
+test('a scaled font size matches what the stylesheet computes for chrome', () => {
+  // `--ui-font-size` is a raw `calc(11px * scale)` with no rounding, so the terminal has
+  // to land on the same value or the two surfaces drift apart at the same setting.
+  assert.deepEqual(
+    UI_SCALE_STEPS.map(step => scaledFontSize(UI_SCALE_BASE_PX, step)),
+    [9.9, 11, 12.1, 13.75, 15.4],
+  )
+})
+
+test('scaled sizes keep enough precision to tell adjacent steps apart', () => {
+  // Rounded to whole pixels, 1.1 and 1.25 would both render 11px→12px and 13.75px→14px
+  // reads as a step the chrome beside it did not take. Two decimals is what xterm needs
+  // to actually move.
+  assert.notEqual(scaledFontSize(11, 1.1), scaledFontSize(11, 1.25))
+  assert.equal(scaledFontSize(11, 1.25), 13.75)
+  // Binary float noise does not leak into the value handed to xterm.
+  assert.equal(scaledFontSize(11, 1.1), 12.1)
 })

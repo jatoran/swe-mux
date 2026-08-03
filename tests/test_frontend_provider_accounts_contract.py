@@ -98,7 +98,9 @@ def test_account_and_resource_switchers_escape_sidebar_as_viewport_popovers() ->
     assert "createPortal(popup,document.body)" in resources
     assert "anchoredPopoverStyle" in resources
     assert "open process fleet…" in resources
-    assert 'class="account-popover resource-usage-popover"' in resources
+    # `ui-portal` is what keeps a body-portalled popover following the UI scale; see
+    # test_frontend_ui_scale_contract for the rule it opts into.
+    assert 'class="account-popover resource-usage-popover ui-portal"' in resources
     assert "daemon + infrastructure" in resources
     assert ".account-popover{position:fixed" in css
     assert ".resource-usage-popover>section{padding:0}" in css
