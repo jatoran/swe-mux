@@ -43,7 +43,7 @@
   `design/features/prompt-queue.md`, `design/features/delivery-readiness.md`,
   `design/interfaces.md`, `design/data-model.md`, `technical/backend/packages.md`,
   `technical/frontend/packages.md`
-- Changing gated auto-delivery (the per-session opt-in, stability window, quiet hours,
+- Changing gated auto-delivery (the per-conversation default/override, stability window, quiet hours,
   emergency pause, item scheduling/expiry, or the promotion criteria):
   `design/features/auto-delivery.md`, `design/features/prompt-queue.md`,
   `design/features/delivery-readiness.md`, `design/interfaces.md`, `design/data-model.md`

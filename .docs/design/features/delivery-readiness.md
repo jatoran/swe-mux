@@ -33,6 +33,11 @@ queue's `send_next` (a human act, with an explicit confirm for blocked/unknown) 
 Phase 5 auto-delivery controller (which requires `safe` held continuously across a window
 and can never confirm). See `auto-delivery.md`.
 
+The controller's authority is still separate from this classifier: the install master must be
+enabled, and the daemon materializes a bounded default-on grant for each live agent run. A
+per-conversation opt-out, global pause, expiry, or exhausted send cap keeps it from acting even
+when readiness is `safe`.
+
 **Promotion criteria.** Widening auto-delivery beyond its Phase 5 bounds requires zero known
 false-safe results across six fixture classes — `approval_required`, `awaiting_user_input`,
 `rate_limited`, `subagent_activity`, `active_operator_input`, `run_replacement` — pinned by

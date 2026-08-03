@@ -1,7 +1,8 @@
 """Phase 5: gated auto-delivery.
 
 What these pin is the gate, not the delivery: delivery itself is the Phase 4
-queue operation and is already covered. Here: two independent opt-ins, an
+queue operation and is already covered. Here: the install master switch plus
+default-on bounded conversation grants, an
 expiry, a consecutive-send cap that a human send resets, a stability window
 that a single safe sample cannot satisfy, quiet hours, the persisted emergency
 pause, schedule constraints honoured by both paths, the never-overrides rule,
@@ -119,22 +120,41 @@ def harness(tmp_path: Path):  # type: ignore[no-untyped-def]
 
 
 @pytest.mark.asyncio
-async def test_nothing_is_delivered_without_both_opt_ins(harness: Harness) -> None:
+async def test_master_switch_is_required_but_agent_conversations_default_on(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path, live_session("s1"), auto_delivery_enabled=False)
     message = await harness.service.enqueue(
         target_session_id="s1", body="go", armed=True
     )
-    # Master switch on, no per-session opt-in.
+    try:
+        await harness.settle()
+        assert await harness.auto.tick() == []
+        policy = await harness.store.auto_policy("s1")
+        assert policy is not None and policy["enabled"]
+        assert policy["updated_by"] == "conversation-default"
+        assert not harness.writes
+
+        harness.config.auto_delivery_enabled = True
+        await harness.settle()
+        assert await harness.auto.tick() == [message["id"]]
+        assert harness.writes
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_opt_out_is_sticky_for_the_current_conversation(
+    harness: Harness,
+) -> None:
+    await harness.auto.disable_session("s1")
+    await harness.service.enqueue(target_session_id="s1", body="go", armed=True)
     await harness.settle()
     assert await harness.auto.tick() == []
-    # Per-session opt-in on, master switch off.
-    await harness.auto.enable_session("s1")
-    harness.config.auto_delivery_enabled = False
-    await harness.settle()
-    assert await harness.auto.tick() == []
-    harness.config.auto_delivery_enabled = True
-    await harness.settle()
-    assert await harness.auto.tick() == [message["id"]]
-    assert harness.writes
+    policy = await harness.store.auto_policy("s1")
+    assert policy is not None and not policy["enabled"]
+    assert policy["agent_run_id"] == "run-s1"
+    assert policy["disabled_reason"] == "disabled by user"
 
 
 @pytest.mark.asyncio
@@ -203,7 +223,7 @@ async def test_not_safe_is_never_overridden(harness: Harness) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_consecutive_cap_disables_the_opt_in_and_a_human_send_resets_it(
+async def test_the_consecutive_cap_disables_the_grant_and_a_human_send_resets_it(
     harness: Harness,
 ) -> None:
     await harness.auto.enable_session("s1", max_sends=1)
@@ -223,7 +243,9 @@ async def test_the_consecutive_cap_disables_the_opt_in_and_a_human_send_resets_i
 
 
 @pytest.mark.asyncio
-async def test_expiry_and_run_replacement_end_the_opt_in(harness: Harness) -> None:
+async def test_expiry_ends_the_current_grant_and_a_new_run_defaults_on(
+    harness: Harness,
+) -> None:
     await harness.auto.enable_session("s1")
     await harness.store.set_auto_policy("s1", expires_at=time.time() - 1)
     await harness.service.enqueue(target_session_id="s1", body="go", armed=True)
@@ -235,11 +257,12 @@ async def test_expiry_and_run_replacement_end_the_opt_in(harness: Harness) -> No
 
     await harness.auto.enable_session("s1")
     harness.manager.sessions["s1"].record.agent_run_id = "run-replaced"
-    await harness.settle()
-    assert await harness.auto.tick() == []
+    status = await harness.auto.status()
     replaced = await harness.store.auto_policy("s1")
-    assert replaced is not None and not replaced["enabled"]
-    assert "replaced" in str(replaced["disabled_reason"])
+    assert replaced is not None and replaced["enabled"]
+    assert replaced["agent_run_id"] == "run-replaced"
+    assert replaced["sends_used"] == 0
+    assert next(row for row in status["sessions"] if row["session_id"] == "s1")["run_matches"]
 
 
 @pytest.mark.asyncio
@@ -358,6 +381,13 @@ async def test_a_failed_delivery_disables_the_opt_in(tmp_path: Path) -> None:
         policy = await harness.store.auto_policy("s1")
         assert policy is not None and not policy["enabled"]
         assert "verify the terminal" in str(policy["disabled_reason"])
+        # An ambiguous write is the one disabled state that intentionally
+        # survives a conversation replacement until a human verifies it.
+        harness.manager.sessions["s1"].record.agent_run_id = "run-replaced"
+        await harness.auto.status()
+        policy = await harness.store.auto_policy("s1")
+        assert policy is not None and not policy["enabled"]
+        assert policy["agent_run_id"] == "run-s1"
         counters = await harness.store.counters()
         assert counters.get("auto_failed") == 1
     finally:

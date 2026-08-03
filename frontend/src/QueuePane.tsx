@@ -593,8 +593,8 @@ export function QueuePane({ sessionId, sessions, onSelectSession, onFocusTarget,
               </label>
               {auto && !auto.master_enabled && (
                 <p class="queue-auto-note">
-                  Auto-delivery is off for this install. Turn on “Allow auto-delivery” under Settings →
-                  Agents → Prompt queue to make this per-session opt-in available.
+                  Auto-delivery is off for this install. Turn on “Allow auto-delivery for agent
+                  conversations” under Settings → Agents → Prompt queue.
                 </p>
               )}
             </div>

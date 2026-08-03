@@ -2,29 +2,33 @@
 
 ## What it is
 
-An opt-in, bounded controller that presses "send next" on a session's prompt queue when —
-and only when — delivery readiness has been continuously `safe` for a held window. Roadmap
+A bounded controller that presses "send next" on a session's prompt queue when — and only
+when — delivery readiness has been continuously `safe` for a held window. Roadmap
 Phase 5. It is the **only** non-human caller of `PromptQueueService.send_next`, and it is
 not a second delivery path: ordering, revision checks, readiness, identity, constraints,
 and audit all stay in the typed queue operation (`CONTROL_PLANE_ROADMAP.md` §7.1).
 
-Off by default at two independent levels. Nothing here can be armed by an agent, a rule, or
-a remote request.
+The install-wide master switch is off by default. Once an operator enables it, every live
+Claude/Codex conversation receives a bounded default-on grant. Nothing here can arm a queue
+message on behalf of the user; a per-conversation opt-out remains available.
 
 ## Key concepts
 
-- **Two opt-ins, both required.** `auto_delivery_enabled` (config, default off) is the
-  install's master switch; a per-session opt-in on top of it is what actually authorizes
-  sends. Turning the master switch on delivers nothing by itself.
-- **The per-session grant is bounded and dies on its own.** It records the
+- **One master authorization, bounded per-conversation grants.** `auto_delivery_enabled`
+  (config, default off) is the install's master switch. When it is on, the daemon materializes
+  an enabled policy for each live Claude/Codex `agent_run_id`; no extra toggle is required.
+  Turning a conversation off is sticky for that run.
+- **The per-conversation grant is bounded and dies on its own.** It records the
   `agent_run_id` it was made against and carries an expiry (`auto_delivery_session_ttl_minutes`,
   default 60) and a consecutive-send cap (`auto_delivery_max_consecutive`, default 3).
   Standing authorization is what turns a bounded convenience into an unattended actuator, so
-  the grant is deliberately not sticky. A **manual** send resets the consecutive count —
+  expiry and the send cap still stop it. A **manual** send resets the consecutive count —
   a human at the keyboard is exactly the evidence the cap exists to require.
 - **Same live run only.** A replaced run (resume, branch, restart into a new conversation,
-  or an in-CLI `/clear`/`/new` — `backends.md`) disables the opt-in rather than inheriting it.
-  Consent was for *that* conversation.
+  or an in-CLI `/clear`/`/new` — `backends.md`) receives a fresh default grant rather than
+  inheriting the prior run's expiry or send count. A user opt-out applies only to the run it
+  names. The exception is an ambiguous failed delivery: its disabled state survives a run
+  replacement until a human verifies the terminal and re-enables it.
 - **Stability, not a snapshot.** `delivery_state` must read `safe` continuously for
   `auto_delivery_stable_seconds` (default 8) for the *same* message revision. One safe
   sample is a race; a held window is evidence. Any flap resets the window.
@@ -41,7 +45,7 @@ a remote request.
   confirmation from a non-human initiator (`confirm_requires_user`). Blocked or unknown
   readiness always means "not now", never "anyway".
 - **Fail closed and stay stopped.** A *failed* delivery — where the PTY write may or may not
-  have landed — disables that session's opt-in and asks the user to verify the terminal. It
+  have landed — disables that session's grant and asks the user to verify the terminal. It
   never retries blindly. A *refused* attempt backs the session off
   (`auto_delivery_refusal_backoff_seconds`) instead of spinning the audit log.
 - **Emergency disable.** A persisted `paused` flag in SQLite (`queue_auto_policy`), not in
@@ -78,25 +82,25 @@ Quantitative, machine-checked, and visible rather than asserted:
 3. **Duration**: at least 14 days (`PROVING_MIN_DAYS`) since the capability was first armed
    or since the last unsafe report.
 
-These gate *widening* the capability (defaulting it on, dropping the TTL or the consecutive
-cap) — they do not gate the opt-in itself, which is bounded by construction. Current values
+These gate *widening* the capability (enabling the install master by default, dropping the TTL
+or the consecutive cap) — they do not gate a conversation grant itself, which is bounded by
+construction. Current values
 are on `GET /api/queue/auto` and in the mailbox scopes' status line.
 
 ## UI
 
 - **Queue panel, `auto:` strip**: a one-line status (on/off, sends left, minutes left, quiet
-  hours, why it is off) that discloses the per-session toggle and the `accept agent messages
-  armed` toggle. The toggle is unavailable when the install's master switch is off, with the
-  reason stated. Collapsed by default because it is carried permanently above the queue in a
-  narrow column; it used to cost three wrapped lines there.
+  hours, why it is off) that discloses the default-on per-conversation toggle and the
+  `accept agent messages armed` toggle. The toggle is unavailable when the install's master
+  switch is off, with the reason stated. Collapsed by default because it is carried permanently
+  above the queue in a narrow column; it used to cost three wrapped lines there.
 - **Per-item schedule**: `+5m` / `+15m` / `+1h` presets and `Clear schedule`, behind the
   row's `⋯`; a scheduled item shows its time in the row.
 - **Queue panel, `inbox`/`outbox` scopes**: pause-all / resume, `report unsafe delivery`,
   and the proving-period counters — reachable in one gesture from desktop or phone.
 - **Settings → Agents → Prompt queue**: the install-wide master switch and the bounds every
-  opt-in runs under (stability window, consecutive-send cap, opt-in expiry, refusal back-off,
-  quiet hours). The queue strip's "off for this install" note names that control, so the two
-  halves of the double opt-in point at each other rather than at a config key.
+  grant runs under (stability window, consecutive-send cap, grant expiry, refusal back-off,
+  quiet hours). The queue strip's "off for this install" note names that control.
 
 ## API surface
 
@@ -115,8 +119,8 @@ PATCH /api/queue/messages/{id}             {constraints}     schedule / clear
 `auto_delivery_session_ttl_minutes`, `auto_delivery_quiet_start`, `auto_delivery_quiet_end`,
 `auto_delivery_refusal_backoff_seconds` (`config.py`, validated with lower bounds — a
 zero-length stability window would defeat the gate it exists to be), all editable in
-Settings → Agents. Runtime state (pause, per-session opt-ins, counters) lives in SQLite, not
-config, so the emergency pause never waits on a config write.
+Settings → Agents. Runtime state (pause, per-conversation grants/opt-outs, counters) lives in
+SQLite, not config, so the emergency pause never waits on a config write.
 
 ## Key files
 

@@ -1039,8 +1039,8 @@ delivery path, no model cost, and no new user surface beyond diagnostics.
   with the EventBus envelope. Re-emit it as `start_source` for `SessionStart` so the reason a
   run rolled is in the event log.
 - [x] **Codex and hookless launches: the transcript-switch watcher**, routed through the same
-  rollover primitive instead of rekeying in place. Codex has no session-start hook (its
-  `notify` surface is turn-completion only), so the filesystem remains its only signal.
+  rollover primitive instead of rekeying in place. Codex now has stable lifecycle hooks, but
+  the filesystem watcher remains the fallback when they are disabled, untrusted, or unavailable.
 - [x] Tighten the sibling gate instead of accepting it: it currently blocks on the mere
   *existence* of a live same-backend session in the cwd. Narrow it to siblings that are
   genuinely unaccounted for — a sibling whose own transcript was written after the candidate

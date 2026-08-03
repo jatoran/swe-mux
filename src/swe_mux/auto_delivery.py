@@ -6,12 +6,12 @@ checks, readiness, identity, constraints, and audit all stay in the typed queue
 operation. What lives here is *when a send is attempted at all*, and every
 bound the roadmap requires around that decision:
 
-- **Opt-in, twice.** A master switch (config, off by default) and a per-session
-  opt-in that carries an expiry and a consecutive-send cap. Standing
-  authorization is what turns a bounded convenience into an unattended
-  actuator, so the per-session grant dies on its own.
-- **Same live run only.** The opt-in binds to the session's ``agent_run_id``;
-  a replaced run disables it rather than inheriting the grant.
+- **Master-gated, conversation-default.** The install-wide master switch stays
+  off by default. Once enabled, each live agent conversation receives a
+  bounded grant automatically; a human can turn that conversation off.
+- **Same live run only.** The grant binds to the session's ``agent_run_id``;
+  a replacement conversation receives a fresh default grant rather than
+  inheriting the old run's counters or expiry.
 - **Stability, not a snapshot.** ``delivery_state`` must be ``safe``
   continuously across a window for the *same* message revision. One safe
   sample is a race; a held window is evidence.
@@ -19,7 +19,7 @@ bound the roadmap requires around that decision:
   operation rejects it from a non-human initiator), so blocked/unknown
   readiness always means "not now" and never "anyway".
 - **Fail closed and stay stopped.** A failed delivery — where the PTY write may
-  or may not have landed — disables the session's opt-in and requires human
+  or may not have landed — disables the session's grant and requires human
   reconciliation. It never retries blindly.
 - **Emergency disable.** A persisted pause flag in SQLite, independent of the
   config file and of any provider, plus quiet hours.
@@ -58,7 +58,7 @@ EXPIRY_SWEEP_TICKS = 30
 
 # Proving-period criteria for promoting auto-delivery beyond its Phase 5 bounds
 # (`ROADMAP.md` Phase 5, "quantitative promotion criteria"). These gate a future
-# widening decision — they do not gate the opt-in itself, which is bounded by
+# widening decision — they do not gate the grant itself, which is bounded by
 # construction.
 PROVING_MIN_SENDS = 50
 PROVING_MIN_DAYS = 14
@@ -79,6 +79,11 @@ COUNTER_REFUSED = "auto_refused"
 COUNTER_FAILED = "auto_failed"
 COUNTER_UNSAFE = "unsafe_reported"
 COUNTER_PROVING_SINCE = "proving_since"
+
+DEFAULT_POLICY_BY = "conversation-default"
+FAILED_DELIVERY_REASON = (
+    "a delivery failed mid-send; verify the terminal before re-enabling"
+)
 
 
 def _minutes(value: str) -> int | None:
@@ -119,6 +124,7 @@ class AutoDeliveryController:
         self._stability: dict[str, tuple[str, int, float]] = {}
         # (session_id) -> monotonic deadline after a refused attempt
         self._backoff: dict[str, float] = {}
+        self._policy_lock = asyncio.Lock()
         self._ticks = 0
         self.last_error = ""
 
@@ -156,10 +162,24 @@ class AutoDeliveryController:
         max_sends: int | None = None,
         by: str = "user",
     ) -> dict[str, Any]:
-        """Grant one session a bounded auto-delivery window.
+        """Grant one session a bounded auto-delivery window."""
+        async with self._policy_lock:
+            return await self._enable_session_unlocked(
+                session_id, ttl_minutes=ttl_minutes, max_sends=max_sends, by=by
+            )
 
-        The grant records the run it was made against: an opt-in is consent for
-        *this conversation*, and a replaced run has to be authorized again.
+    async def _enable_session_unlocked(
+        self,
+        session_id: str,
+        *,
+        ttl_minutes: int | None = None,
+        max_sends: int | None = None,
+        by: str,
+    ) -> dict[str, Any]:
+        """Write a grant while ``_policy_lock`` is held.
+
+        The grant records the run it was made against. A replacement run gets
+        its own default grant and starts with a fresh expiry and send budget.
         """
         session = self.sessions.sessions.get(session_id)
         if session is None:
@@ -202,9 +222,16 @@ class AutoDeliveryController:
     async def disable_session(
         self, session_id: str, *, reason: str = "disabled by user", by: str = "user"
     ) -> dict[str, Any]:
-        policy = await self.queue.store.set_auto_policy(
-            session_id, enabled=0, disabled_reason=reason, updated_by=by
-        )
+        async with self._policy_lock:
+            session = self.sessions.sessions.get(session_id)
+            record = getattr(session, "record", None)
+            policy = await self.queue.store.set_auto_policy(
+                session_id,
+                enabled=0,
+                agent_run_id=getattr(record, "agent_run_id", None) or None,
+                disabled_reason=reason,
+                updated_by=by,
+            )
         self._stability.pop(session_id, None)
         self._backoff.pop(session_id, None)
         self.queue.events.emit_background(
@@ -225,9 +252,10 @@ class AutoDeliveryController:
         session = self.sessions.sessions.get(session_id)
         if session is None:
             raise QueueError("unknown_target", "no such session", status=404)
-        return await self.queue.store.set_auto_policy(
-            session_id, accept_agent_messages=int(bool(accept)), updated_by=by
-        )
+        async with self._policy_lock:
+            return await self.queue.store.set_auto_policy(
+                session_id, accept_agent_messages=int(bool(accept)), updated_by=by
+            )
 
     async def accepts_agent_messages(self, session_id: str) -> bool:
         row = await self.queue.store.auto_policy(session_id)
@@ -248,9 +276,48 @@ class AutoDeliveryController:
 
     # -- status ---------------------------------------------------------------
 
+    async def _policies_with_conversation_defaults(self) -> list[dict[str, Any]]:
+        """Materialize the default bounded grant for each live agent run.
+
+        A row bound to the current run is authoritative, including an explicit
+        opt-out, expiry, or exhausted budget. A new run starts enabled again.
+        The only cross-run hold is an ambiguous failed delivery: that state
+        still requires the promised human verification and manual re-enable.
+        """
+        async with self._policy_lock:
+            rows = await self.queue.store.auto_policies()
+            by_session = {str(row["session_id"]): row for row in rows}
+            changed = False
+            for session_id, session in self.sessions.sessions.items():
+                record = getattr(session, "record", None)
+                run_id = str(getattr(record, "agent_run_id", "") or "")
+                if (
+                    record is None
+                    or record.backend not in {"claude", "codex"}
+                    or record.state in {"exited", "crashed"}
+                    or not run_id
+                ):
+                    continue
+                row = by_session.get(str(session_id))
+                if row is not None and str(row.get("agent_run_id") or "") == run_id:
+                    continue
+                if row is not None and row.get("disabled_reason") == FAILED_DELIVERY_REASON:
+                    continue
+                if row is not None and not row.get("agent_run_id") and row.get("disabled_reason"):
+                    # A user can opt out during startup before run identity is
+                    # available. Do not immediately undo that explicit act.
+                    continue
+                by_session[str(session_id)] = await self._enable_session_unlocked(
+                    str(session_id), by=DEFAULT_POLICY_BY
+                )
+                changed = True
+            if changed:
+                return await self.queue.store.auto_policies()
+            return rows
+
     async def status(self) -> dict[str, Any]:
+        rows = await self._policies_with_conversation_defaults()
         counters = await self.queue.store.counters()
-        rows = await self.queue.store.auto_policies()
         now = time.time()
         sessions: list[dict[str, Any]] = []
         for row in rows:
@@ -310,6 +377,7 @@ class AutoDeliveryController:
             # message is a promise the user made about *any* delivery path.
             with contextlib.suppress(Exception):
                 await self.queue.expire_due()
+        rows = await self._policies_with_conversation_defaults()
         if not self.config.auto_delivery_enabled:
             self._stability.clear()
             return delivered
@@ -319,7 +387,7 @@ class AutoDeliveryController:
         quiet = in_quiet_window(
             self.config.auto_delivery_quiet_start, self.config.auto_delivery_quiet_end
         )
-        for row in await self.queue.store.auto_policies():
+        for row in rows:
             if not row.get("enabled"):
                 continue
             session_id = str(row["session_id"])
@@ -354,7 +422,7 @@ class AutoDeliveryController:
         expires_at = policy.get("expires_at")
         if expires_at and now >= float(expires_at):
             await self.disable_session(
-                session_id, reason="auto-delivery opt-in expired", by="controller"
+                session_id, reason="auto-delivery grant expired", by="controller"
             )
             return None
         max_sends = int(policy.get("max_sends") or 0)
@@ -433,7 +501,7 @@ class AutoDeliveryController:
                 await self.queue.store.bump_counter(COUNTER_FAILED)
                 await self.disable_session(
                     session_id,
-                    reason="a delivery failed mid-send; verify the terminal before re-enabling",
+                    reason=FAILED_DELIVERY_REASON,
                     by="controller",
                 )
                 return None
@@ -451,7 +519,7 @@ def promotion_status(counters: dict[str, float]) -> dict[str, Any]:
     """Quantitative promotion criteria for Phase 1 shadow readiness.
 
     Three conditions, all of which must hold before auto-delivery is widened
-    beyond its Phase 5 bounds (per-session opt-in, expiry, consecutive cap):
+    beyond its Phase 5 bounds (master switch, grant expiry, consecutive cap):
 
     1. **Zero known false-safe deliveries.** Both machine-checked — the
        readiness fixtures in `PROVING_FIXTURE_CLASSES` must never evaluate

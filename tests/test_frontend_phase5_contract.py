@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1] / "frontend" / "src"
 
 
-def test_the_queue_tab_exposes_the_bounded_opt_in_and_its_state() -> None:
+def test_the_queue_tab_exposes_the_bounded_conversation_policy_and_its_state() -> None:
     pane = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
 
     assert "auto-deliver armed messages" in pane
@@ -23,8 +23,17 @@ def test_the_queue_tab_exposes_the_bounded_opt_in_and_its_state() -> None:
     assert "${minutes} min left" in pane
     assert "quiet hours — paused" in pane
     assert "paused (emergency stop)" in pane
-    # The opt-in cannot be offered when the install's master switch is off.
+    # The conversation policy cannot be changed while the install master is off.
     assert "disabled={busyId === 'auto' || !auto?.master_enabled}" in pane
+
+
+def test_settings_explain_that_agent_conversations_default_on() -> None:
+    settings = (ROOT / "Settings.tsx").read_text(encoding="utf-8")
+
+    assert (
+        "every new Claude/Codex conversation starts with bounded auto-delivery enabled" in settings
+    )
+    assert "Allow auto-delivery for agent conversations" in settings
 
 
 def test_scheduling_is_a_property_of_the_queued_item() -> None:

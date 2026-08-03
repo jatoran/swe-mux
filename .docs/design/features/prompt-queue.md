@@ -9,9 +9,11 @@ devices) and the control-plane queue-draft channel (`CONTROL_PLANE_ROADMAP.md` Â
 *callers* of the same typed operations, not new delivery paths.
 
 Phase 4 delivers only on an explicit user act. Phase 5 adds two bounded callers on top,
-both off by default and both documented separately: `auto-delivery.md` (who else may press
-send, and under what gate) and `agent-messaging.md` (who else may put a message in a
-queue).
+documented separately: `auto-delivery.md` (who else may press send, and under what gate)
+and `agent-messaging.md` (who else may put a message in a queue). The auto-delivery install
+master is off by default; once enabled, each live Claude/Codex conversation gets a bounded
+default-on grant that can be turned off for that conversation. Agent-authored queueing stays
+separately opt-in.
 
 ## Key concepts
 

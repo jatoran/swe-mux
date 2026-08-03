@@ -379,17 +379,18 @@ class Config:
     # Prompt-queue history (sent/cancelled/failed/stranded items and their
     # delivery audit) ages out on this window; pending items never do.
     prompt_queue_retention_days: int = 90
-    # Phase 5 auto-delivery. The master switch is off by default and per-session
-    # opt-in is required on top of it; the emergency pause lives in SQLite
+    # Phase 5 auto-delivery. The master switch is off by default; when enabled,
+    # every live Claude/Codex conversation gets a bounded default-on grant. The
+    # emergency pause and per-conversation overrides live in SQLite
     # (`queue_auto_policy`) so it stays instant, persistent, and independent of
-    # config-file writes. These knobs are the *bounds* an opt-in runs under.
+    # config-file writes. These knobs are the bounds each grant runs under.
     auto_delivery_enabled: bool = False
     # How long `delivery_state=safe` must hold, continuously, before a send.
     auto_delivery_stable_seconds: float = 8.0
-    # Consecutive automatic sends allowed before the opt-in disables itself. A
+    # Consecutive automatic sends allowed before the grant disables itself. A
     # manual send by the user resets the count — it is evidence of attention.
     auto_delivery_max_consecutive: int = 3
-    # An opt-in expires on its own; standing authorization is what turns a
+    # A grant expires on its own; standing authorization is what turns a
     # bounded convenience into an unattended actuator.
     auto_delivery_session_ttl_minutes: int = 60
     # Local-time quiet window (HH:MM). Auto-delivery pauses inside it; manual
@@ -680,7 +681,7 @@ def _validate(config: Config) -> None:
     if not 1 <= config.prompt_queue_retention_days <= 3650:
         errors["prompt_queue_retention_days"] = "must be between 1 and 3650"
     # Auto-delivery bounds. The lower bounds are the point: a zero-length
-    # stability window or an unbounded opt-in would defeat the gate they exist
+    # stability window or an unbounded grant would defeat the gate they exist
     # to be (`ROADMAP.md` Phase 5).
     if not 2 <= config.auto_delivery_stable_seconds <= 600:
         errors["auto_delivery_stable_seconds"] = "must be between 2 and 600 seconds"
