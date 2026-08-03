@@ -228,7 +228,7 @@ def test_files_is_a_drawer_navigator_rather_than_a_workspace_tab() -> None:
 
 
 def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
-    """Ten icon tabs stay reachable in one horizontally scrolling phone row.
+    """Eleven icon tabs stay reachable in one horizontally scrolling phone row.
 
     `drawerTabs.ts` stays JSX-free so it can be unit-tested under plain type-stripping, which
     is why the icon map lives in `railIcons.tsx` and why this cross-file invariant — every tab
@@ -255,8 +255,14 @@ def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
     # count stop mattering. What still has to hold is the machinery below it — one row, a
     # fade that says there is more, and scrollIntoView on selection — so a tab is never
     # silently off-screen with nothing to say so.
+    #
+    # Re-checked at eleven (Processes): same answer as ten, and for the same reason — the
+    # eleventh cell is one more 36px stop in a scroller that was already scrolling, so nothing
+    # about the header changes. The question a new tab has to pass is therefore no longer
+    # "does it fit" but "does this surface belong beside a terminal"; the assertions below are
+    # what keep the scroller honest while that stays the actual bar.
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
-    assert len(ids) == 10, ids
+    assert len(ids) == 11, ids
     tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
     assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
     assert ".drawer-tabs-shell:after" in css
