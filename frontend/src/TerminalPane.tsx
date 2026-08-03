@@ -12,7 +12,7 @@ import { api, openWebSocket, uploadTerminalImage } from './api'
 import type { Session } from './types'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
-import { AGENT_NEWLINE, terminalKeyDecision } from './terminalKeys'
+import { terminalKeyDecision } from './terminalKeys'
 import { isTerminalProtocolResponse, shouldSuppressTerminalProtocolResponse } from './terminalProtocol'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import {
@@ -25,7 +25,7 @@ import {
   type MobileInputSettings,
   type TerminalCell,
 } from './mobileInput'
-import { isMobileTerminalInput, mobileImeDelta } from './mobileTerminalIme'
+import { isMobileTerminalInput, mobileEnterNeedsPinnedSend, mobileEnterPayload, mobileImeDelta } from './mobileTerminalIme'
 import { clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, pasteNeedsManualBracketing, ResilientClipboardProvider } from './terminalClipboard'
 import { noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
@@ -1199,6 +1199,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       sendInput(sequence, false, false)
     }
     let mobileInputValue=''
+    // A shell can promote into Claude/Codex without replacing the pane, so read
+    // the live backend at the event rather than capturing the effect's first one.
+    const mobileLineBreak=()=>mobileEnterPayload(backendRef.current)
     let lineBreakSent=false
     let lineBreakResetTimer:number|undefined
     const markLineBreakSent=()=>{
@@ -1218,7 +1221,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const mobileBeforeInput=(event:InputEvent)=>{
       if(event.inputType!=='insertLineBreak'&&event.inputType!=='insertParagraph')return
       event.preventDefault()
-      if(!lineBreakSent)term.input('\r',true)
+      if(!lineBreakSent)term.input(mobileLineBreak(),true)
       markLineBreakSent()
       resetMobileInput()
     }
@@ -1228,7 +1231,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if(lineBreakSent&&/^[\r\n]*$/.test(next)){
         resetMobileInput();return
       }
-      const data=mobileImeDelta(mobileInputValue,next)
+      const data=mobileImeDelta(mobileInputValue,next,mobileLineBreak())
       mobileInputValue=next
       if(data)term.input(data,true)
       if(/[\r\n]/.test(next))resetMobileInput()
@@ -1241,8 +1244,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         Escape:'\x1b',Tab:'\t',
       }
       if(event.key==='Enter'&&!event.isComposing){
-        const agentNewline=(event.shiftKey||event.ctrlKey)&&!event.altKey&&!event.metaKey&&session.backend!=='shell'
-        event.preventDefault();term.input(agentNewline?AGENT_NEWLINE:'\r',true);markLineBreakSent();resetMobileInput();return
+        event.preventDefault();term.input(mobileLineBreak(),true);markLineBreakSent();resetMobileInput();return
       }
       if(event.key==='Backspace'&&!mobileInputValue){
         event.preventDefault();term.input('\x7f',true);return
@@ -1726,7 +1728,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // markup (disabled states, tooltips), generic types render uniformly.
   // Strip placement only: the long tail lives in the utility drawer's Commands
   // tab, where a full-width grid can show it with labels.
+  const mobilePinnedSend=isMobileTerminalInput()&&mobileEnterNeedsPinnedSend(session.backend)
   const railItems=resolveRail(loadRailItems(session.project_id),{platform:currentProfile(),backend:session.backend as RailBackend},'strip')
+  // Mobile agent Enter is reserved for composing a newline. The ordinary Enter
+  // item therefore moves to the fixed end-cap instead of remaining as a second,
+  // scrollable submit target. The fixed action is intentionally not configurable:
+  // removing it would strand a phone whose soft-keyboard Enter cannot submit.
+  const scrollingRailItems=mobilePinnedSend?railItems.filter(item=>item.id!=='enter'):railItems
   const renderRailItem=(item:RailItem)=>{
     switch(item.id){
       case 'relaunch':return isTask?<button key={item.id} class="term-relaunch" title="Relaunch this task terminal — stops it and re-runs the same command" onClick={()=>runCommand('session.relaunch')}>Relaunch</button>:null
@@ -1762,7 +1770,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   }
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
-  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class="terminal-action-rail" role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)} onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{railItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={jumpToLatest}>↓</button>}{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-scroll" onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}>Send</button>}</div>{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={jumpToLatest}>↓</button>}{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }

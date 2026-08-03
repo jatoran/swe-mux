@@ -1118,11 +1118,13 @@ body {
 .terminal-surface{position:relative;width:100%;height:100%;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;overflow:hidden}
 .terminal-surface>.terminal-host{grid-row:1;grid-column:1;min-width:0;min-height:0}
 .mobile-terminal-live-input{display:none}
-/* The rail holds voice, terminal keys, and clipboard actions; it overflows on narrow panes
-   and scrolls horizontally (touch drag, scrollbar, or wheel via the onWheel handler). Items
-   keep their natural width so nothing collapses while scrolling. */
-.terminal-action-rail{grid-row:2;grid-column:1;min-height:34px;display:flex;align-items:center;gap:5px;padding:3px 7px;border-top:1px solid var(--line);background:var(--panel);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;touch-action:pan-x;-webkit-overflow-scrolling:touch}
-.terminal-action-rail>*{flex:0 0 auto}
+/* The rail owns one scrolling column plus an optional fixed mobile Send end-cap.
+   Overflow belongs only to the inner strip so Send never moves with its siblings. */
+.terminal-action-rail{grid-row:2;grid-column:1;min-width:0;min-height:34px;display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;border-top:1px solid var(--line);background:var(--panel)}
+.terminal-action-rail.mobile-pinned-send{grid-template-columns:minmax(0,1fr) auto}
+.terminal-action-scroll{min-width:0;display:flex;align-items:center;gap:5px;padding:3px 7px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;touch-action:pan-x;-webkit-overflow-scrolling:touch}
+.terminal-action-scroll>*{flex:0 0 auto}
+.terminal-action-rail .terminal-mobile-send{align-self:center;min-width:72px;margin:3px 7px 3px 0;border-color:color-mix(in srgb,var(--green) 60%,var(--line));background:color-mix(in srgb,var(--green) 10%,var(--panel2));color:var(--green);font-weight:700}
 .terminal-action-rail .term-key{min-width:30px;padding:0 6px}
 /* Icon-only actions size like keys, not like the 74px text buttons they replaced. The svg is
    sized here rather than in `em` because the rail's font is 9px. */
@@ -1297,7 +1299,7 @@ body {
   .mobile-unified-active .terminal-host{height:auto;min-height:0}
   .terminal-host .xterm{touch-action:none}
   .prepared-clipboard{top:5px;grid-template-columns:minmax(0,1fr) auto auto}.prepared-clipboard button{min-height:44px}.prepared-clipboard textarea{display:block;min-height:96px;padding:10px;font-size:16px;line-height:1.4;user-select:text;-webkit-user-select:text;touch-action:auto}
-  .terminal-action-rail{min-height:52px;gap:7px;padding:4px max(7px,env(safe-area-inset-right)) max(4px,env(safe-area-inset-bottom)) max(7px,env(safe-area-inset-left))}.terminal-action-rail button{min-width:96px;height:44px;font-size:11px}.terminal-action-rail .term-key,.terminal-action-rail .rail-icon{min-width:44px;padding:0 8px}.terminal-action-rail .rail-icon svg{width:19px;height:19px}.terminal-action-rail span{font-size:9px}.manual-terminal-paste{bottom:58px}.manual-terminal-paste textarea{min-height:92px}
+  .terminal-action-rail{min-height:52px}.terminal-action-scroll{gap:7px;padding:4px max(7px,env(safe-area-inset-right)) max(4px,env(safe-area-inset-bottom)) max(7px,env(safe-area-inset-left))}.terminal-action-rail.mobile-pinned-send .terminal-action-scroll{padding-right:7px}.terminal-action-rail button{min-width:96px;height:44px;font-size:11px}.terminal-action-rail .term-key,.terminal-action-rail .rail-icon{min-width:44px;padding:0 8px}.terminal-action-rail .terminal-mobile-send{min-width:76px;margin:4px max(7px,env(safe-area-inset-right)) max(4px,env(safe-area-inset-bottom)) 0}.terminal-action-rail .rail-icon svg{width:19px;height:19px}.terminal-action-rail span{font-size:9px}.manual-terminal-paste{bottom:58px}.manual-terminal-paste textarea{min-height:92px}
   .context-menu{z-index:49}
   /* Status rows are taps here, not hover targets, so they take the 44px floor the rest of
      the mobile chrome uses. The drawer is 285px at most and these rows already ellipsize,
@@ -1330,6 +1332,7 @@ body {
 @media (max-width:760px), (pointer:coarse){
   .mobile-terminal-live-input{position:absolute;z-index:1;left:8px;bottom:54px;display:block;width:1px;height:1px;min-width:1px;min-height:1px;margin:0;padding:0;border:0;outline:0;opacity:.01;overflow:hidden;resize:none;background:transparent;color:transparent;caret-color:transparent;font-size:16px;pointer-events:none}
   .terminal-surface .xterm .composition-view{display:none!important}
+  .terminal-action-rail .terminal-mobile-send{min-height:44px}
 }
 
 /* Every visible Project resource lives in the same recursive pane tree. */

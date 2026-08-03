@@ -146,6 +146,10 @@ preview pointer input. Native HTML `dragstart`/`dragend` is not part of this sta
 leaves plus one selected leaf. It does not synthesize/persist a replacement pane. Mobile tab
 activation may update the owning desktop stack's `active_child_id`; new tabs target the selected
 leaf's owning stack. Closing uses `adjacentMobileTab` before applying the ordinary leaf removal.
+Opening a tab menu is not activation: mobile long-press and desktop right-click retain the current
+focused view/active terminal, and the touch gesture consumes its follow-up synthetic click. The
+adjacent-tab close fallback runs only when the removed mobile leaf was selected; closing a
+background leaf leaves selection untouched.
 
 This separation is required for responsive transitions: rotating a phone, using desktop device
 emulation, or resizing through 760 px must never erase desktop splits.

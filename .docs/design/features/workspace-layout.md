@@ -95,6 +95,10 @@ PaneLeaf = terminal | note | preview | history | queue
 - Touch tab strips (including the mobile projection) render no close control at all. Closing
   and killing there go through the tab's long-press menu — the session menu for terminals, the
   tab menu for resources — which is also where the kill confirmation already lives.
+- Tab menus do not activate their target. Desktop right-click and mobile long-press leave the
+  pane-active tab, focused view, and active terminal unchanged; only an ordinary click/tap
+  activates. Closing a background tab through its menu preserves the current selection, while
+  closing the selected mobile tab chooses the adjacent rail tab as the fallback.
 
 ## Pointer drag contract
 

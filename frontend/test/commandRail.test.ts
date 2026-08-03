@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { BUILTIN_RAIL, adoptPlacement, clearProjectRailBlob, mergeRail, railHasProjectOverride, railItemsFromBlob, railItemVisible, railPayload, resolveRail, writeRailBlob, type RailItem } from '../src/commandRail.ts'
+import { AGENT_NEWLINE } from '../src/terminalKeys.ts'
 
 test('default rail preserves the legacy order and omits disabled extras', () => {
   const ids = resolveRail(BUILTIN_RAIL, { platform: 'desktop', backend: 'claude' }).map(item => item.id)
@@ -45,6 +46,10 @@ test('placement splits the strip from the drawer without hiding anything', () =>
   assert.deepEqual(drawer, ['home', 'end', 'ctrlHome', 'ctrlEnd', 'newline', 'clearInput', 'rewind', 'endSession'])
   // Every built-in lands in exactly one host.
   assert.deepEqual([...strip, ...drawer].sort(), BUILTIN_RAIL.filter(item => railItemVisible(item, ctx)).map(item => item.id).sort())
+})
+
+test('the drawer newline uses the sequence accepted by Claude and Codex', () => {
+  assert.equal(BUILTIN_RAIL.find(item => item.id === 'newline')?.bytes, AGENT_NEWLINE)
 })
 
 test('end session ships in the drawer for every backend, never on the strip', () => {

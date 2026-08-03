@@ -9,7 +9,9 @@
 // Rendering of each item still lives in TerminalPane, which owns the terminal
 // handles and clipboard handlers; this module owns only the pure data model,
 // the built-in defaults, and the resolve/injection helpers so they stay unit
-// testable under the node type-stripping runner (no runtime imports here).
+// testable under the node type-stripping runner (no browser dependencies here).
+
+import { AGENT_NEWLINE } from './terminalKeys.ts'
 
 export type RailPlatform = 'desktop' | 'mobile'
 export type RailBackend = 'claude' | 'codex' | 'shell'
@@ -97,8 +99,9 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'end', type: 'key', bytes: '\x1b[F', label: 'End', className: 'term-key', title: 'End / end of line', placement: 'drawer' },
   { id: 'ctrlHome', type: 'key', bytes: '\x1b[1;5H', label: '^Home', className: 'term-key', title: 'Ctrl+Home / top', placement: 'drawer' },
   { id: 'ctrlEnd', type: 'key', bytes: '\x1b[1;5F', label: '^End', className: 'term-key', title: 'Ctrl+End / bottom', placement: 'drawer' },
-  // Ctrl+J (raw LF) inserts a newline in agent composers without submitting.
-  { id: 'newline', type: 'key', bytes: '\n', label: '↵ nl', className: 'term-key', title: 'Insert newline (Ctrl+J) without submitting', placement: 'drawer' },
+  // ESC+CR is the one newline sequence both agent composers accept. Raw LF works
+  // in Claude but Codex treats it as ordinary input instead of editor.newline.
+  { id: 'newline', type: 'key', bytes: AGENT_NEWLINE, label: '↵ nl', className: 'term-key', title: 'Insert newline without submitting', placement: 'drawer' },
   // Ctrl+U clears the composed input (restorable with Ctrl+Y in Claude).
   { id: 'clearInput', type: 'key', bytes: '\x15', label: 'clear', className: 'term-key', title: 'Clear the current input (Ctrl+U)', placement: 'drawer' },
   // Opens Claude's interactive /rewind picker (there is no one-shot,

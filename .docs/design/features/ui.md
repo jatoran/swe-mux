@@ -164,6 +164,9 @@ responsive controls.
 - Context menus are source-aware. Terminal-only operations never appear on resource tabs;
   obsolete focused-terminal, detach/remove-from-group, Project-note, pane-swap, and pane-header
   minimize/close actions are absent.
+- Opening tab actions is non-activating. Desktop right-click and mobile long-press target the
+  named tab without changing the pane-active tab, focused view, or active terminal; normal
+  click/tap remains the activation gesture.
 - **No context menu reorders or reshapes anything, on any platform.** Open-in-split,
   new-terminal-in-split, new-custom-terminal-in-split, stack-with-focused, dissolve-stack, and
   move-tab are absent from the session menu on every source (sidebar row, tab, pane bar / `⋯`),

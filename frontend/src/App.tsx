@@ -34,8 +34,10 @@ import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
 import { UtilityDrawer } from './UtilityDrawer'
 import {
-  DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY, clampDrawerWidth, drawerTab, parseDrawerTab, storedDrawerWidth,
-  type DrawerTabId,
+  DEFAULT_DRAWER_PROJECT_STATE, DRAWER_PROJECT_STATE_KEY, DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY,
+  clampDrawerWidth, drawerProjectStateFor, drawerTab, migrateLegacyDrawerTab, parseDrawerProjectStates,
+  pruneDrawerProjectStates, serializeDrawerProjectStates, storedDrawerWidth, updateDrawerProjectState,
+  type DrawerProjectState, type DrawerProjectStateMap, type DrawerTabId,
 } from './drawerTabs'
 import {
   isDefaultDrawerTabOrder, normalizeDrawerTabOrder, orderedDrawerTabs as orderedTabsFor,
@@ -283,6 +285,7 @@ export function App() {
   // this is additive rather than restrictive, so the app menu still passes the
   // active Project: opening "unscoped" would remove templates, not filters.
   const [promptScope,setPromptScope]=useState<Project|null>(null)
+  const [promptTargetId,setPromptTargetId]=useState<string|null>(null)
   const [reviewState,setReviewState]=useState<ReviewState|null>(null)
   const [handoffState,setHandoffState]=useState<HandoffState|null>(null)
   // A note/markdown selection waiting for a target. The message is captured when the dialog
@@ -406,11 +409,23 @@ export function App() {
   // the same chip twice focuses the composer twice) plus the scope to land on. Switching
   // to the tab by hand leaves the panel wherever it was.
   const [queueOpen,setQueueOpen]=useState<{token:number;scope:QueueScope}>({token:0,scope:'session'})
-  // The utility drawer: open state, which tab, and (desktop) the docked column's
-  // width. All three are device-local UI preferences, like sidebar width, so the
-  // drawer reopens where you left it on this device.
-  const [clipboardOpen,setClipboardOpenState]=useState(false)
-  const [drawerTabId,setDrawerTabId]=useState<DrawerTabId>(()=>parseDrawerTab(localStorage.getItem(DRAWER_TAB_KEY)))
+  // The utility drawer's selected tab and desktop expansion are device-local but keyed by
+  // Project. Mobile visibility is deliberately separate and transient: closing an overlay on
+  // a phone must not collapse this Project's docked desktop drawer.
+  const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
+  const [mobileDrawerOpen,setMobileDrawerOpen]=useState(false)
+  const legacyDrawerTab=useRef<{pending:boolean;raw:string|null}>({pending:false,raw:null})
+  const [drawerProjectStates,setDrawerProjectStates]=useState<DrawerProjectStateMap>(()=>{
+    const raw=localStorage.getItem(DRAWER_PROJECT_STATE_KEY)
+    if(raw===null)legacyDrawerTab.current={pending:true,raw:localStorage.getItem(DRAWER_TAB_KEY)}
+    return parseDrawerProjectStates(raw)
+  })
+  // The no-Project state keeps app-scoped tabs usable before the first Project exists. It is
+  // transient because there is no durable Project identity to own it.
+  const [unscopedDrawerState,setUnscopedDrawerState]=useState<DrawerProjectState>(DEFAULT_DRAWER_PROJECT_STATE)
+  const activeDrawerState=projectId?drawerProjectStateFor(drawerProjectStates,projectId):unscopedDrawerState
+  const drawerTabId=activeDrawerState.tab
+  const clipboardOpen=mobileWorkspace?mobileDrawerOpen:activeDrawerState.desktopExpanded
   // A command-rail prompt button whose template has {{placeholders}} has nothing to
   // inject yet, so it hands the template to the Prompts tab to be filled in.
   const [promptPreselect,setPromptPreselect]=useState<{key:string}|undefined>()
@@ -434,7 +449,6 @@ export function App() {
   const [mobileInput, setMobileInput] = useState<MobileInputSettings>(defaultMobileInputSettings)
   const [mobileGestures, setMobileGestures] = useState<MobileGestureSettings>(defaultMobileGestureSettings)
   const [swipeAwayClose, setSwipeAwayClose] = useState(true)
-  const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
   // On a phone the navigation sidebar and the clipboard panel are both full-height
   // drawers over the workspace, entering from opposite edges. Two open at once leave
   // no workspace between them and bury one under the other's scrim, so opening either
@@ -449,18 +463,41 @@ export function App() {
   const setSidebarOpen=(next:OpenState)=>{
     const open=typeof next==='function'?next(sidebarOpen):next
     setSidebarOpenState(open)
-    if(open&&mobileWorkspace){setClipboardOpenState(false);dismissSoftKeyboard()}
+    if(open&&mobileWorkspace){setMobileDrawerOpen(false);dismissSoftKeyboard()}
   }
-  const setClipboardOpen=(next:OpenState)=>{
-    const open=typeof next==='function'?next(clipboardOpen):next
-    setClipboardOpenState(open)
-    if(open&&mobileWorkspace){setSidebarOpenState(false);dismissSoftKeyboard()}
+  const setDrawerProjectState=(targetProject:string,patch:Partial<DrawerProjectState>)=>{
+    if(!targetProject){setUnscopedDrawerState(current=>({...current,...patch}));return}
+    setDrawerProjectStates(current=>{
+      const updated=updateDrawerProjectState(current,targetProject,patch)
+      if(updated!==current)localStorage.setItem(DRAWER_PROJECT_STATE_KEY,serializeDrawerProjectStates(updated))
+      return updated
+    })
+  }
+  const setClipboardOpen=(next:OpenState,targetProject=projectId)=>{
+    if(mobileWorkspace){
+      const open=typeof next==='function'?next(mobileDrawerOpen):next
+      setMobileDrawerOpen(open)
+      if(open){setSidebarOpenState(false);dismissSoftKeyboard()}
+      return
+    }
+    if(!targetProject){
+      setUnscopedDrawerState(current=>({...current,desktopExpanded:typeof next==='function'?next(current.desktopExpanded):next}))
+      return
+    }
+    setDrawerProjectStates(current=>{
+      const state=drawerProjectStateFor(current,targetProject)
+      const open=typeof next==='function'?next(state.desktopExpanded):next
+      const updated=updateDrawerProjectState(current,targetProject,{desktopExpanded:open})
+      if(updated!==current)localStorage.setItem(DRAWER_PROJECT_STATE_KEY,serializeDrawerProjectStates(updated))
+      return updated
+    })
   }
   /** Open the drawer on a specific tab (or toggle that tab shut if it is already showing). */
-  const showDrawerTab=(tab:DrawerTabId)=>{
-    localStorage.setItem(DRAWER_TAB_KEY,tab)
-    setDrawerTabId(tab)
-    setClipboardOpen(!(clipboardOpen&&drawerTabId===tab))
+  const showDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
+    const state=targetProject?drawerProjectStateFor(drawerProjectStates,targetProject):unscopedDrawerState
+    const open=mobileWorkspace?mobileDrawerOpen:state.desktopExpanded
+    setDrawerProjectState(targetProject,{tab})
+    setClipboardOpen(!(open&&state.tab===tab),targetProject)
     // Reaching Notes from the rail, the tab strip, or `drawer.notes` says nothing about scope,
     // so it means "this Project" — the drawer sits beside that Project's workspace. Only the
     // app menu's deliberately unscoped `notes.browse` widens it, and it goes through
@@ -472,12 +509,24 @@ export function App() {
    *  files…", "Session notes…") has already said "show me this"; closing the drawer on
    *  it is perverse, and worse when the click also switched Project — the panel would
    *  vanish instead of retargeting. */
-  const openDrawerTab=(tab:DrawerTabId)=>{
-    localStorage.setItem(DRAWER_TAB_KEY,tab)
-    setDrawerTabId(tab)
-    setClipboardOpen(true)
+  const openDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
+    setDrawerProjectState(targetProject,{tab})
+    setClipboardOpen(true,targetProject)
     setMainMenuOpen(false);setProjectMenu(null);setContextMenu(null)
   }
+  // `mux.drawer.tab.v1` could describe only one Project. Preserve it for the Project active at
+  // upgrade, then remove it so every other Project starts from an honest default.
+  useEffect(()=>{
+    if(!projectId||!legacyDrawerTab.current.pending)return
+    const legacy=legacyDrawerTab.current
+    legacyDrawerTab.current={pending:false,raw:null}
+    setDrawerProjectStates(current=>{
+      const updated=migrateLegacyDrawerTab(current,projectId,legacy.raw)
+      localStorage.setItem(DRAWER_PROJECT_STATE_KEY,serializeDrawerProjectStates(updated))
+      localStorage.removeItem(DRAWER_TAB_KEY)
+      return updated
+    })
+  },[projectId])
   useEffect(()=>{localStorage.setItem(DRAWER_NOTE_KEY,serializeDrawerNotes(drawerNotes))},[drawerNotes])
   /**
    * Putting a note in a pane always takes it out of the drawer.
@@ -496,6 +545,11 @@ export function App() {
   useEffect(()=>{
     if(!projects.length)return
     setDrawerNotes(current=>pruneDrawerNotes(current,projects.map(project=>project.id)))
+    setDrawerProjectStates(current=>{
+      const updated=pruneDrawerProjectStates(current,projects.map(project=>project.id))
+      if(updated!==current)localStorage.setItem(DRAWER_PROJECT_STATE_KEY,serializeDrawerProjectStates(updated))
+      return updated
+    })
   },[projects])
   const persistDrawerWidth=(value:number)=>{
     const next=clampDrawerWidth(value)
@@ -649,6 +703,7 @@ export function App() {
   const relaunching = useRef(false)
   const longPressTimer = useRef<number | null>(null)
   const runHeldRef = useRef(false)
+  const mobileTabHeldRef = useRef(false)
   // When the Run menu's scrim dismissed it, so the trigger's own click can tell
   // "reopen" from "the closing half of a toggle tap".
   const runMenuClosedAt = useRef(0)
@@ -1319,11 +1374,11 @@ export function App() {
   // Files is a drawer tab, not a pane tab: it is a navigator that opens documents into
   // the workspace, so it costs a panel rather than a permanent tab. Its view follows the
   // active Project, which is why every entry point selects that Project first.
-  const openProjectFiles=(project:Project)=>{setProjectId(project.id);openDrawerTab('files')}
+  const openProjectFiles=(project:Project)=>{setProjectId(project.id);openDrawerTab('files',project.id)}
   const openNotesBrowser=(scope:Project|null)=>{
     if(scope)setProjectId(scope.id)
     setNotesAllProjects(!scope)
-    openDrawerTab('notes')
+    openDrawerTab('notes',scope?.id||projectId)
   }
   const openProjectFile=(project:Project,path:string,targetViewId?:string)=>void showResourceForTarget({projectId:project.id,terminalSessionId:null,kind:'file',ownerLabel:path},targetViewId)
   // Notifications are a drawer tab, not a modal: checking what fired should not be
@@ -1999,7 +2054,7 @@ export function App() {
     setProjectId(targetProject)
     setDrawerNotes(current=>claimDrawerNote(current,targetProject,resourceId))
     setNoteMenu(null);setContextMenu(null);setProjectMenu(null);setMainMenuOpen(false)
-    openDrawerTab('notes')
+    openDrawerTab('notes',targetProject)
   }
   const openTargetInDrawer=(target:NoteTarget)=>{
     const resourceId=noteIdForTarget(target)
@@ -2094,7 +2149,7 @@ export function App() {
   const openQueueForSession = async (sessionId: string) => {
     const session = sessionsRef.current.find(item => item.id === sessionId)
     if (session) await selectSession(session)
-    openDrawerTab('queue')
+    openDrawerTab('queue',session?.project_id||projectId)
     setQueueOpen(current => ({ token: current.token + 1, scope: 'session' }))
   }
 
@@ -2458,8 +2513,8 @@ export function App() {
     { id: 'sidebar.open', label: 'Open navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(true) },
     { id: 'sidebar.close', label: 'Close navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(false) },
     { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(value => !value) },
-    { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
-    { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
+    { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
+    { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
     { id:'observations.open',label:'Open selected project’s observation inbox',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setObservationsProject(commandProject||null);setMainMenuOpen(false);setProjectMenu(null)} },
     // The mailbox is a scope of the Queue panel, not a modal of its own: "what is queued
     // for this agent" and "what is queued anywhere" are one store, and were two surfaces
@@ -2672,9 +2727,7 @@ export function App() {
       const detail = (event as CustomEvent<{ key?: string }>).detail
       if (!detail?.key) return
       setPromptPreselect({ key: detail.key })
-      localStorage.setItem(DRAWER_TAB_KEY, 'prompts')
-      setDrawerTabId('prompts')
-      setClipboardOpen(true)
+      openDrawerTab('prompts')
     }
     window.addEventListener(PROMPT_RAIL_EVENT, onPromptTemplate)
     return () => window.removeEventListener(PROMPT_RAIL_EVENT, onPromptTemplate)
@@ -2829,14 +2882,15 @@ export function App() {
 
   const openSessionMenu = (session:Session,x:number,y:number,source:NonNullable<ContextState>['source']) => {
     setProjectId(session.project_id)
-    if(source!=='sidebar'){setActiveId(session.id);setFocusedViewId(session.id)}
+    // A tab menu targets the named session without activating it. Pane-bar menus
+    // still focus their pane; sidebar, desktop-tab, and mobile-tab menus do not.
+    if(source==='pane'){setActiveId(session.id);setFocusedViewId(session.id)}
     setTabMenu(null);setNoteMenu(null)
     setContextMenu({session,x,y,source})
   }
 
   const openTabMenu=(leaf:PaneLeaf,label:string,x:number,y:number,source:'tab'|'mobile'='tab')=>{
     setContextMenu(null);setNoteMenu(null);setProjectMenu(null);setSidebarMenu(null);setMainMenuOpen(false)
-    setFocusedViewId(leaf.id);if(leaf.kind==='terminal')setActiveId(leaf.id)
     setTabMenu({leaf,label,projectId,x,y,source})
   }
 
@@ -2976,7 +3030,7 @@ export function App() {
           void updateLayout(projectId,removeLeaf(latest,child.kind,child.id))
         }}>{confirming?'✓':'×'}</button>
       }
-      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={()=>setFocusedViewId(activeChild.id)}><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Workspace tabs" onWheel={scrollStripByWheel}>
+      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={event=>{if(event.button!==2)setFocusedViewId(activeChild.id)}}><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Workspace tabs" onWheel={scrollStripByWheel}>
         {node.children.map(child=>{
           const activate=()=>{if(suppressDragClickRef.current===`tab:${child.id}`){suppressDragClickRef.current=null;return}setFocusedViewId(child.id);if(child.kind==='terminal')setActiveId(child.id);if(child.id!==activeChild.id)void updateLayout(projectId,activateStackChild(activeLayout,node.id,child.id))}
           const dragClass=dragStackTab?.overId===child.id&&dragStackTab.side?`drag-over drop-${dragStackTab.side}`:''
@@ -2984,26 +3038,26 @@ export function App() {
           if(child.kind==='preview'){
             const preview=previews[child.id]
             const label=preview?.url||child.id
-            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} preview tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main preview-tab ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◱</span>{preview?`:${preview.port}`:child.id}</button>{closeTab(child,label)}</div>
+            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} preview tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main preview-tab ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◱</span>{preview?`:${preview.port}`:child.id}</button>{closeTab(child,label)}</div>
           }
           if(child.kind==='note'){
             const label=noteTabLabel(child.id)
-            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} resource tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◇</span>{label}</button>{closeTab(child,label)}</div>
+            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} resource tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◇</span>{label}</button>{closeTab(child,label)}</div>
           }
           if(child.kind==='history'){
             const label='History'
-            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label="History tab" title="Search session history" aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◷</span>{label}</button>{closeTab(child,label)}</div>
+            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label="History tab" title="Search session history" aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◷</span>{label}</button>{closeTab(child,label)}</div>
           }
           if(child.kind==='queue'){
             const label=queueTabLabel(child.id)
-            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} queue tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">⇥</span>{label}</button>{closeTab(child,label)}</div>
+            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} queue tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">⇥</span>{label}</button>{closeTab(child,label)}</div>
           }
           const session=sessions.find(item=>item.id===child.id)
           // sessionName, not session.name: the generated title is the whole point of
           // titling, and a tab strip showing `claude-15036b` while the sidebar shows
           // the real name is the surface where you actually need to tell panes apart.
           const label=session?sessionName(session):child.id
-          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();activate();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session?.state)}/>{activityGlyphs(session)}{label}</button>{closeTab(child,label,session)}</div>
+          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session?.state)}/>{activityGlyphs(session)}{label}</button>{closeTab(child,label,session)}</div>
         })}
       </div><div class="stack-active">{node.children
         .filter(child=>child.id===activeChild.id||(child.kind==='terminal'&&warmTerminalIds.includes(child.id)))
@@ -3097,7 +3151,7 @@ export function App() {
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Terminal tabs">
-      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();setActiveId(id);openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session.state)}/>{activityGlyphs(session)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${confirmKillId===id?'Confirm close':'Close'} terminal: ${sessionName(session)}`} title={confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
+      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session.state)}/>{activityGlyphs(session)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${confirmKillId===id?'Confirm close':'Close'} terminal: ${sessionName(session)}`} title={confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
     </div><div class="stack-active">{terminalPane}</div></section>
   }
 
@@ -3251,6 +3305,7 @@ export function App() {
     if(pane&&pane.active_child_id!==leaf.id)void updateLayout(projectId,activateStackChild(current,pane.id,leaf.id))
   }
   const focusAfterMobileClose=(leaf:PaneLeaf)=>{
+    if(mobileProjection.selected?.id!==leaf.id)return
     const next=adjacentMobileTab(mobileProjection.tabs,leaf.id)
     setFocusedViewId(next?.id||null)
     if(next?.kind==='terminal')setActiveId(next.id)
@@ -3278,12 +3333,12 @@ export function App() {
     // menu (session menu for terminals, tab menu for resources), which is also
     // where the confirm step already is.
     const openMobileTabMenu=(x:number,y:number)=>{
-      activateMobileTab(leaf)
+      mobileTabHeldRef.current=true
       if(session&&!session.pending)openSessionMenu(session,x,y,'mobile')
       else if(leaf.kind!=='terminal')openTabMenu(leaf,label,x,y,'mobile')
     }
     return <div key={`${leaf.kind}:${leaf.id}`} class="stack-tab-shell mobile-unified-tab">
-      <button role="tab" aria-label={`${label} ${leaf.kind} tab`} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>activateMobileTab(leaf)} onPointerDown={event=>beginLongPress(event,openMobileTabMenu)} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event=>{event.preventDefault();event.stopPropagation();cancelLongPress();openMobileTabMenu(event.clientX,event.clientY)}}>{glyph}{visibleLabel}</button>
+      <button role="tab" aria-label={`${label} ${leaf.kind} tab`} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>{if(mobileTabHeldRef.current){mobileTabHeldRef.current=false;return}activateMobileTab(leaf)}} onPointerDown={event=>{mobileTabHeldRef.current=false;beginLongPress(event,openMobileTabMenu)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event=>{event.preventDefault();event.stopPropagation();cancelLongPress();openMobileTabMenu(event.clientX,event.clientY)}}>{glyph}{visibleLabel}</button>
     </div>
   }
   // With no new-tab button left in the rail, an empty projection would render a
@@ -3460,7 +3515,7 @@ export function App() {
         unread={notificationUnread}
         onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('That session is no longer live.');return}void selectSession(session)}}
         onOpenSettings={section=>{if(mobileWorkspace)setClipboardOpen(false);openSettings(section)}}
-        onManagePrompts={()=>{if(mobileWorkspace)setClipboardOpen(false);setPromptLibraryOpen(true)}}
+        onManagePrompts={()=>{if(mobileWorkspace)setClipboardOpen(false);setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true)}}
         onOpenFile={path=>{
           // The drag ghost's pointer-up also fires a click on the row it started from.
           if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}
@@ -3590,7 +3645,7 @@ export function App() {
       <button onClick={() => runNamedCommand('session.copyId')}>Copy session ID</button>
       <button onClick={() => runNamedCommand('session.copyCwd')}>Copy working directory</button>
       <button onClick={() => runNamedCommand('session.note')}>Open session note</button>
-      <button onClick={()=>{setContextMenu(null);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
+      <button onClick={()=>{const target=contextMenu.session;setPromptScope(projects.find(project=>project.id===target.project_id)||null);setPromptTargetId(target.id);setContextMenu(null);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
       {/* No context menu touches tab order or pane geometry on any platform — not split,
           stack, dissolve, or move. They answer "how is the workspace laid out", which is
           not the question a menu opened on a session or a tab is asked, and the direction
@@ -3602,7 +3657,7 @@ export function App() {
           left in place it could not be written any more, but a phone that had already
           saved one would have stayed permanently pinned to it with no way out. */}
       <button onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
-      <button onClick={()=>runNamedCommand('pane.stackNew')}>New terminal as tab</button>
+      <button onClick={()=>{const target=contextMenu.session;setContextMenu(null);void spawnTerminal(target.project_id,'stack',undefined,target.id)}}>New terminal as tab</button>
       {voiceStatus?.enabled&&isAgent(contextMenu.session)&&<>
         <div class="context-subtitle">READ ALOUD</div>
         {(['off','on_demand','auto'] as VoiceMode[]).map(mode=><button key={mode} onClick={()=>{void setVoiceMode(contextMenu.session,mode);setContextMenu(null)}}>{effectiveVoiceMode(contextMenu.session)===mode?'✓ ':''}{mode==='off'?'Off':mode==='on_demand'?'On demand':'Auto on reply'}</button>)}
@@ -3827,7 +3882,7 @@ export function App() {
 
     {settingsOpen && <Settings initialSection={settingsSection} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
-    {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={active?.backend} onClose={()=>setPromptLibraryOpen(false)} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}}))}/>}
+    {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
 
     {observationsProject&&<Observations project={observationsProject} onClose={()=>setObservationsProject(null)} onInsertBatch={activeId?text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}})):undefined}/>}
 
