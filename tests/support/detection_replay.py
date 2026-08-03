@@ -299,6 +299,11 @@ class DetectionReplay:
     async def drain(self) -> None:
         while not self.queue.empty():
             event = await self.queue.get()
+            # UI/automation fanout after a user transcript record is consumed is
+            # not status evidence. Keep the detection goldens scoped to state,
+            # attention, and standing-activity semantics.
+            if event.type == "transcript_message":
+                continue
             self.normalized.append(normalized_event(event))
             self.readiness.observe(event, self.session)
 

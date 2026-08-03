@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -16,20 +18,62 @@ from .base import SpawnOptions, SpawnSpec
 _ROLLOUT_CACHE_SECONDS = 2.0
 _ROLLOUT_CACHE: dict[str, tuple[float, list[tuple[float, Path]]]] = {}
 
+CODEX_LIFECYCLE_HOOK_EVENTS = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PermissionRequest",
+    "PostToolUse",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+    "SessionEnd",
+)
+
 
 def codex_data_home() -> Path:
     configured = os.environ.get("CODEX_HOME")
     return Path(configured).expanduser() if configured else Path.home() / ".codex"
 
 
+def _codex_hook_commands(event: str, executable: str | None = None) -> tuple[str, str]:
+    argv = [executable or sys.executable, "-m", "swe_mux.hook_client", event]
+    return shlex.join(argv), subprocess.list2cmdline(argv)
+
+
+def codex_lifecycle_hook_args(existing_args: list[str] | None = None) -> list[str]:
+    """Inline additive Codex lifecycle hooks without rewriting user configuration.
+
+    The command is session-independent: its exact definition hashes the same in every
+    pane, so Codex's non-managed hook trust review is needed once rather than once per
+    mux session. Per-session authentication remains in the inherited MUX_HOOK_* env.
+    """
+    existing = existing_args or []
+    configured = "\n".join(existing)
+    args: list[str] = []
+    for event in CODEX_LIFECYCLE_HOOK_EVENTS:
+        if f"hooks.{event}" in configured:
+            continue
+        command, windows_command = _codex_hook_commands(event)
+        timeout = 3 if event == "SessionEnd" else 15
+        value = (
+            f"hooks.{event}=[{{ hooks = [{{ type = \"command\", "
+            f"command = {json.dumps(command)}, "
+            f"command_windows = {json.dumps(windows_command)}, "
+            f"timeout = {timeout} }}] }}]"
+        )
+        args.extend(["-c", value])
+    return args
+
+
 class CodexAdapter:
     name = "codex"
-    # Codex has no session-start hook, so a `/new` under a live PTY is only
-    # discoverable from the filesystem; the transcript-switch heuristic stays on.
+    # Lifecycle hooks are additive but user/admin policy can disable or leave them
+    # untrusted, so `/new` retains the transcript-switch fallback.
     reports_conversation_rollover = False
     # Codex mints its own thread id, so a fresh session carries the mux session id
-    # as a placeholder until its rollout file is discovered. Its transcript can
-    # only ever be bound by elimination, never by an exact id match.
+    # as a placeholder until SessionStart reports the real id. Transcript discovery
+    # can then exact-match it; elimination remains the hookless fallback.
     assigns_conversation_id = False
 
     def __init__(
@@ -67,7 +111,12 @@ class CodexAdapter:
         configured = with_scrollback_safe_tui([*self.default_args, *args])
         prefix = self._mcp_args()
         if self.notify_program:
-            prefix = ["-c", f"notify={json.dumps(self.notify_program)}", *prefix]
+            prefix = [
+                "-c",
+                f"notify={json.dumps(self.notify_program)}",
+                *codex_lifecycle_hook_args(configured),
+                *prefix,
+            ]
         return [*prefix, *configured]
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:

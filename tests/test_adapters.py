@@ -7,6 +7,7 @@ import pytest
 
 from swe_mux.adapters import ClaudeAdapter, CodexAdapter, ShellAdapter, SpawnOptions, SpawnSpec
 from swe_mux.adapters.claude import _hook_command, encode_cwd
+from swe_mux.adapters.codex import CODEX_LIFECYCLE_HOOK_EVENTS, codex_lifecycle_hook_args
 from swe_mux.reconcile import inspect_claude, inspect_codex
 
 
@@ -130,14 +131,31 @@ def test_codex_spawn_resume_and_notify_are_structured(tmp_path: Path) -> None:
     assert spawned.executable == "codex.exe"
     assert spawned.argv[0] == "-c"
     assert spawned.argv[1].startswith("notify=")
-    assert spawned.argv[2:6] == (
-        "-c",
-        'tui.alternate_screen="never"',
-        "-c",
-        "tui.raw_output_mode=true",
+    hook_values = [value for value in spawned.argv if value.startswith("hooks.")]
+    assert len(hook_values) == 9
+    assert any(value.startswith("hooks.SessionStart=") for value in hook_values)
+    assert any(value.startswith("hooks.UserPromptSubmit=") for value in hook_values)
+    assert all(
+        "command_windows" in value and "swe_mux.hook_client" in value for value in hook_values
     )
+    assert 'tui.alternate_screen="never"' in spawned.argv
+    assert "tui.raw_output_mode=true" in spawned.argv
     assert spawned.argv[-2:] == ("--model", "o3 pro")
     assert resumed.argv[-2:] == ("resume", "native-id")
+
+
+def test_codex_lifecycle_hooks_are_stable_and_preserve_explicit_event_config() -> None:
+    first = codex_lifecycle_hook_args()
+    second = codex_lifecycle_hook_args()
+
+    assert first == second
+    assert len(first) == len(CODEX_LIFECYCLE_HOOK_EVENTS) * 2
+    assert all(first[index] == "-c" for index in range(0, len(first), 2))
+
+    explicit = codex_lifecycle_hook_args(["-c", "hooks.SessionStart=[]"])
+    values = explicit[1::2]
+    assert not any(value.startswith("hooks.SessionStart=") for value in values)
+    assert any(value.startswith("hooks.UserPromptSubmit=") for value in values)
 
 
 def test_codex_defaults_to_scrollback_safe_tui(tmp_path: Path) -> None:

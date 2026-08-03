@@ -167,13 +167,11 @@ def test_agent_launchers_inject_mux_wiring(tmp_path: Path, monkeypatch: pytest.M
     exe, args, native_id = _codex(["resume", "codex-native"])
     assert exe == "real-codex.exe"
     assert args[:2] == ["-c", args[1]]
-    assert "notify=" in args[1]
-    assert args[2:6] == [
-        "-c",
-        'tui.alternate_screen="never"',
-        "-c",
-        "tui.raw_output_mode=true",
-    ]
+    assert any("notify=" in arg for arg in args)
+    assert any(arg.startswith("hooks.SessionStart=") for arg in args)
+    assert any(arg.startswith("hooks.UserPromptSubmit=") for arg in args)
+    assert 'tui.alternate_screen="never"' in args
+    assert "tui.raw_output_mode=true" in args
     assert args[-2:] == ["resume", "codex-native"]
     assert native_id == "codex-native"
 

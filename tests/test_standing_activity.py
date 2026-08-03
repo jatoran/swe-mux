@@ -528,9 +528,8 @@ async def test_background_close_without_tracked_open_decrements_the_annotation()
 
 
 async def test_codex_subagent_activity_arms_and_ttl_decays() -> None:
-    # Codex has no subagent lifecycle hooks: recency is the only truth, so any
-    # sub_agent_activity record opens/refreshes the annotation at count 1 and
-    # the TTL is the only clear.
+    # Without a lifecycle hook, recency is the fallback truth: any activity
+    # record opens/refreshes the annotation at count 1 and the TTL clears it.
     replay = DetectionReplay("codex")
     await replay.step(
         {
@@ -559,6 +558,37 @@ async def test_codex_subagent_activity_arms_and_ttl_decays() -> None:
     await replay.step({"kind": "watchdog"})
     assert replay.session.record.standing_activity == []
     assert replay.session.status_health_counters["standing_activity_expired"] == 1
+
+
+async def test_codex_trailing_subagent_record_does_not_reopen_after_hook_stop() -> None:
+    replay = DetectionReplay("codex")
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "SubagentStart",
+            "payload": {"session_id": "native-replay", "agent_id": "agent-1"},
+        }
+    )
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "SubagentStop",
+            "payload": {"session_id": "native-replay", "agent_id": "agent-1"},
+        }
+    )
+    assert replay.session.record.standing_activity == []
+
+    await replay.step(
+        {
+            "kind": "transcript",
+            "ts_offset": 1,
+            "record": {
+                "type": "event_msg",
+                "payload": {"type": "sub_agent_activity", "kind": "stopped"},
+            },
+        }
+    )
+    assert replay.session.record.standing_activity == []
 
 
 async def test_process_tree_fast_clears_background_tasks() -> None:

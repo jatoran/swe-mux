@@ -56,9 +56,10 @@ and reattachable browser viewports.
   scrollback. The pinned xterm 6 WebGL addon carries
   the upstream missing-buffer-line guard in its runtime bundles, preventing a resize/trim race
   from aborting a model update and leaving stale glyphs. Mobile remains DOM-only.
-- Agent startup state uses semantic evidence first. Claude normally becomes ready through its
-  `SessionStart` hook; Codex (or a degraded Claude hook path) may use settled live PTY output as
-  a startup-only, lowest-priority readiness signal until its first native transcript event.
+- Agent startup state uses semantic evidence first. Claude and trusted Codex lifecycle hooks
+  normally report `SessionStart`; Codex with disabled/untrusted hooks (or a degraded Claude hook
+  path) may use settled live PTY output as a startup-only, lowest-priority readiness signal until
+  its first native transcript event.
 - Standing engagements (an armed `/loop`, a cron schedule, background tasks, live subagents)
   are annotations on the session (`SessionRecord.standing_activity`), never states: an idle
   session with an armed loop is exactly as idle, and as deliverable, as one without. They are
@@ -141,12 +142,12 @@ and reattachable browser viewports.
     rekeyed itself onto the stranger's thread. Codex's `session_meta` does not separate them
     either — `originator` betrays only the headless `codex exec` (`codex_exec`/`exec`); an
     interactive outsider reports `codex-tui`/`cli`, exactly like ours.
-  - **Codex binds from its own turn notify.** What an outsider cannot forge is a hook: it
+  - **Codex binds from its own lifecycle hook.** What an outsider cannot forge is a hook: it
     arrives over this session's own loopback ingress authenticated with this session's own
-    secret. Codex reports `thread-id` on `agent-turn-complete`, and that is what binds it
-    (`_bind_native_id_from_hook`, which also accepts Claude's `SessionStart` `session_id`).
-    Binding therefore lands at the end of the first turn, after which the transcript is
-    exact-matched and catch-up replays that turn's tokens and context. Whether the id was
+    secret. Trusted Codex hooks report `session_id` on `SessionStart`, so normal binding lands
+    before the first turn and transcript discovery can exact-match it. The older
+    `agent-turn-complete` `thread-id` remains the compatibility binding path when lifecycle hooks
+    are disabled, untrusted, or unavailable (`_bind_native_id_from_hook` accepts both). Whether the id was
     dictated at spawn is an adapter declaration, `assigns_conversation_id`, and is
     deliberately **not** inferred from the shape of the id: mux session ids are UUIDs too, so
     a shape test treats every fresh Codex placeholder as already bound and refuses the only
@@ -158,12 +159,13 @@ and reattachable browser viewports.
     ingress with this session's own secret, which is the strongest available proof of which
     conversation this PTY runs; it fills an *unknown* id only and never overwrites a bound
     one, so a hook cannot rekey a session.
-  - **Switch (in-CLI resume) is Codex-only.** Backends whose CLI reports conversation
-    replacement itself (`reports_conversation_rollover` on the adapter — Claude, via the
-    SessionStart ingress) never take the filesystem switch heuristic at all: the CLI's own
+  - **Filesystem switch fallback is Codex-only.** Backends whose adapter reports conversation
+    replacement itself (`reports_conversation_rollover` — Claude, via the SessionStart ingress)
+    never take the filesystem switch heuristic at all: the CLI's own
     report is strictly stronger evidence, and guessing from mtimes is the one mechanism that
     could latch a session onto a sibling's conversation in a shared cwd. Where the heuristic
-    does apply (Codex has no session-start hook), following a freshly-written transcript
+    does apply (Codex keeps it because hooks can be unavailable), following a freshly-written
+    transcript
     additionally requires that this session's own PTY produced output around the time the
     candidate appeared. An outside CLI leaves our PTY silent, which is what distinguishes it.
   - **Unresolved siblings block.** Another live session in the same cwd makes a fresh

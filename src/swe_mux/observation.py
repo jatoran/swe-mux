@@ -1354,7 +1354,7 @@ def _remember_user_prompt(session: Session, payload: dict[str, Any]) -> None:
     text = utf8_safe(prompt.strip())
     if text:
         session.last_user_prompt = text[:MAX_REMEMBERED_PROMPT_CHARS]
-        if session.first_user_prompt is None:
+        if getattr(session, "first_user_prompt", None) is None:
             session.first_user_prompt = session.last_user_prompt
 
 
@@ -1370,12 +1370,12 @@ async def _bind_native_id_from_hook(
     it the strongest available proof of which conversation this PTY is running —
     stronger than the sole-unclaimed-candidate heuristic it replaces here.
 
-    This is also the *only* way a Codex session can be bound. Codex mints its own
-    thread id, so nothing on the filesystem separates its rollout from one written
-    by a `codex` started outside mux in the same cwd (measured: `originator` betrays
-    only the headless `codex exec`; an interactive outsider is identical). Codex
-    reports `thread-id` on its `agent-turn-complete` notify, over this same
-    authenticated ingress, and an outsider has no secret with which to reach it.
+    Codex also mints its own thread id, so nothing on the filesystem separates its
+    rollout from one written by a `codex` started outside mux in the same cwd
+    (measured: `originator` betrays only the headless `codex exec`; an interactive
+    outsider is identical). Its root `SessionStart` hook is the primary binding
+    signal. The older `agent-turn-complete` notify remains an authenticated repair
+    path when lifecycle hooks are disabled, untrusted, or unavailable.
 
     Deliberately one-way: it only fills an *unknown* id and never overwrites one
     the daemon already established, so a hook cannot rekey a bound session.
@@ -2055,8 +2055,9 @@ async def apply_hook_observation(
                 scope="root",
             )
     elif event_type in {"Stop", "turn_ended", "agent-turn-complete", "task_complete"}:
-        # Codex has no SessionStart, so its turn-end notify is the only authenticated
-        # place it ever names its own thread. Bind before closing the turn so the
+        # SessionStart normally binds Codex before the first turn. Its completion
+        # notify remains a compatibility/repair path when lifecycle hooks are
+        # disabled, untrusted, or unavailable. Bind before closing the turn so the
         # transcript can be exact-matched and catch-up replays the turn that just ran.
         await _bind_native_id_from_hook(session, payload, events)
         await _finish_root_turn(session, events, source="hook", evidence=f"hook:{event_type}")
@@ -2193,10 +2194,18 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
             )
             and not has_tool_result
         ):
+            _remember_user_prompt(session, {"prompt": text})
             # A fresh prompt while blocked means the user answered and moved on.
             await _resume_from_awaiting(session, events, event, evidence="user_prompt_record")
             await _begin_root_turn(
                 session, events, source="transcript", evidence="user_prompt_record"
+            )
+            await events.emit(
+                "transcript_message",
+                session_id=session.record.id,
+                source="transcript",
+                scope="root",
+                role="user",
             )
         elif has_tool_result:
             # The tool actually ran: an approval (or denial) resolved it.
@@ -2403,7 +2412,19 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
     if payload_type in CODEX_RESUME_PAYLOADS:
         # Tooling or the model is running again, so any approval was answered.
         await _resume_from_awaiting(session, events, event, evidence=str(payload_type))
-    if payload_type in {"task_started", "user_message"}:
+    if payload_type == "user_message":
+        _remember_user_prompt(session, {"prompt": str(payload.get("message") or "")})
+        await _begin_root_turn(
+            session, events, source="transcript", evidence=str(payload_type)
+        )
+        await events.emit(
+            "transcript_message",
+            session_id=session.record.id,
+            source="transcript",
+            scope="root",
+            role="user",
+        )
+    elif payload_type == "task_started":
         await _begin_root_turn(
             session, events, source="transcript", evidence=str(payload_type)
         )
@@ -2574,14 +2595,16 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             scope="root",
         )
     elif payload_type == "sub_agent_activity":
-        # Codex has no subagent lifecycle hooks, so recency is the only truth:
-        # any sub-agent record refreshes (or opens) the annotation and the TTL
-        # is the only clear. Count stays 1 — the records carry no fleet size.
+        # This is the fallback tier until lifecycle hooks arrive. Once they do,
+        # SubagentStart/SubagentStop own the count and transcript records only
+        # refresh recency, so a trailing record cannot reopen a stopped agent.
+        # Count stays 1 in fallback mode because the records carry no fleet size.
         if not getattr(session, "observation_replay", False) and _refresh_subagents(
             session,
             source="transcript",
             evidence="transcript:sub_agent_activity",
             now=_standing_now(session, event),
+            create=not _observation_state(session).get("subagent_hooks_seen"),
         ):
             _publish_update(session)
         await events.emit(

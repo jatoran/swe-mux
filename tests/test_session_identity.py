@@ -228,8 +228,8 @@ def test_codex_turn_notify_dates_the_staleness_evidence() -> None:
     """Codex's only turn hook must count as transcript-backed evidence.
 
     `_note_transcript_staleness` is the fail-closed path for a Codex `/new` behind a
-    sibling that cannot be ruled out — the one rollover with no session-start hook to
-    fall back on. The ingress tests the **raw** event type, and Codex's notify arrives
+    sibling when lifecycle hooks are disabled, untrusted, or unavailable. The ingress
+    tests the **raw** event type, and Codex's compatibility notify arrives
     as `agent-turn-complete`, so leaving it out of this set left `last_turn_hook_ts`
     permanently unset and made the path unreachable for the only backend that needs
     it. Verified live: the rolled pane reported the abandoned conversation as live,

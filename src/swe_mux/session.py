@@ -75,9 +75,9 @@ AGENT_EXIT_TRANSCRIPT_QUIET_SECONDS = 2.0
 AGENT_EXIT_CONFIRM_ATTEMPTS = 10
 AGENT_EXIT_CHECK_INTERVAL_SECONDS = 1.0
 
-# Codex currently has no startup hook and does not create its rollout until the
-# first submitted turn.  A short quiet period after live PTY output is therefore
-# the last-resort signal that its interactive prompt has settled.
+# Codex lifecycle hooks may be disabled or awaiting one-time trust, and Codex does
+# not create its rollout until the first submitted turn. A short quiet period after
+# live PTY output remains the last-resort signal that its interactive prompt settled.
 AGENT_STARTUP_QUIET_SECONDS = 1.0
 
 # The transcript observer only ever returns by raising; if it does, observation
@@ -917,12 +917,12 @@ def session_is_unwitnessed(session: Any) -> bool:
     the side channel has never reached this session).
 
     This is a real, reachable configuration rather than a defensive guard. Codex
-    has no session-start hook and mints its own thread id, so the first thing
-    that can ever name its conversation is the `agent-turn-complete` notify at
-    the *end* of turn one; until then a fresh pane has neither tier. It is also
-    where a misconfigured `notify` program or a hook ingress the CLI cannot reach
-    leaves a session permanently, which is why the predicate is written in terms
-    of the channels rather than in terms of Codex.
+    lifecycle hooks may be disabled, untrusted, or unreachable; because Codex
+    mints its own thread id, the compatibility binding signal is then the
+    `agent-turn-complete` notify at the *end* of turn one. Until then a fresh pane
+    may have neither tier. It is also where a misconfigured `notify` program or a
+    hook ingress the CLI cannot reach leaves a session permanently, which is why
+    the predicate is written in terms of the channels rather than in terms of Codex.
 
     Deliberately one hook, not one *recent* hook: a session that has ever been
     witnessed has a working channel, and a temporary silence on it is what the
@@ -3509,9 +3509,10 @@ class SessionManager:
     async def _note_transcript_staleness(self, session: Session, current: Path) -> None:
         """Fail closed when the conversation moved somewhere we cannot prove.
 
-        Codex has no session-start hook, so a `/new` behind a sibling that cannot
-        be ruled out leaves the observer tailing a file that will never change
-        again. Silence alone is not evidence of that — an idle agent is also quiet.
+        A Codex `SessionStart` normally reports `/new`, but hooks may be disabled,
+        untrusted, or unavailable. In that fallback path, a `/new` behind a sibling
+        that cannot be ruled out leaves the observer tailing a file that will never
+        change again. Silence alone is not evidence of that — an idle agent is also quiet.
         The evidence is a hook whose event *must* have written transcript records
         (a prompt submitted, a tool run, a turn stopped) arriving after the file
         went dead: the CLI ran a turn and none of it landed where we are looking.

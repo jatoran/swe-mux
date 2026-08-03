@@ -567,7 +567,7 @@ def stale_manager(tmp_path: Path, *, last_turn_hook_ts: float) -> tuple[Any, Any
 async def test_a_turn_hook_after_a_dead_transcript_marks_observation_stale(
     tmp_path: Path,
 ) -> None:
-    # Codex has no session-start hook, so a `/new` behind an unresolvable sibling
+    # Codex's hookless fallback cannot see `/new` behind an unresolvable sibling and
     # has no positive signal at all. A turn that must have written records, followed
     # by a file that never changed, is the proof we are watching the wrong one.
     manager, session, transcript = stale_manager(tmp_path, last_turn_hook_ts=time.time())

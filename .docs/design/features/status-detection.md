@@ -246,10 +246,11 @@ Two cross-backend sources complete the set:
   and any extra descendant leaves the annotation to transcript evidence and the TTL —
   which also makes a false clear structurally impossible while a task's process runs.
 - **Codex** (`_codex`): no loop/cron equivalents exist in the Codex CLI, so those
-  annotations stay empty rather than being faked, and no subagent lifecycle hooks exist —
-  any `sub_agent_activity` record opens/refreshes the `subagents` annotation at count 1
-  and the TTL is the only clear. Background tasks reach Codex through the process
-  fast-clear side only.
+  annotations stay empty rather than being faked. Trusted `SubagentStart`/`SubagentStop`
+  hooks own the subagent count; before any lifecycle hook arrives, `sub_agent_activity`
+  records provide the count-1/TTL fallback. Once hooks own the count, those transcript
+  records only refresh recency and cannot reopen a stopped subagent. Background tasks
+  reach Codex through the process fast-clear side only.
 
 ### Leaving `awaiting` (answered prompts)
 
@@ -281,9 +282,10 @@ rather than as a source.
 
 A session is **unwitnessed** when both tiers that may prove work are structurally
 absent: no transcript is bound and no hook has ever arrived (`session_is_unwitnessed`).
-This is reachable, not defensive. Codex has no session-start hook and mints its own
-thread id, which it first names on `agent-turn-complete` — so until turn one *ends* a
-fresh pane has neither tier, and `working` was reachable from neither source. The
+This is reachable, not defensive. Codex lifecycle hooks may be disabled, untrusted, or
+unreachable; in that fallback mode its minted thread id is first named by
+`agent-turn-complete`. Until turn one *ends* a fresh pane can therefore have neither tier,
+and `working` is reachable from neither source. The
 startup-quiet PTY fallback's `idle` was therefore the last word for the whole turn:
 measured live at 200 s of "ready · turn complete" while the agent worked, with the
 rollout's own `task_started` sitting on disk 4 s after spawn.

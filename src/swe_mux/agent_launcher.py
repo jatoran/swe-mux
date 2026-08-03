@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .adapters.codex import codex_lifecycle_hook_args
 from .codex_tui import with_scrollback_safe_tui
 from .shim_paths import is_mux_shim, path_without_shim_dirs
 
@@ -108,6 +109,7 @@ def _codex(args: list[str]) -> tuple[str, list[str], str]:
     if not any("notify=" in arg for arg in args):
         notify = [sys.executable, "-m", "swe_mux.hook_client", "codex_notify"]
         args = ["-c", f"notify={json.dumps(notify)}", *args]
+    args = [*codex_lifecycle_hook_args(args), *args]
     mcp_url = os.environ.get("MUX_MCP_URL")
     if (
         mcp_url

@@ -71,7 +71,8 @@
 - **Live sessions read their own transcript through a separate route.** The drawer's Transcript
   tab (`ui.md`) uses `GET /sessions/{id}/transcript`, not the history transcript route: the
   history route reindexes a run's searchable messages and loads its annotations on every call,
-  which is right for opening an entry once and wrong for a surface that refreshes on every turn.
+  which is right for opening an entry once and wrong for a surface that refreshes on observed user
+  messages and assistant turn boundaries.
   Both parse the same native files through `transcript_view.py` and neither mutates them; they
   differ in what they reduce to. History indexes everything text-shaped, because search wants
   recall. The reader keeps only what was said, because a reading column wants only the

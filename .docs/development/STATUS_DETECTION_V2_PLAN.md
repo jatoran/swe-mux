@@ -10,6 +10,8 @@
 > current CLI's background-wait footer is "N shell(s) still running · check the task
 > status" (recaptured, pinned). Open per §7: cli-state promotion to a transition source
 > awaits a release of `cli_state_disagrees` telemetry.
+> Follow-up 2026-08-03: Codex now has stable lifecycle hooks. swe-mux injects them
+> additively while retaining the PTY/transcript fallbacks for disabled or untrusted hooks.
 
 Implementation plan, written 2026-07-31 after the nested-child/marker-drift incident
 (commit `bb81463`, `.docs/design/features/status-detection.md` § Foreign conversations).
@@ -57,7 +59,7 @@ this machine unless marked **[verify]**.
 | G5 | Process-tree evidence isn't folded into status. `process_observed` events already carry `descendants` counts (ProcessInspector), but nothing correlates "descendants appeared/persisted" with background work or nested agents. | `processes.py`; replay harness `process` step. |
 | G6 | Screen-classifier drift has no alarm. The 2026-07-31 incident ran for weeks of CLI releases with `pty_tail_state` returning "unknown" on every busy screen; nothing counted it. | Incident postmortem; `status_health` has no classifier-liveness counter. |
 | G7 | Startup dialogs read `idle`. Claude's workspace-trust dialog (SessionStart hook fires before the trust gate) and Codex's trust/update dialogs block the session while state shows idle. Since `bb81463` the classifier at least reads them as `approval` ("enter to confirm"/"esc to cancel"), but hook-sourced idle wins the displayed state. | Measured in E2E 2026-07-31; also `status-tracking-open-issues` memory. |
-| G8 | Codex is structurally thinner: no session-start hook, no known per-pid side state **[verify]**, dialogs invisible pre-first-turn. | `backends.md`; unwitnessed-session machinery exists precisely because of this. |
+| G8 | At the plan date Codex was structurally thinner: no session-start hook, no known per-pid side state, dialogs invisible pre-first-turn. Lifecycle hooks later resolved the normal path; unwitnessed-session machinery remains for disabled/untrusted hooks. | `backends.md`; unwitnessed-session machinery is the fallback. |
 | G9 | Loop/cron *lifecycle* is invisible even to transcripts consumers: `ScheduleWakeup` and `CronCreate` tool_use records flow through the observer today but are classified as generic tool activity. | Verified record shapes in live transcripts: `{"delaySeconds": 1500, "prompt": "<<autonomous-loop-dynamic>>", "reason": ...}` and `{"stop": true}`. |
 
 ## 2. Design: standing-activity annotations

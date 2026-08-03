@@ -49,8 +49,15 @@
 - Claude executes hook commands through Bash even on Windows. Generated commands use
   Bash-safe executable paths (for example `/d/.../python.exe` under Git Bash/MSYS), are
   written by atomic replacement, and must never use raw Windows `list2cmdline` output.
-- Codex explicit spawn receives a `notify` program; resume uses `codex resume`. Direct and
-  shim-launched Codex sessions default `tui.alternate_screen="never"` and
+- Codex explicit spawn and the shell shim add the stable lifecycle hook set
+  (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`,
+  `SubagentStart`, `SubagentStop`, `Stop`, `SessionEnd`) as inline `-c` configuration. The
+  definitions are additive with hooks from every other Codex config layer, skip an event the
+  launch argv explicitly configures, and carry no session secret; authentication comes from the
+  inherited `MUX_HOOK_*` environment. Codex asks once to trust the exact command definitions for
+  non-managed hooks. swe-mux does not bypass that review or a user/admin hook disable. The older
+  `notify` program remains a completion and identity fallback, and resume uses `codex resume`.
+  Direct and shim-launched Codex sessions default `tui.alternate_screen="never"` and
   `tui.raw_output_mode=true`, keeping the transcript in native xterm scrollback instead of
   asking its full-screen TUI to repaint history while the viewport is off-tail. An explicit
   `codex_args` or per-launch config value wins for either key. The Project Run menu and custom
@@ -60,10 +67,10 @@
   including when an agent is launched outside a shim or an agent mode omits a hook. Source
   priority arbitrates conflicting evidence within one root turn and is released at the next
   root boundary, so a previously healthy hook cannot permanently suppress transcript fallback.
-- Codex has no startup hook and may not create its rollout until the first submitted turn. While
-  the state is still `starting`, a one-second quiet period after live PTY output marks the
-  interactive prompt ready at the lowest evidence tier. Any later hook/transcript evidence
-  supersedes this startup-only fallback.
+- A trusted Codex `SessionStart` hook normally establishes startup and conversation identity
+  immediately. Hooks may be disabled or still awaiting trust, and Codex may not create its
+  rollout until the first submitted turn, so a one-second quiet period after live PTY output
+  remains the lowest-priority startup fallback. Any later hook/transcript evidence supersedes it.
 - **A Codex rollout may be followed provisionally before its conversation is proven.** Identity
   still comes only from the hook — an outsider cannot forge one, and nothing on disk separates
   our rollout from a `codex` started in the same cwd outside mux (`originator` betrays only the
@@ -81,7 +88,9 @@
   metadata, which a successor daemon would read as an established binding. The worst case for a
   wrong guess is a pane reading "working" while an unrelated codex runs: visible, self-correcting,
   and strictly more conservative for delivery than the "ready" it replaces.
-- `agent-turn-complete` resolves it. If the hook names the conversation the guess was already
+- `SessionStart` normally prevents the provisional path by binding the conversation before the
+  observer needs to guess. When lifecycle hooks are unavailable, `agent-turn-complete` resolves
+  it. If the hook names the conversation the guess was already
   following, the binding is promoted (`transcript_binding_confirmed`) and the history row is
   finally written; if it names a different one, the guess is discarded
   (`transcript_binding_discarded`) and the observer re-derives by exact match, which exists from
@@ -156,9 +165,9 @@
   named the conversation at spawn, which decides whether the transcript is *derived* from the
   native id or has to be learned from the CLI's own authenticated hook), and for backends that do, the transcript-switch heuristic is
   never consulted (a guess from mtimes is the one mechanism that could latch onto a sibling's
-  conversation in a shared cwd). **The transcript-switch watcher** exists for Codex, which has
-  no session-start hook: a quiet observed transcript plus a freshly written, unclaimed,
-  PTY-corroborated replacement in the same run cwd.
+  conversation in a shared cwd). **The transcript-switch watcher** remains enabled for Codex as
+  a fallback when lifecycle hooks are disabled, untrusted, or unavailable: a quiet observed
+  transcript plus a freshly written, unclaimed, PTY-corroborated replacement in the same run cwd.
 - For Codex, if the observed transcript goes quiet while another transcript for the same run
   cwd is being actively written and is not owned by another live session, observation
   retargets to it and re-enters historical catch-up as part of that rollover.
@@ -171,10 +180,11 @@
   moving), delivery hard-blocks on `transcript_stale`, observers refuse to read it, and the
   session is marked in the UI and the state log. Cleared by the next record read on any followed
   transcript, or by a rollover.
-- The set is matched against the **raw** hook event type, so it must name Codex's turn notify
-  (`agent-turn-complete`) and not only Claude's `Stop` or the normalized `turn_ended`. Codex is
-  the *only* backend this rule protects — Claude reports its own rollovers, so its observation
-  never needs to be inferred stale — and while `agent-turn-complete` was missing from the set,
+- The set is matched against the **raw** hook event type, so it must retain Codex's turn notify
+  (`agent-turn-complete`) and not only Claude's `Stop` or the normalized `turn_ended`, because it
+  is the compatibility path when lifecycle hooks are absent. Claude reports its own rollovers,
+  so its observation never needs to be inferred stale; while `agent-turn-complete` was missing
+  from the set,
   `last_turn_hook_ts` was never dated and the fail-closed path was unreachable for it. Verified
   live: a Codex pane rolled by `/new` behind a busy same-cwd sibling kept reporting the
   abandoned conversation, with its retired token counts, as live and `idle` for 200 s.

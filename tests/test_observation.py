@@ -334,15 +334,29 @@ async def test_claude_sidechain_end_turn_never_completes_root() -> None:
 
 
 async def test_codex_task_started_and_user_message_emit_one_root_start() -> None:
-    session = cast(Any, SimpleNamespace(record=record("codex")))
+    session = cast(
+        Any,
+        SimpleNamespace(
+            record=record("codex"), first_user_prompt=None, last_user_prompt=None
+        ),
+    )
     events = EventBus()
     queue = events.subscribe()
 
     await _codex(session, {"type": "event_msg", "payload": {"type": "task_started"}}, events)
-    await _codex(session, {"type": "event_msg", "payload": {"type": "user_message"}}, events)
+    await _codex(
+        session,
+        {
+            "type": "event_msg",
+            "payload": {"type": "user_message", "message": "fix the login race"},
+        },
+        events,
+    )
 
     emitted = [await queue.get() for _ in range(queue.qsize())]
     assert [item.type for item in emitted].count("turn_started") == 1
+    assert [item.type for item in emitted].count("transcript_message") == 1
+    assert session.first_user_prompt == "fix the login race"
 
 
 async def test_parser_drift_degrades_after_sustained_unknown_ratio() -> None:

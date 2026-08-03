@@ -17,6 +17,7 @@ import urllib.request
 # sits displayed as "working" until the 900s no-evidence fleet alarm — with the
 # user's attention on a prompt nothing is showing them.
 _DURABLE_EVENTS = {
+    "SessionStart",
     "Stop",
     "SessionEnd",
     "turn_ended",
