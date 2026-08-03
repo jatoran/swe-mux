@@ -30,7 +30,12 @@ def test_mobile_workspace_and_recovery_contracts_remain_available() -> None:
         ".pane-stack:not(.focused-pane):not(.empty-workspace-pane):not(.mobile-unified-workspace){display:none}"
         in css
     )
-    assert "contextMenu.source!=='mobile'" in combined
+    # Pane geometry used to be excluded from mobile by name (`source!=='mobile'`).
+    # It is now included by name on one source only — the pane menu — which excludes
+    # mobile, the sidebar, and the tab strip in one rule.
+    # test_pane_geometry_actions_live_only_on_the_pane_menu owns that invariant.
+    assert "contextMenu.source!=='mobile'" not in combined
+    assert "contextMenu.source==='mobile'&&mobileMoveRow" in combined
     assert "tabMenu.source==='mobile'" in combined
     # Mobile rail order is a device-local permutation of the projection. It must
     # never write layout: that is the only thing keeping a phone's reordering
