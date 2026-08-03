@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from swe_mux.git_projects import ProjectIdentity, rebase_identity
 from swe_mux.project_files import (
     ObservationsUnreadableError,
+    ProjectFileRevisionConflict,
+    ProjectImageUnavailable,
+    ProjectResourceExists,
     append_observation,
+    create_project_resource,
     effective_project_ignores,
     ignored_project_path,
     initialize_note,
@@ -18,6 +24,8 @@ from swe_mux.project_files import (
     read_note,
     read_observations,
     read_project_config,
+    read_project_file,
+    read_project_image_content,
     search_project_files,
     write_note,
     write_observations,
@@ -233,3 +241,148 @@ def test_project_search_matches_names_contents_and_respects_ignores(tmp_path: Pa
     paths = [item["path"] for item in both["items"]]
     assert paths == ["src/widget.ts", "src/helper.ts"]  # name match sorts before content match
     assert not search_project_files(tmp_path, "", mode="both", ignore_patterns=patterns)["items"]
+
+
+def test_project_file_inspection_classifies_delimited_text_and_bounds_reads(
+    tmp_path: Path,
+) -> None:
+    csv_file = tmp_path / "report.csv"
+    csv_file.write_text('name,detail\nalpha,"one, two"\n', encoding="utf-8")
+    payload = read_project_file(tmp_path, "report.csv")
+    assert payload["status"] == "ready"
+    assert payload["presentation"] == {"kind": "delimited", "delimiter": ","}
+    assert payload["text"].startswith("name,detail")
+
+    oversized = tmp_path / "huge.txt"
+    with oversized.open("wb") as handle:
+        handle.seek(2 * 1024 * 1024)
+        handle.write(b"x")
+    refused = read_project_file(tmp_path, "huge.txt")
+    assert refused["status"] == "too-large"
+    assert refused["revision"] == "unavailable"
+    assert "text" not in refused
+
+
+def test_project_image_inspection_and_content_are_allowlisted_and_revision_pinned(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "preview.png"
+    buffer = io.BytesIO()
+    Image.new("RGBA", (12, 7), (10, 20, 30, 255)).save(buffer, format="PNG")
+    image_bytes = buffer.getvalue()
+    target.write_bytes(image_bytes)
+
+    payload = read_project_file(tmp_path, "preview.png")
+    assert payload["status"] == "viewable"
+    assert payload["presentation"] == {
+        "kind": "image",
+        "mime": "image/png",
+        "width": 12,
+        "height": 7,
+        "frames": 1,
+    }
+    content, repeated = read_project_image_content(tmp_path, "preview.png", payload["revision"])
+    assert content == image_bytes
+    assert repeated["revision"] == payload["revision"]
+
+    target.write_bytes(image_bytes + b"changed")
+    with pytest.raises(ProjectFileRevisionConflict):
+        read_project_image_content(tmp_path, "preview.png", payload["revision"])
+    with pytest.raises(ProjectImageUnavailable):
+        read_project_image_content(tmp_path, "preview.txt", payload["revision"])
+
+
+def test_project_image_rejects_extension_mismatch_and_decoded_pixel_bombs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    buffer = io.BytesIO()
+    Image.new("RGB", (10, 10), "white").save(buffer, format="PNG")
+    (tmp_path / "mismatch.jpg").write_bytes(buffer.getvalue())
+    mismatch = read_project_file(tmp_path, "mismatch.jpg")
+    assert mismatch["status"] == "unsupported"
+    assert mismatch["presentation"]["reason"] == "image-signature-extension-mismatch"
+
+    (tmp_path / "large.png").write_bytes(buffer.getvalue())
+    monkeypatch.setattr("swe_mux.project_files.PROJECT_IMAGE_MAX_PIXELS", 50)
+    refused = read_project_file(tmp_path, "large.png")
+    assert refused["status"] == "unsupported"
+    assert refused["presentation"]["reason"] == "image-pixel-limit"
+
+
+def test_project_resource_creation_is_exclusive_and_parent_scoped(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    created_file = create_project_resource(tmp_path, "src", "widget.ts", "file")
+    created_folder = create_project_resource(tmp_path, "src", "components", "directory")
+
+    assert created_file == {
+        "name": "widget.ts",
+        "path": "src/widget.ts",
+        "parent": "src",
+        "kind": "file",
+        "size": 0,
+    }
+    assert (tmp_path / "src" / "widget.ts").read_bytes() == b""
+    assert created_folder == {
+        "name": "components",
+        "path": "src/components",
+        "parent": "src",
+        "kind": "directory",
+        "size": None,
+    }
+    assert (tmp_path / "src" / "components").is_dir()
+
+    with pytest.raises(ProjectResourceExists):
+        create_project_resource(tmp_path, "src", "widget.ts", "file")
+    with pytest.raises(ProjectResourceExists):
+        create_project_resource(tmp_path, "src", "components", "directory")
+    assert (tmp_path / "src" / "widget.ts").read_bytes() == b""
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "",
+        ".",
+        "..",
+        "../escape",
+        "nested/file",
+        "nested\\file",
+        "CON",
+        "con.txt",
+        "CON .txt",
+        "COM¹.txt",
+        "LPT³",
+        "bad.",
+        "bad ",
+        ".git",
+        ".swe-mux",
+        "bad:name",
+        "bad\x00name",
+        "a" * 256,
+    ],
+)
+def test_project_resource_creation_rejects_unsafe_leaf_names(
+    tmp_path: Path, name: str
+) -> None:
+    with pytest.raises(ValueError):
+        create_project_resource(tmp_path, "", name, "file")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_project_resource_creation_requires_a_safe_existing_parent(tmp_path: Path) -> None:
+    (tmp_path / "ordinary.txt").write_text("keep", encoding="utf-8")
+    (tmp_path / ".swe-mux").mkdir()
+
+    with pytest.raises(ValueError):
+        create_project_resource(tmp_path, "missing", "child.txt", "file")
+    with pytest.raises(ValueError):
+        create_project_resource(tmp_path, "ordinary.txt", "child.txt", "file")
+    with pytest.raises(ValueError):
+        create_project_resource(tmp_path, "../outside", "child.txt", "file")
+    with pytest.raises(ValueError):
+        create_project_resource(tmp_path, ".swe-mux", "child.txt", "file")
+    with pytest.raises(ValueError):
+        create_project_resource(tmp_path, "\0", "child.txt", "file")
+    assert (tmp_path / "ordinary.txt").read_text(encoding="utf-8") == "keep"
+    assert not (tmp_path / "missing").exists()

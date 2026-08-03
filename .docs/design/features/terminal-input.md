@@ -89,6 +89,9 @@ work, while a claim that changes owners must use the freshly registered viewport
 - A persistent letterbox is stated in the pane. `inputOwnerNotice` speaks only when this
   pane was refused, so without a standalone notice the case that looks most broken —
   someone else's grid, drawn with no explanation — was the one that said nothing.
+- File/image attachment references are unicast regardless of the pane's broadcast membership.
+  They still travel through xterm's paste/input path so replay bounds and bracketed-paste rules
+  apply; only the broadcast bit is forced off for the synchronous attachment insertion.
 
 ## API surface
 

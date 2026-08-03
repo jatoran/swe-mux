@@ -8,7 +8,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
-import { api, openWebSocket, uploadTerminalImage } from './api'
+import { api, openWebSocket, uploadTerminalAttachment } from './api'
 import type { Session } from './types'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
@@ -26,11 +26,12 @@ import {
   type TerminalCell,
 } from './mobileInput'
 import { isMobileTerminalInput, mobileEnterNeedsPinnedSend, mobileEnterPayload, mobileImeDelta } from './mobileTerminalIme'
-import { clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, pasteNeedsManualBracketing, ResilientClipboardProvider } from './terminalClipboard'
+import { clipboardImage, copyPreparedText, pasteNeedsManualBracketing, ResilientClipboardProvider } from './terminalClipboard'
 import { noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
 import { railPayload, resolveRail, type RailBackend, type RailItem } from './commandRail'
+import { createRailKeyRepeater, isRepeatableRailKey } from './railKeyRepeat'
 import { activatePromptRailItem } from './promptRail'
 import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { currentProfile, loadRailItems } from './deviceSettings'
@@ -52,11 +53,13 @@ import {
 import { pendingInputDecision } from './pendingInput'
 import { pastePayload } from './noteSelection'
 import { deviceIsFocused, PRESENCE_REPORTED_EVENT } from './devicePresence'
+import { attachmentReferenceText, attachmentSafeBroadcast, MAX_ATTACHMENTS_PER_ACTION, type UploadedTerminalAttachment } from './terminalAttachments'
 import { localPreviewUrl } from './previewLinks'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness, type ConnectionPhase } from './liveness'
 import {
   shouldLoadWebgl,
   terminalAttachReadyFrame,
+  terminalCursorOptions,
   type ActiveTerminalRenderer,
   type TerminalRendererPreference,
   type WindowsPtyCompatibility,
@@ -138,7 +141,7 @@ function reportError(message: string) {
   window.dispatchEvent(new CustomEvent('mux:error', { detail: message }))
 }
 
-function acceptsClipboardImages(session: Session) {
+function acceptsTerminalAttachments(session: Session) {
   return session.backend === 'claude' || session.backend === 'codex'
 }
 
@@ -160,7 +163,7 @@ function acceptsClipboardImages(session: Session) {
 function pasteIntoTerminal(term: Terminal, session: Session, text: string) {
   if (pasteNeedsManualBracketing({
     text,
-    agentBackend: acceptsClipboardImages(session),
+    agentBackend: acceptsTerminalAttachments(session),
     bracketedPasteMode: term.modes.bracketedPasteMode,
   })) {
     // term.input keeps this on the normal onData path, so broadcast membership and
@@ -175,30 +178,15 @@ function mobileClipboardFallback(): boolean {
   return window.matchMedia('(max-width: 760px), (pointer: coarse)').matches
 }
 
-async function insertTerminalImage(term: Terminal, session: Session, blob: Blob) {
-  if (!acceptsClipboardImages(session)) throw new Error('Images can be attached only to Claude or Codex sessions.')
-  if (!isTerminalImage(blob)) throw new Error('Supported image types are PNG, JPEG, WebP, and GIF.')
-  if (session.backend === 'codex' && !term.modes.bracketedPasteMode) {
-    throw new Error('Codex is not ready for an image yet. Wait for its chat prompt and try again.')
-  }
-  const form = new FormData()
-  form.append('file', blob, `clipboard.${blob.type.split('/')[1] || 'png'}`)
-  const result = await uploadTerminalImage<{reference:string}>(`/api/sessions/${session.id}/media`, form)
-  // Claude and Codex both recognize one isolated bracketed paste containing a readable
-  // image path. Codex turns it into LocalImage rather than leaving the path as draft text.
-  term.paste(result.reference)
-  term.focus()
-}
-
-async function pasteBrowserClipboard(term: Terminal, session: Session) {
-  if (acceptsClipboardImages(session) && typeof navigator.clipboard.read === 'function') {
+async function pasteBrowserClipboard(term: Terminal, session: Session, attach: (files: Blob[]) => Promise<void>): Promise<'attachment'|'text'> {
+  if (acceptsTerminalAttachments(session) && typeof navigator.clipboard.read === 'function') {
     try {
       const items = await navigator.clipboard.read()
       const item = items.find(candidate => candidate.types.some(type => type.startsWith('image/')))
       const mediaType = item?.types.find(type => type.startsWith('image/'))
       if (item && mediaType) {
-        await insertTerminalImage(term, session, await item.getType(mediaType))
-        return
+        await attach([await item.getType(mediaType)])
+        return 'attachment'
       }
     } catch {
       // Some browsers block the richer Clipboard API while still allowing text reads.
@@ -206,6 +194,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session) {
   }
   pasteIntoTerminal(term, session, await navigator.clipboard.readText())
   term.focus()
+  return 'text'
 }
 
 function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, onConfigureRail, onBranch }: Props) {
@@ -230,7 +219,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const [lastReply,setLastReply]=useState('')
   const [clipboardStatus,setClipboardStatus]=useState('')
   const [manualPaste,setManualPaste]=useState(false)
-  const [imageDropActive,setImageDropActive]=useState(false)
+  const [fileDropActive,setFileDropActive]=useState(false)
+  const [attachmentBusy,setAttachmentBusy]=useState(false)
   // True while the viewport sits above the newest line. Mirrored in a ref so the
   // per-render tail check can bail without touching component state.
   const [offTail,setOffTail]=useState(false)
@@ -284,6 +274,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setSelectionText('')
     setClipboardStatus('')
     setManualPaste(false)
+    setFileDropActive(false)
+    setAttachmentBusy(false)
     setFindOpen(false)
     setFindQuery('')
     setFindResult('')
@@ -300,8 +292,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   },[session.id])
   const manualClipboardRef=useRef<HTMLTextAreaElement>(null)
   const manualPasteRef=useRef<HTMLTextAreaElement>(null)
+  const attachmentInputRef=useRef<HTMLInputElement>(null)
   const mobileLiveInputRef=useRef<HTMLTextAreaElement>(null)
   const focusTerminalInputRef=useRef<()=>void>(()=>{})
+  const pasteAttachmentRef=useRef<(text:string,nativeImage:boolean)=>void>(()=>{})
+  const attachFilesRef=useRef<(files:Blob[])=>Promise<void>>(async()=>{})
+  const attachmentBusyRef=useRef(false)
+  const attachmentOperationRef=useRef(0)
+  const activeSessionIdRef=useRef(session.id)
+  activeSessionIdRef.current=session.id
+  useEffect(()=>{
+    attachmentOperationRef.current+=1
+    attachmentBusyRef.current=false
+  },[session.id])
   // Read/select mode: when on (touch only), tapping the terminal no longer raises the soft
   // keyboard, so you can select, scroll, and paste without it. The ref is what the pointer
   // and focus closures created in the mount effect read at call time.
@@ -347,6 +350,66 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setClipboardStatus(message)
     if(clipboardStatusTimerRef.current!==null)window.clearTimeout(clipboardStatusTimerRef.current)
     clipboardStatusTimerRef.current=window.setTimeout(()=>setClipboardStatus(''),1800)
+  }
+
+  attachFilesRef.current=async(files:Blob[])=>{
+    if(!acceptsTerminalAttachments(session)){
+      reportError('Attach files to an open Claude or Codex session.')
+      return
+    }
+    if(['exited','crashed'].includes(session.state)){
+      reportError('Files cannot be attached to an ended session.')
+      return
+    }
+    if(session.backend==='codex'&&!termRef.current?.modes.bracketedPasteMode){
+      reportError('Codex is not ready for attachments yet. Wait for its chat prompt and try again.')
+      return
+    }
+    if(!files.length)return
+    if(files.length>MAX_ATTACHMENTS_PER_ACTION){
+      reportError(`Attach at most ${MAX_ATTACHMENTS_PER_ACTION} files at once.`)
+      return
+    }
+    if(attachmentBusyRef.current){
+      reportError('Another attachment upload is still running.')
+      return
+    }
+    const operation=++attachmentOperationRef.current
+    const startedSession=session.id
+    attachmentBusyRef.current=true
+    setAttachmentBusy(true)
+    const uploaded:UploadedTerminalAttachment[]=[]
+    const failures:string[]=[]
+    try{
+      for(let index=0;index<files.length;index+=1){
+        const file=files[index] as File
+        const subtype=file.type.split('/',2)[1]||'bin'
+        const filename=file.name?.trim()||`clipboard.${subtype}`
+        showClipboardStatus(`Attaching ${index+1}/${files.length}…`)
+        const form=new FormData()
+        form.append('file',file,filename)
+        try{
+          uploaded.push(await uploadTerminalAttachment<UploadedTerminalAttachment>(`/api/sessions/${startedSession}/attachments`,form))
+        }catch(cause){
+          failures.push(cause instanceof Error?cause.message:`${filename} failed`)
+        }
+        if(activeSessionIdRef.current!==startedSession||attachmentOperationRef.current!==operation)return
+      }
+      const pathReferences:string[]=[]
+      for(const item of uploaded){
+        if(item.kind==='image')pasteAttachmentRef.current(item.reference,true)
+        else pathReferences.push(item.path)
+      }
+      const pathText=attachmentReferenceText(pathReferences)
+      if(pathText)pasteAttachmentRef.current(pathText,false)
+      if(uploaded.length)showClipboardStatus(`${uploaded.length} file${uploaded.length===1?'':'s'} attached`)
+      if(failures.length)reportError(`${failures.length} attachment${failures.length===1?'':'s'} failed: ${failures.at(-1)}`)
+    }finally{
+      if(attachmentOperationRef.current===operation){
+        attachmentBusyRef.current=false
+        setAttachmentBusy(false)
+      }
+    }
   }
 
   useEffect(() => () => {
@@ -410,8 +473,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (startupOrigin !== undefined) onStartupTiming?.(milestone, performance.now() - startupOrigin)
     }
     reportStartup('pane_mounted')
+    const mobileTerminalInput = isMobileTerminalInput()
     const term = new Terminal({
       cursorBlink: true, cursorStyle: 'bar', fontFamily: '"Cascadia Mono", Consolas, monospace',
+      ...terminalCursorOptions(mobileTerminalInput),
       fontSize: baseFontRef.current, fontWeight: '600', fontWeightBold: '600', lineHeight: 1.2, scrollback, allowProposedApi: true,
       screenReaderMode: false,
       // Passed at construction, not assigned later: below ConPTY build 21376 this
@@ -458,7 +523,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     termRef.current = term
     searchRef.current = search
     term.open(host.current)
-    const mobileLiveInput=isMobileTerminalInput()?mobileLiveInputRef.current:null
+    const mobileLiveInput=mobileTerminalInput?mobileLiveInputRef.current:null
     // The live-input textarea is uncontrolled, and switching stack tabs re-runs this
     // effect against the *same* DOM node (the pane is rendered unkeyed as the stack's
     // only active child, so Preact reuses the instance). The IME delta baseline below
@@ -466,15 +531,35 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // full on the next keystroke — duplicating the composer contents, or leaking the
     // previous tab's text into this session. Element and baseline must start in sync.
     if(mobileLiveInput)mobileLiveInput.value=''
+    let mobileCursorInitialized=false
     const focusTerminalInput=()=>{
       if(keyboardOffRef.current)return
       if(mobileLiveInput){
+        // xterm does not render any cursor until its own textarea has received focus
+        // once. Claude normally initializes it by entering the alternate screen, but
+        // Codex stays on the normal screen. Briefly focus xterm on the first user
+        // focus, then hand focus to the native IME bridge that actually receives input.
+        if(!mobileCursorInitialized){term.focus();mobileCursorInitialized=true}
         mobileLiveInput.focus({preventScroll:true})
         const end=mobileLiveInput.value.length
         mobileLiveInput.setSelectionRange(end,end)
       }else term.focus()
     }
     focusTerminalInputRef.current=focusTerminalInput
+    // Attachment paths are always unicast. xterm fires onData synchronously from
+    // paste/input, so this depth marker reaches the ordinary input path without
+    // bypassing its replay guard or bracketed-paste handling.
+    let attachmentPasteDepth=0
+    pasteAttachmentRef.current=(text,nativeImage)=>{
+      attachmentPasteDepth+=1
+      try{
+        if(nativeImage)term.paste(text)
+        else pasteIntoTerminal(term,session,text)
+      }finally{
+        attachmentPasteDepth-=1
+      }
+      focusTerminalInput()
+    }
     const onTheme = (event: Event) => {
       const name = (event as CustomEvent<Exclude<ThemeName,'system'>>).detail
       term.options.theme = terminalThemes[name]
@@ -1177,6 +1262,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if (!replaying || replayAllowsTerminalResponses) sendInput(data, true, false)
         return
       }
+      const shouldBroadcast=attachmentSafeBroadcast(broadcastRef.current,attachmentPasteDepth)
       if (replaying) {
         if (pendingInputDecision(pendingUserInputLength, data.length) === 'overflow') {
           // Losing input without saying so is what made this look like the terminal
@@ -1185,10 +1271,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           return
         }
         pendingUserInputLength += data.length
-        pendingUserInput.push({ data, broadcast: broadcastRef.current })
+        pendingUserInput.push({ data, broadcast: shouldBroadcast })
         return
       }
-      sendInput(data, false, broadcastRef.current)
+      sendInput(data, false, shouldBroadcast)
     })
     // View keys skip xterm's `input()` so they are never broadcast, and are dropped rather
     // than queued while replaying: the buffer is still being written, and a viewport gesture
@@ -1256,9 +1342,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const mobilePaste=(event:ClipboardEvent)=>{
       if(!mobileLiveInput||!event.clipboardData)return
       const image=clipboardImage(Array.from(event.clipboardData.items))
-      if(image&&acceptsClipboardImages(session)){
+      if(image&&['claude','codex'].includes(backendRef.current)){
         event.preventDefault();resetMobileInput()
-        void insertTerminalImage(term,session,image).catch(cause=>reportError(cause instanceof Error?cause.message:'Clipboard image paste failed.'))
+        void attachFilesRef.current([image])
         return
       }
       const text=event.clipboardData.getData('text/plain')
@@ -1430,53 +1516,48 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       event.preventDefault()
     }
     const pasteEvent = (event: ClipboardEvent) => {
-      if (!acceptsClipboardImages(session) || !event.clipboardData) return
+      if (!['claude','codex'].includes(backendRef.current) || !event.clipboardData) return
+      const transferred=Array.from(event.clipboardData.files)
       const image = clipboardImage(Array.from(event.clipboardData.items))
-      if (!image) return
+      const files:Blob[]=transferred.length?transferred:image?[image]:[]
+      if (!files.length) return
       event.preventDefault()
       event.stopPropagation()
-      void insertTerminalImage(term, session, image).catch(cause => {
-        reportError(cause instanceof Error ? cause.message : 'Clipboard image paste failed.')
-      })
+      void attachFilesRef.current(files)
     }
     const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types || []).includes('Files')
     const dragEnter = (event: DragEvent) => {
       if (!hasFiles(event)) return
       event.preventDefault()
-      if (acceptsClipboardImages(session) && event.dataTransfer && hasTerminalImage(Array.from(event.dataTransfer.items))) {
-        setImageDropActive(true)
-      }
+      if (['claude','codex'].includes(backendRef.current) && !['exited','crashed'].includes(stateRef.current)) setFileDropActive(true)
     }
     const dragOver = (event: DragEvent) => {
       if (!hasFiles(event)) return
       event.preventDefault()
       if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = acceptsClipboardImages(session) && hasTerminalImage(Array.from(event.dataTransfer.items)) ? 'copy' : 'none'
+        event.dataTransfer.dropEffect = ['claude','codex'].includes(backendRef.current) && !['exited','crashed'].includes(stateRef.current) ? 'copy' : 'none'
       }
     }
     const dragLeave = (event: DragEvent) => {
       const next = event.relatedTarget
       if (next instanceof Node && host.current?.contains(next)) return
-      setImageDropActive(false)
+      setFileDropActive(false)
     }
     const drop = (event: DragEvent) => {
       if (!hasFiles(event)) return
       event.preventDefault()
       event.stopPropagation()
-      setImageDropActive(false)
-      if (!acceptsClipboardImages(session)) {
-        reportError('Drop images into an open Claude or Codex session.')
+      setFileDropActive(false)
+      if (!['claude','codex'].includes(backendRef.current)) {
+        reportError('Drop files into an open Claude or Codex session.')
         return
       }
-      const transfer = event.dataTransfer
-      const image = transfer && (clipboardImage(Array.from(transfer.items)) || Array.from(transfer.files).find(isTerminalImage))
-      if (!image) {
-        reportError('Supported image types are PNG, JPEG, WebP, and GIF.')
+      const files=Array.from(event.dataTransfer?.files||[])
+      if (!files.length) {
+        reportError('No readable files were dropped.')
         return
       }
-      void insertTerminalImage(term, session, image).catch(cause => {
-        reportError(cause instanceof Error ? cause.message : 'Image drop failed.')
-      })
+      void attachFilesRef.current(files)
     }
     host.current.addEventListener('pointerdown', pointerClaim)
     host.current.addEventListener('pointermove', pointerMove)
@@ -1521,7 +1602,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput])
 
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so
@@ -1550,9 +1631,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const term = termRef.current
     if (term) {
       try {
-        await pasteBrowserClipboard(term, session)
+        const pasted=await pasteBrowserClipboard(term, session, files=>attachFilesRef.current(files))
         focusTerminalInputRef.current()
-        showClipboardStatus('Pasted')
+        if(pasted==='text')showClipboardStatus('Pasted')
       } catch {
         setManualPaste(true)
         requestAnimationFrame(()=>manualPasteRef.current?.focus())
@@ -1644,6 +1725,27 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(sequence===APP_TAIL_KEY&&appOffTailRef.current){appOffTailRef.current=false;setAppOffTail(false)}
     if(!keyboardOffRef.current)focusTerminalInputRef.current()
   }
+  const railKeySendRef=useRef(sendKey)
+  railKeySendRef.current=sendKey
+  const railKeyRepeaterRef=useRef<ReturnType<typeof createRailKeyRepeater>|null>(null)
+  if(!railKeyRepeaterRef.current){
+    railKeyRepeaterRef.current=createRailKeyRepeater(
+      sequence=>railKeySendRef.current(sequence),
+      (callback,delayMs)=>window.setTimeout(callback,delayMs),
+      timer=>window.clearTimeout(timer),
+    )
+  }
+  const railKeyRepeater=railKeyRepeaterRef.current
+  useEffect(()=>{
+    const cancel=()=>railKeyRepeater.cancel()
+    window.addEventListener('blur',cancel)
+    document.addEventListener('visibilitychange',cancel)
+    return()=>{
+      window.removeEventListener('blur',cancel)
+      document.removeEventListener('visibilitychange',cancel)
+      cancel()
+    }
+  },[session.id])
   // Jump-to-latest, for both viewports rather than only xterm's (see `appOwnsTail`). Scrolling
   // the terminal alone is what left this dead on a phone in a Claude session while the rail's
   // `^End` — which happens to send the same key on its way past — kept working.
@@ -1760,7 +1862,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       case 'kbdToggle':return <button key={item.id} class={`term-key kbd-toggle ${keyboardOff?'active':''}`} aria-pressed={keyboardOff} title={keyboardOff?'Read mode: tap the terminal to select/scroll without the keyboard. Click to type again.':'Hide the on-screen keyboard so you can select, scroll, and paste'} onClick={toggleKeyboard}>⌨</button>
     }
-    if(item.type==='key')return <button key={item.id} class={item.className||'term-key'} title={item.title||item.label} onClick={()=>sendKey(item.bytes||'')}>{item.label}</button>
+    if(item.type==='key'){
+      const sequence=item.bytes||''
+      if(isRepeatableRailKey(item.id))return <button key={item.id} class={`${item.className||'term-key'} rail-key-repeat`} title={`${item.title||item.label} (hold to repeat)`} onPointerDown={event=>{
+        if(!event.isPrimary||event.button!==0)return
+        event.preventDefault()
+        event.currentTarget.setPointerCapture?.(event.pointerId)
+        railKeyRepeater.press(event.pointerId,sequence)
+      }} onPointerUp={event=>railKeyRepeater.release(event.pointerId)} onPointerCancel={event=>railKeyRepeater.release(event.pointerId)} onLostPointerCapture={event=>railKeyRepeater.release(event.pointerId)} onContextMenu={event=>event.preventDefault()} onClick={event=>{if(event.detail===0)sendKey(sequence)}}>{item.label}</button>
+      return <button key={item.id} class={item.className||'term-key'} title={item.title||item.label} onClick={()=>sendKey(sequence)}>{item.label}</button>
+    }
     if(item.type==='action')return null
     // Prompt templates resolve over the network at click time (see promptRail.ts), so
     // they cannot go through the synchronous payload path below.
@@ -1770,7 +1881,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   }
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
-  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-scroll" onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}>Send</button>}</div>{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={jumpToLatest}>↓</button>}{imageDropActive&&<div class="terminal-image-drop" role="status">Drop image to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-scroll" onWheel={event=>{const rail=event.currentTarget;if(event.deltaY&&rail.scrollWidth>rail.clientWidth)rail.scrollLeft+=event.deltaY}}>{acceptsTerminalAttachments(session)&&<button disabled={attachmentBusy||['exited','crashed'].includes(session.state)} title="Attach files to this chat without sending" onClick={()=>attachmentInputRef.current?.click()}>{attachmentBusy?'Attaching…':'Attach'}</button>}{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}>Send</button>}</div>{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }
@@ -1790,7 +1901,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     :letterboxActive&&letterboxSettled&&<div class="terminal-input-owner letterbox-notice" role="status"><span>Showing {letterboxSize} · sized elsewhere</span><button title="Size this session to this pane" onClick={()=>{resizeToPaneRef.current();focusTerminalInputRef.current()}}>Resize</button></div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
     const data=event.clipboardData
     const image=data&&clipboardImage(Array.from(data.items))
-    if(image){event.preventDefault();void insertTerminalImage(termRef.current!,session,image).then(()=>{setManualPaste(false);showClipboardStatus('Pasted')}).catch(cause=>reportError(cause instanceof Error?cause.message:'Clipboard image paste failed.'));return}
+    if(image){event.preventDefault();void attachFilesRef.current([image]).then(()=>setManualPaste(false));return}
     const text=data?.getData('text/plain')||''
     if(text){event.preventDefault();if(termRef.current)pasteIntoTerminal(termRef.current,session,text);focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}
   }} onInput={event=>{const text=event.currentTarget.value;if(!text)return;if(termRef.current)pasteIntoTerminal(termRef.current,session,text);event.currentTarget.value='';focusTerminalInputRef.current();setManualPaste(false);showClipboardStatus('Pasted')}}/><button aria-label="Cancel paste" onClick={()=>{setManualPaste(false);focusTerminalInputRef.current()}}>×</button></div>}{preparedClipboard&&<div class="prepared-clipboard" role="status"><span>Clipboard write was blocked. Copy the prepared text once.</span><button onClick={()=>void retryPreparedCopy()}>Copy</button><button aria-label="Dismiss prepared clipboard" onClick={()=>{setPreparedClipboard('');setManualClipboard(false)}}>×</button><textarea ref={manualClipboardRef} class={manualClipboard?'manual':''} readOnly value={preparedClipboard} aria-label="Prepared terminal clipboard text" onFocus={event=>event.currentTarget.select()} /></div>}{menu && <div ref={el=>fitMenuInViewport(el)} class="terminal-menu" role="menu" style={{ left: clampContextMenuLeft(menu.x, innerWidth), top: Math.min(menu.y, innerHeight - 230) }}>

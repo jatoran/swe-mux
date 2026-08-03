@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import io
 import json
 import os
 import re
+import stat
 import time
 import tomllib
 import uuid
@@ -12,6 +14,8 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+
+from PIL import Image, UnidentifiedImageError
 
 from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from .git_projects import ProjectIdentity, rebase_identity, resolve_project
@@ -39,9 +43,179 @@ FORBIDDEN_PROJECT_FIELDS = {
 NOTE_KINDS = {"projects", "sessions"}
 _SAFE_NOTE_ID = re.compile(r"[A-Za-z0-9._-]{1,120}\Z")
 
+PROJECT_TEXT_FILE_MAX_BYTES = 2 * 1024 * 1024
+PROJECT_IMAGE_FILE_MAX_BYTES = 16 * 1024 * 1024
+PROJECT_IMAGE_MAX_DIMENSION = 16_384
+PROJECT_IMAGE_MAX_PIXELS = 25_000_000
+PROJECT_IMAGE_MAX_FRAMES = 200
+PROJECT_IMAGE_MAX_TOTAL_PIXELS = 100_000_000
+
+_IMAGE_FORMATS: dict[str, tuple[str, frozenset[str]]] = {
+    "PNG": ("image/png", frozenset({".png"})),
+    "JPEG": ("image/jpeg", frozenset({".jpg", ".jpeg", ".jpe"})),
+    "GIF": ("image/gif", frozenset({".gif"})),
+    "WEBP": ("image/webp", frozenset({".webp"})),
+}
+_IMAGE_EXTENSIONS = frozenset(
+    extension for _mime, extensions in _IMAGE_FORMATS.values() for extension in extensions
+)
+_DELIMITED_EXTENSIONS = {".csv": ",", ".tsv": "\t"}
+_RESERVED_PROJECT_RESOURCE_NAMES = frozenset({".git", ".swe-mux"})
+_WINDOWS_INVALID_RESOURCE_CHARS = frozenset('<>:"/\\|?*')
+_WINDOWS_RESERVED_RESOURCE_STEMS = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"COM{number}" for number in range(1, 10)}
+    | {f"LPT{number}" for number in range(1, 10)}
+    | {f"COM{number}" for number in "¹²³"}
+    | {f"LPT{number}" for number in "¹²³"}
+)
+
+
+class ProjectFileRevisionConflict(ValueError):
+    """The caller inspected a different file revision than the one now on disk."""
+
+
+class ProjectImageUnavailable(ValueError):
+    """A Project file is not an allowlisted, bounded image response."""
+
+
+class ProjectResourceExists(ValueError):
+    """An exclusive Project file/folder create collided with an existing entry."""
+
 
 def revision(data: bytes | None) -> str:
     return hashlib.sha256(data or b"").hexdigest()[:24] if data is not None else "missing"
+
+
+def _unread_revision() -> str:
+    # Oversized files are deliberately never hashed: a revision calculation must not turn a
+    # metadata-only refusal into a complete read of an arbitrarily large file.
+    return "unavailable"
+
+
+def _read_regular_file_bounded(target: Path, limit: int) -> tuple[bytes | None, int]:
+    """Read one regular file without ever crossing ``limit`` bytes.
+
+    ``Path.read_bytes`` checks no bound while reading. Inspecting a sparse or multi-gigabyte
+    file through the browser must remain a cheap refusal, including when the file grows between
+    path resolution and open.
+    """
+
+    try:
+        with target.open("rb") as handle:
+            file_stat = os.fstat(handle.fileno())
+            if not stat.S_ISREG(file_stat.st_mode):
+                raise ValueError("project file is not a regular file")
+            if file_stat.st_size > limit:
+                return None, file_stat.st_size
+            data = handle.read(limit + 1)
+    except OSError as exc:
+        raise ValueError(f"unable to read project file: {exc}") from exc
+    if len(data) > limit:
+        return None, len(data)
+    return data, len(data)
+
+
+def _unsupported_presentation(reason: str) -> dict[str, Any]:
+    return {"kind": "unsupported", "reason": reason}
+
+
+def _inspect_image_bytes(data: bytes, suffix: str) -> dict[str, Any]:
+    """Return bounded metadata for an explicitly image-named file.
+
+    Pillow is only asked to parse the narrow extension allowlist. Its decoded format must agree
+    with the extension, and both per-frame and cumulative decoded sizes are capped before any
+    browser receives the bytes.
+    """
+
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            image_format = str(image.format or "").upper()
+            allowed = _IMAGE_FORMATS.get(image_format)
+            if allowed is None:
+                return _unsupported_presentation("image-format-not-allowed")
+            mime, extensions = allowed
+            if suffix not in extensions:
+                return _unsupported_presentation("image-signature-extension-mismatch")
+            width, height = image.size
+            frames = int(getattr(image, "n_frames", 1) or 1)
+            if width <= 0 or height <= 0:
+                return _unsupported_presentation("invalid-image-dimensions")
+            if width > PROJECT_IMAGE_MAX_DIMENSION or height > PROJECT_IMAGE_MAX_DIMENSION:
+                return _unsupported_presentation("image-dimension-limit")
+            if width * height > PROJECT_IMAGE_MAX_PIXELS:
+                return _unsupported_presentation("image-pixel-limit")
+            if frames > PROJECT_IMAGE_MAX_FRAMES:
+                return _unsupported_presentation("image-frame-limit")
+            total_pixels = 0
+            for frame_index in range(frames):
+                image.seek(frame_index)
+                frame_width, frame_height = image.size
+                if frame_width <= 0 or frame_height <= 0:
+                    return _unsupported_presentation("invalid-image-dimensions")
+                if (
+                    frame_width > PROJECT_IMAGE_MAX_DIMENSION
+                    or frame_height > PROJECT_IMAGE_MAX_DIMENSION
+                    or frame_width * frame_height > PROJECT_IMAGE_MAX_PIXELS
+                ):
+                    return _unsupported_presentation("image-frame-pixel-limit")
+                total_pixels += frame_width * frame_height
+                if total_pixels > PROJECT_IMAGE_MAX_TOTAL_PIXELS:
+                    return _unsupported_presentation("image-animation-pixel-limit")
+        # Reopen for structural verification. ``verify`` invalidates its image object and is
+        # therefore deliberately separate from the frame metadata walk.
+        with Image.open(io.BytesIO(data)) as image:
+            image.verify()
+    except (
+        EOFError,
+        OSError,
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        SyntaxError,
+        ValueError,
+    ):
+        return _unsupported_presentation("invalid-image")
+    return {
+        "kind": "image",
+        "mime": mime,
+        "width": width,
+        "height": height,
+        "frames": frames,
+    }
+
+
+def _read_project_image(
+    root: str | Path, relative_path: str
+) -> tuple[dict[str, Any], bytes | None]:
+    target = project_path(root, relative_path)
+    suffix = Path(relative_path.replace("\\", "/")).suffix.casefold()
+    data, size = _read_regular_file_bounded(target, PROJECT_IMAGE_FILE_MAX_BYTES)
+    if data is None:
+        return (
+            {
+                "path": relative_path,
+                "revision": _unread_revision(),
+                "status": "too-large",
+                "size": size,
+                "presentation": {
+                    "kind": "image",
+                    "reason": "encoded-size-limit",
+                },
+            },
+            None,
+        )
+    presentation = _inspect_image_bytes(data, suffix)
+    status = "viewable" if presentation["kind"] == "image" else "unsupported"
+    return (
+        {
+            "path": target.relative_to(Path(root).resolve()).as_posix(),
+            "revision": revision(data),
+            "status": status,
+            "size": size,
+            "presentation": presentation,
+        },
+        data if status == "viewable" else None,
+    )
 
 
 def safe_note_filename(identity: str) -> str:
@@ -173,6 +347,92 @@ def project_path(root: str | Path, relative_path: str = "") -> Path:
     if target != project_root and not target.is_relative_to(project_root):
         raise ValueError("project file path resolves outside the project root")
     return target
+
+
+def _validate_project_resource_name(name: str) -> None:
+    """Validate one Windows-safe leaf without normalizing what the user typed."""
+
+    if not name:
+        raise ValueError("project resource name must not be empty")
+    if name in {".", ".."}:
+        raise ValueError("project resource name must be a single file or folder name")
+    if name.casefold() in _RESERVED_PROJECT_RESOURCE_NAMES:
+        raise ValueError("project control directory names are reserved")
+    if name.endswith((" ", ".")):
+        raise ValueError("project resource names may not end with a space or dot")
+    if any(
+        character in _WINDOWS_INVALID_RESOURCE_CHARS
+        or ord(character) < 32
+        or ord(character) == 127
+        for character in name
+    ):
+        raise ValueError("project resource name contains a Windows-invalid character")
+    try:
+        utf16_units = len(name.encode("utf-16-le")) // 2
+    except UnicodeEncodeError as exc:
+        raise ValueError("project resource name contains invalid Unicode") from exc
+    if utf16_units > 255:
+        raise ValueError("project resource name exceeds 255 UTF-16 code units")
+    device_stem = name.split(".", 1)[0].rstrip(" ").upper()
+    if device_stem in _WINDOWS_RESERVED_RESOURCE_STEMS:
+        raise ValueError("project resource name is reserved by Windows")
+
+
+def create_project_resource(
+    root: str | Path,
+    parent: str,
+    name: str,
+    kind: str,
+) -> dict[str, Any]:
+    """Create exactly one empty file or directory, exclusively and inside a Project."""
+
+    if kind not in {"file", "directory"}:
+        raise ValueError("project resource kind must be file or directory")
+    _validate_project_resource_name(name)
+    parent_parts = Path(parent.replace("\\", "/")).parts
+    if any(part.casefold() in _RESERVED_PROJECT_RESOURCE_NAMES for part in parent_parts):
+        raise ValueError("project control directories cannot be modified")
+
+    project_root = Path(root).resolve()
+    try:
+        parent_path = project_path(project_root, parent)
+        parent_is_directory = parent_path.is_dir()
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("project resource parent is invalid or unavailable") from exc
+    if not parent_is_directory:
+        raise ValueError("project resource parent must be an existing folder")
+    # The parent is already resolved and contained, while the validated leaf cannot carry a
+    # separator. Keeping the final component unresolved also makes an existing symlink a plain
+    # exclusive-create collision instead of following it outside the Project.
+    target = parent_path / name
+    try:
+        if kind == "file":
+            with target.open("x", encoding="utf-8", newline="\n"):
+                pass
+        else:
+            target.mkdir()
+    except FileExistsError as exc:
+        raise ProjectResourceExists(f"project resource already exists: {name}") from exc
+    except FileNotFoundError as exc:
+        raise ValueError("project resource parent no longer exists") from exc
+    except PermissionError as exc:
+        raise ValueError(f"project resource could not be created: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"project resource could not be created: {exc}") from exc
+
+    requested_parent = Path(parent.replace("\\", "/")).as_posix()
+    if requested_parent == ".":
+        requested_parent = ""
+    requested_path = (Path(requested_parent) / name).as_posix()
+    return {
+        "name": name,
+        # Preserve the browser's logical in-Project path when a safe symlink aliases another
+        # folder inside the root. The resolved parent above remains the mutation authority.
+        "path": requested_path,
+        "parent": requested_parent,
+        "kind": kind,
+        "size": 0 if kind == "file" else None,
+    }
 
 
 def ignored_project_path(relative_path: str | Path, patterns: Sequence[str]) -> bool:
@@ -381,22 +641,32 @@ def search_project_files(
 
 def read_project_file(root: str | Path, relative_path: str) -> dict[str, Any]:
     target = project_path(root, relative_path)
-    if not target.is_file():
-        raise ValueError("project file does not exist")
-    data = target.read_bytes()
-    if len(data) > 2 * 1024 * 1024:
+    suffix = Path(relative_path.replace("\\", "/")).suffix.casefold()
+    if suffix in _IMAGE_EXTENSIONS:
+        payload, _data = _read_project_image(root, relative_path)
+        return payload
+    data, size = _read_regular_file_bounded(target, PROJECT_TEXT_FILE_MAX_BYTES)
+    presentation: dict[str, Any]
+    delimiter = _DELIMITED_EXTENSIONS.get(suffix)
+    if delimiter is not None:
+        presentation = {"kind": "delimited", "delimiter": delimiter}
+    else:
+        presentation = {"kind": "text"}
+    if data is None:
         return {
             "path": relative_path,
-            "revision": revision(data),
+            "revision": _unread_revision(),
             "status": "too-large",
-            "size": len(data),
+            "size": size,
+            "presentation": presentation,
         }
     if b"\x00" in data:
         return {
             "path": relative_path,
             "revision": revision(data),
             "status": "binary",
-            "size": len(data),
+            "size": size,
+            "presentation": _unsupported_presentation("binary-content"),
         }
     try:
         text = data.decode("utf-8")
@@ -405,27 +675,49 @@ def read_project_file(root: str | Path, relative_path: str) -> dict[str, Any]:
             "path": relative_path,
             "revision": revision(data),
             "status": "binary",
-            "size": len(data),
+            "size": size,
+            "presentation": _unsupported_presentation("not-utf-8"),
         }
     return {
         "path": target.relative_to(Path(root).resolve()).as_posix(),
         "revision": revision(data),
         "status": "ready" if os.access(target, os.W_OK) else "read-only",
-        "size": len(data),
+        "size": size,
         "text": text,
+        "presentation": presentation,
     }
+
+
+def read_project_image_content(
+    root: str | Path, relative_path: str, expected_revision: str
+) -> tuple[bytes, dict[str, Any]]:
+    if not expected_revision:
+        raise ValueError("image content requires a file revision")
+    suffix = Path(relative_path.replace("\\", "/")).suffix.casefold()
+    if suffix not in _IMAGE_EXTENSIONS:
+        raise ProjectImageUnavailable("project file is not an allowlisted image type")
+    payload, data = _read_project_image(root, relative_path)
+    if payload["revision"] != expected_revision:
+        raise ProjectFileRevisionConflict("project file changed since it was inspected")
+    if payload["status"] != "viewable" or data is None:
+        reason = str(payload.get("presentation", {}).get("reason") or payload["status"])
+        raise ProjectImageUnavailable(f"project image is unavailable: {reason}")
+    return data, payload
 
 
 def write_project_file(
     root: str | Path, relative_path: str, text: str, expected_revision: str
 ) -> dict[str, Any]:
+    suffix = Path(relative_path.replace("\\", "/")).suffix.casefold()
+    if suffix in _IMAGE_EXTENSIONS:
+        raise ValueError("image files are read-only")
     data = text.encode("utf-8")
-    if len(data) > 2 * 1024 * 1024:
+    if len(data) > PROJECT_TEXT_FILE_MAX_BYTES:
         raise ValueError("project file exceeds the 2 MiB editor limit")
     target = project_path(root, relative_path)
-    if not target.is_file():
-        raise ValueError("project file does not exist")
-    current = target.read_bytes()
+    current, _size = _read_regular_file_bounded(target, PROJECT_TEXT_FILE_MAX_BYTES)
+    if current is None:
+        raise ValueError("existing project file exceeds the 2 MiB editor limit")
     if revision(current) != expected_revision:
         raise ValueError("project file changed externally; reload before saving")
     _atomic_write(target, data)

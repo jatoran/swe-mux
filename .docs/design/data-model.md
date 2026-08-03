@@ -108,7 +108,8 @@
   delivering twice). Deliberately carries no prompt text; bodies live in `queue_messages`
   only.
 - `queue_auto_policy` / `queue_auto_counters` (Phase 5, `features/auto-delivery.md`):
-  runtime auto-delivery state, deliberately not config — the per-session opt-in (bound
+  runtime auto-delivery state, deliberately not config — the default-on per-conversation grant
+  or override (bound
   `agent_run_id`, `expires_at`, `max_sends`/`sends_used`, `accept_agent_messages`,
   `disabled_reason`), one reserved `*` row for the emergency pause, and the persisted
   proving-period counters (`auto_sent`, `auto_refused`, `auto_failed`, `unsafe_reported`,
@@ -156,6 +157,11 @@
   the argv bound, gitignored via a generated `.gitignore` and pruned after 14 days — staged
   *inside* the workspace so both agent CLIs can read them without leaving it. See
   `features/prompt-queue.md`.
+- `<workspace>/.swe-mux/attachments/<safe-session-id>/<uuid>-<safe-name>`: user-selected files
+  copied into the registered Project or the session's explicitly validated Git worktree. The
+  generated `attachments/.gitignore` excludes all contents from Git. These files are persistent,
+  bounded per upload/session, and are not removed with the live session. See
+  `features/project-resources.md`.
 - `<project>/.swe-mux/notes/project.md`: the Project's one canonical note, seeded at creation
   with a Project-named heading only when the file is absent.
 - `<project>/.swe-mux/notes/sessions/<safe-session-id>.md`: lazily initialized notes owned by
@@ -194,6 +200,8 @@ those long after the operational trail that produced them. Prompt-queue history
 (terminal-state messages and their delivery audit) ages out on
 `prompt_queue_retention_days`; pending queue items never age out. Staged new-session seed
 files (`.swe-mux/seeds/`) are pruned opportunistically after 14 days.
+Session attachments are intentionally outside automated retention: they are workspace files the
+user explicitly supplied, so session removal or a daemon sweep must not silently delete them.
 
 Clipboard history is the one store that holds arbitrary user text verbatim, so it is the one
 store that defaults to keeping nothing durable: memory-only unless persistence is opted into,

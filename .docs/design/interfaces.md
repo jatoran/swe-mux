@@ -190,8 +190,10 @@ GET      /projects/{project_id}/session-notes/{note_id}
 POST     /projects/{project_id}/session-notes/{note_id}   initialize if absent
 PUT      /projects/{project_id}/session-notes/{note_id}
 GET     /projects/{project_id}/files?path=RELATIVE
+POST    /projects/{project_id}/resources   {parent, name, kind: file|directory}
 GET     /projects/{project_id}/search?q=&mode=names|contents|both
 GET     /projects/{project_id}/file?path=RELATIVE
+GET     /projects/{project_id}/file/content?path=RELATIVE&revision=REVISION
 PUT     /projects/{project_id}/file   {path, text, revision}
 POST    /projects/{project_id}/reveal {path: RELATIVE}
 POST    /projects/{project_id}/ignore {path: RELATIVE, scope: global|project}
@@ -240,13 +242,22 @@ truncated}`, name matches sorted before content matches, bounded on files visite
 per-file size, and result count.
 
 Paths are relative to the canonical root and may not escape it. Project and session-note writes
-are revision checked. A session note can be initialized only for a live terminal, a History row
-owned by the Project, or a note file already owned by that Project. Reveal opens the host file
-manager; Windows selects files and raises the resulting Explorer window. Global ignore actions
-persist the resource basename; Project ignore
-actions persist the Project-relative path. The file editor limit is 2 MiB. Watch leases last
-45 seconds, accept at most 64 directories, and are non-recursive; open resource tabs renew them
-every 30 seconds.
+are revision checked. `POST /resources` creates exactly one empty file or directory in an
+existing contained parent. `name` is a leaf, not a path; Windows-invalid/reserved names and the
+Project control directories `.git`/`.swe-mux` are refused. Creation is exclusive and returns
+`409 resource_exists` rather than overwriting any existing filesystem entry. The response is
+`{name, path, parent, kind, size, hidden}`, where `hidden` reports the effective ignore rules.
+`GET /file` classifies the representation as text, delimited text, image,
+or unsupported. Text and delimited-text reads are capped at 2 MiB. Allowlisted PNG, JPEG, GIF,
+and WebP reads are capped at 16 MiB and carry verified dimensions, frame count, MIME type, and
+revision. `GET /file/content` requires that revision and serves only an image that passes the
+format, extension, dimension, pixel, and frame checks; stale revisions return
+`409 revision_conflict`, and refused content returns `415 image_unavailable`. A session note can
+be initialized only for a live terminal, a History row owned by the Project, or a note file
+already owned by that Project. Reveal opens the host file manager; Windows selects files and
+raises the resulting Explorer window. Global ignore actions persist the resource basename;
+Project ignore actions persist the Project-relative path. Watch leases last 45 seconds, accept
+at most 64 directories, and are non-recursive; open resource tabs renew them every 30 seconds.
 
 Successful note writes emit `project_note_changed {project_id, revision}` or
 `session_note_changed {project_id, note_id, revision}`. Clean open editors refetch on a different
@@ -314,7 +325,8 @@ GET    /queue/messages/{message_id}/deliveries      audit rows (no prompt text)
 POST   /queue/send-next                             {message_id, revision, idempotency_key?, confirm?}
 GET    /queue/export?target_session_id=[&redact_secrets=0]
 
-GET    /queue/auto                                  master switch, pause, per-session opt-ins,
+GET    /queue/auto                                  master switch, pause, default-on conversation
+                                                     grants/overrides,
                                                      counters, promotion criteria
 POST   /queue/auto/pause                            {paused}   emergency disable
 PUT    /queue/auto/sessions/{sid}                   {enabled?, ttl_minutes?, max_sends?,
@@ -345,7 +357,8 @@ late) â€” plus `confirm_requires_user`, which refuses a confirmation from a non-
 initiator. `sender_kind` is derived from the transport (`user` on loopback, `remote_user`
 from an authenticated remote device) and never read from the body; `initiator` (`user` |
 `auto`) is recorded on every delivery attempt. The `/queue/auto*` routes carry runtime
-policy, not config: the pause survives a restart and depends on no provider
+policy, not config: live agent runs receive bounded default-on rows, while explicit opt-outs
+and the pause survive a restart and depend on no provider
 (`features/auto-delivery.md`). `/queue/mailbox` is a view over the same message rows, with
 sender/target labels and delivery state (`features/agent-messaging.md`).
 
@@ -382,14 +395,22 @@ GET    /sessions[?project=&state=&backend=]
 POST   /sessions
 GET    /sessions/{id}
 PATCH  /sessions/{id}
+POST   /sessions/{id}/title/regenerate
 DELETE /sessions/{id}
 POST   /sessions/{id}/input
 POST   /sessions/{id}/broadcast-set
 POST   /broadcast/input
+POST   /sessions/{id}/attachments   multipart `file`; X-Mux-User-Gesture: terminal-attachment
+POST   /sessions/{id}/media         legacy image-only compatibility route
 GET    /sessions/{id}/last-reply
 GET    /sessions/{id}/transcript[?limit=]
 GET    /sessions/{id}/skills[?refresh=1]
 ```
+
+`POST /sessions/{id}/title/regenerate` accepts no body and returns `202 {ok:true}` after emitting
+an asynchronous `title_regenerate_requested` event. It is limited to live auto-named Claude/Codex
+runs; ended, shell, and manually named sessions are rejected. Provider and budget failures remain
+visible through automation diagnostics and never block the agent lifecycle.
 
 ```ts
 interface SpawnRequest {
@@ -440,6 +461,16 @@ submit). A multi-line body must arrive wrapped in bracketed paste (`ESC[200~` â€
 newlines as CR) or the agent composer submits at every line. Actual message *delivery*
 (paste + submit) to a live agent goes through the prompt queue's `POST /queue/send-next`,
 which performs both writes daemon-side with the same evidence accounting.
+
+`POST /sessions/{id}/attachments` accepts exactly one multipart file for a live Claude/Codex
+session and returns `{id, name, path, relative_path, reference, kind, media_type, bytes}`. Storage
+is under the owning Project's `.swe-mux/attachments/`, except that an agent spawned at an
+out-of-Project Git worktree uses that validated worktree root. General files are limited to
+25 MiB; content-verified PNG/JPEG/WebP/GIF inputs use `kind: "image"` and a 10 MiB limit. Per
+session limits are 32 files and 100 MiB. The explicit gesture header is required. The older
+`/media` route keeps its image-only gesture headers and response compatibility, but now delegates
+to the same persistent workspace storage. Neither endpoint writes to the PTY; the browser inserts
+the returned reference as unicast draft input without submitting it.
 
 `GET /sessions` adds a compact, read-only `delivery_readiness` object with
 `state: safe|blocked|unknown`, a reason, and `authorized: false`. It is not accepted on writes.

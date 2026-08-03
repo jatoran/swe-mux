@@ -47,17 +47,27 @@ export async function api<T>(method: string, path: string, body?: unknown, optio
   }
 }
 
-export async function uploadTerminalImage<T>(path: string, body: FormData): Promise<T> {
-  const response = await fetch(path, {
-    method: 'POST',
-    headers: { 'X-Mux-User-Gesture': 'terminal-image' },
-    body,
-  })
-  if (!response.ok) {
-    const detail = await response.json().catch(() => ({ error: response.statusText }))
-    throw new Error(detail.error || `POST ${path} failed`)
+export async function uploadTerminalAttachment<T>(path: string, body: FormData): Promise<T> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 60_000)
+  try {
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: { 'X-Mux-User-Gesture': 'terminal-attachment' },
+      body,
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({ error: response.statusText }))
+      throw new Error(detail.error || `POST ${path} failed`)
+    }
+    return response.json()
+  } catch (cause) {
+    if (!(cause instanceof Error) || cause.name !== 'AbortError') throw cause
+    throw new Error('The attachment upload timed out.')
+  } finally {
+    clearTimeout(timer)
   }
-  return response.json()
 }
 
 export function wsUrl(path: string): string {

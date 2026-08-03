@@ -70,6 +70,8 @@ from .history_backfill import HistoryBackfillManager
 from .keybindings import (
     DEFAULT_KEYBINDINGS,
     KEYBINDING_COMMANDS,
+    KEYBINDINGS_FILE_VERSION,
+    V2_DEFAULT_KEYBINDINGS,
     keybinding_policy,
     normalize_binding,
 )
@@ -102,8 +104,13 @@ from .project_actions import ProjectActionService, action_spawn_body
 from .project_card import ProjectCardContext, ProjectCardService
 from .project_files import (
     ObservationsUnreadableError,
+    ProjectFileRevisionConflict,
+    ProjectImageUnavailable,
+    ProjectResourceExists,
     append_observation,
+    create_project_resource,
     effective_project_ignores,
+    ignored_project_path,
     initialize_note,
     list_project_directories,
     list_project_directory,
@@ -115,6 +122,7 @@ from .project_files import (
     read_observations,
     read_project_config,
     read_project_file,
+    read_project_image_content,
     search_project_files,
     session_note_summaries,
     update_observation_request,
@@ -149,6 +157,12 @@ from .session import (
     Session,
     SessionManager,
     session_is_unwitnessed,
+)
+from .session_attachments import (
+    MAX_ATTACHMENT_BYTES,
+    MAX_IMAGE_BYTES,
+    attachment_workspace_root,
+    store_session_attachment,
 )
 from .settings_store import SettingsStore
 from .spawn_contract import (
@@ -314,6 +328,12 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         # Typed queue-operation failures carry their own status and a machine
         # code the queue UI branches on (head-of-line, revision, readiness).
         return json_response({"error": str(exc), "code": exc.code, **exc.payload}, exc.status)
+    except ProjectFileRevisionConflict as exc:
+        return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+    except ProjectImageUnavailable as exc:
+        return json_response({"error": str(exc), "code": "image_unavailable"}, 415)
+    except ProjectResourceExists as exc:
+        return json_response({"error": str(exc), "code": "resource_exists"}, 409)
     except (ValueError, TypeError, ProviderAccountError) as exc:
         return json_response({"error": str(exc)}, 400)
     except Exception:
@@ -431,7 +451,8 @@ def create_app(
     if desktop_control_token is not None and desktop_shutdown_event is None:
         raise ValueError("desktop control requires a shutdown event")
     app = web.Application(
-        middlewares=[error_middleware, security_middleware], client_max_size=12 * 1024 * 1024
+        middlewares=[error_middleware, security_middleware],
+        client_max_size=MAX_ATTACHMENT_BYTES + 1024 * 1024,
     )
     app["config"] = config
     app["frontend_dir"] = frontend_dir or Path(__file__).parent / "static"
@@ -439,6 +460,7 @@ def create_app(
     app["preview_ws_semaphore"] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
     app["hook_ingress_windows"] = {}
     app["mcp_rate_windows"] = {}
+    app["attachment_locks"] = {}
     # Mutable holder because aiohttp freezes app keys once started; carries the
     # externally-signaled shutdown intent (quit vs restart/detach) to cleanup.
     app["shutdown_state"] = {"intent": None}
@@ -572,8 +594,10 @@ def create_app(
             web.put("/api/projects/{project_id}/session-notes/{note_id}", put_session_note),
             web.get("/api/projects/{project_id}/files/tree", list_project_files_tree),
             web.get("/api/projects/{project_id}/files", list_project_files),
+            web.post("/api/projects/{project_id}/resources", post_project_resource),
             web.get("/api/projects/{project_id}/search", search_project_files_route),
             web.get("/api/projects/{project_id}/file", get_project_file),
+            web.get("/api/projects/{project_id}/file/content", get_project_file_content),
             web.put("/api/projects/{project_id}/file", put_project_file),
             web.post("/api/projects/{project_id}/reveal", reveal_project_resource),
             web.post("/api/projects/{project_id}/ignore", ignore_project_resource),
@@ -605,6 +629,7 @@ def create_app(
             web.get("/api/sessions/{sid}/transcript", session_transcript),
             web.get("/api/sessions/{sid}/skills", session_skills),
             web.patch("/api/sessions/{sid}", patch_session),
+            web.post("/api/sessions/{sid}/title/regenerate", regenerate_session_title),
             web.delete("/api/sessions/{sid}", delete_session),
             web.post("/api/sessions/{sid}/relaunch", relaunch_session),
             web.post("/api/sessions/{sid}/branch", branch_session),
@@ -612,6 +637,7 @@ def create_app(
             web.post("/api/sessions/{sid}/startup-metrics", session_startup_metrics),
             web.post("/api/sessions/{sid}/broadcast-set", broadcast_set),
             web.post("/api/broadcast/input", broadcast_input_route),
+            web.post("/api/sessions/{sid}/attachments", upload_session_attachment),
             web.post("/api/sessions/{sid}/media", upload_session_media),
             web.post("/api/sessions/{sid}/promote", promote_session),
             web.post("/api/sessions/{sid}/demote", demote_session),
@@ -1790,6 +1816,11 @@ def _keybindings_payload(config: Config) -> dict[str, Any]:
         replace_defaults = bool(
             isinstance(supplied, dict) and supplied.get("replace_defaults") is True
         )
+        document_version = (
+            int(supplied.get("version", 1))
+            if replace_defaults and isinstance(supplied.get("version", 1), int)
+            else 1
+        )
         if replace_defaults:
             supplied = supplied.get("bindings", {})
             defaults = {}
@@ -1801,6 +1832,13 @@ def _keybindings_payload(config: Config) -> dict[str, Any]:
                 defaults[key] = command_id
             except ValueError as exc:
                 rejected[str(chord)] = str(exc)
+        # Version 1 could not contain these chords through the Settings/API path:
+        # both were rejected as browser-reserved. Seed the new desktop defaults
+        # once, while a version 2 document continues to preserve an intentional
+        # clear or remap.
+        if replace_defaults and document_version < KEYBINDINGS_FILE_VERSION:
+            for chord, command_id in V2_DEFAULT_KEYBINDINGS.items():
+                defaults.setdefault(chord, command_id)
     commands = [
         {"id": command_id, "label": label, "category": category}
         for command_id, label, category in KEYBINDING_COMMANDS
@@ -1838,7 +1876,7 @@ async def put_keybindings(request: web.Request) -> web.Response:
     path = request.app["config"].data_dir / "keybindings.json"
     temporary = path.with_suffix(".json.tmp")
     document = {
-        "version": 1,
+        "version": KEYBINDINGS_FILE_VERSION,
         "replace_defaults": True,
         "bindings": normalized,
     }
@@ -3913,12 +3951,34 @@ async def patch_session(request: web.Request) -> web.Response:
     return json_response(session.record.snapshot())
 
 
+async def regenerate_session_title(request: web.Request) -> web.Response:
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    record = session.record
+    if record.backend not in {"claude", "codex"} or not record.agent_run_id:
+        raise ValueError("title regeneration requires an active agent run")
+    if record.state in {"exited", "crashed"}:
+        raise ValueError("an ended session cannot regenerate its title")
+    if record.auto_named is False:
+        raise ValueError("a manually named session keeps its user title")
+    await request.app["events"].emit(
+        "title_regenerate_requested",
+        session_id=record.id,
+        source="user",
+        force_title=True,
+    )
+    return json_response({"ok": True}, 202)
+
+
 async def delete_session(request: web.Request) -> web.Response:
     manager: SessionManager = request.app["sessions"]
     session = manager.resolve(request.match_info["sid"])
     if session.record.state not in {"exited", "crashed"}:
         await manager.stop(session.record.id)
     manager.sessions.pop(session.record.id, None)
+    attachment_locks = request.app.get("attachment_locks", {})
+    for key in tuple(attachment_locks):
+        if key[1] == session.record.id:
+            attachment_locks.pop(key, None)
     shutil.rmtree(
         session_media_directory(request.app["config"].data_dir, session.record.id),
         ignore_errors=True,
@@ -3959,6 +4019,10 @@ async def relaunch_session(request: web.Request) -> web.Response:
     if old.record.state not in {"exited", "crashed"}:
         await manager.stop(old_id)
     manager.sessions.pop(old_id, None)
+    attachment_locks = request.app.get("attachment_locks", {})
+    for key in tuple(attachment_locks):
+        if key[1] == old_id:
+            attachment_locks.pop(key, None)
     shutil.rmtree(
         session_media_directory(request.app["config"].data_dir, old_id),
         ignore_errors=True,
@@ -4448,10 +4512,10 @@ _NORMALIZED_HOOK_EVENT_TYPES = {
 # (lifecycle, not turn content) and the subagent hooks, whose records go to sidechain
 # files rather than the root transcript.
 #
-# `agent-turn-complete` is Codex's raw turn-end notify and MUST be here. Codex is the
-# only backend that needs this evidence at all -- it has no session-start hook, so a
-# `/new` behind a sibling that cannot be ruled out is invisible -- and this set is
-# tested against the *raw* event type, so omitting it made
+# `agent-turn-complete` is Codex's raw turn-end notify and MUST be here. Lifecycle
+# hooks can be disabled, untrusted, or unavailable, so a `/new` behind a sibling
+# that cannot be ruled out can still be invisible. This set is tested against the
+# *raw* event type, so omitting the compatibility notify made
 # `_note_transcript_staleness` unreachable for the one backend it was written for.
 # Verified live: a Codex pane rolled by `/new` kept reporting the abandoned
 # conversation as live, with its retired token counts, for 200s while
@@ -4581,49 +4645,80 @@ async def _retention_loop(
         await asyncio.sleep(60 * 60)
 
 
-async def upload_session_media(request: web.Request) -> web.Response:
-    if request.headers.get("X-Mux-User-Gesture") not in {"terminal-image", "clipboard-image"}:
-        raise web.HTTPForbidden(
-            text="terminal image upload requires an explicit paste or drop action"
-        )
+async def _upload_session_attachment(
+    request: web.Request,
+    *,
+    image_only: bool,
+) -> web.Response:
+    allowed_gestures = (
+        {"terminal-image", "clipboard-image"} if image_only else {"terminal-attachment"}
+    )
+    if request.headers.get("X-Mux-User-Gesture") not in allowed_gestures:
+        noun = "image upload" if image_only else "attachment upload"
+        raise web.HTTPForbidden(text=f"terminal {noun} requires an explicit user action")
     session = request.app["sessions"].resolve(request.match_info["sid"])
     adapter: BackendAdapter = request.app["sessions"].adapters[session.record.backend]
     if session.record.backend not in {"claude", "codex"}:
-        raise ValueError("clipboard images are supported only in Claude and Codex sessions")
+        raise ValueError("attachments are supported only in Claude and Codex sessions")
+    if session.record.state in {"exited", "crashed"}:
+        raise ValueError("attachments cannot be added to an ended session")
+    project = request.app["projects"].projects.get(session.record.project_id)
+    if project is None:
+        raise ValueError("the session's owning Project is unavailable")
+    workspace = await asyncio.to_thread(
+        attachment_workspace_root,
+        project.root,
+        session.record.spawn_cwd or session.record.cwd,
+    )
+    if not request.content_type.startswith("multipart/"):
+        raise ValueError("attachment upload must use multipart form data")
     reader = await request.multipart()
     part = await reader.next()
     if not isinstance(part, BodyPartReader) or part.name != "file":
         raise ValueError("multipart field 'file' is required")
     media_type = str(part.headers.get("Content-Type", "")).split(";", 1)[0].lower()
     data = bytearray()
+    max_bytes = MAX_IMAGE_BYTES if image_only else MAX_ATTACHMENT_BYTES
     while chunk := await part.read_chunk(size=64 * 1024):
         data.extend(chunk)
-        if len(data) > 10 * 1024 * 1024:
-            raise ValueError("clipboard image exceeds the 10 MiB limit")
-    suffix = validate_session_media(media_type, data)
-    directory = session_media_directory(request.app["config"].data_dir, session.record.id)
-    directory.mkdir(parents=True, exist_ok=True)
-    if sum(1 for item in directory.iterdir() if item.is_file()) >= 32:
-        raise ValueError("this session has reached the 32-image clipboard limit")
-    path = directory / f"{uuid4().hex}{suffix}"
-    temporary = path.with_suffix(f"{suffix}.tmp")
-    temporary.write_bytes(data)
-    temporary.replace(path)
+        if len(data) > max_bytes:
+            limit = "10 MiB" if image_only else "25 MiB"
+            raise ValueError(f"attachment exceeds the {limit} limit")
+    if await reader.next() is not None:
+        raise ValueError("exactly one multipart file is required")
+    filename = part.filename or "attachment"
+    lock_key = (str(workspace), session.record.id)
+    lock = request.app["attachment_locks"].setdefault(lock_key, asyncio.Lock())
+    async with lock:
+        stored = await asyncio.to_thread(
+            store_session_attachment,
+            workspace,
+            session.record.id,
+            filename,
+            media_type,
+            data,
+            image_only=image_only,
+        )
+    reference = (
+        adapter.media_reference(stored.path) if stored.kind == "image" else str(stored.path)
+    )
     await request.app["events"].emit(
-        "session_media_uploaded",
+        "session_media_uploaded" if image_only else "session_attachment_uploaded",
         session_id=session.record.id,
-        media_type=media_type,
-        bytes=len(data),
+        attachment_kind=stored.kind,
+        media_type=stored.media_type,
+        bytes=stored.bytes,
     )
-    return json_response(
-        {
-            "path": str(path),
-            "reference": adapter.media_reference(path),
-            "media_type": media_type,
-            "bytes": len(data),
-        },
-        201,
-    )
+    return json_response(stored.payload(reference), 201)
+
+
+async def upload_session_attachment(request: web.Request) -> web.Response:
+    return await _upload_session_attachment(request, image_only=False)
+
+
+async def upload_session_media(request: web.Request) -> web.Response:
+    """Compatibility endpoint for older image-paste clients."""
+    return await _upload_session_attachment(request, image_only=True)
 
 
 async def promote_session(request: web.Request) -> web.Response:
@@ -5100,6 +5195,37 @@ async def list_project_files(request: web.Request) -> web.Response:
     )
 
 
+async def post_project_resource(request: web.Request) -> web.Response:
+    project = _request_project(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise TypeError("project resource body must be an object")
+    parent = body.get("parent", "")
+    name = body.get("name")
+    kind = body.get("kind")
+    if not isinstance(parent, str):
+        raise TypeError("project resource parent must be a string")
+    if not isinstance(name, str):
+        raise TypeError("project resource name must be a string")
+    if not isinstance(kind, str):
+        raise TypeError("project resource kind must be a string")
+
+    result = await asyncio.to_thread(
+        create_project_resource,
+        project.root,
+        parent,
+        name,
+        kind,
+    )
+    patterns = await asyncio.to_thread(
+        effective_project_ignores,
+        project.root,
+        request.app["config"].project_ignore_patterns,
+    )
+    result["hidden"] = ignored_project_path(str(result["path"]), patterns)
+    return json_response(result, 201)
+
+
 async def list_project_files_tree(request: web.Request) -> web.Response:
     """Batch-list the root plus every persisted-expanded folder in one round trip.
 
@@ -5144,14 +5270,49 @@ async def search_project_files_route(request: web.Request) -> web.Response:
 
 async def get_project_file(request: web.Request) -> web.Response:
     project = _request_project(request)
-    return json_response(read_project_file(project.root, request.query.get("path", "")))
+    result = await asyncio.to_thread(
+        read_project_file, project.root, request.query.get("path", "")
+    )
+    return json_response(result)
+
+
+async def get_project_file_content(request: web.Request) -> web.Response:
+    """Serve only a revision-pinned image that passed the Project viewer allowlist."""
+
+    project = _request_project(request)
+    relative_path = request.query.get("path", "")
+    expected_revision = request.query.get("revision", "")
+    data, payload = await asyncio.to_thread(
+        read_project_image_content,
+        project.root,
+        relative_path,
+        expected_revision,
+    )
+    presentation = payload["presentation"]
+    response = web.Response(
+        body=data,
+        headers={
+            "Content-Type": str(presentation["mime"]),
+            "Content-Length": str(len(data)),
+            "Content-Disposition": "inline",
+            "Cache-Control": "private, no-store",
+            "ETag": f'"{payload["revision"]}"',
+            "Accept-Ranges": "none",
+            # If the URL is ever navigated to directly, it still cannot become a same-origin
+            # active document. The ordinary middleware preserves endpoint-specific CSP values.
+            "Content-Security-Policy": "sandbox; default-src 'none'",
+        },
+    )
+    _apply_security_headers(response, request)
+    return response
 
 
 async def put_project_file(request: web.Request) -> web.Response:
     project = _request_project(request)
     body = await request.json()
     try:
-        result = write_project_file(
+        result = await asyncio.to_thread(
+            write_project_file,
             project.root,
             str(body.get("path") or ""),
             str(body.get("text") or ""),

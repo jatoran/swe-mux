@@ -1,26 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
-import type { ContinuityEditorElement, RailAction } from '@continuity-editor/editor'
+import { Editor, type ContinuityEditorElement, type RailAction } from '@continuity-editor/editor'
 import { api } from './api'
 import { insertEditorTab } from './editorText'
 import { copyPreparedText } from './terminalClipboard'
+import { DelimitedTextViewer } from './DelimitedTextViewer'
 import { absoluteProjectPath, copySummary, FILE_COPY_MAX_LINES, truncateForClipboard } from './fileClipboard'
+import { ImageViewer } from './ImageViewer'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
+import { useModalFocus } from './modalFocus'
 import { composeAgentMessage, selectionText } from './noteSelection'
 import type { EditorSnapshot } from './noteSelection'
 import { findMatches, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
+import { projectResourceCreationParent } from './projectResourceCreate'
 import { fileSaveTarget, noteQueueKey, noteSaveQueue, noteSaveTarget, type NoteSaveState, type ResourceSaveTarget } from './noteSaveQueue'
 import { loadExpandedFolders, saveExpandedFolders } from './deviceSettings'
 import { currentInsertTarget } from './insertTarget'
+import { isFocusTraversalKey } from './keys'
 import { REQUEST_TIMEOUT_MS, retryDelay, watchResume } from './liveness'
 import type { Project } from './types'
 
 export type ProjectResourceIdentity={kind:'note'|'session-note'|'files'|'file';id:string}
 
 type NotePayload={revision:string;markdown:string;status:string;path:string}
-type FilePayload={revision:string;status:string;path:string;size:number;text?:string}
+type FilePresentation=
+  | {kind:'text'}
+  | {kind:'delimited';delimiter:','|'\t'}
+  | {kind:'image';mime?:string;width?:number;height?:number;frames?:number;reason?:string}
+  | {kind:'unsupported';reason:string}
+type FilePayload={revision:string;status:string;path:string;size:number;text?:string;presentation?:FilePresentation}
 type DirectoryItem={name:string;path:string;kind:'directory'|'file';size:number|null}
 type DirectoryPayload={path:string;parent:string|null;items:DirectoryItem[];truncated:boolean}
 type ResourceEvent={projectId:string;paths:string[]}
@@ -29,7 +39,10 @@ type TreeMenu={item:DirectoryItem;x:number;y:number}
 type SearchMode='names'|'contents'|'both'
 type SearchHit={name:string;path:string;match:'name'|'content';line:number|null;snippet:string|null}
 type SearchPayload={items:SearchHit[];truncated:boolean}
-type FileDraft={revision:string;text:string;baseline:string;status:string;saveState:'idle'|'modified'|'saving'|'saved'|'error';error:string}
+type CreateResourceKind='file'|'directory'
+type CreateResourcePrompt={parent:string;kind:CreateResourceKind;name:string}
+type CreatedResource=DirectoryItem&{parent:string;hidden:boolean}
+type FileDraft={revision:string;text:string;baseline:string;status:string;size:number;presentation:FilePresentation|null;saveState:'idle'|'modified'|'saving'|'saved'|'error';error:string}
 type BrowserState={directories:Record<string,DirectoryPayload>;expanded:Set<string>}
 
 // Resource views can be reparented when a tab is dragged between panes. Keep
@@ -51,6 +64,7 @@ type Props={
 const parentPath=(path:string)=>path.includes('/')?path.slice(0,path.lastIndexOf('/')):''
 const watchIdentity=()=>`resource-${Date.now()}-${Math.random().toString(36).slice(2)}`
 const treeKey=(paths:Iterable<string>)=>[...paths].sort().join('\n')
+const TREE_LONG_PRESS_MS=550
 
 // Expand state persists to the shared server settings blob. Debounce the write at
 // module scope (keyed by project) so a rapid burst of toggles collapses to one PUT
@@ -85,6 +99,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const [text,setText]=useState(cachedFile?.text||'')
   const [baseline,setBaseline]=useState(cachedFile?.baseline||'')
   const [status,setStatus]=useState(cachedFile?.status||'loading')
+  const [fileSize,setFileSize]=useState(cachedFile?.size||0)
+  const [presentation,setPresentation]=useState<FilePresentation|null>(cachedFile?.presentation||null)
+  const [fileViewMode,setFileViewMode]=useState<'preview'|'raw'>('preview')
   const [saveState,setSaveState]=useState<'idle'|'modified'|'saving'|'saved'|'error'>(cachedFile?.saveState||'idle')
   const [error,setError]=useState(cachedFile?.error||'')
   const [directories,setDirectories]=useState<Record<string,DirectoryPayload>>(cachedBrowser?.directories||{})
@@ -92,6 +109,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   // the shared server-persisted set so a refresh or a different device restores it.
   const [expanded,setExpanded]=useState<Set<string>>(()=>cachedBrowser?.expanded||new Set(resource.kind==='files'?loadExpandedFolders(project.id):[]))
   const [treeMenu,setTreeMenu]=useState<TreeMenu|null>(null)
+  const [createPrompt,setCreatePrompt]=useState<CreateResourcePrompt|null>(null)
+  const [creating,setCreating]=useState(false)
+  const [createError,setCreateError]=useState('')
   // Transient "copied" confirmation, and the text of a copy the browser refused to write.
   const [notice,setNotice]=useState('')
   const [pendingCopy,setPendingCopy]=useState<string|null>(null)
@@ -113,6 +133,14 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const lastSavedTree=useRef<string|undefined>(undefined)
   const interacted=useRef(false)
   const treeMenuPanel=useRef<HTMLDivElement>(null)
+  const createPanel=useRef<HTMLFormElement>(null)
+  const createNameInput=useRef<HTMLInputElement>(null)
+  const treeLongPress=useRef<number|null>(null)
+  const treePressOrigin=useRef<{x:number;y:number}|null>(null)
+  const treeTouchPress=useRef(false)
+  const suppressTreeClick=useRef(false)
+  const treeMenuOpenedAt=useRef(0)
+  const treeMenuOpenedByTouch=useRef(false)
   const copyFallback=useRef<HTMLTextAreaElement>(null)
   const noticeTimer=useRef<number|undefined>(undefined)
   const noteLoadGeneration=useRef(0)
@@ -133,6 +161,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const [pendingRetry,setPendingRetry]=useState(false)
   const expandedRef=useRef(expanded)
   expandedRef.current=expanded
+  useModalFocus(createPanel,()=>{if(!creating){setCreatePrompt(null);setCreateError('')}},!!createPrompt)
+  useEffect(()=>{
+    if(!createPrompt)return
+    const frame=requestAnimationFrame(()=>createNameInput.current?.focus())
+    return()=>cancelAnimationFrame(frame)
+  },[!!createPrompt])
 
   const loadDirectory=async(folder:string):Promise<boolean>=>{
     try{
@@ -186,6 +220,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       const unsaved=autosaved?noteSaveQueue.pendingText(noteKey):null
       const next=unsaved??stored
       setRevision(payload.revision);setText(next);setBaseline(stored);setStatus(payload.status)
+      if(!('markdown' in payload)){
+        setFileSize(payload.size)
+        setPresentation(payload.presentation||(
+          payload.text!==undefined?{kind:'text'}:{kind:'unsupported',reason:payload.status}
+        ))
+      }
       setSaveState(unsaved===null?'idle':'modified')
       if(autosaved){
         // The queue owns the daemon storage revision; the editor starts fresh at 0. Remounting
@@ -282,6 +322,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
 
   useEffect(()=>{
     setTreeMenu(null)
+    setFileViewMode('preview')
     recoveryEpoch.current+=1
     clearRetry();retryAttempt.current=0;pendingRetryRef.current=false;setPendingRetry(false)
     loadedOnce.current=false
@@ -310,8 +351,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     // opened accumulated megabytes of strings for the page's lifetime (this app
     // is designed to stay open for days).
     if(text===baseline&&saveState!=='error'){fileDrafts.delete(resourceKey);return}
-    fileDrafts.set(resourceKey,{revision,text,baseline,status,saveState,error})
-  },[resource.kind,resourceKey,revision,text,baseline,status,saveState,error])
+    fileDrafts.set(resourceKey,{revision,text,baseline,status,size:fileSize,presentation,saveState,error})
+  },[resource.kind,resourceKey,revision,text,baseline,status,fileSize,presentation,saveState,error])
 
   useEffect(()=>{
     if(resource.kind==='files')browserStates.set(resourceKey,{directories,expanded:new Set(expanded)})
@@ -454,7 +495,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     setSaveState('saving')
     try{
       const payload=await api<FilePayload>('PUT',`/api/projects/${project.id}/file`,{path:resource.id,text:content,revision:expectedRevision})
-      setRevision(payload.revision);setBaseline(content);setStatus(payload.status);setError('');setSaveState('saved')
+      setRevision(payload.revision);setBaseline(content);setStatus(payload.status);setFileSize(payload.size);setPresentation(payload.presentation||{kind:'text'});setError('');setSaveState('saved')
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause));setSaveState('error')}
   }
 
@@ -477,11 +518,42 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     if(!body.trim()){setError('There is nothing to send yet.');return}
     const scope=selected?'selection':'document'
     const slice=truncateForClipboard(body,sourceLabel)
+    // Only an actual note selection can be consumed. Whole documents and file selections stay
+    // source material, and a truncated payload must never delete text that was not handed off.
+    const removeSelectionAfterSend=isNote&&selected&&snapshot&&!slice.truncated?()=>{
+      const element=editorElement.current
+      if(element){
+        try{
+          if(element.snapshot().text!==snapshot.text){
+            setError('The selection was sent, but the note changed before it could be removed.')
+            return
+          }
+          element.setSelections(snapshot.selections)
+          if(!element.insertText(''))setError('The selection was sent, but it could not be removed from the note.')
+        }catch{
+          setError('The selection was sent, but it could not be removed from the note.')
+        }
+        return
+      }
+      // A mobile drawer closes before the send finishes, so its editor is already detached.
+      // Reproduce Continuity's exact multi/line/block-selection edit in a short-lived engine,
+      // then hand the resulting snapshot to the resource-scoped queue that survives unmounts.
+      let scratch:Editor|null=null
+      try{
+        scratch=new Editor(snapshot.text)
+        scratch.setSelections(snapshot.selections)
+        if(scratch.insertText(''))noteSaveQueue.submit(noteKey,scratch.snapshot().text)
+      }catch{
+        // The handoff is already accepted. Preserve the note if the captured engine state
+        // cannot be replayed instead of risking a broader text edit.
+      }finally{scratch?.destroy()}
+    }:undefined
     onSendToAgent({
       projectId:project.id,
       label:sourceLabel,
       scope,
       message:composeAgentMessage(slice.text,{label:sourceLabel,scope}),
+      removeSelectionAfterSend,
     })
   }
   // Find in this note. Continuity paints the matches (0.2.17 `setDecorations`) but does not
@@ -628,6 +700,18 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   },[!!onSendToAgent])
 
   const editable=status==='ready'||status==='missing'
+  const isDelimitedFile=resource.kind==='file'&&presentation?.kind==='delimited'
+  const imagePresentation=presentation?.kind==='image'?presentation:null
+  const isImageFile=resource.kind==='file'&&!!imagePresentation
+  const readableFile=resource.kind==='file'
+    &&(presentation?.kind==='text'||presentation?.kind==='delimited')
+    &&(status==='ready'||status==='read-only')
+  const canSendText=!!onSendToAgent&&(isNote?editable:readableFile)
+  const imageReady=isImageFile&&status==='viewable'
+    &&!!imagePresentation?.mime
+    &&typeof imagePresentation.width==='number'
+    &&typeof imagePresentation.height==='number'
+    &&typeof imagePresentation.frames==='number'
   // Notes and markdown files persist through the resource-scoped save queue (outside this
   // component so a pane close cannot cancel a save); we only mirror its state for display.
   useEffect(()=>{
@@ -656,10 +740,56 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     if(!directories[path])void loadDirectory(path)
   }
 
+  const openTreeMenuAt=(item:DirectoryItem,x:number,y:number)=>{
+    treeMenuOpenedAt.current=performance.now()
+    treeMenuOpenedByTouch.current=treeTouchPress.current
+    setTreeMenu({item,x,y})
+  }
+
+  const cancelTreeLongPress=()=>{
+    if(treeLongPress.current!==null)window.clearTimeout(treeLongPress.current)
+    treeLongPress.current=null
+    treePressOrigin.current=null
+  }
+
   const openTreeMenu=(item:DirectoryItem,event:MouseEvent)=>{
     event.preventDefault();event.stopPropagation()
-    setTreeMenu({item,x:event.clientX,y:event.clientY})
+    cancelTreeLongPress()
+    if(treeTouchPress.current)suppressTreeClick.current=true
+    openTreeMenuAt(item,event.clientX,event.clientY)
   }
+
+  const beginTreePress=(item:DirectoryItem,event:JSX.TargetedPointerEvent<HTMLElement>)=>{
+    treeTouchPress.current=event.pointerType==='touch'
+    if(!treeTouchPress.current){
+      if(item.kind==='file'&&event.button===0)onFileDragStart?.(item.path,event)
+      return
+    }
+    cancelTreeLongPress()
+    const {clientX,clientY}=event
+    treePressOrigin.current={x:clientX,y:clientY}
+    treeLongPress.current=window.setTimeout(()=>{
+      treeLongPress.current=null
+      treePressOrigin.current=null
+      suppressTreeClick.current=true
+      navigator.vibrate?.(20)
+      openTreeMenuAt(item,clientX,clientY)
+    },TREE_LONG_PRESS_MS)
+  }
+
+  const trackTreePress=(event:JSX.TargetedPointerEvent<HTMLElement>)=>{
+    const origin=treePressOrigin.current
+    if(!origin)return
+    if(Math.abs(event.clientX-origin.x)>10||Math.abs(event.clientY-origin.y)>10)cancelTreeLongPress()
+  }
+
+  const finishTreePress=()=>cancelTreeLongPress()
+  const runTreeClick=(action:()=>void)=>{
+    if(suppressTreeClick.current){suppressTreeClick.current=false;return}
+    action()
+  }
+
+  useEffect(()=>()=>cancelTreeLongPress(),[])
 
   const revealResource=async(item:DirectoryItem)=>{
     setTreeMenu(null)
@@ -675,6 +805,44 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     noticeTimer.current=window.setTimeout(()=>{setNotice('');noticeTimer.current=undefined},2600)
   }
   useEffect(()=>()=>{if(noticeTimer.current)clearTimeout(noticeTimer.current)},[])
+
+  const beginCreateResource=(kind:CreateResourceKind)=>{
+    if(!treeMenu)return
+    const parent=projectResourceCreationParent(treeMenu.item.path,treeMenu.item.kind)
+    setTreeMenu(null)
+    setCreateError('')
+    setCreatePrompt({parent,kind,name:''})
+  }
+
+  const submitCreateResource=async(event:Event)=>{
+    event.preventDefault()
+    if(!createPrompt||creating)return
+    setCreating(true);setCreateError('')
+    try{
+      const created=await api<CreatedResource>('POST',`/api/projects/${project.id}/resources`,{
+        parent:createPrompt.parent,
+        name:createPrompt.name,
+        kind:createPrompt.kind,
+      },{timeoutMs:REQUEST_TIMEOUT_MS})
+      interacted.current=true
+      if(created.kind==='directory'){
+        setQuery('')
+        setExpanded(current=>{
+          const next=new Set(current)
+          if(created.parent)next.add(created.parent)
+          if(!created.hidden)next.add(created.path)
+          return next
+        })
+      }
+      await loadDirectory(created.parent)
+      if(created.kind==='directory'&&!created.hidden)await loadDirectory(created.path)
+      setCreatePrompt(null);setCreateError('')
+      if(created.hidden)setError(`${created.path} was created, but it is hidden by the current ignore rules.`)
+      else showNotice(`Created ${created.kind==='directory'?'folder':'file'} ${created.path}`)
+      if(created.kind==='file')onOpenFile(created.path)
+    }catch(cause){setCreateError(cause instanceof Error?cause.message:String(cause))}
+    finally{setCreating(false)}
+  }
 
   // The offscreen textarea gives `copyPreparedText` its synchronous execCommand path, which is
   // what carries the write on mobile and in non-secure contexts where the async Clipboard API
@@ -741,13 +909,22 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     const directory=directories[folder]
     if(!directory)return expanded.has(folder)?<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>loading…</p>:null
     return <>{directory.items.map(item=>item.kind==='directory'?<div class="file-tree-branch" key={item.path}>
-      <button class="file-tree-row directory" style={{paddingLeft:`${9+depth*15}px`}} onClick={()=>toggleDirectory(item.path)} onContextMenu={event=>openTreeMenu(item,event)} aria-expanded={expanded.has(item.path)}><span>{expanded.has(item.path)?'▾':'▸'}</span><strong>{item.name}/</strong></button>
+      <button class="file-tree-row directory" style={{paddingLeft:`${9+depth*15}px`}} title="Open folder · right-click or long-press for actions" onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>toggleDirectory(item.path))} onContextMenu={event=>openTreeMenu(item,event)} aria-expanded={expanded.has(item.path)}><span>{expanded.has(item.path)?'▾':'▸'}</span><strong>{item.name}/</strong></button>
       {expanded.has(item.path)&&tree(item.path,depth+1)}
-    </div>:<button class="file-tree-row file" key={item.path} style={{paddingLeft:`${9+depth*15}px`}} onPointerDown={event=>onFileDragStart?.(item.path,event)} onClick={()=>onOpenFile(item.path)} onContextMenu={event=>openTreeMenu(item,event)}><span>·</span><strong>{item.name}</strong></button>)}{directory.truncated&&<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>Showing the first 2,000 entries.</p>}</>
+    </div>:<button class="file-tree-row file" key={item.path} style={{paddingLeft:`${9+depth*15}px`}} title="Open file · right-click or long-press for actions" onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>onOpenFile(item.path))} onContextMenu={event=>openTreeMenu(item,event)}><span>·</span><strong>{item.name}</strong></button>)}{directory.truncated&&<p class="file-tree-loading" style={{paddingLeft:`${12+depth*15}px`}}>Showing the first 2,000 entries.</p>}</>
   }
 
   const searchModes:SearchMode[]=['names','contents','both']
   const searchModeLabel:Record<SearchMode,string>={names:'Names',contents:'Contents',both:'Both'}
+  const projectRootItem:DirectoryItem={name:'Project root',path:'',kind:'directory',size:null}
+  const backgroundTreePress=(event:JSX.TargetedPointerEvent<HTMLElement>)=>{
+    if(event.target instanceof Element&&event.target.closest('.file-tree-row'))return
+    beginTreePress(projectRootItem,event)
+  }
+  const backgroundTreeMenu=(event:JSX.TargetedMouseEvent<HTMLElement>)=>{
+    if(event.target instanceof Element&&event.target.closest('.file-tree-row'))return
+    openTreeMenu(projectRootItem,event)
+  }
   // Any error with a retry queued behind it says so, and offers to skip the wait.
   const errorLine=error?<p class="resource-error">{error}{pendingRetry&&<> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>}</p>:null
   if(resource.kind==='files')return <section class="project-resource file-browser">
@@ -770,28 +947,41 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       {errorLine}
       {notice&&<p class="resource-notice" role="status" aria-live="polite">{notice}</p>}
       {results!==null
-        ?<div class="file-results" role="list" aria-busy={searching}>
+        ?<div class="file-results" role="list" aria-busy={searching} onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>
           {searching&&!results.length?<p class="file-tree-loading">Searching…</p>
             :!results.length?<p class="file-tree-loading">No matches.</p>
-            :<>{results.map(hit=><button class="file-tree-row file file-result-row" key={hit.path} onPointerDown={event=>onFileDragStart?.(hit.path,event)} onClick={()=>onOpenFile(hit.path)} onContextMenu={event=>openTreeMenu({name:hit.name,path:hit.path,kind:'file',size:null},event)}>
+            :<>{results.map(hit=>{const item:DirectoryItem={name:hit.name,path:hit.path,kind:'file',size:null};return <button class="file-tree-row file file-result-row" key={hit.path} title="Open file · right-click or long-press for actions" onPointerDown={event=>beginTreePress(item,event)} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onClick={()=>runTreeClick(()=>onOpenFile(hit.path))} onContextMenu={event=>openTreeMenu(item,event)}>
                 <span class="file-result-line"><span>·</span><strong>{hit.name}</strong><small>{hit.path}</small></span>
                 {hit.match==='content'&&hit.snippet&&<em class="file-result-snippet">{hit.line!=null?`${hit.line}: `:''}{hit.snippet}</em>}
-              </button>)}
+              </button>})}
               {searchTruncated&&<p class="file-tree-loading">Showing the first {results.length} matches; refine to narrow.</p>}</>}
         </div>
-        :<div class="file-tree" role="tree">{tree('')}</div>}
+        :<div class="file-tree" role="tree" onPointerDown={backgroundTreePress} onPointerMove={trackTreePress} onPointerUp={finishTreePress} onPointerCancel={finishTreePress} onPointerLeave={finishTreePress} onContextMenu={backgroundTreeMenu}>{tree('')}</div>}
     </div>
-    {treeMenu&&<div class="context-menu project-file-menu" ref={el=>{treeMenuPanel.current=el;fitMenuInViewport(el)}} role="menu" aria-label={`File actions for ${treeMenu.item.name}`} style={{left:clampContextMenuLeft(treeMenu.x,window.innerWidth),top:Math.max(4,Math.min(treeMenu.y,window.innerHeight-(treeMenu.item.kind==='file'?250:220)))}} onMouseDown={event=>event.stopPropagation()}>
+    {treeMenu&&<div class="context-menu project-file-menu" ref={el=>{treeMenuPanel.current=el;fitMenuInViewport(el)}} role="menu" aria-label={`File actions for ${treeMenu.item.name}`} style={{left:clampContextMenuLeft(treeMenu.x,window.innerWidth),top:Math.max(4,Math.min(treeMenu.y,window.innerHeight-(treeMenu.item.kind==='file'?320:290)))}} onMouseDown={event=>event.stopPropagation()} onClickCapture={event=>{if(treeMenuOpenedByTouch.current&&performance.now()-treeMenuOpenedAt.current<250){event.preventDefault();event.stopPropagation()}}}>
       <div class="context-title"><strong>{treeMenu.item.name}</strong></div>
+      <button role="menuitem" onClick={()=>beginCreateResource('file')}>New file…</button>
+      <button role="menuitem" onClick={()=>beginCreateResource('directory')}>New folder…</button>
+      <div class="context-rule"/>
       <button role="menuitem" onClick={()=>void revealResource(treeMenu.item)}>Open in default explorer</button>
       <div class="context-rule"/>
       <button role="menuitem" title={absoluteProjectPath(project.root,treeMenu.item.path)} onClick={()=>void copyPath(treeMenu.item,'absolute')}>Copy full path</button>
-      <button role="menuitem" title={treeMenu.item.path} onClick={()=>void copyPath(treeMenu.item,'relative')}>Copy path from project root</button>
+      {treeMenu.item.path&&<button role="menuitem" title={treeMenu.item.path} onClick={()=>void copyPath(treeMenu.item,'relative')}>Copy path from project root</button>}
       {treeMenu.item.kind==='file'&&<button role="menuitem" title={`Copy the file's text, capped at ${FILE_COPY_MAX_LINES.toLocaleString()} lines`} onClick={()=>void copyContents(treeMenu.item)}>Copy file contents</button>}
       {treeMenu.item.kind==='file'&&onSendToAgent&&<button role="menuitem" title="Open the send-to-agent dialog with this file's contents" onClick={()=>void sendFileToAgent(treeMenu.item)}>Send to an agent session</button>}
-      <div class="context-rule"/>
-      <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'global')}>Add pattern to global ignores</button>
-      <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'project')}>Add pattern to project ignores</button>
+      {treeMenu.item.path&&<><div class="context-rule"/>
+        <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'global')}>Add pattern to global ignores</button>
+        <button role="menuitem" onClick={()=>void ignoreResource(treeMenu.item,'project')}>Add pattern to project ignores</button>
+      </>}
+    </div>}
+    {createPrompt&&<div class="modal-layer resource-create-layer" onPointerDown={event=>{if(event.target===event.currentTarget&&!creating){setCreatePrompt(null);setCreateError('')}}}>
+      <form ref={createPanel} class="modal resource-create-modal" role="dialog" aria-modal="true" aria-label={`Create ${createPrompt.kind==='directory'?'folder':'file'}`} onPointerDown={event=>event.stopPropagation()} onSubmit={event=>void submitCreateResource(event)}>
+        <div class="modal-heading"><div><span>FILES::{createPrompt.kind==='directory'?'NEW_FOLDER':'NEW_FILE'}</span><h2>New {createPrompt.kind==='directory'?'folder':'file'}</h2></div><button type="button" disabled={creating} aria-label="Cancel creation" onClick={()=>{setCreatePrompt(null);setCreateError('')}}>×</button></div>
+        <label>Name<input ref={createNameInput} value={createPrompt.name} disabled={creating} autoComplete="off" spellcheck={false} onInput={event=>setCreatePrompt(current=>current?{...current,name:event.currentTarget.value}:current)}/></label>
+        <p class="resource-create-parent" title={createPrompt.parent||project.root}>Create in <strong>{createPrompt.parent||'Project root'}</strong></p>
+        {createError&&<p class="resource-create-error" role="alert">{createError}</p>}
+        <div class="modal-footer"><button type="button" disabled={creating} onClick={()=>{setCreatePrompt(null);setCreateError('')}}>Cancel</button><button class="primary" disabled={creating||!createPrompt.name} type="submit">{creating?'Creating…':'Create'}</button></div>
+      </form>
     </div>}
     <textarea ref={copyFallback} class="resource-copy-relay" tabIndex={-1} aria-hidden="true" readOnly/>
     {pendingCopy!==null&&<div class="resource-copy-fallback" role="dialog" aria-label="Copy blocked text">
@@ -803,7 +993,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   </section>
 
   const handleEditorKey=(event:KeyboardEvent&{currentTarget:HTMLTextAreaElement})=>{
-    if(event.key!=='Tab')return
+    if(!isFocusTraversalKey(event))return
     event.preventDefault()
     const editor=event.currentTarget
     const result=insertEditorTab(text,editor.selectionStart,editor.selectionEnd)
@@ -811,12 +1001,21 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     requestAnimationFrame(()=>editor.setSelectionRange(result.caret,result.caret))
   }
   const stateLabel=autosaved?(noteSave.status==='idle'?status:noteSave.status):(saveState==='idle'?status:saveState)
+  const unavailableMessage=status==='binary'?'This file is not UTF-8 text and has no safe viewer.'
+    :status==='too-large'&&presentation?.kind==='image'?'This image exceeds the 16 MiB viewer limit.'
+    :status==='too-large'?'This file exceeds the 2 MiB text and table limit.'
+    :status==='unsupported'?'This file is not a valid allowlisted PNG, JPEG, GIF, or WebP image.'
+    :status==='loading'?'Loading…'
+    :status==='error'?null
+    :'This resource is read-only.'
   return <section class="project-resource file-editor" onKeyDown={handleFindKey}>
-    <header><div>{!isNote&&<strong>{resource.id}</strong>}<span>{project.name} · {stateLabel}</span></div>{onSendToAgent||(resource.kind==='file'&&!isMarkdownFile)?<div class="resource-actions">
+    <header><div>{!isNote&&<strong>{resource.id}</strong>}<span>{project.name} · {stateLabel}</span></div>{autosaved||onSendToAgent||isDelimitedFile||(resource.kind==='file'&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
       {/* Continuity-backed views send the live selection (or the document); a plain-text
           editor owns no selection engine, so its send is always the whole document. */}
-      {onSendToAgent&&<button class="resource-send" disabled={!editable} title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}
-      {resource.kind==='file'&&!isMarkdownFile&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}
+      {canSendText&&<button class="resource-send" title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}
+      {autosaved&&<button disabled={!editable} title="Find in this note" aria-label="Find in this note" onClick={openFind}>⌕</button>}
+      {isDelimitedFile&&<><button class={fileViewMode==='preview'?'active':''} onClick={()=>setFileViewMode('preview')}>Table</button><button class={fileViewMode==='raw'?'active':''} onClick={()=>setFileViewMode('raw')}>Raw</button></>}
+      {resource.kind==='file'&&!isMarkdownFile&&presentation?.kind!=='image'&&presentation?.kind!=='unsupported'&&(!isDelimitedFile||fileViewMode==='raw')&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}
     </div>:null}</header>
     {errorLine}
     {findOpen&&<div class="note-find" role="search">
@@ -836,13 +1035,14 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       <button title="Close find" aria-label="Close find" onClick={closeFind}>×</button>
     </div>}
     {autosaved&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
-    {editable?(autosaved?<ProjectNoteEditor key={`${project.id}:${resource.kind}:${resource.id}:${loadGeneration}`} projectId={project.id} resourceId={`${resource.kind}:${resource.id}`} initialText={text} label={isNote?noteLabel:resource.id} railActions={railActions} elementRef={editorElement}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>)
-      :<div class="resource-unavailable">{status==='binary'?'Binary files cannot be edited here.'
-        :status==='too-large'?'This file exceeds the 2 MiB editor limit.'
-        :status==='loading'?'Loading…'
+    {imageReady?<ImageViewer key={revision} projectId={project.id} path={resource.id} revision={revision} mime={imagePresentation!.mime!} width={imagePresentation!.width!} height={imagePresentation!.height!} frames={imagePresentation!.frames!} size={fileSize}/>
+      :isDelimitedFile&&readableFile&&fileViewMode==='preview'?<DelimitedTextViewer text={text} delimiter={presentation.delimiter}/>
+      :editable?(autosaved?<ProjectNoteEditor key={`${project.id}:${resource.kind}:${resource.id}:${loadGeneration}`} projectId={project.id} resourceId={`${resource.kind}:${resource.id}`} initialText={text} label={isNote?noteLabel:resource.id} railActions={railActions} elementRef={editorElement}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>)
+      :isDelimitedFile&&readableFile&&fileViewMode==='raw'?<textarea readOnly value={text} spellcheck={false}/>
+      :<div class="resource-unavailable">{status==='error'?<><span>{isNote?'This note could not be loaded.':'This file could not be loaded.'}</span> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>
+        :unavailableMessage
         // Reachable while a retry is still pending, so it says what is happening rather
         // than claiming the resource is read-only.
-        :status==='error'?<><span>{isNote?'This note could not be loaded.':'This file could not be loaded.'}</span> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>
-        :'This resource is read-only.'}</div>}
+        }</div>}
   </section>
 }

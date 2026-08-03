@@ -102,6 +102,10 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
   note endpoint (`{markdown, revision}`); Markdown files PUT the file endpoint
   (`{path, text, revision}`). The queue's debounce, in-flight coalescing, 409 conflict banner,
   retry, and teardown beacon are identical for both.
+- The vendored Continuity 0.2.18 editor owns mobile touch arbitration. `pointerdown` does not
+  focus its textarea; a resolved tap projects the caret and focuses synchronously, while scroll,
+  cancellation, and long-press paths leave the keyboard closed. swe-mux does not inspect the
+  editor's shadow DOM or duplicate caret hit-testing for this behavior.
 - The editor is remounted whenever a different document loads so a new engine cannot leak text
   between documents. Ordinary edits do not remount it, so cursor and undo history survive. A
   host replacement is an echo of pushed text and is never committed back.
@@ -175,9 +179,10 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
 - Decorations are positions rather than anchors, so an edit underneath a live set would leave
   it marking the wrong bytes. The set is therefore recomputed on every commit while the bar is
   open, not only when the query changes.
-- Three ways in, matching the three places a user is: `Ctrl+F` while the editor has focus, a
-  `mux:find` button on the touch rail, and a `note.find` command for the palette, a gesture, or
-  a chord of the user's own. `Ctrl+F` is deliberately *not* a global app binding — the ask is
+- Four ways in, matching the places a user is: the visible resource-header button shared by
+  workspace-tab and drawer notes, `Ctrl+F` while the editor has focus, a `mux:find` button on the
+  touch rail, and a `note.find` command for the palette, a gesture, or a chord of the user's own.
+  `Ctrl+F` is deliberately *not* a global app binding — the ask is
   for the focused note, and a global chord would have to swallow the browser's own find
   everywhere else to get it. The command instead dispatches a cancelable event that the
   resource holding the focused editor claims; an unclaimed event is how "no note is focused"
@@ -199,8 +204,17 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
   from the engine snapshot, not from DOM focus, so taking focus to click cannot lose it.
 - The dialog captures the message when it opens, so editing the document underneath cannot
   change what is about to be sent. The message is shown in full and stays editable: this is a
-  user-initiated send, and the text on screen is the text that leaves. It is prefixed with one
-  origin line naming the document, which is the agent's only context for a loose fragment.
+  user-initiated send, and the text on screen is the text that leaves. A selection enters the
+  message box without an origin preamble; the source remains visible in the dialog heading but
+  is not sent. Whole-document sends retain one origin line naming the document.
+- A project/session-note selection offers **Remove the selected text from the note**, on by
+  default. Removal happens only after the handoff is accepted: immediate delivery, durable queue
+  staging (including **Add to queue**), composer fill, or successful new-session seeding. Cancel,
+  error, and blocked/refused delivery leave the note untouched. Whole-document and file sends do
+  not offer the toggle. A truncated selection cannot offer it because deleting text that was not
+  included in the payload would lose data. A mounted editor applies the captured Continuity
+  selection as one undoable edit; a mobile drawer editor that has already detached commits the
+  same engine-produced snapshot through the resource save queue that survives its unmount.
 - Targets are the live Claude/Codex sessions of a chosen Project (any Project, defaulting to the
   document's own), plus "new Claude session" and "new Codex session". Shell sessions are never
   offered: an agent composer holds a paste inert until submitted, while a shell would run it.
@@ -246,10 +260,21 @@ include a registered Project nested below another Git root.
   visible pane to drop onto.
 - The Project-folder chooser (Add project) has an equivalent debounced name filter over the
   listed folders; contents/both do not apply to a folder chooser.
-- UTF-8 files up to 2 MiB open in revision-checked editor tabs. Binary and larger files remain
-  discoverable but do not enter the text-edit path. Markdown files (`.md`/`.markdown`/`.mdx`)
-  open in the shared Continuity editor and autosave like notes; every other text file uses a
-  plain textarea with an explicit Save button and baseline diff.
+- UTF-8 files up to 2 MiB open in revision-checked editor tabs. Markdown files
+  (`.md`/`.markdown`/`.mdx`) open in the shared Continuity editor and autosave like notes;
+  every other text file uses a plain textarea with an explicit Save button and baseline diff.
+  CSV and TSV use the same file tab but default to a bounded, virtualized table preview with a
+  raw-text toggle; raw mode remains the only editable representation.
+- PNG, JPEG, GIF, and WebP files open read-only in the same ordinary file tabs. The server reads
+  at most 16 MiB, verifies that the decoded format matches the allowlisted extension, and refuses
+  images above 16,384 pixels on either axis, 25 million pixels per frame, 200 frames, or 100
+  million total decoded pixels. The revision-pinned content route serves only images that pass
+  those checks, with an exact allowlisted MIME type, `nosniff`, `no-store`, and a sandbox CSP.
+  SVG, PDF, archives, video, audio, and other browser-active or unsupported formats remain
+  discoverable and open in a tab that explains why no preview is available.
+- File inspection checks the regular-file type and declared size before a bounded read, then runs
+  blocking filesystem and image work off the server event loop. Refused oversized files do not
+  require hashing the full body to produce a revision.
 - Global `project_ignore_patterns` and Project-local `ignore_patterns` compose. They filter the
   browser and watcher only, never Git. Settings preserves line breaks while editing and trims
   blank entries only on explicit Save.
@@ -258,6 +283,14 @@ include a registered Project nested below another Git root.
   to Project ignores. Windows reveal selects a file and asks Explorer to foreground its window.
   The tree, the search results, and an opened file's own resource tab all offer the copy group,
   so a path never has to be transcribed by hand or re-found in the browser.
+- Right-click or guarded touch long-press opens the Files actions; there is no permanent create
+  button. **New file** and **New folder** target the clicked directory, the containing directory
+  of a clicked file, or the Project root when invoked on empty tree/results space. A naming dialog
+  shows that destination. Creation accepts one leaf only, rejects Windows-invalid/reserved names
+  and `.git`/`.swe-mux`, requires an existing contained parent, and uses exclusive filesystem
+  creation: an existing file, directory, or symlink returns `409 resource_exists` and is never
+  changed. A new file opens in its normal pane tab; a new folder clears search, refreshes its
+  parent, and expands. Items hidden by ignore rules are still created, with a persistent notice.
 - Both path forms are offered because both are the right answer somewhere: the absolute path is
   what pastes into a shell, the Project-relative one is what agents and commit messages use. The
   absolute form is rebuilt against the Project root's own separator, so a Windows root yields a
@@ -273,6 +306,29 @@ include a registered Project nested below another Git root.
   recovery panel in the Files view instead of dropping it, so a blocked copy costs one tap.
 - `Tab` inserts a literal tab in the plain-textarea file editor. Continuity Markdown surfaces
   handle their own indentation and list behavior.
+
+## Terminal attachments
+
+- An open Claude or Codex terminal accepts files from OS drag/drop, a copied-file paste, or the
+  action rail's **Attach** picker. One browser action may carry up to 10 files. Shell sessions and
+  ended agent sessions do not expose the action.
+- The daemon copies each file into
+  `<workspace>/.swe-mux/attachments/<safe-session-id>/<uuid>-<safe-name>` and creates a local
+  `attachments/.gitignore` that ignores the directory contents. `<workspace>` is the registered
+  Project root when the session cwd is inside it; a session deliberately launched at an external,
+  Git-validated worktree root uses that worktree instead. Runtime and later agent-run cwd
+  telemetry are never used for storage selection.
+- General files are opaque transport. CSV, TSV, Excel workbooks, PDFs, and source files are all
+  accepted, but swe-mux does not parse or convert them. The terminal draft receives the absolute
+  path and the agent decides which reader or tool to use. The insertion never presses Enter.
+- PNG, JPEG, WebP, and GIF are content-sniffed and keep the native Claude/Codex image-paste path.
+  An empty browser MIME type is accepted when the bytes identify the format; misleading image
+  MIME/extension data is refused. Codex attachments are held until its bracketed-paste mode says
+  the chat prompt is ready, so a file cannot be uploaded and then lost during CLI startup.
+- Attachment insertion is always unicast, even when the source pane has terminal broadcast on.
+  Files are capped at 25 MiB each; native images retain the tighter 10 MiB cap. A session may own
+  at most 32 attachments and 100 MiB total. Files persist across daemon restarts and session
+  removal until the user removes them from the workspace; there is no silent TTL cleanup.
 
 ## Watch efficiency
 
@@ -300,6 +356,10 @@ on read (`workspace-layout.md`).
 - `src/swe_mux/project_watcher.py`
 - `src/swe_mux/file_manager.py`
 - `frontend/src/ProjectResource.tsx`
+- `frontend/src/DelimitedTextViewer.tsx`
+- `frontend/src/ImageViewer.tsx`
+- `frontend/src/delimitedText.ts`
+- `frontend/src/projectResourceCreate.ts`
 - `frontend/src/ProjectNoteEditor.tsx`
 - `frontend/src/NotesTab.tsx` (the notes index; hosted by `UtilityDrawer.tsx`, which also hosts
   the drawer's note editor)
