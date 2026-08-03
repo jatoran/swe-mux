@@ -153,20 +153,30 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .account-identity.unverified{color:var(--amber)}
 .account-relink{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 0;color:var(--amber);font-size:8px}
 .account-current{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 9px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}.account-current span{grid-row:1/3;color:var(--green);font-size:8px;align-self:center}.account-current strong{font-size:9px;font-weight:500}.account-current small{color:var(--muted)}.account-current.external span,.account-current.external strong{color:var(--amber)}.account-current.unreadable span,.account-current.unreadable strong{color:var(--red)}.account-current.signed_out span,.account-current.signed_out strong{color:var(--muted)}
-/* Mobile toolbar quota box: provider mark + weekly percent on one line, the weekly reset
-   countdown under it. Two of these have to fit beside nav, the Project title, and Run, so the
-   box is sized to its content and the digits carry the contrast rather than a border. */
+/* Mobile toolbar quota box: provider mark + every window the provider reports on one line
+   (`5h/weekly[/fable]`, no percent signs — see `quotaChipSegments`), the weekly reset
+   countdown under it. Two of these have to fit beside nav, the Project title, Run, and the
+   drawer toggle, so the box is sized to its content and the digits carry the contrast rather
+   than a border. The values run a point larger than the countdown: they are what the chip is
+   read for, and at 8px three of them blur into one number. */
 .toolbar-quota{min-width:0;height:calc(36px*var(--ui-scale));padding:1px 5px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;line-height:1.15;cursor:pointer;display:grid;grid-template-columns:auto auto;grid-template-rows:auto auto;align-items:center;justify-items:center;column-gap:3px}
 .toolbar-quota .provider-glyph{grid-row:1;font-size:10px;line-height:1;color:var(--text)}
 .toolbar-quota .provider-mark{width:10px;height:10px;display:block}
-.toolbar-quota>strong{grid-row:1;font-weight:600;color:var(--text)}
+.toolbar-quota>strong{grid-row:1;font-size:9px;font-weight:600;color:var(--text);white-space:nowrap}
 .toolbar-quota>small{grid-row:2;grid-column:1/-1;color:var(--muted);font-size:8px;white-space:nowrap}
 .toolbar-quota:hover,.toolbar-quota:focus-visible{border-color:var(--green)}
-.toolbar-quota.usage-warn>strong{color:var(--amber,#e5c07b)}
+/* Each window is banded individually, so the chip says which one is hot rather than only
+   that something is. The button's own band is the worst of them and drives the border. */
+.toolbar-quota .quota-window{font-style:normal;color:var(--text)}
+.toolbar-quota .quota-sep{font-style:normal;color:var(--muted)}
+.toolbar-quota .quota-window.usage-unknown{color:var(--muted)}
+.toolbar-quota .quota-window.usage-warn{color:var(--amber,#e5c07b)}
+.toolbar-quota .quota-window.usage-critical{color:var(--red)}
 .toolbar-quota.usage-critical{border-color:var(--red)}
-.toolbar-quota.usage-critical>strong{color:var(--red)}
 .toolbar-quota.quota-reset-unread{border-color:#a855f7;background:#6b21a833}
-.toolbar-quota.quota-reset-unread>strong{color:#d8b4fe}
+/* After the per-window bands on purpose: an unreviewed reset makes the whole reading
+   suspect, so it overrides them at equal specificity rather than colouring around them. */
+.toolbar-quota.quota-reset-unread .quota-window{color:#d8b4fe}
 .account-switcher.compact{display:flex;align-items:center;gap:4px}
 /* The sidebar's status block stays on mobile too. The toolbar chips answer "how much is
    left"; this answers "on which account, and what is the machine doing" — and both open the
@@ -1221,16 +1231,24 @@ body {
 
 @media(max-width:760px){
   .app-shell{height:var(--app-height,100dvh);min-height:0}
-  /* [nav] [quota] [project name] [Run]. Flex, not grid: only the title flexes and the other
-     three are content-sized, which grid expressed poorly here — an `auto` track next to the
-     title's `1fr` absorbed the slack and left the quota chips floating mid-bar. `nowrap` is
-     also what guarantees the bar stays one row as chip content changes width. */
+  /* [nav] [quota] [project name] [Run] [drawer]. Flex, not grid: only the title flexes and
+     the rest are content-sized, which grid expressed poorly here — an `auto` track next to
+     the title's `1fr` absorbed the slack and left the quota chips floating mid-bar. `nowrap`
+     is also what guarantees the bar stays one row as chip content changes width. The title is
+     the only thing that gives: it ellipsizes, and the Project it names is also in the sidebar
+     and the tab strip, which nothing else here is. */
   .mobile-toolbar{position:sticky;top:0;z-index:43;flex:none;display:flex;flex-wrap:nowrap;align-items:center;gap:6px;min-height:44px;padding:max(5px,env(safe-area-inset-top)) max(6px,env(safe-area-inset-right)) 5px max(6px,env(safe-area-inset-left));border-bottom:1px solid var(--line);background:var(--panel)}
   .mobile-toolbar>*{flex:0 0 auto}
-  /* Halved from 44px to buy the quota chips their width; the font drops with it so `:nav` is
-     not clipped. The 44px touch target survives vertically, and the sidebar also opens by
-     swipe, so this is not the only way in. */
-  .mobile-nav-toggle{position:static;inset:auto;min-width:24px;width:24px;height:44px;padding:0;overflow:hidden;z-index:auto}
+  /* The two edge toggles are the same box, mirrored: whatever is true of the tap target for
+     one drawer is true of the other. 24px was too narrow to hit reliably — the 44px height
+     alone does not save a target that thin, since a thumb's contact patch is wider than it is
+     tall. The glyph scales with the box, or a wider button just frames a 9px `≡` in dead space. */
+  .mobile-nav-toggle,.mobile-drawer-toggle{position:static;inset:auto;display:grid;place-items:center;min-width:36px;width:36px;height:44px;padding:0;overflow:hidden;z-index:auto;border:1px solid var(--line);background:var(--panel);color:var(--green);cursor:pointer}
+  .mobile-nav-toggle{font-size:15px}
+  .mobile-drawer-toggle>svg{width:18px;height:18px}
+  /* Pressed state only on the drawer toggle: it is the one whose panel can be open while the
+     button is still on screen. The sidebar's scrim covers this bar. */
+  .mobile-drawer-toggle[aria-expanded="true"]{border-color:var(--accent);color:var(--accent);background:var(--panel2)}
   .mobile-project-name{flex:1 1 auto;min-width:0;height:calc(38px*var(--ui-scale));border:0;background:transparent;padding:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;color:var(--text);cursor:pointer}
   .mobile-project-name:disabled{color:var(--muted);cursor:default}
   .mobile-project-name:not(:disabled):active{background:var(--panel2)}

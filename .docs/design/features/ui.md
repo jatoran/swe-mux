@@ -100,13 +100,26 @@ responsive controls.
   dot preserves unread-agent output even during another activity state. The active Project keeps
   an explicit selection border. Status, menu, and Projects controls remain pinned beneath the
   chip list; every status indicator opens the same popover as its expanded counterpart.
-- Each quota chip stacks the provider's own mark above its weekly percentage. Weekly is the
-  window worth a permanent glance: the 5-hour session window churns constantly, and `fable` is a
-  sub-window of one provider's plan rather than a measure comparable across providers. The mark
-  is the only thing identifying the row, so it keeps full contrast while the percentage carries
-  the shared ok/warn/critical banding. Providers render in the same order as everywhere else.
-  The mobile toolbar renders the same chip with the weekly countdown added beneath; the rail has
-  no room for that second line, and on desktop the tooltip already carries it.
+- Each quota chip stacks the provider's own mark above its usage. The mark is the only thing
+  identifying the row, so it keeps full contrast while the numbers carry the shared
+  ok/warn/critical banding. Providers render in the same order as everywhere else.
+- The **collapsed desktop rail** has room for one number, and that number is weekly: the 5-hour
+  session window churns constantly, and `fable` is a sub-window of one provider's plan rather
+  than a measure comparable across providers, so weekly is the one worth a permanent glance.
+- The **mobile toolbar** has the width for all of them and shows every window the provider
+  reports — `5h/weekly[/fable]`, so Claude reads `90/80/74` and Codex, which has no 5-hour
+  window today, reads `—/74`. A window the provider omits keeps its slot as `—` rather than
+  collapsing, because there are no percent signs to anchor on and it is a number's *position*
+  that says which window it is. The signs are dropped for width: every value here is a
+  percentage, so the sign distinguishes nothing while costing a third of the chip. Each window
+  is banded on its own, so the chip says *which* one is hot; the chip's border takes the worst
+  of them. The weekly reset countdown stays on a second line beneath — "22% used" answers a
+  different question from "and it clears in 4d12h", and a phone has no hover tooltip to reach
+  the second one. The chip's tooltip (and so its accessible name) names every window and says
+  the countdown is the weekly one, since the chip itself shows unlabelled numbers.
+- A band always describes the digits actually printed, not the value behind them: a rounded `90`
+  colours as 90 even when the true reading is 89.6, or the colour would contradict the number
+  beside it at exactly the threshold people watch for.
 - The resource chip reports RAM rather than CPU, since a percentage that moves every sample is
   not worth a permanent glance, and abbreviates it (`3.2G`) to fit the strip.
 - Popover direction is independent of the condensed trigger, so a rail anchored at the bottom of
@@ -388,15 +401,25 @@ responsive controls.
 - The bar is flex with `nowrap`, not grid. Only the Project name flexes and the other three are
   content-sized; expressed as grid, the `auto` track next to the name's `1fr` absorbed the
   slack and left the quota boxes stranded mid-bar.
-- Mobile quota is **two boxes, one per provider**, each carrying the weekly percentage and the
-  weekly reset countdown (`23%` over `4d8h`). It previously showed a single number — whichever
-  provider's weekly window was furthest along — which hid *which* provider was burning and gave
-  no sense of how long until it cleared, and a phone has no hover tooltip to recover either.
-  Providers render in the same order as every other surface.
-- Nav is half width and therefore a glyph rather than the `:nav` label. No word survives at that
-  width, and pinning a font size to force one would ignore the user's UI-scale setting, which
-  this button is subject to through an `!important` rule. The 44 px touch target survives
-  vertically, and the sidebar also opens by swipe, so this is not its only entry point.
+- The bar is `[nav] [quota] [Project name] [Run] [side panel]`. Only the Project name flexes;
+  everything else is content-sized, and the name is the one thing that can give, since it
+  ellipsizes and the Project it names also appears in the sidebar and the tab strip. Measured
+  at 320–430 px, the fixed items take ~262 px, so the name keeps 36 px at the narrowest phone
+  and ~106 px at 390 px.
+- Mobile quota is **two boxes, one per provider**, each carrying every window that provider
+  reports over the weekly reset countdown (`90/80/74` over `4d8h`) — see the quota-chip rules
+  above. It previously showed a single number — whichever provider's weekly window was furthest
+  along — which hid *which* provider was burning and gave no sense of how long until it
+  cleared, and a phone has no hover tooltip to recover either. Providers render in the same
+  order as every other surface.
+- Nav is a glyph rather than the `:nav` label. No word survives at this width, and pinning a
+  font size to force one would ignore the user's UI-scale setting, which this button is subject
+  to through an `!important` rule. It and the side-panel toggle are one mirrored box (36 × 44
+  px): whatever is true of the tap target for one drawer is true of the other. 24 px was too
+  narrow to hit reliably — the 44 px height alone does not rescue a target that thin, because a
+  thumb's contact patch is wider than it is tall — and the glyph scales with the box, or a
+  wider button only frames a 9 px `≡` in dead space. Both drawers also open by swipe, so
+  neither toggle is its panel's only entry point.
 - Every Run trigger that targets the active Project — mobile toolbar, desktop header, collapsed
   rail — toggles: a second click collapses the menu. Sidebar project rows keep the plain open, so
   clicking another Project's `▶` while a menu is up switches to it rather than only closing.
@@ -905,6 +928,13 @@ responsive controls.
   `drawer.toggle` (default two-finger swipe **left**, the swipe that drags a right-edge panel in;
   the rightward swipe keeps the left-edge sidebar) reopens where you left off, while `drawer.<tab>`
   commands open one tab directly and close it if it is already showing.
+- On mobile the toolbar's right-corner toggle is the drawer's only *visible* entry point: the
+  desktop icon rail is hidden there, which left the panel reachable by gesture or command
+  palette alone — neither of which announces itself. It mirrors the nav toggle at the opposite
+  edge because the two full-height drawers they open are mirror images, and an edge toggle
+  sitting anywhere but its own edge reads as unrelated to the panel it opens; Run gives up the
+  corner for it and is found by its label instead. Its icon is the panel, not any one tab's
+  mark, because like `drawer.toggle` it opens whichever tab was last used.
 - Acting closes the drawer on mobile, where it covers the surface just acted on, and leaves it
   open on desktop, where the column sits beside that surface and a second insert (or a second
   file) is the common next action. One rule, applied to inserting text and to opening a file or

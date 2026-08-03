@@ -265,8 +265,12 @@ def test_collapsed_sidebar_rail_keeps_sidebar_controls_reachable() -> None:
     # Popover direction is independent of the condensed trigger so the rail, which
     # sits at the bottom of the window, still opens upward.
     assert "const opensDown=placement?placement==='down':compact" in accounts
-    # One chip per provider, each identified by its own mark, showing weekly usage.
-    assert "providerWeeklyUsage" in accounts
+    # One chip per provider, each identified by its own mark. Both surfaces read the same
+    # windows map; the rail narrows it to weekly because it has room for one number, while
+    # the mobile toolbar shows every window the provider reports.
+    assert "providerQuotaWindows" in accounts
+    assert "const weekly=windows?.weekly||null" in accounts
+    assert "quotaChipSegments(windows)" in accounts
     # One chip builder shared by the collapsed rail and the mobile toolbar, so the
     # two surfaces cannot drift apart.
     assert "const quotaChip=(provider:ProviderName,form:'rail'|'toolbar')=>" in accounts
