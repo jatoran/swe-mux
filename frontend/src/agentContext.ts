@@ -6,6 +6,7 @@ export interface AgentContextSource {
   id: string
   provider: 'claude' | 'codex'
   kind: 'instructions' | 'memory'
+  scope: 'project' | 'global'
   label: string
   status: AgentContextStatus
   detail?: string
@@ -22,6 +23,7 @@ export interface AgentContextProvider {
   status: AgentContextStatus
   detail: string
   items: AgentContextSource[]
+  item_count: number
   truncated: boolean
 }
 
@@ -39,6 +41,9 @@ export interface AgentContextInventory {
   generated_at: number
   instructions: {
     comparison: AgentContextComparison
+    items: AgentContextSource[]
+  }
+  global_instructions: {
     items: AgentContextSource[]
   }
   providers: AgentContextProvider[]
@@ -80,4 +85,8 @@ export function statusLabel(value: AgentContextStatus): string {
 
 export function backupAction(backup: AgentContextBackup): string {
   return backup.existed ? `Restore ${backup.target}` : `Remove created ${backup.target}`
+}
+
+export function memoryFileCount(providers: AgentContextProvider[]): number {
+  return providers.reduce((total, provider) => total + provider.item_count, 0)
 }

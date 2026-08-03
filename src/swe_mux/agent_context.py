@@ -34,6 +34,18 @@ INSTRUCTION_SOURCES = {
     "instruction:claude": ("claude", "CLAUDE.md"),
     "instruction:codex": ("codex", "AGENTS.md"),
 }
+GLOBAL_INSTRUCTION_SOURCES = {
+    "instruction:global:claude": (
+        "claude",
+        (".claude", "CLAUDE.md"),
+        "~/.claude/CLAUDE.md",
+    ),
+    "instruction:global:codex": (
+        "codex",
+        (".codex", "AGENTS.md"),
+        "~/.codex/AGENTS.md",
+    ),
+}
 SYNC_DIRECTIONS = {
     "claude_to_agents": ("CLAUDE.md", "AGENTS.md"),
     "agents_to_claude": ("AGENTS.md", "CLAUDE.md"),
@@ -146,6 +158,11 @@ class AgentContextService:
         self.home = Path(home) if home is not None else Path.home()
         self.repository_root = repository_root
         self._start_revisions: dict[tuple[str, str], str] = {}
+        for _, relative_path, _ in GLOBAL_INSTRUCTION_SOURCES.values():
+            path = self.home.joinpath(*relative_path)
+            self._start_revisions[(str(path.parent.resolve()), path.name)] = self._file_revision(
+                path
+            )
 
     def capture_project(self, root: str | Path) -> None:
         project_root = Path(root).resolve()
@@ -171,13 +188,22 @@ class AgentContextService:
         return self._start_revisions[key] != current
 
     def _instruction_item(self, root: Path, source_id: str) -> dict[str, Any]:
-        provider, filename = INSTRUCTION_SOURCES[source_id]
-        path = root / filename
+        if source_id in INSTRUCTION_SOURCES:
+            provider, filename = INSTRUCTION_SOURCES[source_id]
+            path = root / filename
+            scope = "project"
+            label = filename
+        else:
+            provider, relative_path, label = GLOBAL_INSTRUCTION_SOURCES[source_id]
+            path = self.home.joinpath(*relative_path)
+            filename = path.name
+            scope = "global"
         item: dict[str, Any] = {
             "id": source_id,
             "provider": provider,
             "kind": "instructions",
-            "label": filename,
+            "scope": scope,
+            "label": label,
             "status": "missing",
             "revision": "missing",
             "size": 0,
@@ -211,7 +237,7 @@ class AgentContextService:
             except (OSError, ValueError) as exc:
                 item.update(status="unreadable", detail=str(exc), revision="unreadable")
         item["changed_since_start"] = self._changed_since_start(
-            root, filename, str(item["revision"])
+            path.parent.resolve(), filename, str(item["revision"])
         )
         return item
 
@@ -250,6 +276,7 @@ class AgentContextService:
             "status": "missing",
             "detail": "No learned project memory directory was found.",
             "items": [],
+            "item_count": 0,
             "truncated": False,
         }
         if settings_error:
@@ -280,6 +307,7 @@ class AgentContextService:
                 "id": source_id,
                 "provider": "claude",
                 "kind": "memory",
+                "scope": "project",
                 "label": path.name,
                 "status": "available",
                 "size": 0,
@@ -306,6 +334,7 @@ class AgentContextService:
                 except (OSError, ValueError) as exc:
                     item.update(status="unreadable", detail=f"Unreadable: {exc}")
             provider["items"].append(item)
+        provider["item_count"] = len(paths)
         provider.update(
             status="available" if provider["items"] else "missing",
             detail=(
@@ -332,6 +361,7 @@ class AgentContextService:
                     "status": "unreadable",
                     "detail": f"Codex memory configuration is unreadable: {exc}",
                     "items": [],
+                    "item_count": 0,
                     "truncated": False,
                 }
         return {
@@ -345,6 +375,7 @@ class AgentContextService:
                 else "Codex project memory is disabled or not configured."
             ),
             "items": [],
+            "item_count": 0,
             "truncated": False,
         }
 
@@ -366,6 +397,12 @@ class AgentContextService:
             "project": {"id": project_id, "name": project_name},
             "generated_at": time.time(),
             "instructions": {"comparison": comparison, "items": instructions},
+            "global_instructions": {
+                "items": [
+                    self._instruction_item(project_root, source_id)
+                    for source_id in GLOBAL_INSTRUCTION_SOURCES
+                ]
+            },
             "providers": [self._claude_provider(project_root), self._codex_provider()],
             "backups": self._backups(project_id),
         }
@@ -376,6 +413,14 @@ class AgentContextService:
             provider, filename = INSTRUCTION_SOURCES[source_id]
             path = project_root / filename
             kind = "instructions"
+            scope = "project"
+            label = filename
+        elif source_id in GLOBAL_INSTRUCTION_SOURCES:
+            provider, relative_path, label = GLOBAL_INSTRUCTION_SOURCES[source_id]
+            path = self.home.joinpath(*relative_path)
+            filename = path.name
+            kind = "instructions"
+            scope = "global"
         elif source_id.startswith("memory:claude:"):
             filename = _source_filename(source_id.removeprefix("memory:claude:"))
             directory, settings_error = self._claude_memory_directory(project_root)
@@ -384,6 +429,8 @@ class AgentContextService:
             path = directory / filename
             provider = "claude"
             kind = "memory"
+            scope = "project"
+            label = filename
         else:
             raise ValueError("unknown agent context source")
         if not path.exists():
@@ -394,7 +441,8 @@ class AgentContextService:
                 "id": source_id,
                 "provider": provider,
                 "kind": kind,
-                "label": filename,
+                "scope": scope,
+                "label": label,
                 "revision": _revision(data),
                 "size": len(data),
                 "modified_at": path.stat().st_mtime,

@@ -1738,14 +1738,14 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 }
 
 /* Agent Context: an inventory and viewer, never an editor. Mutations are isolated to the
-   preview/confirm sync and restore cards; file bodies are ordinary preformatted text. */
+   sync modal; file bodies are ordinary preformatted text. */
 .agent-context{flex:1 1 auto;min-height:0;overflow:auto;background:var(--bg)}
 .agent-context-header{position:sticky;z-index:5;top:0;display:flex;align-items:center;gap:8px;padding:8px 9px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--panel) 94%,transparent);backdrop-filter:blur(6px)}
 .agent-context-header>div{flex:1;min-width:0;display:grid;gap:2px}
 .agent-context-header strong{font-size:10px}
 .agent-context-header small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
-.agent-context-header button,.agent-context-section button,.agent-context-confirm button{min-height:27px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:8px;cursor:pointer}
-.agent-context-header button:hover:not(:disabled),.agent-context-section button:hover:not(:disabled),.agent-context-confirm button:hover:not(:disabled){border-color:var(--accent)}
+.agent-context-header button,.agent-context-section button,.agent-context-confirm button,.agent-context-sync-card button{min-height:27px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:8px;cursor:pointer}
+.agent-context-header button:hover:not(:disabled),.agent-context-section button:hover:not(:disabled),.agent-context-confirm button:hover:not(:disabled),.agent-context-sync-card button:hover:not(:disabled){border-color:var(--accent)}
 .agent-context button:disabled{opacity:.45;cursor:not-allowed}
 .agent-context-notice{margin:0;padding:7px 9px;border-bottom:1px solid color-mix(in srgb,var(--green) 45%,var(--line));background:color-mix(in srgb,var(--green) 8%,var(--panel));color:var(--green);font-size:8px;line-height:1.45}
 .agent-context-notice.error{border-color:color-mix(in srgb,var(--red) 45%,var(--line));background:color-mix(in srgb,var(--red) 8%,var(--panel));color:var(--red)}
@@ -1766,6 +1766,19 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .agent-context-source-flags{min-width:0;display:flex;align-items:center;gap:4px;flex-wrap:wrap}
 .agent-context-source strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:9px;white-space:nowrap}
 .agent-context-source small{overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:7px;line-height:1.35;white-space:nowrap}
+.agent-context-memories{border-bottom:1px solid var(--line);background:var(--panel)}
+.agent-context-memories>summary{display:flex;align-items:center;gap:6px;padding:9px;color:var(--text);cursor:pointer;list-style:none;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.agent-context-memories>summary::-webkit-details-marker{display:none}
+.agent-context-memories>summary:before{content:'›';color:var(--muted);font-size:13px;line-height:1;transform-origin:center;transition:transform .12s ease}
+.agent-context-memories[open]>summary:before{transform:rotate(90deg)}
+.agent-context-memories>summary span{flex:1}
+.agent-context-memories>summary i{padding:1px 5px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:7px;font-style:normal;font-weight:400;letter-spacing:.02em}
+.agent-context-memory-list{display:grid;border-top:1px solid var(--line)}
+.agent-context-memory-provider{display:grid;gap:7px;padding:9px;background:var(--panel)}
+.agent-context-memory-provider+.agent-context-memory-provider{border-top:1px solid var(--line)}
+.agent-context-memory-provider>header{display:flex;align-items:center;gap:6px}
+.agent-context-memory-provider h4{flex:1;margin:0;color:var(--text);font-size:9px;text-transform:uppercase;letter-spacing:.05em}
+.agent-context-memory-provider>p{margin:0;color:var(--muted);font-size:8px;line-height:1.45}
 .agent-context-sync{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding-top:2px}
 .agent-context-sync>strong,.agent-context-sync>small{grid-column:1/-1}
 .agent-context-sync>strong{font-size:8px}
@@ -1789,6 +1802,18 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .agent-context-backup strong{overflow:hidden;text-overflow:ellipsis;font-size:8px;white-space:nowrap}
 .agent-context-backup small{color:var(--muted);font-size:7px}
 .agent-context-backup-confirm{display:flex;gap:4px}
+.agent-context-sync-layer{z-index:90}
+.agent-context-sync-modal{width:min(720px,calc(100% - 24px));max-height:calc(100dvh - 24px);display:grid;grid-template-rows:auto minmax(0,1fr) auto}
+.agent-context-sync-body{min-height:0;overflow:auto;padding:14px 18px;display:grid;gap:12px}
+.agent-context-sync-body>.agent-context-notice{border:1px solid color-mix(in srgb,var(--green) 45%,var(--line))}
+.agent-context-sync-body>.agent-context-notice.error{border-color:color-mix(in srgb,var(--red) 45%,var(--line))}
+.agent-context-sync-card{display:grid;gap:9px;padding:12px;border:1px solid var(--line);background:var(--panel)}
+.agent-context-sync-card>header{display:flex;align-items:start;gap:8px}
+.agent-context-sync-card>header>div{flex:1;min-width:0;display:grid;gap:3px}
+.agent-context-sync-card>header strong{font-size:10px}
+.agent-context-sync-card>header small{overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:8px;white-space:nowrap}
+.agent-context-sync-card>p{margin:0;color:var(--muted);font-size:8px;line-height:1.45}
+.agent-context-sync-modal .agent-context-confirm{border:1px solid color-mix(in srgb,var(--amber) 55%,var(--line))}
 /* Command grid: labelled buttons, unlike the strip's abbreviated keys. */
 .drawer-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:5px;padding:8px 9px}
 .drawer-grid.keys{grid-template-columns:repeat(auto-fill,minmax(58px,1fr));border-top:1px solid var(--line)}
@@ -1945,7 +1970,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .drawer-grid button{min-height:46px}
   .drawer-fields input{min-height:38px;font-size:16px}
   .drawer-actions button{min-height:40px}
-  .agent-context-header button,.agent-context-section button,.agent-context-confirm button{min-height:38px}
+  .agent-context-header button,.agent-context-section button,.agent-context-confirm button,.agent-context-sync-card button{min-height:38px}
   .agent-context-sync{grid-template-columns:1fr}
   .agent-context-sync>strong,.agent-context-sync>small{grid-column:auto}
 }

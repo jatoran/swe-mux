@@ -35,10 +35,14 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
     (memory / "MEMORY.md").write_text("# Learned\n", encoding="utf-8")
     (memory / "testing.md").write_bytes(b"Prefer focused tests.\n")
     (home / ".claude").mkdir()
+    (home / ".claude" / "CLAUDE.md").write_text(
+        "# Global Claude\n", encoding="utf-8"
+    )
     (home / ".claude" / "settings.json").write_text(
         '{"autoMemoryDirectory": "~/memories"}', encoding="utf-8"
     )
     (home / ".codex").mkdir()
+    (home / ".codex" / "AGENTS.md").write_text("# Global Codex\n", encoding="utf-8")
     (home / ".codex" / "config.toml").write_text(
         "[features]\nmemories = true\n", encoding="utf-8"
     )
@@ -54,14 +58,27 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
         "AGENTS.md",
     ]
     assert not any(item["changed_since_start"] for item in inventory["instructions"]["items"])
+    assert [item["label"] for item in inventory["global_instructions"]["items"]] == [
+        "~/.claude/CLAUDE.md",
+        "~/.codex/AGENTS.md",
+    ]
+    assert all(
+        item["scope"] == "global"
+        for item in inventory["global_instructions"]["items"]
+    )
     claude, codex = inventory["providers"]
     assert claude["status"] == "available"
     assert [item["label"] for item in claude["items"]] == ["MEMORY.md", "testing.md"]
+    assert claude["item_count"] == 2
     assert codex["status"] == "unsupported"
 
     source = service.read_source(root, claude["items"][1]["id"])
     assert source["source"]["kind"] == "memory"
     assert source["text"] == "Prefer focused tests.\n"
+    global_source = service.read_source(root, "instruction:global:codex")
+    assert global_source["source"]["scope"] == "global"
+    assert global_source["source"]["label"] == "~/.codex/AGENTS.md"
+    assert global_source["text"].replace("\r\n", "\n") == "# Global Codex\n"
 
     (root / "AGENTS.md").write_text("changed\n", encoding="utf-8")
     changed = service.inventory("project-one", "Project One", root)
@@ -180,6 +197,8 @@ def test_sources_are_allowlisted_and_bounded(tmp_path: Path) -> None:
         service.read_source(root, "memory:claude:Li4vZXNjYXBlLm1k")
     with pytest.raises(ValueError, match="unknown"):
         service.read_source(root, "file:anywhere")
+    with pytest.raises(ValueError, match="unknown"):
+        service.read_source(root, "instruction:global:../../escape")
 
 
 async def test_agent_context_http_contract(tmp_path: Path) -> None:
@@ -239,6 +258,10 @@ async def test_agent_context_http_contract(tmp_path: Path) -> None:
 
     assert inventory_response.status == 200
     assert inventory_payload["instructions"]["comparison"] == "missing"
+    assert [item["status"] for item in inventory_payload["global_instructions"]["items"]] == [
+        "missing",
+        "missing",
+    ]
     assert read_response.status == 200
     assert read_payload["text"].replace("\r\n", "\n") == "shared\n"
     assert preview_response.status == 200

@@ -773,8 +773,8 @@ responsive controls.
   reading or adding to a note without leaving the session on screen is the whole point of it on a
   phone. Context is the read-only inventory of root agent instructions and provider learned
   memory; like the drawer's note editor it renders inside the drawer, and unlike it never opens a
-  pane and never writes. Git closes the
-  Project-scoped block without joining them: it reads the repository behind the Project
+  pane and never writes. Git closes the Project-scoped block without joining the navigators:
+  it reads the repository behind the Project
   (branches, worktrees, dirty/upstream state) and opens nothing into a pane — see `git.md` for
   what it shows and the mutations it is allowed. **Processes** closes that block for the same
   shape of reason: Project-scoped, reports rather than opens, and see below for the split it
@@ -882,12 +882,13 @@ responsive controls.
   When the text landed in the note the panel is hosting, it stays open and returns to the note
   instead — closing would hide the result that was just asked for. Desktop does not move at all,
   because the column sits beside the workspace and a second insert is the common next action.
-- **Context** is the Agent Context surface (`agent-context.md`). It shows root `CLAUDE.md` and
-  `AGENTS.md`, Claude's provider-owned learned Markdown memory, and an explicit Codex
-  available/disabled/unsupported state. Bodies are read-only. The only mutations are deliberate
-  whole-file instruction copies: choose either direction, review a normalized diff, confirm the
-  overwrite, and retain a revision-guarded restore point. It never watches or synchronizes in the
-  background and never writes learned memory.
+- **Context** is the Agent Context surface (`agent-context.md`). It shows Project-root
+  `CLAUDE.md`/`AGENTS.md`, fixed global `~/.claude/CLAUDE.md`/`~/.codex/AGENTS.md`, and one
+  collapsed **Memories** disclosure badged with the provider file count. Bodies are read-only.
+  One `sync…` button opens a modal containing both deliberate Project-root whole-file copy
+  directions, normalized diff confirmation, and revision-guarded restore points. Global
+  instructions and learned memory are never write targets; nothing watches or synchronizes in
+  the background.
 - **Processes** is the *watch* half of process inspection; the modal inspector keeps the *act*
   half. The split is what makes a column viable at all. Watching is "which of my sessions are
   running something, is that dev server up" — a handful of numbers and a link, and a question you

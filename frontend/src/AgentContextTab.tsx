@@ -4,6 +4,7 @@ import {
   AGENT_CONTEXT_SYNC_OPTIONS,
   backupAction,
   comparisonLabel,
+  memoryFileCount,
   statusLabel,
   type AgentContextBackup,
   type AgentContextDirection,
@@ -12,6 +13,7 @@ import {
   type AgentContextSource,
   type AgentContextSyncPreview,
 } from './agentContext'
+import { useModalFocus } from './modalFocus'
 import type { Project, Session } from './types'
 
 const REQUEST_TIMEOUT_MS = 12_000
@@ -73,12 +75,20 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
   const [sourceNonce, setSourceNonce] = useState(0)
   const [preview, setPreview] = useState<AgentContextSyncPreview | null>(null)
   const [restoreConfirm, setRestoreConfirm] = useState<AgentContextBackup | null>(null)
+  const [syncOpen, setSyncOpen] = useState(false)
   const [busy, setBusy] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const generation = useRef(0)
+  const syncPanel = useRef<HTMLElement>(null)
   const projectId = project?.id || ''
+  const closeSync = useCallback(() => {
+    setSyncOpen(false)
+    setPreview(null)
+    setRestoreConfirm(null)
+  }, [])
+  useModalFocus(syncPanel, closeSync, syncOpen)
 
   const refresh = useCallback(async () => {
     if (!projectId) { setInventory(null); return }
@@ -95,6 +105,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       setInventory(next)
       const readable = [
         ...next.instructions.items,
+        ...next.global_instructions.items,
         ...next.providers.flatMap(provider => provider.items),
       ].filter(item => item.status === 'available')
       setSelectedId(current => readable.some(item => item.id === current)
@@ -116,6 +127,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
     setSelected(null)
     setPreview(null)
     setRestoreConfirm(null)
+    setSyncOpen(false)
     setMessage('')
     setError('')
     void refresh()
@@ -240,6 +252,9 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
   }
 
   const instructions = inventory?.instructions.items || []
+  const globalInstructions = inventory?.global_instructions.items || []
+  const providers = inventory?.providers || []
+  const memories = memoryFileCount(providers)
   const sourceExists = new Map(instructions.map(item => [item.label, item.status === 'available']))
   const focusedAgent = session && session.project_id === project.id && session.backend !== 'shell'
     ? session
@@ -271,6 +286,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
         {inventory && <i class={`context-comparison ${inventory.instructions.comparison}`}>
           {comparisonLabel(inventory.instructions.comparison)}
         </i>}
+        <button disabled={!inventory || !!busy} onClick={() => setSyncOpen(true)}>sync…</button>
       </header>
       <p>Root instruction files read by Claude and Codex. Viewing never edits them.</p>
       <div class="agent-context-sources">
@@ -283,44 +299,13 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
           onOpen={setSelectedId}
         />)}
       </div>
-      <div class="agent-context-sync">
-        <strong>Manual whole-file sync</strong>
-        <small>Choose a direction, review the diff, then confirm the overwrite.</small>
-        {AGENT_CONTEXT_SYNC_OPTIONS.map(option => <button
-          key={option.direction}
-          disabled={!sourceExists.get(option.source) || !!busy}
-          onClick={() => void openPreview(option.direction)}
-        >
-          {busy === `preview:${option.direction}` ? 'preparing…' : `${option.source} → ${option.target}`}
-        </button>)}
-      </div>
     </section>
 
-    {preview && <section class="agent-context-confirm" aria-label="Confirm instruction sync">
-      <header>
-        <strong>Overwrite {preview.target.label}?</strong>
-        <small>{preview.source.label} will replace the entire file. A restore point is created first.</small>
-      </header>
-      {preview.in_sync
-        ? <p>The normalized contents already match; there is nothing to copy.</p>
-        : <pre>{preview.diff || '(The destination is empty.)'}</pre>}
-      <footer>
-        <button onClick={() => setPreview(null)}>cancel</button>
-        <button class="danger" disabled={preview.in_sync || busy === 'sync'} onClick={() => void commitSync()}>
-          {busy === 'sync' ? 'overwriting…' : `overwrite ${preview.target.label}`}
-        </button>
-      </footer>
-    </section>}
-
-    {(inventory?.providers || []).map(provider => <section class="agent-context-section" key={provider.id}>
-      <header>
-        <h4>{provider.label} learned memory</h4>
-        {focusedAgent?.backend === provider.id && <i class="context-state focused">focused agent</i>}
-        <i class={`context-state ${provider.status}`}>{statusLabel(provider.status)}</i>
-      </header>
-      <p>{provider.detail}</p>
-      {provider.items.length > 0 && <div class="agent-context-sources">
-        {provider.items.map(item => <SourceRow
+    <section class="agent-context-section">
+      <header><h4>Global instructions</h4></header>
+      <p>User-level instruction files shared by every Project for each provider.</p>
+      <div class="agent-context-sources">
+        {globalInstructions.map(item => <SourceRow
           key={item.id}
           item={item}
           selected={selectedId === item.id}
@@ -328,9 +313,36 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
           runStartedAt={focusedAgent?.agent_run_started_at}
           onOpen={setSelectedId}
         />)}
-      </div>}
-      {provider.truncated && <p>Only the first bounded set of memory files is shown.</p>}
-    </section>)}
+      </div>
+    </section>
+
+    <details class="agent-context-memories">
+      <summary>
+        <span>Memories</span>
+        <i>{memories} file{memories === 1 ? '' : 's'}</i>
+      </summary>
+      <div class="agent-context-memory-list">
+        {providers.map(provider => <section class="agent-context-memory-provider" key={provider.id}>
+          <header>
+            <h4>{provider.label}</h4>
+            {focusedAgent?.backend === provider.id && <i class="context-state focused">focused agent</i>}
+            <i class={`context-state ${provider.status}`}>{statusLabel(provider.status)}</i>
+          </header>
+          <p>{provider.detail}</p>
+          {provider.items.length > 0 && <div class="agent-context-sources">
+            {provider.items.map(item => <SourceRow
+              key={item.id}
+              item={item}
+              selected={selectedId === item.id}
+              focusedBackend={focusedAgent?.backend}
+              runStartedAt={focusedAgent?.agent_run_started_at}
+              onOpen={setSelectedId}
+            />)}
+          </div>}
+          {provider.truncated && <p>Showing {provider.items.length} of {provider.item_count} memory files.</p>}
+        </section>)}
+      </div>
+    </details>
 
     {selectedId && <section class="agent-context-viewer">
       <header>
@@ -340,27 +352,77 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       {selected ? <pre tabIndex={0}>{selected.text}</pre> : <p>Reading source…</p>}
     </section>}
 
-    {(inventory?.backups.length || 0) > 0 && <section class="agent-context-section agent-context-backups">
-      <header><h4>Restore points</h4></header>
-      <p>Created automatically before a manual sync or restore.</p>
-      {inventory!.backups.map(backup => {
-        const confirming = restoreConfirm?.id === backup.id
-        const canRestore = currentRevision.has(backup.target)
-        return <div class="agent-context-backup" key={backup.id}>
-          <span>
-            <strong>{backupAction(backup)}</strong>
-            <small>{formatTime(backup.created_at)} · {backup.existed ? formatBytes(backup.size) : 'file did not exist'}</small>
-          </span>
-          {confirming
-            ? <span class="agent-context-backup-confirm">
-              <button onClick={() => setRestoreConfirm(null)}>cancel</button>
-              <button class="danger" disabled={!canRestore || !!busy} onClick={() => void restore(backup)}>
-                {busy === `restore:${backup.id}` ? 'restoring…' : 'restore now'}
-              </button>
-            </span>
-            : <button disabled={!canRestore || !!busy} onClick={() => { setRestoreConfirm(backup); setPreview(null) }}>restore…</button>}
+    {syncOpen && <div class="modal-layer agent-context-sync-layer" onMouseDown={event => event.target === event.currentTarget && closeSync()}>
+      <section ref={syncPanel} class="modal agent-context-sync-modal" role="dialog" aria-modal="true" aria-label="Manage instruction sync">
+        <div class="modal-heading">
+          <div><span>AGENT CONTEXT</span><h2>Instruction sync</h2></div>
+          <button type="button" aria-label="Close instruction sync" onClick={closeSync}>×</button>
         </div>
-      })}
-    </section>}
+        <div class="agent-context-sync-body">
+          {(error || message) && <p class={`agent-context-notice ${error ? 'error' : ''}`} aria-live="polite">
+            {error || message}
+          </p>}
+          <section class="agent-context-sync-card">
+            <header>
+              <div><strong>Project root files</strong><small>{project.root}</small></div>
+              {inventory && <i class={`context-comparison ${inventory.instructions.comparison}`}>
+                {comparisonLabel(inventory.instructions.comparison)}
+              </i>}
+            </header>
+            <p>Choose a direction, review the diff, then confirm the whole-file overwrite.</p>
+            <div class="agent-context-sync">
+              {AGENT_CONTEXT_SYNC_OPTIONS.map(option => <button
+                key={option.direction}
+                disabled={!sourceExists.get(option.source) || !!busy}
+                onClick={() => void openPreview(option.direction)}
+              >
+                {busy === `preview:${option.direction}` ? 'preparing…' : `${option.source} → ${option.target}`}
+              </button>)}
+            </div>
+          </section>
+
+          {preview && <section class="agent-context-confirm" aria-label="Confirm instruction sync">
+            <header>
+              <strong>Overwrite {preview.target.label}?</strong>
+              <small>{preview.source.label} will replace the entire file. A restore point is created first.</small>
+            </header>
+            {preview.in_sync
+              ? <p>The normalized contents already match; there is nothing to copy.</p>
+              : <pre>{preview.diff || '(The destination is empty.)'}</pre>}
+            <footer>
+              <button onClick={() => setPreview(null)}>cancel</button>
+              <button class="danger" disabled={preview.in_sync || busy === 'sync'} onClick={() => void commitSync()}>
+                {busy === 'sync' ? 'overwriting…' : `overwrite ${preview.target.label}`}
+              </button>
+            </footer>
+          </section>}
+
+          <section class="agent-context-sync-card agent-context-backups">
+            <header><div><strong>Restore points</strong><small>Created before every sync or restore.</small></div></header>
+            {(inventory?.backups.length || 0) === 0
+              ? <p>No restore points yet.</p>
+              : inventory!.backups.map(backup => {
+                const confirming = restoreConfirm?.id === backup.id
+                const canRestore = currentRevision.has(backup.target)
+                return <div class="agent-context-backup" key={backup.id}>
+                  <span>
+                    <strong>{backupAction(backup)}</strong>
+                    <small>{formatTime(backup.created_at)} · {backup.existed ? formatBytes(backup.size) : 'file did not exist'}</small>
+                  </span>
+                  {confirming
+                    ? <span class="agent-context-backup-confirm">
+                      <button onClick={() => setRestoreConfirm(null)}>cancel</button>
+                      <button class="danger" disabled={!canRestore || !!busy} onClick={() => void restore(backup)}>
+                        {busy === `restore:${backup.id}` ? 'restoring…' : 'restore now'}
+                      </button>
+                    </span>
+                    : <button disabled={!canRestore || !!busy} onClick={() => { setRestoreConfirm(backup); setPreview(null) }}>restore…</button>}
+                </div>
+              })}
+          </section>
+        </div>
+        <div class="modal-footer"><button type="button" onClick={closeSync}>Close</button></div>
+      </section>
+    </div>}
   </div>
 }

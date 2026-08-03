@@ -275,18 +275,23 @@ POST /projects/{project_id}/agent-context/sync           {direction, source_revi
 POST /projects/{project_id}/agent-context/restore        {backup_id, target_revision}
 ```
 
-`direction` is exactly `claude_to_agents | agents_to_claude`. Inventory returns the two root
-instruction items, their normalized `in_sync | different | missing` comparison, provider rows,
-and the newest valid restore-point manifests. Source/provider status is typed:
+`direction` is exactly `claude_to_agents | agents_to_claude`. Inventory returns the two
+Project-root instruction items, their normalized `in_sync | different | missing` comparison,
+`global_instructions.items` for the fixed read-only `~/.claude/CLAUDE.md` and
+`~/.codex/AGENTS.md` sources, provider rows with complete `item_count`, and the newest valid
+restore-point manifests. Source/provider status is typed:
 `available | missing | disabled | unsupported | unreadable | too_large`. Claude learned memory
 items and root instructions carry opaque source ids; no route accepts a path.
 
 Source reads return `{source, text}` and are UTF-8, regular-file, non-symlink, and 512 KiB
-bounded. Inventory caps Claude memory at 128 direct Markdown children. Codex returns an explicit
-provider status and no files until its CLI publishes a stable project-memory file inventory;
-the daemon does not expose private database rows.
+bounded. Instruction sources carry `scope: project | global`; resolved global host paths never
+cross the API. Inventory caps Claude memory rows at 128 direct Markdown children while
+`item_count` reports the complete count. Codex returns an explicit provider status and no files
+until its CLI publishes a stable project-memory file inventory; the daemon does not expose
+private database rows.
 
-Preview returns a bounded unified diff plus SHA-256 `source.revision` and `target.revision`
+Preview remains Project-root-only. It returns a bounded unified diff plus SHA-256
+`source.revision` and `target.revision`
 (`missing` when absent). Commit is a complete destination overwrite and succeeds only while both
 revisions still match; otherwise `409 {code:"revision_conflict"}`. It preserves an existing
 destination's CRLF/LF convention and mode, uses same-directory atomic replace, and creates a

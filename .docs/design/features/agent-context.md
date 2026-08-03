@@ -2,10 +2,10 @@
 
 ## Purpose
 
-Agent Context is the project-scoped, read-only view of instruction and learned-memory files
-that Claude Code or Codex may carry between conversations. It makes otherwise hidden provider
-state inspectable before switching agents. It does not inject context into a session, infer what
-an already-running process loaded, or create a second memory authority.
+Agent Context is the Project-selected, read-only view of Project/global instruction files and
+learned-memory files that Claude Code or Codex may carry between conversations. It makes
+otherwise hidden provider state inspectable before switching agents. It does not inject context
+into a session, infer what an already-running process loaded, or create a second memory authority.
 
 The only ordinary mutation in the feature is a user-triggered whole-file copy between the two
 root instruction files. There is no automatic, watched, scheduled, or startup sync.
@@ -18,12 +18,15 @@ the project-scoped block. It contains:
 - the Project-root `CLAUDE.md` and `AGENTS.md`, including typed availability, byte size,
   modification time, line-ending style, and whether each revision changed since this daemon
   run began;
+- the fixed global instruction sources `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` with the
+  same read-only metadata;
 - an `in_sync | different | missing` comparison after normalizing CRLF/CR to LF;
-- Claude's learned `MEMORY.md` and Markdown topic files;
+- one collapsed **Memories** disclosure whose badge counts the complete provider inventory;
+  expanding it shows Claude's learned `MEMORY.md` and Markdown topic files plus provider status;
 - an explicit Codex state (`disabled`, `unsupported`, or `unreadable`) rather than an empty list
   that implies no memory exists;
-- a read-only preformatted viewer, manual rescan, sync preview/confirmation, and recent restore
-  points.
+- a read-only preformatted viewer and manual rescan; one `sync…` button opens a focus-trapped
+  modal containing both copy directions, diff confirmation, and recent restore points.
 
 Every body is rendered as text, never as an editor. Selecting or rescanning a source does not
 write it. A Project must be selected; live session focus and runtime cwd do not retarget the
@@ -31,8 +34,10 @@ inventory.
 
 ## Source discovery
 
-Only the two root instruction names are recognized. Nested `CLAUDE.md`/`AGENTS.md` files are
-outside this first-wave contract.
+Only four instruction sources are recognized: `<Project>/CLAUDE.md`, `<Project>/AGENTS.md`,
+`~/.claude/CLAUDE.md`, and `~/.codex/AGENTS.md`. Nested instruction files are outside the
+contract. Global files are inspectable only; manual synchronization remains between the two
+Project-root files.
 
 Claude learned memory comes from `~/.claude/settings.json:autoMemoryDirectory` when explicitly
 configured. Otherwise the daemon derives Claude's project directory under
@@ -47,11 +52,12 @@ documented project-memory file inventory. swe-mux does not reverse-engineer or r
 SQLite memory store. When the flag is absent/false it reports `disabled`; malformed config is
 `unreadable`.
 
-Provider paths never cross the HTTP boundary. Browser reads address opaque source IDs that the
-daemon maps back through the fixed instruction allowlist or the freshly validated Claude memory
-filename shape. Source reads are UTF-8, regular-file only, reject symlinks, and cap each file at
-512 KiB. An inventory contains at most 128 Claude memory files. Blocking Git and filesystem work
-runs off the aiohttp event loop.
+Provider paths never cross the HTTP boundary. The two global rows use fixed `~/…` display labels,
+not resolved host paths. Browser reads address opaque source IDs that the daemon maps back through
+the fixed instruction allowlist or the freshly validated Claude memory filename shape. Source
+reads are UTF-8, regular-file only, reject symlinks, and cap each file at 512 KiB. An inventory
+contains at most 128 Claude memory rows while retaining the complete count. Blocking Git and
+filesystem work runs off the aiohttp event loop.
 
 ## Manual instruction sync
 

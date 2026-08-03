@@ -4,7 +4,9 @@ import {
   AGENT_CONTEXT_SYNC_OPTIONS,
   backupAction,
   comparisonLabel,
+  memoryFileCount,
   statusLabel,
+  type AgentContextProvider,
 } from '../src/agentContext.ts'
 
 test('instruction sync exposes only the two explicit whole-file directions', () => {
@@ -29,4 +31,12 @@ test('restore copy distinguishes a prior file from undoing a newly created one',
   const base = { id: 'backup', created_at: 1, revision: 'missing', size: 0 } as const
   assert.equal(backupAction({ ...base, target: 'AGENTS.md', existed: false }), 'Remove created AGENTS.md')
   assert.equal(backupAction({ ...base, target: 'CLAUDE.md', existed: true }), 'Restore CLAUDE.md')
+})
+
+test('memory count uses the complete provider inventory count', () => {
+  const providers = [
+    { item_count: 130, items: new Array(128) },
+    { item_count: 0, items: [] },
+  ] as unknown as AgentContextProvider[]
+  assert.equal(memoryFileCount(providers), 130)
 })
