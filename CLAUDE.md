@@ -44,9 +44,27 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   retries exhaust on a `WinError 5/32` lock straggler, the script relaunches the old bundle
   itself; do NOT reach for `taskkill`/`muxd --shutdown` (that reaps sessions). Endpoint log:
   `<data_dir>/redeploy.log`.
+- **Supervisor change** (`supervisor.py`, `pty_host.py`, `scrollback.py`, `win_jobobj.py`,
+  `subprocess_flags.py`, the supervisor spec/entry): **the redeploy above cannot ship this,
+  and says nothing when it doesn't.** The redeploy's preflight *requires* a live supervisor,
+  while the bundle build refuses to run while one exists (PyInstaller cannot overwrite the
+  locked exe) — so the app bundle updates, `dist/swe-mux-supervisor/` stays stale, and your
+  change silently does nothing. Restarting swe-mux around the redeploy does not help; the
+  order is not the problem. Updating the supervisor **reaps every live session**, so it is a
+  deliberate act, not part of a normal update. From a terminal **outside** swe-mux:
+  1. `uv run muxd --shutdown` (reaps all sessions *and* stops the supervisor)
+  2. `Get-Process swe-mux, swe-mux-supervisor -ErrorAction SilentlyContinue` — expect nothing
+  3. `uv run python packaging/build_desktop.py --supervisor-only`
+  4. relaunch the app
+
+  Step 3 must run with no supervisor alive, so do not relaunch before it. Check whether you
+  actually need any of this: `supervisor_bundle_current()` in `packaging/build_desktop.py`
+  returns `False` when the running bundle is stale. **Prefer avoiding it entirely** — a new
+  supervisor message that an older supervisor can reject ("unknown message type") while the
+  daemon degrades gracefully needs no reap, whereas a `PROTOCOL_VERSION` bump forces one.
 - **Never** run `muxd --shutdown`, kill `swe-mux-supervisor.exe`, or taskkill swe-mux
   processes as part of an update — those reap every live session. They are only for
-  intentionally stopping everything.
+  intentionally stopping everything, or for the deliberate supervisor update above.
 
 Details, constraints, and the supervisor design: `.docs/development/SESSION_PRESERVING_RELOAD.md`
 (§7.5+ addendum has the exact workflows), `.docs/design/features/desktop-shell.md` (packaging),
