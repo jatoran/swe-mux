@@ -78,6 +78,30 @@ test('a background-wait turn end does not fire the completion sound', () => {
   assert.equal(classifySoundEvent(event({ scope: 'root', idle_reason: 'waiting_on_background' })), null)
 })
 
+test('the ready sound is suppressed while the agent still has work running', () => {
+  // Mirrors `running_work` in push.py: the same idle raises a sound here and a
+  // lock-screen push there, so the two classifiers have to agree on what "still
+  // working" means or one device stays noisy after the other is fixed.
+  const ready = (payload: Record<string, unknown> = {}) =>
+    classifySoundEvent({ type: 'state_changed', session_id: 's1', payload: { scope: 'root', state: 'idle', previous: 'working', ...payload } } as never)
+  assert.equal(ready()?.event, 'waiting')
+  assert.equal(ready({ standing: ['subagents'] }), null)
+  assert.equal(ready({ standing: ['background_tasks'] }), null)
+  assert.equal(ready({ idle_reason: 'waiting_on_background' }), null)
+  // A scheduled engagement is not running work: an idle session with an armed
+  // loop has genuinely finished its turn.
+  assert.equal(ready({ standing: ['loop', 'cron'] })?.event, 'waiting')
+})
+
+test('a session settling after startup does not fire the ready sound', () => {
+  // Startup idle is inferred from PTY quiet ~1s after spawn and is not even
+  // input-ready; nothing about it means the agent wants the human.
+  const event = (previous: string) =>
+    ({ type: 'state_changed', session_id: 's1', payload: { scope: 'root', state: 'idle', previous } }) as never
+  assert.equal(classifySoundEvent(event('starting')), null)
+  assert.equal(classifySoundEvent(event('working'))?.event, 'waiting')
+})
+
 test('shell sessions render the raw state', () => {
   const shell = { ...agent('running'), backend: 'shell' } as unknown as Session
   assert.equal(sessionStatus(shell), 'running')

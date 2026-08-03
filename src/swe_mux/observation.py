@@ -22,6 +22,7 @@ from .session import (
     pty_tail_state,
     pty_tail_waiting_on_background,
     set_standing_activity,
+    standing_activity_kinds,
     transition_proof,
 )
 from .text_safety import utf8_safe
@@ -2120,6 +2121,14 @@ async def _transition(
             state=state,
             detail=detail,
             awaiting_reason=awaiting_reason if state == "awaiting" else None,
+            # The idle axis and the standing axis have to ride the event, not only
+            # the record: consumers that decide whether to interrupt the human
+            # (push, sounds) see events, and an `idle` with subagents still running
+            # is not the moment to tell them the agent wants their input. This
+            # mirrors what `turn_ended` has always carried; the two must agree,
+            # because `state_changed` is the one the mobile default subscribes to.
+            idle_reason=idle_reason if state == "idle" else None,
+            standing=standing_activity_kinds(session),
             proof=transition_proof(source, inferred),
         )
     return True

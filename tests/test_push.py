@@ -87,6 +87,45 @@ def test_classify_excludes_subagent_and_nonroot() -> None:
     assert classify_notification(_event("state_changed", state="working")) is None
 
 
+def test_ready_is_suppressed_while_the_agent_still_has_work_running() -> None:
+    """A turn that ends with subagents or background tasks live is not a turn end.
+
+    This is the failure that made the feature unusable: 39% of a measured day's
+    "the agent is waiting for your input" alerts were raised while the session had
+    running work annotated, because the guard read a field `state_changed` did not
+    carry. Both sources of that fact are checked here so neither can rot silently.
+    """
+    ready = lambda **kw: classify_notification(_event("state_changed", state="idle", **kw))  # noqa: E731
+    assert ready()["category"] == "waiting"
+    assert ready(standing=["subagents"]) is None
+    assert ready(standing=["background_tasks"]) is None
+    assert ready(idle_reason="waiting_on_background") is None
+    # A *scheduled* engagement is not running work: an idle session with an armed
+    # loop has genuinely finished, and the human may well want to know.
+    assert ready(standing=["loop", "cron"])["category"] == "waiting"
+    # The completion category answers to the same rule.
+    assert classify_notification(_event("turn_ended", standing=["subagents"])) is None
+
+
+def test_ready_is_suppressed_for_a_session_that_just_started() -> None:
+    # Startup `idle` is inferred from PTY quiet, arrives ~1s after spawn, and is
+    # not even input-ready (the CLI swallows the submitting CR for seconds after).
+    # Nothing about it means the agent wants something from the human.
+    assert classify_notification(_event("state_changed", state="idle", previous="starting")) is None
+    assert (
+        classify_notification(_event("state_changed", state="idle", previous="working"))["category"]
+        == "waiting"
+    )
+
+
+def test_running_activity_kinds_agree_with_the_session_axis() -> None:
+    # push.py restates the set instead of importing the session machinery; this is
+    # what keeps the copy honest.
+    from swe_mux.session import RUNNING_ACTIVITY_KINDS as session_kinds
+
+    assert push_module.RUNNING_ACTIVITY_KINDS == session_kinds
+
+
 class _Recorder:
     def __init__(self) -> None:
         self.sent: list[dict] = []
@@ -312,6 +351,91 @@ async def test_repeat_alerts_do_not_stack_deferrals(
     gate.released.set()
     await _drain(sender)
     assert len(recorder.sent) == 1
+
+
+async def _drain_settles(sender: PushSender) -> None:
+    await asyncio.gather(*list(sender._settling.values()), return_exceptions=True)
+
+
+def _ready(**payload: object) -> MuxEvent:
+    return _event("state_changed", state="idle", previous="working", **payload)
+
+
+async def test_a_ready_alert_is_held_until_the_agent_has_actually_stopped(
+    tmp_path: Path, recorder: _Recorder
+) -> None:
+    """The measured failure: a turn-end signal lands, the agent carries on 11s
+    later, and the phone has already buzzed. Nothing at the moment of the idle
+    distinguishes that from a real one, so the alert waits to find out."""
+    now = [100.0]
+    gate = _Gate()
+    _store, _settings, sender = await _make_sender(tmp_path, lambda: now[0], sleep=gate)
+    await sender._handle(_ready())
+    assert recorder.sent == []  # nothing has been decided yet
+    assert sender.pending_settles() == 1
+    now[0] += 120
+    gate.released.set()
+    await _drain_settles(sender)
+    assert len(recorder.sent) == 1
+
+
+async def test_the_agent_carrying_on_cancels_the_ready_alert(
+    tmp_path: Path, recorder: _Recorder
+) -> None:
+    now = [100.0]
+    gate = _Gate()
+    _store, _settings, sender = await _make_sender(tmp_path, lambda: now[0], sleep=gate)
+    await sender._handle(_ready())
+    # The turn was not over. The claim the alert would have made is now false.
+    await sender._handle(_event("state_changed", state="working"))
+    assert sender.pending_settles() == 0
+    gate.released.set()
+    await asyncio.sleep(0)
+    assert recorder.sent == []
+
+
+async def test_repeat_idles_inside_the_settle_do_not_stack(
+    tmp_path: Path, recorder: _Recorder
+) -> None:
+    now = [100.0]
+    gate = _Gate()
+    _store, _settings, sender = await _make_sender(tmp_path, lambda: now[0], sleep=gate)
+    await sender._handle(_ready())
+    now[0] += 20  # past the dedup window; the same session, still idle
+    await sender._handle(_ready())
+    assert sender.pending_settles() == 1
+    gate.released.set()
+    await _drain_settles(sender)
+    assert len(recorder.sent) == 1
+
+
+async def test_an_approval_is_never_held_to_settle(
+    tmp_path: Path, recorder: _Recorder
+) -> None:
+    # The settle exists because "ready" is a claim the next two minutes can falsify.
+    # An approval is true the instant it is raised, and late is useless.
+    now = [100.0]
+    gate = _Gate()
+    _store, _settings, sender = await _make_sender(tmp_path, lambda: now[0], sleep=gate)
+    await sender._handle(_event("approval_needed"))
+    assert sender.pending_settles() == 0
+    assert len(recorder.sent) == 1
+
+
+async def test_a_settled_ready_alert_rechecks_presence_when_it_fires(
+    tmp_path: Path, recorder: _Recorder
+) -> None:
+    """Presence is read at delivery, not at the raise: two minutes is long enough
+    for the user to have picked the phone up, and the alert must not fight that."""
+    now = [100.0]
+    gate = _Gate()
+    store, _settings, sender = await _make_sender(tmp_path, lambda: now[0], sleep=gate)
+    await sender._handle(_ready())
+    now[0] += 120
+    store.set_presence("https://push/e1", True, ttl=60)
+    gate.released.set()
+    await _drain_settles(sender)
+    assert recorder.sent == []
 
 
 async def test_a_held_notification_respects_settings_changed_while_it_waited(

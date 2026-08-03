@@ -4,7 +4,7 @@ fleet status-health bounds."""
 
 from __future__ import annotations
 
-from typing import Any, get_args
+from typing import Any, cast, get_args
 
 import pytest
 
@@ -589,6 +589,37 @@ def test_background_wait_is_an_idle_sub_reason_not_a_state() -> None:
     assert pty_tail_waiting_on_background("") is False
     # The state itself is unchanged: this never invents or blocks a state.
     assert pty_tail_state("✻ Waiting for 2 background tasks to finish") == "unknown"
+
+
+async def test_state_changed_carries_what_the_notification_path_filters_on() -> None:
+    """`state_changed` is what "the agent is waiting for your input" is raised from,
+    so every field that decides whether to interrupt a human has to be on it.
+
+    It used to carry neither `idle_reason` nor the standing axis, which made both
+    suppression rules in push.py and sessionSounds.ts unreachable: they read fields
+    that only ever rode `turn_ended`, a category mobile has off by default. The
+    result was a phone buzzing "ready" for turns whose agent was still working.
+    """
+    from swe_mux.event_bus import EventBus
+    from swe_mux.observation import _transition
+    from swe_mux.push import classify_notification
+    from swe_mux.session import set_standing_activity
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.state = "working"
+    events = EventBus()
+    queue = events.subscribe()
+    set_standing_activity(session, "subagents", source="hook", evidence="hook:SubagentStart")
+    await _transition(
+        session, events, "idle", source="transcript", evidence="stop_reason=end_turn"
+    )
+    emitted = queue.get_nowait()
+    assert emitted.type == "state_changed"
+    assert emitted.payload["standing"] == ["subagents"]
+    assert emitted.payload["previous"] == "working"
+    # The end of this contract is the consumer: a turn end with subagents still
+    # running must not become a lock-screen alert.
+    assert classify_notification(emitted) is None
 
 
 def test_idle_reason_is_ledgered_and_cleared_by_leaving_idle() -> None:

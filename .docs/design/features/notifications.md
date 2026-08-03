@@ -13,14 +13,54 @@ inbox. Supported reasons are root turn complete, ready/waiting, approval or Q&A 
 failure, and confirmed unexpected quota reset. Reset sounds are emitted only after the durable
 quota classifier's timer, drop-size, floor, independent-confirmation, and account/auth gates all
 pass. EventBus semantic deduplication collapses hook and transcript duplicates; the browser adds
-a short sequence-aware guard. Events explicitly scoped to subagents/sidechains are rejected,
-and so is a turn end carrying `idle_reason: waiting_on_background`: the agent will resume
-itself when its background work lands, so that turn end is not the moment worth interrupting
-for. The one after it is — and suppressing here keeps "the completion chime means the agent
-is done" true instead of training the user to ignore it. The same rule gates web push.
+a short sequence-aware guard. Events explicitly scoped to subagents/sidechains are rejected.
+
+Three rules decide whether an idle session is worth interrupting a human for, and all three
+apply identically to sounds and to web push (`classify_notification` and
+`classifySoundEvent` are mirrors; the tests pin them):
+
+- **Running work suppresses it.** A turn end carrying `idle_reason: waiting_on_background`,
+  or a `subagents`/`background_tasks` standing annotation, means the turn ended and the
+  agent did not — it resumes itself when that work lands, so this is not the moment worth
+  interrupting for. The one after it is, and suppressing here keeps "the chime means the
+  agent is done" true instead of training the user to ignore it. Scheduled engagements
+  (`loop`, `cron`) do **not** suppress: ready means ready.
+- **A session settling after startup is not ready for you.** `state_changed` with
+  `previous: starting` never notifies. It is inferred from PTY quiet ~1s after spawn, it is
+  not even input-ready (the CLI swallows the submitting CR for seconds after it), and
+  nothing about it means the agent wants something the human asked for.
+- **"Ready" is held before it is believed.** See below.
+
+The first two read fields that must be present on `state_changed`, not only on
+`turn_ended` — see `features/status-detection.md` § What `state_changed` carries.
+
 The account popover can persistently classify a Codex alert as manual usage or discard any alert
 as a detection error. Reviewed evidence remains in telemetry history but leaves the active alert
 summary; review cannot retract a sound already emitted for the original confirmed event.
+
+## Settling the "ready" alert
+
+`waiting` ("the agent is ready for you") is raised by a *state transition*, and a transition
+into `idle` is a claim about the future that the next two minutes can falsify: a turn-end
+notify lands mid-turn, the PTY watchdog reads an idle prompt during a pause, a Codex
+`agent-turn-complete` arrives before the model is done. Nothing at the moment of the idle
+distinguishes those from a real turn end — only what happens next does. So the category is
+held for `WAITING_SETTLE_SECONDS` (120 s) before any routing decision, and the agent
+resuming cancels it, reusing the same cancellation the deferral path already had.
+
+120 s is measured, not chosen: over one 10-hour, 17-session day, 89 of 211 idle transitions
+were back to `working` inside that window with no human input in between. The 8 s
+semantic-dedup window caught none of them, because the flaps run 11-50 s. Categories that
+are true the instant they are raised (`attention`, `failure`, `reset`) are never held —
+an approval that arrives two minutes late is worse than useless. Sounds are not settled
+either: a live tab's chime is cheap, immediate, and the user is already looking at the
+screen that shows the correction.
+
+A settle and a deferral are different questions and compose: the settle asks "did the agent
+actually stop", the deferral asks "is the human somewhere else", so a held-then-deferred
+ready alert can arrive up to ~165 s after the idle. Anything that resolves a session
+(human input, the agent resuming) cancels both — `cancel_pending`, not just the deferral
+map, or a settled alert outlives the resume that falsified it.
 
 ## Web push and device routing
 

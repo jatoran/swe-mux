@@ -372,6 +372,15 @@ attribution.
   Do not make arbitrary script execution the universal default notification path.
 - [x] Preserve existing notification inbox/toast behavior and support quiet hours, volume,
   test sound, and per-event mute.
+- [x] Suppress the ready/complete alerts while running work (subagents, background tasks)
+  or a startup settle means the agent is not actually waiting on the human, and hold the
+  ready alert 120 s so a turn the agent walks back never reaches a lock screen.
+- [ ] Decide the residual `waiting` volume question — 62 true alerts per 10 hours on a
+  17-session fleet. Recency scoping and rate limiting are both measured and **rejected**;
+  see `NOTIFICATION_SCOPING_PROPOSAL.md` before proposing either again.
+- [ ] Persist one row per notification decision (session, category, plan verdict, outcome).
+  Today the sender logs only failures, so its behavior is reconstructable only by
+  simulation over `status_timeline`.
 
 ### Voice boundary
 

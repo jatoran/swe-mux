@@ -24,6 +24,15 @@ the notification they most needed is exactly the one plain suppression eats. So
 the push is held briefly and then delivered anyway, unless the user interacted
 with the other device *after* the alert was raised, which is direct evidence they
 were there and chose not to act on it.
+
+Routing is only half of it; the other half is whether the alert was ever true.
+`waiting` ("the agent is ready for you") is raised by a *state transition*, and a
+transition into `idle` is a claim about the future that the next two minutes can
+falsify: the CLI's turn-end notify lands mid-turn, the PTY watchdog reads an idle
+prompt during a pause, a session settles after startup. So that category is held
+for `WAITING_SETTLE_SECONDS` before any routing decision, and the agent resuming
+cancels it — the same cancellation the deferral path already used. Categories
+that are true the instant they are raised (`attention`, `failure`) are never held.
 """
 
 from __future__ import annotations
@@ -66,6 +75,22 @@ DEFERRABLE_CATEGORIES = frozenset({"attention", "waiting"})
 #: Long enough to cover answering a prompt at the desk, short enough that walking
 #: away mid-turn still reaches the phone while it matters.
 DEFERRAL_SECONDS = 45.0
+#: Categories held briefly to see whether the agent actually stopped, before any
+#: routing decision is made. Only `waiting`: it is the one alert whose whole claim
+#: ("the agent wants you now") is falsified by the agent carrying on, and the one
+#: that can be late without being useless. An approval is neither.
+SETTLED_CATEGORIES = frozenset({"waiting"})
+#: How long that hold is. Chosen from measured flap data rather than taste: on a
+#: 10-hour, 17-session day, 89 of 211 idle transitions were back to `working`
+#: inside 120 s with no human input in between (agent-turn-complete landing
+#: mid-turn, the PTY watchdog reading an idle prompt during a pause, startup
+#: settling). The 8 s dedup window caught none of them — the flaps run 11-50 s.
+WAITING_SETTLE_SECONDS = 120.0
+#: Annotation kinds that mean work is running right now. Duplicated from
+#: `session.RUNNING_ACTIVITY_KINDS` rather than imported: this module is the
+#: notification boundary and must not drag the session machinery in behind it.
+#: `session.py` owns the definition; the contract test pins them equal.
+RUNNING_ACTIVITY_KINDS = frozenset({"subagents", "background_tasks"})
 
 
 def _b64url(data: bytes) -> str:
@@ -77,6 +102,24 @@ def _atomic_write(path: Path, data: bytes) -> None:
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_bytes(data)
     os.replace(tmp, path)
+
+
+def running_work(payload: dict[str, Any]) -> bool:
+    """Whether the agent has work in flight that will resume it without the human.
+
+    Two sources, because they were built two months apart and both are still
+    load-bearing: the derived `idle_reason` (this session's own PTY footer saying
+    it is waiting on background tasks) and the standing-activity annotations
+    (subagents and background tasks, counted from hooks and transcript records).
+    A payload that carries neither is treated as "nothing running", which is the
+    honest reading of an older event and errs toward notifying.
+    """
+    if payload.get("idle_reason") == "waiting_on_background":
+        return True
+    standing = payload.get("standing")
+    if not isinstance(standing, (list, tuple)):
+        return False
+    return any(str(kind) in RUNNING_ACTIVITY_KINDS for kind in standing)
 
 
 def classify_notification(event: MuxEvent) -> dict[str, str] | None:
@@ -114,13 +157,21 @@ def classify_notification(event: MuxEvent) -> dict[str, str] | None:
             "title": "swe-mux — failed",
             "body": "The agent run failed.",
         }
-    if payload.get("idle_reason") == "waiting_on_background":
-        # The agent will resume itself when its background work lands, so this is
-        # not the moment worth a lock-screen alert; the next completion is.
+    if running_work(payload):
+        # The turn ended; the agent did not. It resumes itself when its subagents
+        # or background tasks land, so this is not the moment worth a lock-screen
+        # alert — the next completion is. Suppressing here keeps "the alert means
+        # the agent is done" true instead of training the user to ignore it.
         return None
     if kind == "turn_ended":
         return {"category": "complete", "title": "swe-mux", "body": "The agent finished a turn."}
     if kind == "state_changed" and payload.get("state") == "idle":
+        if payload.get("previous") == "starting":
+            # A session that just booted has not finished anything and is not
+            # waiting on the human for anything they asked for. Worse, startup
+            # `idle` is inferred from PTY quiet and is not even input-ready: the
+            # CLI still swallows a submitting CR for several seconds after it.
+            return None
         return {
             "category": "waiting",
             "title": "swe-mux — ready",
@@ -290,6 +341,7 @@ class PushSender:
         self._recent: dict[tuple[str, str], float] = {}
         self._failures: dict[str, int] = {}
         self._deferred: dict[tuple[str, str, str], asyncio.Task[None]] = {}
+        self._settling: dict[tuple[str, str], asyncio.Task[None]] = {}
 
     async def run(self) -> None:
         queue = self._events.subscribe(name="push")
@@ -300,7 +352,16 @@ class PushSender:
                     await self._handle(event)
         finally:
             self._events.unsubscribe(queue)
-            self.cancel_deferred()
+            self.cancel_pending()
+
+    def cancel_pending(self, session_id: str | None = None) -> int:
+        """Drop everything held for a session (or all of them): settles and deferrals.
+
+        Both maps answer the same question from different ends — "is this alert
+        still true?" — so anything that resolves a session has to clear both, or a
+        settled alert outlives the resume that falsified it.
+        """
+        return self.cancel_deferred(session_id) + self._cancel_settling(session_id)
 
     def cancel_deferred(self, session_id: str | None = None) -> int:
         """Drop pending deferrals, for one session or all of them."""
@@ -313,22 +374,70 @@ class PushSender:
             self._deferred.pop(key).cancel()
         return len(keys)
 
+    def _cancel_settling(self, session_id: str | None = None) -> int:
+        keys = [key for key in self._settling if session_id is None or key[0] == session_id]
+        for key in keys:
+            self._settling.pop(key).cancel()
+        return len(keys)
+
     def pending_deferrals(self) -> int:
         return len(self._deferred)
+
+    def pending_settles(self) -> int:
+        return len(self._settling)
 
     async def _handle(self, event: MuxEvent) -> None:
         if _resolves_attention(event):
             # The user dealt with this session (typed into it, or the agent resumed),
             # so anything held for it is answered and must not arrive late.
-            self.cancel_deferred(event.session_id or "")
+            self.cancel_pending(event.session_id or "")
         note = classify_notification(event)
         if not note:
             return
+        if note["category"] in SETTLED_CATEGORIES:
+            # Hold before deciding anything. An idle that the agent walks back is
+            # indistinguishable from a real one at the moment it is raised; the
+            # only thing that tells them apart is what happens next.
+            self._settle(event.session_id or "", note)
+            return
+        await self._dispatch(event.session_id or "", note)
+
+    def _settle(self, session_id: str, note: dict[str, str]) -> None:
+        key = (session_id, note["category"])
+        if key in self._settling:
+            # Already waiting out this session's readiness; a repeat idle inside the
+            # hold is the same claim, not a new one.
+            return
+        task = asyncio.create_task(self._dispatch_settled(key, note), name="push-settle")
+        self._settling[key] = task
+
+        def finished(done: asyncio.Task[None]) -> None:
+            if self._settling.get(key) is done:
+                del self._settling[key]
+            if done.cancelled():
+                return
+            try:
+                done.result()
+            except Exception:
+                log.exception("settled push dispatch failed")
+
+        task.add_done_callback(finished)
+
+    async def _dispatch_settled(self, key: tuple[str, str], note: dict[str, str]) -> None:
+        await self._sleep(WAITING_SETTLE_SECONDS)
+        # Leave the map before dispatching: past this point the alert has survived
+        # the hold and is being delivered, and a cancel landing mid-`gather` would
+        # tear down a send already in flight rather than preventing one.
+        if self._settling.get(key) is asyncio.current_task():
+            del self._settling[key]
+        await self._dispatch(key[0], note)
+
+    async def _dispatch(self, session_id: str, note: dict[str, str]) -> None:
         subs = self._store.list()
         if not subs:
             return
         now = self._clock()
-        dedup_key = (event.session_id or "", note["category"])
+        dedup_key = (session_id, note["category"])
         if self._recent.get(dedup_key, 0.0) > now - _DEDUP_WINDOW:
             return
         self._recent = {key: at for key, at in self._recent.items() if at > now - 60}
@@ -345,7 +454,7 @@ class PushSender:
             if plan == "send":
                 targets.append(sub)
             elif plan == "defer":
-                self._defer(sub, note, event.session_id or "", now)
+                self._defer(sub, note, session_id, now)
         if not targets:
             return
         # Concurrently: one stale endpoint that times out rather than returning

@@ -561,9 +561,31 @@ strips, the mobile projection) show the dimmed glyphs beside the dot; the full t
 in the status line and tooltips. Tests assert every annotation kind renders a glyph and
 label and that idle-with-loop still classifies as ready with an unchanged dot class.
 Notification policy: annotations neither add nor suppress sounds, with one exception —
-the pre-existing `waiting_on_background` turn-end sound suppression, now driven by the
-`background_tasks` annotation via the derived `idle_reason` (a loop-armed turn end still
-notifies: ready means ready).
+**running work** (`subagents`, `background_tasks`) suppresses the turn-end and ready
+alerts, because the turn ended and the agent did not. Scheduled engagements (`loop`,
+`cron`) still notify: ready means ready, and an armed wakeup is not work in flight. That
+split is the same one `hasRunningActivity` uses for the blue ring, defined once per side
+(`session.RUNNING_ACTIVITY_KINDS`, `push.RUNNING_ACTIVITY_KINDS`, and the frontend's
+`hasRunningWork`; a test pins the first two equal). The rule reaches the notification path
+only because `state_changed` carries the axes — see below.
+
+### What `state_changed` carries, and why
+
+`state_changed` is the event the "the agent is waiting for your input" alert is raised
+from, so it carries every field that decides whether to interrupt a human:
+`{previous, state, detail, awaiting_reason, idle_reason, standing, proof}`. `standing` is
+the open annotation *kinds* only — a consumer deciding whether to interrupt needs to know
+*that* subagents are running, never their count or expiry, and a fat payload on every
+transition is paid by every websocket client.
+
+This is a contract, not a convenience. `idle_reason` and the standing axis used to ride
+only `turn_ended`, which meant both suppression rules in `push.py` and `sessionSounds.ts`
+read fields their event never had and silently never fired; measured over one 10-hour,
+17-session day, 39% of "ready" pushes were raised while the session had running work
+annotated. Both producers of the event (`observation._transition` and the startup-quiet
+fallback in `session.py`) must keep the payload in step, and the startup path stamps
+`proof: inferred` for the same reason: an idle read off screen quiet must not reach a
+consumer looking as solid as a hook-proven turn end.
 
 ## Key files
 

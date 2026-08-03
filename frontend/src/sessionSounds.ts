@@ -64,6 +64,21 @@ export function isQuietTime(preferences:SoundPreferences,date=new Date()):boolea
   return start<end?now>=start&&now<end:now>=start||now<end
 }
 
+/**
+ * Annotation kinds that mean work is running *right now*, as opposed to a
+ * scheduled engagement (`loop`, `cron`) with nothing in flight. Same split as
+ * `hasRunningActivity` in sessionStatus.ts, read off the event payload rather
+ * than a session record: one definition of "running", three consumers.
+ */
+const RUNNING_ACTIVITY_KINDS=new Set(['subagents','background_tasks'])
+
+/** Whether an event payload says the agent will resume without the human. */
+export function hasRunningWork(payload:Record<string,unknown>):boolean{
+  if(payload.idle_reason==='waiting_on_background')return true
+  const standing=payload.standing
+  return Array.isArray(standing)&&standing.some(kind=>RUNNING_ACTIVITY_KINDS.has(String(kind)))
+}
+
 export function classifySoundEvent(event:NormalizedMuxEvent):{event:SoundEvent;reason:string}|null{
   const payload=event.payload||{}
   if(payload.scope&&payload.scope!=='root')return null
@@ -71,13 +86,20 @@ export function classifySoundEvent(event:NormalizedMuxEvent):{event:SoundEvent;r
   if(event.type==='unexpected_quota_reset')return {event:'reset',reason:'confirmed unexpected quota reset'}
   if(event.type==='approval_needed')return {event:'attention',reason:payload.kind==='input'?'root agent asked a question':'root agent needs approval'}
   if(event.type==='turn_failed'||event.type==='turn_aborted'||event.type==='session_crashed'||(event.type==='state_changed'&&payload.state==='crashed'))return {event:'failure',reason:'root agent failed'}
-  // The turn ended but the agent will wake itself when its background work
-  // finishes, so this is not the moment that wants the user's attention — the
-  // one after it is. Suppressing here keeps "the completion chime means the
-  // agent is done" true instead of training the user to ignore it.
-  if(payload.idle_reason==='waiting_on_background')return null
+  // The turn ended but the agent did not: subagents or background tasks are still
+  // running and it wakes itself when they land, so this is not the moment that
+  // wants the user's attention — the one after it is. Suppressing here keeps "the
+  // completion chime means the agent is done" true instead of training the user
+  // to ignore it. Mirrors `running_work` in push.py; the two must agree, because
+  // the same idle raises a sound here and a lock-screen push there.
+  if(hasRunningWork(payload))return null
   if(event.type==='turn_ended')return {event:'complete',reason:'root agent turn completed'}
-  if(event.type==='state_changed'&&payload.state==='idle')return {event:'waiting',reason:'root agent is ready for input'}
+  if(event.type==='state_changed'&&payload.state==='idle'){
+    // A session that just booted has not finished anything, and its startup idle
+    // is inferred from PTY quiet rather than observed — it is not even input-ready.
+    if(payload.previous==='starting')return null
+    return {event:'waiting',reason:'root agent is ready for input'}
+  }
   return null
 }
 

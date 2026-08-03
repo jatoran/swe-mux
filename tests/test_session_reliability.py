@@ -436,10 +436,25 @@ async def test_agent_startup_settles_to_ready_without_a_transcript(
                 "previous": "starting",
                 "state": "idle",
                 "detail": None,
+                "idle_reason": None,
+                "standing": [],
+                # Stamped `inferred` like every other PTY-sourced transition: this
+                # idle is read off screen quiet, not observed, and a consumer that
+                # cannot tell it from a hook-proven turn end will act on it.
+                "proof": "inferred",
                 "capability": "startup_quiet_fallback",
             },
         )
     ]
+    # `previous: starting` is what keeps this out of the notification path — a
+    # session that just booted is not waiting on anything the human asked for.
+    from swe_mux.models import MuxEvent
+    from swe_mux.push import classify_notification
+
+    startup_idle = MuxEvent(
+        ts=0.0, session_id="mux", source="pty", type="state_changed", payload=emitted[0][1]
+    )
+    assert classify_notification(startup_idle) is None
 
 
 async def test_browser_startup_metrics_are_validated_and_persisted_once() -> None:

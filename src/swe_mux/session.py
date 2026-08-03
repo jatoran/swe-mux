@@ -671,6 +671,26 @@ def set_standing_activity(
     return True
 
 
+#: Annotation kinds that mean work is running *right now*, as opposed to a
+#: scheduled engagement (`loop`, `cron`) with nothing in flight. This is the same
+#: split the dot uses (`hasRunningActivity` in the frontend) and the one the
+#: notification path suppresses on: an idle session with live subagents has not
+#: finished, while an idle session with an armed loop genuinely has.
+RUNNING_ACTIVITY_KINDS: frozenset[str] = frozenset({"subagents", "background_tasks"})
+
+
+def standing_activity_kinds(session: Any) -> list[str]:
+    """The open annotation kinds, for callers that only need the shape of the set.
+
+    Events carry this rather than whole annotations: a consumer deciding whether
+    to interrupt the human needs to know *that* subagents are running, never
+    their count, source, or expiry, and a fat payload on every transition is paid
+    by every websocket client.
+    """
+    record = getattr(session, "record", None)
+    return [activity.kind for activity in getattr(record, "standing_activity", ()) or ()]
+
+
 def clear_standing_activity(
     session: Any,
     kind: StandingActivityKind,
@@ -4331,6 +4351,13 @@ class SessionManager:
                     previous=previous,
                     state="idle",
                     detail=None,
+                    # This is the second producer of `state_changed`, and it was
+                    # the quieter one: it never stamped `proof`, so an inferred
+                    # startup idle reached consumers looking exactly as solid as a
+                    # hook-proven turn end. Keep the two payloads in step.
+                    idle_reason=None,
+                    standing=standing_activity_kinds(session),
+                    proof=transition_proof("pty", True),
                     capability="startup_quiet_fallback",
                 )
             return
