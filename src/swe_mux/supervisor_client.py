@@ -513,6 +513,30 @@ class SupervisorClient:
             timeout_seconds=stop_timeout + RPC_TIMEOUT_SECONDS,
         )
 
+    async def job_pids(self) -> dict[str, list[int]]:
+        """Per-session Win32 job membership, or ``{}`` when it cannot be had.
+
+        A supervisor predating this message answers "unknown message type",
+        which `request` surfaces as RuntimeError. That is an expected steady
+        state, not a fault: a new daemon is explicitly allowed to drive an older
+        running supervisor rather than reap live sessions to update it. Every
+        failure therefore degrades to "no job evidence" and the caller keeps
+        using the parent walk alone.
+        """
+        try:
+            response, _ = await self.request({"t": "job_pids"}, timeout_seconds=5.0)
+        except (SupervisorUnavailable, RuntimeError, TimeoutError):
+            return {}
+        jobs = response.get("jobs")
+        if not isinstance(jobs, dict):
+            return {}
+        result: dict[str, list[int]] = {}
+        for sid, pids in jobs.items():
+            if not isinstance(pids, list):
+                continue
+            result[str(sid)] = [int(pid) for pid in pids if isinstance(pid, int)]
+        return result
+
     async def reap_all_and_exit(self) -> None:
         try:
             await self.request({"t": "reap_all_and_exit"}, timeout_seconds=10.0)

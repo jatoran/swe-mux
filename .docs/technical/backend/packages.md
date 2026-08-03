@@ -174,6 +174,13 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   assign a supervised PID to a daemon-held Job handle (that would reap agents on daemon exit);
   nested per-session Jobs are created supervisor-side. Shutdown intent comes from outside the
   daemon: quit reaps through `reap_all_and_exit`, detach only flushes mirrored session metadata.
+- Because those per-session Jobs live supervisor-side, anything the daemon needs to know about
+  Job membership must come over the wire (`job_pids`, consumed by process attribution — see
+  `design/features/processes-and-previews.md`). **A new supervisor message must not bump
+  `PROTOCOL_VERSION` unless the wire format genuinely changed**: a mismatch stops a new daemon
+  from driving the already-running supervisor, and the only way to update the supervisor is to
+  kill every live session. Add the message, let an older supervisor answer "unknown message
+  type", and degrade on the daemon side.
 - The frozen supervisor ships as its own bundle (`dist/swe-mux-supervisor`), never inside
   `dist/swe-mux`, so app rebuilds cannot collide with a running supervisor's image. Keep the
   supervisor's import closure inside the hash-gated source list in `packaging/build_desktop.py`;
@@ -195,6 +202,9 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   `CREATE_NEW_PROCESS_GROUP` does **not** escape a Job — never treat it as detachment. The
   daemon, tray, and supervisor each call `win_jobobj.process_in_job()` at startup and leave a
   loud warning when they find themselves inside a Job (the poisoned-launch breadcrumb).
+  That same inheritance is what makes Job membership a sound *attribution* source: since only
+  an opt-in breakaway leaves the Job, a member is provably the session's even when the parent
+  chain to it has been broken by an intermediate exit.
 - Nothing in-process can observe an external TerminateProcess, so death forensics live outside
   the daemon: `lifecycle.py` keeps `daemon-heartbeat.json` fresh (~10 s) and marks clean exits
   with their intent; the next daemon reports a predecessor whose record has no clean exit and a

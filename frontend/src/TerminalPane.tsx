@@ -425,7 +425,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const search = new SearchAddon()
     term.loadAddon(fit)
     term.loadAddon(search)
-    term.loadAddon(new WebLinksAddon((event,uri)=>{
+    const openUri=(event:MouseEvent,uri:string)=>{
       const previewUrl=localPreviewUrl(uri)
       if(previewUrl){
         event.preventDefault()
@@ -433,7 +433,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       window.open(uri,'_blank','noopener,noreferrer')
-    }))
+    }
+    term.loadAddon(new WebLinksAddon(openUri))
+    // WebLinksAddon only matches URLs that appear as literal text. An OSC 8
+    // hyperlink carries its destination out of band and renders as a label, so a
+    // loopback server announced that way had no clickable route to a Preview at
+    // all — which is exactly how a Codex TUI renders `[label](http://127.0.0.1:…)`.
+    // Both link kinds now resolve through the same handler.
+    term.options.linkHandler={activate:openUri}
     term.loadAddon(new ClipboardAddon(undefined,new ResilientClipboardProvider(
       prepareClipboardFallback,
       reportError,

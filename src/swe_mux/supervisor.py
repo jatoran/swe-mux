@@ -337,6 +337,8 @@ class SupervisorServer:
             )
         elif kind == "list":
             connection.send({"id": request_id, "ok": True, "sessions": self._session_infos()})
+        elif kind == "job_pids":
+            connection.send({"id": request_id, "ok": True, "jobs": self._job_pids()})
         elif kind == "ping":
             if request_id is not None:
                 connection.send({"id": request_id, "ok": True})
@@ -371,6 +373,30 @@ class SupervisorServer:
                 "sessions": self._session_infos(),
             }
         )
+
+    def _job_pids(self) -> dict[str, list[int]]:
+        """Per-session job membership, for the daemon's process attribution.
+
+        The nested per-session job lives here rather than in the daemon -- a
+        daemon-held handle would kill the tree on daemon exit and defeat session
+        survival -- so the daemon cannot query it directly. It is the only
+        ownership evidence that survives an intermediate parent exiting, which
+        is what a detached launch (`Start-Process`) leaves behind.
+
+        Deliberately *not* gated on PROTOCOL_VERSION: an older supervisor
+        answers "unknown message type" and the daemon falls back to the parent
+        walk, so a new daemon can still drive a running older supervisor rather
+        than orphaning every live session over an attribution nicety.
+        """
+        result: dict[str, list[int]] = {}
+        for entry in self.sessions.values():
+            if entry.ownership_job is None:
+                continue
+            try:
+                result[entry.sid] = entry.ownership_job.process_ids()
+            except OSError:
+                continue
+        return result
 
     def _session_infos(self) -> list[dict[str, Any]]:
         return [

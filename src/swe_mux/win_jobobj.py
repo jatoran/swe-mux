@@ -12,6 +12,12 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x0800
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+JOB_OBJECT_BASIC_PROCESS_ID_LIST = 3
+ERROR_MORE_DATA = 234
+# Growth bounds for the pid-list query. A session tree of hundreds is already
+# past MAX_PROCESSES_PER_SESSION, so this only has to avoid a pathological loop.
+_PID_LIST_INITIAL = 64
+_PID_LIST_MAX = 8192
 
 
 class IO_COUNTERS(ctypes.Structure):
@@ -40,6 +46,24 @@ class BASIC_LIMITS(ctypes.Structure):
         ("PriorityClass", wintypes.DWORD),
         ("SchedulingClass", wintypes.DWORD),
     ]
+
+
+def _pid_list_struct(capacity: int) -> type[ctypes.Structure]:
+    """JOBOBJECT_BASIC_PROCESS_ID_LIST sized for ``capacity`` entries.
+
+    The Win32 struct declares a one-element trailing array, so the real shape
+    depends on how many pids the caller is prepared to receive; it is built per
+    capacity rather than declared once.
+    """
+
+    class BASIC_PROCESS_ID_LIST(ctypes.Structure):
+        _fields_ = [
+            ("NumberOfAssignedProcesses", wintypes.DWORD),
+            ("NumberOfProcessIdsInList", wintypes.DWORD),
+            ("ProcessIdList", ctypes.c_size_t * capacity),
+        ]
+
+    return BASIC_PROCESS_ID_LIST
 
 
 class EXTENDED_LIMITS(ctypes.Structure):
@@ -72,6 +96,14 @@ class ReaperJob:
         kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
         kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
         kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.QueryInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.QueryInformationJobObject.restype = wintypes.BOOL
         self._handle = kernel32.CreateJobObjectW(None, None)
         if not self._handle:
             self._raise("CreateJobObjectW")
@@ -105,6 +137,47 @@ class ReaperJob:
                 self._raise("AssignProcessToJobObject")
         finally:
             self._kernel32.CloseHandle(hproc)
+
+    def process_ids(self) -> list[int]:
+        """Every pid currently assigned to this job.
+
+        This is the only ownership source that survives the death of an
+        intermediate parent. A descendant launched detached -- PowerShell's
+        `Start-Process`, which is how Codex's one-shot shell tool has to start
+        anything long-lived, since that shell must return -- keeps a ppid field
+        pointing at a pid Windows never clears and never reuses for it. The
+        downward parent/child walk in `processes.py` therefore cannot reach it,
+        while job membership still names it exactly.
+
+        Membership is also *stronger* evidence than the parent chain, not
+        weaker: a process joins a job only by being spawned inside one, and
+        Windows drops a pid from the list the moment it exits, so a recycled pid
+        cannot appear here by coincidence.
+
+        Returns an empty list rather than raising if the job cannot be queried;
+        callers treat it as "no extra evidence" and fall back to the walk.
+        """
+        capacity = _PID_LIST_INITIAL
+        while capacity <= _PID_LIST_MAX:
+            info = _pid_list_struct(capacity)()
+            returned = wintypes.DWORD(0)
+            ok = self._kernel32.QueryInformationJobObject(
+                self._handle,
+                JOB_OBJECT_BASIC_PROCESS_ID_LIST,
+                ctypes.byref(info),
+                ctypes.sizeof(info),
+                ctypes.byref(returned),
+            )
+            if ok:
+                count = min(int(info.NumberOfProcessIdsInList), capacity)
+                return [int(info.ProcessIdList[index]) for index in range(count)]
+            if ctypes.get_last_error() != ERROR_MORE_DATA:
+                return []
+            # ERROR_MORE_DATA still fills the buffer and reports the true total,
+            # so grow to it directly instead of doubling blindly.
+            assigned = int(info.NumberOfAssignedProcesses)
+            capacity = max(capacity * 2, assigned + 16)
+        return []
 
     def create_child(self) -> ReaperJob:
         """Create a nested per-session job beneath the daemon-wide reaper.

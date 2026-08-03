@@ -2098,6 +2098,38 @@ class SessionManager:
             )
             session.publish_update()
 
+    async def job_process_ids(self) -> dict[str, list[int]]:
+        """Per-session Win32 job membership, merged across both PTY ownerships.
+
+        Process attribution walks *down* from the session root, which cannot
+        reach a descendant whose intermediate parent has exited -- Windows never
+        clears the dead ppid and never re-parents. That is the normal shape for
+        anything Codex starts, because its shell tool runs one-shot and must
+        detach whatever it launches. Job membership is the ownership record that
+        survives it.
+
+        Supervisor-owned sessions hold their job handle in the supervisor and
+        are fetched over RPC; a daemon-owned PTY (supervisor disabled or
+        unreachable) holds its own and is read directly. Either source missing
+        yields no entry, and the caller keeps the parent walk as its only
+        evidence.
+        """
+        result: dict[str, list[int]] = {}
+        client = self.supervisor
+        if client is not None and client.connected:
+            result.update(await client.job_pids())
+        local: dict[str, list[int]] = {}
+        for sid, session in self.sessions.items():
+            job = session.ownership_job
+            if job is None or sid in result:
+                continue
+            try:
+                local[sid] = await asyncio.to_thread(job.process_ids)
+            except OSError:
+                continue
+        result.update(local)
+        return result
+
     @staticmethod
     async def _await_registration(session: Session) -> None:
         task = getattr(session, "registration_task", None)

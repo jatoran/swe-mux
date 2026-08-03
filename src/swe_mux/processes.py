@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 import time
@@ -19,6 +20,8 @@ try:
     import psutil
 except ImportError:  # pragma: no cover - diagnostics cover an unsynchronized dev venv
     psutil = None
+
+log = logging.getLogger(__name__)
 
 PROCESS_INSPECTOR_LOOP = "process-inspector"
 # Creation times round-trip through float seconds on both sides; the existing
@@ -133,6 +136,10 @@ class ProcessInspector:
         self._children_by_pid: dict[int, list[int]] = {}
         # pid -> parent pid from that same map, used to detect pid reuse for free.
         self._parents: dict[int, int] = {}
+        # session_id -> pids in that session's Win32 job, refreshed before each
+        # collection. Reaches detached descendants the parent walk cannot; see
+        # _tree_handles and SessionManager.job_process_ids.
+        self._job_pids: dict[str, list[int]] = {}
         self._daemon_resources: dict[str, Any] = {
             "pid": os.getpid(),
             "processes": 0,
@@ -206,9 +213,26 @@ class ProcessInspector:
             with background.iteration(PROCESS_INSPECTOR_LOOP):
                 await self.reconcile()
 
+    async def _refresh_job_pids(self) -> None:
+        """Re-read per-session job membership before a collection pass.
+
+        Kept off the sampling thread because the supervisor-owned half is an
+        RPC. One request per pass covers every session, so this does not scale
+        with fleet size; a failure leaves the previous map in place rather than
+        blanking attribution on a single dropped response.
+        """
+        source = getattr(self.sessions, "job_process_ids", None)
+        if source is None:
+            return
+        try:
+            self._job_pids = await source()
+        except Exception:  # noqa: BLE001 - attribution must never break sampling
+            log.debug("job pid refresh failed; keeping previous map", exc_info=True)
+
     async def reconcile(self, *, startup: bool = False) -> None:
         if psutil is None:
             return
+        await self._refresh_job_pids()
         async with self._sample_lock:
             snapshots = await asyncio.to_thread(self._collect_all, startup)
         now = time.time()
@@ -304,6 +328,8 @@ class ProcessInspector:
         instead of forcing a full descendant re-walk plus socket enumeration on every
         poll. ``force`` is used by ownership-sensitive actions that require live state.
         """
+        if force or time.monotonic() - self._last_collect >= self.cadence:
+            await self._refresh_job_pids()
         async with self._sample_lock:
             if force or time.monotonic() - self._last_collect >= self.cadence:
                 await asyncio.to_thread(self._collect_all)
@@ -717,6 +743,43 @@ class ProcessInspector:
             grouped.setdefault(connection.pid, []).append(connection)
         return grouped
 
+    def _job_handles(self, session_id: str, walked: list[Any]) -> list[Any]:
+        """Handles for job members the parent walk could not reach.
+
+        The walk can only descend through *live* parents. Windows neither
+        re-parents an orphan nor clears the dead pid from its ppid field, so a
+        descendant whose intermediate parent has exited is permanently
+        unreachable from the root -- and that is the normal outcome for anything
+        an agent starts detached, which is the only way Codex's one-shot shell
+        tool can leave a server running. The listener is real, owned, and dies
+        with the session; only the *evidence path* was missing.
+
+        Job membership is not a weaker substitute for the creation-time-guarded
+        walk, it is a stronger claim: a process is in a job only by having been
+        spawned inside it, and Windows removes a pid from the list the instant
+        it exits, so a recycled pid cannot appear here by coincidence. That is
+        why these handles are not re-filtered against the root's creation time
+        the way mapped children are -- there is no stale-link failure mode to
+        guard against.
+
+        Children of a job member are themselves job members, so nothing needs
+        traversing; the list is already transitive.
+        """
+        pids = self._job_pids.get(session_id)
+        if not pids:
+            return []
+        known = {int(handle.pid) for handle in walked}
+        extra: list[Any] = []
+        for pid in pids:
+            if pid in known:
+                continue
+            known.add(pid)
+            handle = self._handle(pid)
+            if handle is None:
+                continue
+            extra.append(handle)
+        return extra
+
     def _collect_session(
         self, session: Session, conn_map: dict[int, list[Any]]
     ) -> list[OwnedProcess]:
@@ -743,6 +806,12 @@ class ProcessInspector:
                 return []
             if abs(actual_start - expected_start) > _CREATE_TIME_TOLERANCE_SECONDS:
                 return []
+        # Only now that the root is fingerprint-verified is job membership safe to
+        # trust: the job handle is keyed to this session, so if the root turned out
+        # to be a recycled pid its job would describe someone else's tree.
+        job_only = self._job_handles(session.record.id, processes)
+        processes = [*processes, *job_only][:MAX_PROCESSES_PER_SESSION]
+        job_only_pids = {int(handle.pid) for handle in job_only}
         result: list[OwnedProcess] = []
         for process in processes:
             pid = int(process.pid)
@@ -803,6 +872,12 @@ class ProcessInspector:
                 last_verified_at=time.time(),
                 startup_revalidated=existing.startup_revalidated if existing else False,
             )
+            if pid in job_only_pids:
+                # Same state and confidence as a walked descendant -- the process
+                # is live and provably this session's -- but the reason names the
+                # evidence, so an operator seeing a parentless row in the tree can
+                # tell "detached, job-owned" from "lineage not sampled".
+                observed.evidence_reason = "live_job_object_member"
             result.append(observed)
         by_pid = {item.pid: item for item in result}
         for item in result:

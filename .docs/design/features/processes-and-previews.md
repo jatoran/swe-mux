@@ -20,6 +20,36 @@
   session as `active`/`high` evidence — persisted, listed in the fleet, emitting
   `listener_detected` under the wrong session, and offering terminate on it. Sessions adopted
   from a supervisor predating the field have no reference and fall back to pid-only.
+- **A downward walk cannot reach a detached descendant, so job membership is a second
+  attribution source.** Windows neither re-parents an orphan nor clears the dead pid from
+  its ppid field, so once an intermediate parent exits its children are permanently
+  unreachable from the session root. That is the *normal* outcome for anything an agent
+  starts to outlive one tool call: Codex's shell tool runs one-shot and must detach
+  (`Start-Process`), where Claude's holds the parent open for the command's whole life.
+  The visible symptom was a Codex session serving a live dev server that swe-mux reported
+  as zero listeners — no sidebar row, no Preview, no clickable route to one — while the
+  identical thing under Claude worked. Each session's nested Win32 job is therefore
+  queried (`JOBOBJECT_BASIC_PROCESS_ID_LIST`) and its members unioned into the walk.
+  Membership is a *stronger* claim than the parent chain, not a fallback: a process enters
+  a job only by being spawned inside one, and Windows drops a pid the instant it exits, so
+  a recycled pid cannot appear by coincidence. Job members are consequently not re-filtered
+  against the root's creation time the way mapped children are, and are not traversed for
+  children (their children are already members). They carry
+  `evidence_reason=live_job_object_member` so a parentless row reads as "detached,
+  job-owned" rather than "lineage not sampled", and they are subject to the same
+  interrupt/terminate rules — correctly, since closing that job already kills them.
+- **Job evidence never outranks the root fingerprint.** The job handle is keyed to the
+  session, so a root that fails its creation-time check discards the job's answer with the
+  rest of the attribution. The lookup happens only after that check passes.
+- The job handle lives wherever the PTY does. A supervisor-owned session keeps it in the
+  supervisor (a daemon-held handle would kill the tree on daemon exit and defeat session
+  survival), so the daemon fetches membership over a `job_pids` RPC; a daemon-owned PTY
+  reads its own. The message is deliberately **not** gated on `PROTOCOL_VERSION`: bumping
+  it would stop a new daemon from driving the already-running supervisor and orphan every
+  live session over an attribution nicety. An older supervisor answers "unknown message
+  type", which degrades to "no job evidence" and the parent walk alone. A failed refresh
+  keeps the previous map rather than blanking it, so an RPC hiccup cannot flicker a
+  Preview tab off and back.
 - Snapshots cap retained records and expose parent, executable label/command, start/exit,
   CPU, RSS, listeners, and measurable warning conditions. The inspector nests descendants
   by PID/parent PID; processes whose parent is outside the owned snapshot remain visible as
@@ -166,7 +196,12 @@ more — swe-mux does not reap or share language servers.
 - Clicking a loopback HTTP(S) URL rendered in a terminal registers/activates it as an integrated
   Preview with explicit user approval. `localhost`, `0.0.0.0`, and wildcard IPv6 links normalize
   to literal loopback; non-loopback links retain ordinary external-browser behavior. Reopening
-  the same Project endpoint reuses its registration. Closing its workspace tab leaves the
+  the same Project endpoint reuses its registration.
+- **Both link kinds route there.** Plain-text URLs are matched by the web-links addon; an
+  OSC 8 hyperlink carries its destination out of band and renders as a label, so xterm's
+  `linkHandler` resolves through the same handler. Without it a server announced only as a
+  markdown link — how a Codex TUI renders `[label](http://127.0.0.1:…)` — had no clickable
+  route to a Preview at all, since there is no URL text on screen to match. Closing its workspace tab leaves the
   sidebar registration intact; selecting the row or URL again reattaches and activates that
   same Preview leaf.
 - A server belongs beside whatever spawned it. Attaching a preview groups it as a tab in the
@@ -253,6 +288,9 @@ more — swe-mux does not reap or share language servers.
 ## Key files
 
 - Ownership/registry: `src/swe_mux/processes.py`
+- Job membership: `src/swe_mux/win_jobobj.py` (`ReaperJob.process_ids`),
+  `src/swe_mux/supervisor.py` (`job_pids` message),
+  `src/swe_mux/session.py` (`SessionManager.job_process_ids` merges both PTY ownerships)
 - Proxy and runtime bridge: `src/swe_mux/server.py`
 - Durable evidence: `src/swe_mux/operational_telemetry.py`
 - Job boundary: `src/swe_mux/win_jobobj.py`, `src/swe_mux/session.py`

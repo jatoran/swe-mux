@@ -1133,6 +1133,103 @@ def test_session_without_a_recorded_start_falls_back_to_pid_only(
     assert [item.pid for item in collected] == [100]
 
 
+def test_a_detached_descendant_is_attributed_through_job_membership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A server whose launching shell exited is still this session's.
+
+    Codex's shell tool runs one-shot, so anything long-lived has to be started
+    detached (`Start-Process`). Windows neither re-parents the orphan nor clears
+    the dead pid from its ppid field, so the downward walk can never reach it and
+    the session reported a live dev server as zero listeners — no sidebar row, no
+    Preview, while Claude (whose Bash tool holds the parent open) worked fine.
+    """
+    record = _process_record(root_started_at=7.0)
+    inspector, sessions = _inspector_for(record, monkeypatch, 7.0)
+    # 777 is the detached server: absent from _ppid_map's children of 100.
+    inspector._job_pids = {"session-a": [100, 777]}
+
+    collected = inspector._collect_session(cast(Any, sessions.sessions["session-a"]), {})
+
+    assert sorted(item.pid for item in collected) == [100, 777]
+    detached = next(item for item in collected if item.pid == 777)
+    assert detached.evidence_state == "active"
+    assert detached.evidence_reason == "live_job_object_member"
+    assert detached.confidence == "high"
+    # No lineage inside the session: its parent is dead. It renders as a root.
+    assert detached.parent_lineage == []
+
+
+def test_job_membership_is_ignored_when_the_root_pid_was_recycled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Job evidence never outranks the root fingerprint check.
+
+    The job handle is keyed to the session, so a root that turns out to be a
+    recycled pid means the whole attribution is someone else's — including
+    anything the job would have named.
+    """
+    record = _process_record(root_started_at=7.0)
+    inspector, sessions = _inspector_for(record, monkeypatch, 9999.0)
+    inspector._job_pids = {"session-a": [100, 777]}
+
+    assert inspector._collect_session(cast(Any, sessions.sessions["session-a"]), {}) == []
+
+
+def test_job_membership_never_duplicates_a_walked_descendant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _process_record(root_started_at=7.0)
+    inspector, sessions = _inspector_for(record, monkeypatch, 7.0)
+    inspector._job_pids = {"session-a": [100, 100, 100]}
+
+    collected = inspector._collect_session(cast(Any, sessions.sessions["session-a"]), {})
+
+    assert [item.pid for item in collected] == [100]
+    assert collected[0].evidence_reason == "live_descendant_fingerprint_match"
+
+
+@pytest.mark.asyncio
+async def test_job_pid_refresh_keeps_the_previous_map_when_the_source_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dropped supervisor response must not blank attribution for a tick.
+
+    Losing the map would drop every detached listener out of the fleet and reap
+    its Preview, then bring it back on the next pass — a tab that flickers on an
+    unrelated RPC hiccup.
+    """
+    from swe_mux import processes
+
+    monkeypatch.setattr(processes, "psutil", SimpleNamespace())
+
+    async def failing() -> dict[str, list[int]]:
+        raise RuntimeError("supervisor went away")
+
+    sessions = SimpleNamespace(sessions={}, job_process_ids=failing)
+    inspector = ProcessInspector(cast(Any, sessions), EventBus())
+    inspector._job_pids = {"session-a": [100, 777]}
+
+    await inspector._refresh_job_pids()
+
+    assert inspector._job_pids == {"session-a": [100, 777]}
+
+
+@pytest.mark.asyncio
+async def test_job_pid_refresh_is_skipped_when_the_manager_cannot_supply_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-Windows and older supervisors simply contribute no job evidence."""
+    from swe_mux import processes
+
+    monkeypatch.setattr(processes, "psutil", SimpleNamespace())
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+
+    await inspector._refresh_job_pids()
+
+    assert inspector._job_pids == {}
+
+
 @pytest.mark.asyncio
 async def test_preview_capture_reports_unavailable_and_resolves_the_shot_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -559,6 +560,60 @@ async def test_fanout_reports_exit_when_the_process_is_really_gone(
     assert entry.alive is False
     assert entry.output_ended_while_alive is False
     assert entry.exit_code == 0
+
+
+async def test_job_pids_reports_per_session_membership(tmp_path: Path) -> None:
+    """The daemon cannot read these handles itself.
+
+    The nested per-session job is held here on purpose — a daemon-held handle
+    would kill the tree on daemon exit — so job membership, the only ownership
+    evidence that survives a detached launch's parent exiting, has to come back
+    over the wire.
+    """
+    server = SupervisorServer(tmp_path / "config.toml", tmp_path)
+    with_job = _supervised(_SentinelHost(alive=True))
+    with_job.ownership_job = SimpleNamespace(process_ids=lambda: [10, 777])
+    without_job = _supervised(_SentinelHost(alive=True))
+    without_job.sid = "s2"
+    unreadable = _supervised(_SentinelHost(alive=True))
+    unreadable.sid = "s3"
+    unreadable.ownership_job = SimpleNamespace(
+        process_ids=lambda: (_ for _ in ()).throw(OSError("handle closed"))
+    )
+    server.sessions["s1"] = with_job
+    server.sessions["s2"] = without_job
+    server.sessions["s3"] = unreadable
+
+    # A session with no job and one whose handle fails both drop out rather than
+    # reporting an empty list, which the daemon would read as "nothing is owned".
+    assert server._job_pids() == {"s1": [10, 777]}
+
+
+async def test_an_older_supervisor_degrades_instead_of_breaking_the_daemon(
+    tmp_path: Path,
+) -> None:
+    """`job_pids` is deliberately not gated on PROTOCOL_VERSION.
+
+    Bumping the protocol to add it would stop a new daemon from driving the
+    already-running supervisor, orphaning every live session over an attribution
+    nicety. An older supervisor answers "unknown message type" instead, and the
+    client turns that into "no job evidence".
+    """
+    from swe_mux.supervisor_client import SupervisorClient
+
+    client = SupervisorClient.__new__(SupervisorClient)
+
+    async def unknown_message(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("unknown message type: 'job_pids'")
+
+    client.request = unknown_message  # type: ignore[method-assign]
+    assert await client.job_pids() == {}
+
+    async def malformed(*_args: Any, **_kwargs: Any) -> Any:
+        return {"ok": True, "jobs": {"s1": [1, "two", 3], "s2": "nope"}}, b""
+
+    client.request = malformed  # type: ignore[method-assign]
+    assert await client.job_pids() == {"s1": [1, 3]}
 
 
 async def test_remove_stops_a_session_the_daemon_wrongly_believes_is_dead(
