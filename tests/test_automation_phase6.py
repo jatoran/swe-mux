@@ -184,15 +184,18 @@ class CountingTitleProvider(FakeProvider):
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def complete_json(self, **_: Any) -> OpenRouterResult:
+    async def complete_json(self, **values: Any) -> OpenRouterResult:
         self.calls += 1
         self.started.set()
         await self.release.wait()
+        payload: dict[str, Any] = {"title": "Getting Started", "confidence": 0.95}
+        if values.get("schema_name") == "title_v2":
+            payload["stability"] = "settled"
         return OpenRouterResult(
             "generation-title",
             "vendor/cheap",
             "vendor/cheap",
-            {"title": "Getting Started", "confidence": 0.95},
+            payload,
             40,
             8,
             0.001,
@@ -510,13 +513,36 @@ class InstantTitleProvider(FakeProvider):
     def __init__(self) -> None:
         self.calls = 0
 
-    async def complete_json(self, **_: Any) -> OpenRouterResult:
+    async def complete_json(self, **values: Any) -> OpenRouterResult:
         self.calls += 1
+        payload: dict[str, Any] = {"title": "Login Test Fix", "confidence": 0.95}
+        if values.get("schema_name") == "title_v2":
+            payload["stability"] = "settled"
         return OpenRouterResult(
             "generation-title",
             "vendor/cheap",
             "vendor/cheap",
-            {"title": "Login Test Fix", "confidence": 0.95},
+            payload,
+            40,
+            8,
+            0.001,
+            10,
+        )
+
+
+class TitleLifecycleProvider(FakeProvider):
+    def __init__(self, results: list[tuple[str, str]]) -> None:
+        self.results = list(results)
+        self.prompts: list[str] = []
+
+    async def complete_json(self, **values: Any) -> OpenRouterResult:
+        self.prompts.append(str(values["messages"][-1]["content"]))
+        title, stability = self.results.pop(0)
+        return OpenRouterResult(
+            f"generation-{len(self.prompts)}",
+            "vendor/cheap",
+            "vendor/cheap",
+            {"title": title, "confidence": 0.95, "stability": stability},
             40,
             8,
             0.001,
@@ -540,6 +566,7 @@ def _titler_engine(
             data_dir=tmp_path,
             automation_enabled=True,
             observer_titler_enabled=True,
+            automation_rule_daily_budget_usd=2.0,
             openrouter_cheap_model="vendor/cheap",
             openrouter_standard_model=standard_model,
         ),
@@ -622,10 +649,100 @@ async def test_completed_turns_never_retitle_a_named_run(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_provisional_title_recomputes_once_when_the_real_task_arrives(
+    tmp_path: Path,
+) -> None:
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item,
+        transcript_path=None,
+        first_user_prompt="review and learn this repository",
+        last_user_prompt="review and learn this repository",
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    provider = TitleLifecycleProvider(
+        [("Repository Review", "provisional"), ("Auth Race Fix", "settled")]
+    )
+    engine = _titler_engine(tmp_path, session, store, provider=provider)
+
+    await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+    session.last_user_prompt = "fix the authentication callback race"
+    await engine.evaluate(
+        normalized_event(
+            item,
+            11,
+            event_type="transcript_message",
+            payload={"role": "user"},
+        )
+    )
+    session.last_user_prompt = "now run the focused tests"
+    reports = await engine.evaluate(
+        normalized_event(
+            item,
+            12,
+            event_type="transcript_message",
+            payload={"role": "user"},
+        )
+    )
+
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["content"] for row in rows] == ["Auth Race Fix", "Repository Review"]
+    assert len(provider.prompts) == 2
+    assert "review and learn" in provider.prompts[1]
+    assert "authentication callback race" in provider.prompts[1]
+    assert reports[0]["guarded"] is True
+    state = await store.checkpoint("title-state:run-1")
+    assert state and state["stability"] == "settled"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_regenerate_uses_latest_prompt_and_then_freezes(tmp_path: Path) -> None:
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item,
+        transcript_path=None,
+        first_user_prompt="fix the login test",
+        last_user_prompt="fix the login test",
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    provider = TitleLifecycleProvider(
+        [("Login Test Fix", "settled"), ("Deployment Audit", "provisional")]
+    )
+    engine = _titler_engine(tmp_path, session, store, provider=provider)
+
+    await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+    session.last_user_prompt = "audit the production deployment logs"
+    await engine.evaluate(
+        normalized_event(
+            item,
+            11,
+            event_type="transcript_message",
+            payload={"role": "user"},
+        )
+    )
+    await engine.evaluate(
+        normalized_event(
+            item,
+            12,
+            event_type="title_regenerate_requested",
+            payload={"force_title": True},
+        )
+    )
+
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["content"] for row in rows] == ["Deployment Audit", "Login Test Fix"]
+    assert "production deployment logs" in provider.prompts[-1]
+    state = await store.checkpoint("title-state:run-1")
+    assert state and state["stability"] == "settled"
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_turn_ended_titles_a_run_whose_request_was_never_captured(
     tmp_path: Path,
 ) -> None:
-    """Codex has no prompt hook, so the completed turn is all its tab can be named from.
+    """Hookless/adopted Codex runs can still be titled from the completed turn.
 
     This is the only case the weaker last-turn reading is for; with a request on hand
     it stands down (see `test_completed_turns_never_retitle_a_named_run`).
@@ -653,7 +770,7 @@ async def test_turn_ended_titles_a_run_whose_request_was_never_captured(
 async def test_initial_titler_is_skipped_when_no_prompt_was_observed(
     tmp_path: Path,
 ) -> None:
-    """Codex has no prompt hook, so it has nothing to title from until a turn ends."""
+    """A hookless Codex run has nothing to title from until a turn ends."""
     item = record(tmp_path)
     session = SimpleNamespace(record=item, transcript_path=None, first_user_prompt=None)
     store = AutomationStore(tmp_path / "mux.db")
@@ -683,11 +800,14 @@ class RateLimitedThenTitleProvider(FakeProvider):
             raise OpenRouterError(
                 "OpenRouter request failed with HTTP 429", status=429, retryable=self.retryable
             )
+        payload: dict[str, Any] = {"title": "Login Test Fix", "confidence": 0.95}
+        if values.get("schema_name") == "title_v2":
+            payload["stability"] = "settled"
         return OpenRouterResult(
             "generation-title",
             str(values["model"]),
             str(values["model"]),
-            {"title": "Login Test Fix", "confidence": 0.95},
+            payload,
             40,
             8,
             0.001,

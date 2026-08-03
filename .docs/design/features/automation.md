@@ -84,14 +84,18 @@ and the declared minimum observation capability.
 Built-ins are an explicit-name-preserving session titler, one-line turn summarizer, stalled-run
 triage, approval-request triage, and context-handoff suggestion. Duplicate hook/transcript
 completion evidence is coalesced before completion-triggered calls.
-**A run is titled once, from the request it opened with.** `builtin.session-titler-initial` fires
-on `turn_started` and names the pane from that request; `builtin.session-titler` fires on
-`turn_ended` and reads the completed turn instead, but **only for a run whose request was never
-captured** — Codex has no prompt hook, and an agent adopted mid-conversation was never observed
-being asked anything. With a request on hand the `turn_ended` stage stands down while the
-prompt-driven call still has attempts left, whether or not it has landed; once that ladder is
-spent, it takes over, because a weak name beats the `claude-15036b` placeholder. First title
-wins; nothing replaces one.
+`builtin.session-titler-initial` fires on an observed user request (`turn_started` or
+`transcript_message`). Its `title_v2` result includes `stability=provisional|settled`. A concrete
+request settles immediately. A setup-only opener such as “review/learn this repository” may be
+provisional, then recomputed when a later request reveals the real task. Automatic work is bounded
+to the first three distinct requests and at most three provider calls; a settled result freezes.
+Every replacement is append-only, and the newest title annotation is the displayed title.
+
+`builtin.session-titler` still fires on `turn_ended` and reads the completed turn, but only for a
+run whose request was never captured, such as an adopted session or a Codex run whose hooks were
+unavailable and whose prompt record was missed. With a request on hand the fallback stands down
+while the prompt-driven retry ladder remains active; once that ladder is exhausted, it may provide
+a weak title rather than leave the backend placeholder.
 
 The two rule ids read backwards (`-initial` is the primary) because they kept their original
 strings when the roles swapped, so existing annotations, user rules, and the `observer_titler_enabled`
@@ -100,15 +104,15 @@ setting still resolve.
 Titling from the completed turn was the earlier design and it drifted badly in practice: the last
 turn describes a step inside the session rather than the session, so a run that opened with "fix
 the flaky login test" ended up titled `OK`, `FrozenClaude`, `Reply FROZENCODEX`. Retries made it
-worse — the prompt slice originally read the session's *latest* request, so an attempt that landed
-three turns late named the tab after whatever detour was in flight. The pinned first prompt is what
-makes a retry, a restart, and the original attempt all produce the same name.
+worse when they silently switched to whatever request was newest. Every provider attempt now pins
+its active request context; the bounded provisional recomputation is the only path that
+intentionally incorporates a later prompt.
 
-The prompt is pinned twice over. `Session.first_user_prompt` is set once per run from the hook
-ingress (bounded, cleared on rollover), and the first observer to read it copies it into an
-`automation_checkpoints` row keyed `run-prompt:<agent_run_id>` — because the daemon restarts on
-every reload and redeploy while its sessions keep running, and the in-memory copy dies with it.
-Without that, a post-restart retry would fall back to the newest prompt and rename the tab.
+Prompt state is durable twice over. `Session.first_user_prompt` and `last_user_prompt` are updated
+from authenticated hook and transcript evidence, and the observer stores the first three distinct
+requests plus the latest in `automation_checkpoints` at `run-prompt:<agent_run_id>`. A provider
+retry also pins the exact active input in `title-state:<agent_run_id>`, so a daemon restart or a
+later request cannot change the question an in-flight retry is answering.
 
 Reading the prompt rather than the transcript is also what keeps titling working when observation
 degrades: it is the one observer input that needs neither a transcript on disk nor semantic
@@ -176,14 +180,17 @@ mints a new `agent_run_id` and the existing title describes work the conversatio
 contains. An explicit user rename pins the title and disables auto-update for that session, and the
 pin is a property of the session, so it survives a rollover too — a human who named a tab did not
 un-name it by clearing the conversation. The automation never overwrites a human-chosen name.
+An auto-named live agent also exposes **Regenerate title** in its session menu and command palette.
+That explicit action uses the latest observed request, bypasses the automatic provisional/call
+guards, and records a settled replacement; it remains subject to provider availability and the
+normal observer budgets.
 Generated titles are compact task labels for tabs/sidebar, without backend or “terminal session”
 prefixes: the prompt targets 2-3 words and caps at 4, because the tab strip and sidebar rows are
 narrow enough that a longer-but-equally-accurate title only buys an ellipsis.
 
-The continuous titler once planned in `../../development/CONTROL_PLANE_ROADMAP.md` §6.11 —
-recomputing on a material shift, with debounce and hysteresis — is **not being built**. Its premise
-was that a title should track the work; the observed failure is the opposite one, that a title
-which moves stops being a handle the user can find a tab by.
+The bounded provisional pass is deliberately not a continuous “track the current work” titler.
+After a concrete title settles, later turns do not move it automatically. This keeps the title a
+stable navigation handle while fixing the specific setup-command failure.
 Provider failure, invalid output, cancellation, queue pressure, or budget failure cannot block
 or change the agent/PTY lifecycle. Canonical observers have no PTY write, approval,
 worker/spawn, script, arbitrary HTTP, project-write, or relay path.

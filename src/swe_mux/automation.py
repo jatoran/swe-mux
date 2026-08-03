@@ -104,12 +104,12 @@ SLICE_KINDS = {
     "prompt_text",
 }
 TRANSCRIPT_FREE_SLICES = {"prompt_text", "summary_chain"}
-# One title per agent run, taken from the request the user opened the run with.
-# `PROMPT_TITLE_RULE_ID` is the real titler; `FALLBACK_TITLE_RULE_ID` exists only for
-# runs that have no prompt to read — Codex has no prompt hook, and an agent adopted
-# mid-conversation was never seen being asked anything. The ids keep their original
-# strings so existing annotations, user rules, and settings keys still resolve; only
-# which one leads has changed.
+# Prompt titles may move only through a bounded provisional phase. The common case
+# settles on the opening request and still takes one call; setup-only requests can
+# revise against at most the first three user prompts before freezing.
+# `FALLBACK_TITLE_RULE_ID` exists only for adopted runs whose request was unavailable.
+# The ids keep their original strings so annotations, user rules, and settings keys
+# continue to resolve.
 #
 # The fallback reads the completed turn, which is a much weaker signal for a name:
 # it describes what just happened rather than what the session is for, and it
@@ -118,6 +118,9 @@ TRANSCRIPT_FREE_SLICES = {"prompt_text", "summary_chain"}
 PROMPT_TITLE_RULE_ID = "builtin.session-titler-initial"
 FALLBACK_TITLE_RULE_ID = "builtin.session-titler"
 TITLE_RULE_IDS = {PROMPT_TITLE_RULE_ID, FALLBACK_TITLE_RULE_ID}
+TITLE_STATE_CHECKPOINT_PREFIX = "title-state:"
+TITLE_MAX_AUTOMATIC_CALLS = 3
+TITLE_MAX_AUTOMATIC_PROMPTS = 3
 # A title lost to a provider rate limit used to wait for the next turn boundary,
 # which on an idle pane never comes: sessions were observed sitting nameless for
 # 20+ minutes with the user waiting on nothing. Retry in the background instead.
@@ -262,6 +265,8 @@ EVENT_PAYLOAD_FIELDS: dict[str, set[str]] = {
     "backend_demoted": {"backend", "native_session_id"},
     "turn_started": {"detail"},
     "turn_ended": {"duration_ms", "detail"},
+    "transcript_message": {"role"},
+    "title_regenerate_requested": {"force_title"},
     "tool_use": {"tool", "detail", "target"},
     "tool_result": {"tool", "success", "exit_code", "detail"},
     "approval_needed": {"kind", "detail"},
@@ -335,6 +340,16 @@ OBSERVER_SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {
             "title": {"type": "string", "maxLength": 80},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+    },
+    "title_v2": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "confidence", "stability"],
+        "properties": {
+            "title": {"type": "string", "maxLength": 80},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "stability": {"type": "string", "enum": ["provisional", "settled"]},
         },
     },
     "summary_v1": {
@@ -1494,21 +1509,69 @@ class AutomationEngine:
         # is enough), and the leaked key then blocked that run's title forever.
         unique_key: tuple[str, str] | None = None
         if rule.id in TITLE_RULE_IDS and event.agent_run_id:
-            # First title wins, whichever rule wrote it. Nothing replaces a title:
-            # a name that moves is worse than a name chosen from partial evidence,
-            # because the user has already learned to find the tab by it.
-            if await self.store.recent_annotation(event.agent_run_id, "title", 0) is not None:
+            session = self.sessions.sessions.get(event.session_id or "")
+            if session and session.record.auto_named is False:
                 return False
-            if (
-                rule.id == FALLBACK_TITLE_RULE_ID
-                and await self._run_prompt(event, pin=not dry_run) is not None
-                and not await self._prompt_titler_gave_up(event)
-            ):
-                # There is a prompt to title from, so the weaker last-turn reading is
-                # not needed — while the prompt-driven call still has attempts left,
-                # whether or not it has landed yet. Once it has spent them, a weak
-                # name beats the placeholder the pane is otherwise stuck with.
-                return False
+            title = await self.store.recent_annotation(event.agent_run_id, "title", 0)
+            if rule.id == FALLBACK_TITLE_RULE_ID:
+                if title is not None:
+                    return False
+                if (
+                    await self._run_prompt(event, pin=not dry_run) is not None
+                    and not await self._prompt_titler_gave_up(event)
+                ):
+                    # A captured request is stronger than the completed-turn fallback.
+                    return False
+            else:
+                # Record every observed prompt before deciding whether the generated
+                # title is frozen. This keeps a later explicit regenerate action useful
+                # without adding transcript polling or a separate classifier call.
+                await self._run_prompt(event, pin=not dry_run)
+                if title is not None and not event.payload.get("force_title"):
+                    state = await self.store.checkpoint(
+                        f"{TITLE_STATE_CHECKPOINT_PREFIX}{event.agent_run_id}"
+                    )
+                    if not state and title.get("evidence_json"):
+                        try:
+                            evidence = json.loads(str(title["evidence_json"]))
+                            recovered = next(
+                                (
+                                    item
+                                    for item in evidence
+                                    if isinstance(item, dict)
+                                    and item.get("kind") == "title_lifecycle"
+                                ),
+                                None,
+                            )
+                        except (json.JSONDecodeError, TypeError):
+                            recovered = None
+                        if recovered:
+                            state = {
+                                "stability": recovered.get("stability"),
+                                "titled_prompt_count": recovered.get("prompt_count"),
+                                "automatic_calls": recovered.get("automatic_calls"),
+                            }
+                            if not dry_run:
+                                await self.store.set_checkpoint(
+                                    f"{TITLE_STATE_CHECKPOINT_PREFIX}{event.agent_run_id}",
+                                    {**state, "recovered_at": time.time()},
+                                )
+                    # Missing state means a legacy title. Preserve the old invariant
+                    # rather than unexpectedly renaming existing sessions after upgrade.
+                    if not state or state.get("stability") != "provisional":
+                        return False
+                    prompt_state = await self.store.checkpoint(
+                        f"{RUN_PROMPT_CHECKPOINT_PREFIX}{event.agent_run_id}"
+                    )
+                    prompt_count = int((prompt_state or {}).get("prompt_count") or 0)
+                    titled_count = int(state.get("titled_prompt_count") or 0)
+                    automatic_calls = int(state.get("automatic_calls") or 0)
+                    if (
+                        prompt_count <= titled_count
+                        or prompt_count > TITLE_MAX_AUTOMATIC_PROMPTS
+                        or automatic_calls >= TITLE_MAX_AUTOMATIC_CALLS
+                    ):
+                        return False
             unique_key = self._unique_guard_key(rule, event)
             if unique_key in self._unique_inflight:
                 return False
@@ -1546,34 +1609,96 @@ class AutomationEngine:
         return None
 
     async def _run_prompt(self, event: NormalizedEvent, *, pin: bool = True) -> str | None:
-        """The request this agent run opened with, pinned for the life of the run.
+        """Bounded user-request context for the title lifecycle.
 
-        Pinned in the store on first read rather than re-read from the session each
-        time, for two reasons. A daemon restart clears the live session's copy while
-        the run keeps going, and the retry that follows would otherwise have nothing
-        to title from; and once anything has been titled from a given text, every
-        later attempt has to agree with it or the name moves under the user.
-
-        ``pin=False`` for dry runs, which must observe without leaving state behind.
+        The first three distinct prompts support automatic provisional revision;
+        ``latest`` keeps an explicit regenerate useful later. A failed provider call
+        pins its active input separately, so a scheduled retry asks the same question
+        even if the user has moved on. ``pin=False`` leaves dry runs read-only.
         """
         if not event.agent_run_id:
             return None
         key = f"{RUN_PROMPT_CHECKPOINT_PREFIX}{event.agent_run_id}"
-        pinned = await self.store.checkpoint(key)
-        text = str((pinned or {}).get("text") or "")
-        if text:
-            return text
+        pinned = dict(await self.store.checkpoint(key) or {})
+        prompts = [
+            str(item)
+            for item in pinned.get("prompts", [])
+            if isinstance(item, str) and item
+        ][:TITLE_MAX_AUTOMATIC_PROMPTS]
+        first = str(pinned.get("text") or "")
+        if first and not prompts:
+            prompts = [first]
+        latest = str(pinned.get("latest") or (prompts[-1] if prompts else first))
+        prompt_count = int(pinned.get("prompt_count") or len(prompts))
         session = self.sessions.sessions.get(event.session_id or "")
-        if not session or session.record.agent_run_id != event.agent_run_id:
+        if session and session.record.agent_run_id == event.agent_run_id:
+            live = getattr(session, "last_user_prompt", None)
+            if not isinstance(live, str) or not live:
+                live = getattr(session, "first_user_prompt", None)
+            if (
+                isinstance(live, str)
+                and live
+                and not event.payload.get("title_retry")
+                and live != latest
+            ):
+                latest = live
+                prompt_count += 1
+                if len(prompts) < TITLE_MAX_AUTOMATIC_PROMPTS:
+                    prompts.append(live)
+                if not first:
+                    first = live
+                if pin:
+                    await self.store.set_checkpoint(
+                        key,
+                        {
+                            "text": first,
+                            "prompts": prompts,
+                            "latest": latest,
+                            "prompt_count": prompt_count,
+                            "pinned_at": pinned.get("pinned_at") or time.time(),
+                            "updated_at": time.time(),
+                        },
+                    )
+        elif not first:
             # A rolled-over session's prompt belongs to the successor run, not this
             # one, so a mismatched record is no prompt at all.
             return None
-        live = getattr(session, "first_user_prompt", None)
-        if not isinstance(live, str) or not live:
+
+        if not first:
             return None
-        if pin:
-            await self.store.set_checkpoint(key, {"text": live, "pinned_at": time.time()})
-        return live
+        if not pinned and pin:
+            await self.store.set_checkpoint(
+                key,
+                {
+                    "text": first,
+                    "prompts": prompts or [first],
+                    "latest": latest or first,
+                    "prompt_count": prompt_count or 1,
+                    "pinned_at": time.time(),
+                    "updated_at": time.time(),
+                },
+            )
+
+        title_state = await self.store.checkpoint(
+            f"{TITLE_STATE_CHECKPOINT_PREFIX}{event.agent_run_id}"
+        )
+        active = str((title_state or {}).get("active_prompt_text") or "")
+        automatic_calls = int((title_state or {}).get("automatic_calls") or 0)
+        if event.payload.get("title_retry") and active:
+            return active
+        # Until the first title lands, preserve the opening input across fresh turn
+        # events too. Once a provisional title exists, a new prompt intentionally
+        # replaces the active context with the accumulated request sequence.
+        if active and automatic_calls == 0 and not event.payload.get("force_title"):
+            return active
+        if event.payload.get("force_title"):
+            return latest or first
+        selected = prompts or [first]
+        if len(selected) == 1:
+            return selected[0]
+        return "\n\n".join(
+            f"Request {index}: {text}" for index, text in enumerate(selected, start=1)
+        )
 
     async def _action(
         self,
@@ -1721,6 +1846,24 @@ class AutomationEngine:
             prompt_text = await self._run_prompt(event)
             if not prompt_text:
                 raise ValueError("no user prompt has been observed for this run")
+            if rule.id == PROMPT_TITLE_RULE_ID:
+                state_key = f"{TITLE_STATE_CHECKPOINT_PREFIX}{event.agent_run_id}"
+                title_state = dict(await self.store.checkpoint(state_key) or {})
+                prompt_state = await self.store.checkpoint(
+                    f"{RUN_PROMPT_CHECKPOINT_PREFIX}{event.agent_run_id}"
+                )
+                await self.store.set_checkpoint(
+                    state_key,
+                    {
+                        **title_state,
+                        "active_prompt_text": prompt_text,
+                        "active_prompt_count": int(
+                            (prompt_state or {}).get("prompt_count") or 1
+                        ),
+                        "active_force": bool(event.payload.get("force_title")),
+                        "updated_at": time.time(),
+                    },
+                )
             transcript = self.slices.from_prompt(prompt_text)
         elif slice_kind == "summary_chain":
             summaries = await self.store.annotations(
@@ -1897,6 +2040,24 @@ class AutomationEngine:
         kind = str(mapping["kind"])
         if kind == "annotate":
             assert event.agent_run_id is not None
+            title_lifecycle: dict[str, Any] | None = None
+            if rule.id == PROMPT_TITLE_RULE_ID:
+                state_key = f"{TITLE_STATE_CHECKPOINT_PREFIX}{event.agent_run_id}"
+                title_state = dict(await self.store.checkpoint(state_key) or {})
+                forced = bool(title_state.get("active_force"))
+                stability = (
+                    "settled" if forced else str(completion.value.get("stability") or "settled")
+                )
+                automatic_calls = int(title_state.get("automatic_calls") or 0)
+                if not forced:
+                    automatic_calls += 1
+                title_lifecycle = {
+                    "kind": "title_lifecycle",
+                    "stability": stability,
+                    "prompt_count": int(title_state.get("active_prompt_count") or 1),
+                    "automatic_calls": automatic_calls,
+                    "explicit_regenerate": forced,
+                }
             annotation = await self.store.create_annotation(
                 agent_run_id=event.agent_run_id,
                 session_id=event.session_id,
@@ -1917,7 +2078,19 @@ class AutomationEngine:
                 output_tokens=completion.output_tokens,
                 cost_usd=completion.cost_usd,
                 confidence=_float(completion.value.get("confidence")),
+                evidence=[title_lifecycle] if title_lifecycle else None,
             )
+            if title_lifecycle is not None:
+                await self.store.set_checkpoint(
+                    f"{TITLE_STATE_CHECKPOINT_PREFIX}{event.agent_run_id}",
+                    {
+                        "stability": title_lifecycle["stability"],
+                        "titled_prompt_count": title_lifecycle["prompt_count"],
+                        "automatic_calls": title_lifecycle["automatic_calls"],
+                        "last_annotation_id": annotation["id"],
+                        "updated_at": time.time(),
+                    },
+                )
             await self.events.emit(
                 "annotation_created",
                 session_id=event.session_id,
@@ -1976,7 +2149,11 @@ class AutomationEngine:
         if cached is not None:
             return cached
         raw: list[dict[str, Any]] = []
-        if event.type == "turn_started" and self.config.observer_titler_enabled:
+        if event.type in {
+            "turn_started",
+            "transcript_message",
+            "title_regenerate_requested",
+        } and self.config.observer_titler_enabled:
             raw.append(
                 {
                     "id": PROMPT_TITLE_RULE_ID,
@@ -1985,7 +2162,7 @@ class AutomationEngine:
                     "shadow": False,
                     # Debounced past the hook/transcript race: whichever source opens
                     # the turn, the prompt has to have been recorded before this runs.
-                    "on": {"trigger": "turn_started", "debounce_s": 2.0},
+                    "on": {"trigger": event.type, "debounce_s": 2.0},
                     "when": [],
                     "do": [
                         {
@@ -1997,7 +2174,12 @@ class AutomationEngine:
                             "minimum_capability": "telemetry",
                             "prompt": (
                                 "Create a compact task-oriented title for a terminal tab and "
-                                "sidebar, from the request the user opened this session with. "
+                                "sidebar from the ordered user requests. Later requests clarify "
+                                "earlier ones; do not title a setup step when a concrete task is "
+                                "present. Return stability=provisional only when the requests are "
+                                "still setup/orientation (for example learn, review, or read docs) "
+                                "and do not yet name concrete work. Otherwise return "
+                                "stability=settled. "
                                 "Prefer 2-3 words and "
                                 "never exceed 4; the tab is narrow, so shorter wins whenever it "
                                 "stays accurate. Describe the concrete user goal or work topic, "
@@ -2006,7 +2188,7 @@ class AutomationEngine:
                                 "Codex, User, or Conversation. Do not label simple greetings as "
                                 "greetings. Return only the schema."
                             ),
-                            "schema": "title_v1",
+                            "schema": "title_v2",
                             "on_result": {
                                 "kind": "annotate",
                                 "tag": "title",
