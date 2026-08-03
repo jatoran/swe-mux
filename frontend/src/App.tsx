@@ -46,7 +46,7 @@ import {
   pruneDrawerNotes, releaseDrawerNote, serializeDrawerNotes, type DrawerNoteMap,
 } from './drawerNotes'
 import type { WatchScope } from './processWatch'
-import { DRAWER_TAB_ICONS } from './railIcons'
+import { DRAWER_TAB_ICONS, SidePanelIcon } from './railIcons'
 import { CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture } from './clipboardHistory'
 import { insertIntoFocusedSurface } from './insertTarget'
 import type { NotePlacement, SessionNoteSummary } from './NotesTab'
@@ -3266,14 +3266,12 @@ export function App() {
   return <div class="app-shell">
     <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{attention ? `${attention} agent${attention === 1 ? '' : 's'} awaiting attention` : 'No agents awaiting attention'}</div>
     <div class="mobile-toolbar">
-      {/* A glyph, not `:nav`: at half width no word survives, and pinning a font size to make
+      {/* A glyph, not `:nav`: no word survives at this width, and pinning a font size to make
           one fit would ignore the user's UI-scale setting, which this button is subject to via
           an `!important` rule. One character stays legible at every scale. */}
       <button class="nav-toggle mobile-nav-toggle" aria-label="Open navigation sidebar" title="Navigation" onClick={() => setSidebarOpen(value => !value)}>≡</button>
-      {/* Quota sits beside nav, at the start of the bar: it is glanced at constantly and the
-          far edge is where a thumb reaching for Run lands. Run moves to that far edge for the
-          same reason — it is the destructive-ish action here (it spawns), so it wants the
-          corner, not the middle. */}
+      {/* Quota sits beside nav, at the start of the bar: it is glanced at constantly, and the
+          two edges are where a thumb reaching for a toggle lands, so it takes neither. */}
       <AccountSwitcher variant="compact" onManage={()=>openSettings('Accounts')}/>
       {/* The toolbar title is the Project menu's trigger. Single tap opens it on
           touch: a long-press was the only way in, and holding a text node is what
@@ -3299,6 +3297,14 @@ export function App() {
           if(runHeldRef.current){runHeldRef.current=false;return}
           if(activeProject)toggleRunMenu(activeProject,event.currentTarget)
         }}>▶ Run</button>
+      {/* The side panel's only tap target on a phone: the desktop's always-visible rail is
+          hidden here, so until now the drawer opened by two-finger swipe or the command
+          palette alone — neither of which is discoverable. It takes the right corner and
+          mirrors nav at the left because the two full-height drawers they open are mirror
+          images, and an edge toggle sitting anywhere but its own edge reads as unrelated to
+          the panel it opens. Run gives up the corner for it and is found by its label. Opens
+          the last tab used, which is why the icon is the panel and not one tab's mark. */}
+      <button class="mobile-drawer-toggle" aria-label={clipboardOpen?'Close side panel':`Open side panel (${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'})`} aria-expanded={clipboardOpen} title={clipboardOpen?'Close side panel':`Side panel — ${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'}`} onClick={()=>setClipboardOpen(value=>!value)}><SidePanelIcon/></button>
     </div>
     {mobileHud&&<div class="mobile-hud" role="status" aria-live="polite">{mobileHud}</div>}
 

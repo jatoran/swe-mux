@@ -2,7 +2,7 @@ import { createPortal } from 'preact/compat'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { setSoundPreferences, soundPreferences } from './sessionSounds'
-import { accountPopoverStyle, formatResetRemaining, percent, providerWeeklyUsage, quotaSummary, quotaWindowSummary, usageBand } from './providerAccountDisplay'
+import { accountPopoverStyle, chipUsageBand, formatResetRemaining, percent, providerQuotaWindows, quotaChipSegments, quotaSummary, quotaWindowSummary, shownUsageBand, type QuotaWindowDisplay } from './providerAccountDisplay'
 import { emitTutorialAction } from './tutorial'
 
 export type ProviderName='claude'|'codex'
@@ -139,23 +139,49 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
       {latestReset&&resetUnread&&<section class="account-reset-alert"><h4>quota reset evidence</h4><p><strong>{latestReset.provider} {latestReset.window}</strong> moved {latestReset.before_value}% → {latestReset.after_value}% and was confirmed by a second fresh sample.</p><div>{latestReset.provider==='codex'&&<button disabled={!!busy} onClick={()=>void reviewReset('manual_usage')}>{busy==='reset-manual_usage'?'marking…':'manual Codex usage'}</button>}<button class="danger" disabled={!!busy} onClick={()=>void reviewReset('discarded')}>{busy==='reset-discarded'?'discarding…':'discard as error'}</button><button disabled={!!busy} onClick={dismissReset}>mark seen</button><button disabled={!!busy} onClick={toggleResetSound}>{resetSound?'mute reset sound':'enable reset sound'}</button></div></section>}
       <footer><button disabled={!!busy} onClick={()=>void refresh()}>{busy==='refresh'?'refreshing…':'refresh quotas'}</button><button onClick={()=>{setOpen(false);onManage()}}>manage…</button></footer>
     </div>
-  const weekly=providerWeeklyUsage(status?.accounts||[],status?.selected||{})
+  const quotas=providerQuotaWindows(status?.accounts||[],status?.selected||{})
   const weeklyTitle=(provider:ProviderName)=>{
-    const window=weekly[provider]
+    const window=quotas[provider]?.weekly
     if(!window)return `${provider} · weekly quota unavailable · open accounts`
     const remaining=formatResetRemaining(window.resets_at)
     return `${provider} weekly ${Math.round(window.used_percent)}% used${remaining?` · resets in ${remaining}`:''} · open accounts`
   }
-  // One chip per provider. The collapsed-sidebar rail has room only for the glyph above the
-  // percentage; the mobile toolbar adds the weekly reset countdown, because "22% used" answers
-  // a different question from "and it clears in 4d12h" and the phone has no hover tooltip to
-  // reach the second one. Same markup either way so both stay in step.
+  // The toolbar chip shows several unlabelled numbers, so its tooltip — which is also its
+  // accessible name, and the only reading a screen reader gets — has to name every window
+  // and say which of them the countdown belongs to.
+  const toolbarTitle=(provider:ProviderName)=>{
+    const windows=quotas[provider]
+    if(!windows)return `${provider} · quota unavailable · open accounts`
+    const part=(label:string,window:QuotaWindowDisplay|null)=>{
+      if(!window)return `${label} not reported`
+      const remaining=formatResetRemaining(window.resets_at)
+      return `${label} ${Math.round(window.used_percent)}% used${remaining?` (resets in ${remaining})`:''}`
+    }
+    const parts=[part('5h',windows.session),part('weekly',windows.weekly)]
+    if(windows.fable)parts.push(part('fable',windows.fable))
+    return `${provider} · ${parts.join(' · ')} · countdown is the weekly reset · open accounts`
+  }
+  // One chip per provider. The collapsed-sidebar rail has room only for the glyph above a
+  // single weekly percentage; the mobile toolbar carries every window the provider reports
+  // (`5h/weekly[/fable]`) plus the weekly reset countdown, because "22% used" answers a
+  // different question from "and it clears in 4d12h" and the phone has no hover tooltip to
+  // reach the second one. Same button either way so both stay in step.
   const quotaChip=(provider:ProviderName,form:'rail'|'toolbar')=>{
-    const window=weekly[provider]
-    const remaining=window?formatResetRemaining(window.resets_at):''
-    return <button key={provider} class={`${form==='rail'?'rail-quota':'toolbar-quota'} usage-${usageBand(window?.used_percent)} ${resetUnread&&latestReset?.provider===provider?'quota-reset-unread':''}`} aria-label={weeklyTitle(provider)} aria-expanded={open} title={weeklyTitle(provider)} onClick={toggle}>
+    const windows=quotas[provider]
+    const weekly=windows?.weekly||null
+    const remaining=weekly?formatResetRemaining(weekly.resets_at):''
+    const title=form==='rail'?weeklyTitle(provider):toolbarTitle(provider)
+    const band=form==='rail'?shownUsageBand(weekly?.used_percent):chipUsageBand(windows)
+    return <button key={provider} class={`${form==='rail'?'rail-quota':'toolbar-quota'} usage-${band} ${resetUnread&&latestReset?.provider===provider?'quota-reset-unread':''}`} aria-label={title} aria-expanded={open} title={title} onClick={toggle}>
       <span class={`provider-glyph ${provider}`} aria-hidden="true">{providerGlyph(provider)}</span>
-      <strong>{window?`${Math.round(window.used_percent)}%`:'—'}</strong>
+      {/* Each window is banded on its own so the chip says *which* one is hot; the button's
+          band is the worst of them and only drives the border. */}
+      <strong>{form==='rail'
+        ?weekly?`${Math.round(weekly.used_percent)}%`:'—'
+        :quotaChipSegments(windows).flatMap((segment,index)=>[
+          ...(index?[<i key={`sep-${segment.key}`} class="quota-sep" aria-hidden="true">/</i>]:[]),
+          <i key={segment.key} class={`quota-window usage-${segment.band}`}>{segment.text}</i>,
+        ])}</strong>
       {form==='toolbar'&&<small>{remaining||'—'}</small>}
     </button>
   }

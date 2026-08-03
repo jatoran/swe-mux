@@ -67,9 +67,9 @@ def test_sidebar_account_status_survives_the_mobile_breakpoint() -> None:
     """The drawer carries the same status block as desktop.
 
     Mobile used to hide it outright, leaving the toolbar chips as the only quota
-    surface: they show a weekly percentage per provider but not which account is
-    selected, its 5h window, or owned-process usage — and the drawer is where a
-    phone user goes looking for exactly that.
+    surface: they show each provider's usage but not which account is selected,
+    nor owned-process usage — and the drawer is where a phone user goes looking
+    for exactly that.
     """
     css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 

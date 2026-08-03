@@ -146,6 +146,14 @@ export const AlertsIcon = () => <svg {...stroke}>
   <path d="M13.7 21a2 2 0 0 1-3.4 0" />
 </svg>
 
+/** A frame with its right-hand column partitioned off: the side panel itself, rather
+ *  than whichever tab happens to be showing in it. Used by the mobile toolbar's drawer
+ *  toggle, which opens the drawer on its last tab and so cannot name one. */
+export const SidePanelIcon = () => <svg {...stroke}>
+  <rect x="2" y="4" width="20" height="16" rx="2" />
+  <line x1="15" y1="4" x2="15" y2="20" />
+</svg>
+
 /** Every drawer tab must appear here; the strip and the rail both read this map. */
 export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   clipboard: ClipboardHistoryIcon,
