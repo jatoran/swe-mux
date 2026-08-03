@@ -30,6 +30,9 @@
   as zero listeners — no sidebar row, no Preview, no clickable route to one — while the
   identical thing under Claude worked. Each session's nested Win32 job is therefore
   queried (`JOBOBJECT_BASIC_PROCESS_ID_LIST`) and its members unioned into the walk.
+  **This is not known to fix the Codex case — see § Detached servers: what is and is not
+  known.** It is retained because it is correct for whatever it does catch and costs
+  nothing when it catches nothing, not because it was shown to solve the reported bug.
   Membership is a *stronger* claim than the parent chain, not a fallback: a process enters
   a job only by being spawned inside one, and Windows drops a pid the instant it exits, so
   a recycled pid cannot appear by coincidence. Job members are consequently not re-filtered
@@ -119,6 +122,68 @@
   attributed to a session, preventing double counting. Process Fleet totals use that same
   additive bucket, so its count and usage reconcile with the sidebar. The closed popover and
   detailed fleet rows reuse the existing sample and cause no additional process enumeration.
+
+## Detached servers: what is and is not known
+
+Investigated 2026-08-03, after a Codex session in a Project served a live dev server that
+never appeared in the sidebar. **Status: root cause confirmed, mitigation shipped but
+unverified against the real case, and further process forensics deliberately stopped.**
+Read this before spending time on the problem again.
+
+### Confirmed by measurement
+
+- The agent started the server with PowerShell `Start-Process` from a one-shot
+  `pwsh -NonInteractive -EncodedCommand` tool call. That shell exits ~1 s later.
+- Windows neither re-parents the orphan nor clears the dead pid: the server's ppid still
+  named a pid that returned `NoSuchProcess`. Two such servers existed, both unreachable.
+- Consequence: `_tree_handles` reported 6 processes and **zero listeners** for a session
+  that was demonstrably serving HTTP. No listener means no sidebar row and no Preview.
+- Claude never hits this because its Bash tool keeps a `bash.exe` alive as the parent for
+  the command's whole life, background commands included, so the server stays a genuine
+  descendant. This is a difference between the two CLIs' shell tools, not a gap in swe-mux's
+  Codex support.
+- There is a race, not a guarantee: reconcile runs every 5 s and the launching shell lives
+  ~1 s, so a pass can occasionally catch the server while its parent is alive and then
+  retain it as `escaped`/`suspected_orphan`. Several stale `http.server` records in the
+  fleet were captured exactly that way. It essentially never wins.
+- The supervisor `job_pids` RPC works end to end and returns real membership.
+- `bash.exe` descendants of a session's `claude.exe` **are** in that session's job, so job
+  capture is functioning in general.
+
+### Not established
+
+**Whether a `Start-Process` child lands in the supervisor's nested per-session job.** An
+isolated bench (one self-created `BREAKAWAY_OK | KILL_ON_JOB_CLOSE` job, root → pwsh →
+`Start-Process` grandchild) showed the grandchild *was* in the job and died on job close.
+That result did not reproduce against a live session, and the reason is a limitation of the
+test rig rather than evidence either way: **nothing spawned from Claude Code's Bash tool is
+in the session job** — not a sandboxed process, not one with the sandbox disabled, not even
+a plain `subprocess.Popen` child. There was no foothold inside the job to launch from, so
+the end-to-end test could never be made faithful from an agent session.
+
+Testing this properly needs a real Codex session performing a real detached launch, with
+`job_pids` sampled against the resulting pid. Do not re-derive the above first.
+
+### The durable answer is a convention, not more forensics
+
+Process topology is the wrong layer to fight. Codex's shell tool *must* return, so "keep the
+server in the process tree" argues with the tool's design, and Windows job semantics under a
+nested-job ConPTY arrangement proved not worth the measurement cost. Have the agent **declare
+the server** instead — one call, independent of process topology, deterministic:
+
+```
+POST /api/previews {"session_id": "<sid>", "url": "http://127.0.0.1:<port>/", "approved": true}
+```
+
+This is the same `approved` path a terminal link click already uses, so it needs no new
+surface, and it was confirmed to work on the reported server on the first attempt. The
+cheap form is a line in the Project's `AGENTS.md`/`CLAUDE.md` telling agents to register a
+server after starting it. The fuller form is a `register_preview` MCP tool beside `notify`
+and `request_spawn` — deferred, because it widens a write surface `mux-mcp.md` keeps
+deliberately narrow, and the convention should be shown to be forgotten before paying for it.
+
+Until either exists, the manual escape hatch is the modal inspector's add-preview-by-URL,
+which takes the same `approved` path.
 
 ## Sampling cost
 
