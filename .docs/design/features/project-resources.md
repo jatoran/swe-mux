@@ -13,6 +13,11 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
 - Every Project has one canonical note at `.swe-mux/notes/project.md`. Creation seeds an absent
   file with a `# <Project name> notes` heading followed by two blank lines. An existing note is
   never rewritten, and renaming a Project never rewrites its heading.
+- The Project note has **no sidebar chip**. It is opened from the Notes drawer tab's first
+  pinned row (always present, even when the note is empty), the Project context menu's
+  `Project note`, the `notes.open` / `project.note` commands, or the Projects registry's
+  per-Project note action. The sidebar chip it replaced cost every Project row a permanent
+  second line for a surface most Projects never opened; see `ui.md` § sidebar.
 - Every shell, Claude, or Codex terminal can lazily initialize a distinct note at
   `.swe-mux/notes/sessions/<safe-session-id>.md`. Unsafe/external identities use a stable hashed
   filename. Opening an existing note never overwrites it.

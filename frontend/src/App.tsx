@@ -2976,7 +2976,7 @@ export function App() {
         <div><span class={`pane-state ${session.state}${session.observation_stale_since?' observation-stale':''}`} title={[session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}{session.observation_stale_since?' · stale':''}</span></div>
         <div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>
         <div class="pane-voice">{paneVoice}</div>
-        <div class="pane-tools"><button class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button>{isAgent(session)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}<button class="pane-tool-label" aria-label={`Inspect processes for ${sessionName(session)}`} title="Processes and previews" onClick={() => {setActiveId(session.id);openProcessViewer(session)}}>proc</button><button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
+        <div class="pane-tools"><button data-tutorial="session-note" class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button>{isAgent(session)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}<button class="pane-tool-label" aria-label={`Inspect processes for ${sessionName(session)}`} title="Processes and previews" onClick={() => {setActiveId(session.id);openProcessViewer(session)}}>proc</button><button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
       {voiceStripNode}
       <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} visible={paneVisible} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
@@ -3031,6 +3031,13 @@ export function App() {
     empty:'Session note · empty · click to start one beside this terminal',
   })[noteChipState(session)]
   const noteChipLabel=(session:Session)=>`${noteChipState(session)==='empty'?'Start':'Open'} session note for ${sessionName(session)}`
+  // Session notes only. The Project note and Files used to sit here too, as a chip pair
+  // costing every Project a permanent second line; both surfaces are now reached from the
+  // drawer (Notes pins the Project note first and unconditionally, Files is its own tab)
+  // and from the Project context menu, so the row is nothing but navigation the sidebar
+  // was paying for on every Project, open or not. A session note keeps its row because it
+  // is conditional — it appears only once the note holds text or is open — and because it
+  // is the one note that belongs *next to* something in the tree.
   const sidebarNoteRow=(resourceId:string,targetProject:string)=>{
     const identity=parseNoteResourceId(resourceId)
     if(!identity)return null
@@ -3038,28 +3045,9 @@ export function App() {
     const workspaceOpen=workspaceNoteIds(targetProject).includes(resourceId)
     const selected=targetProject===projectId&&stackForView(noteLayout,resourceId)?.active_child_id===resourceId
     const label=identity.kind==='note'?'Project note':identity.kind==='session-note'?'Session note':identity.id.split('/').pop()||'File'
-    return <button data-tutorial={identity.kind==='note'?'project-note':undefined} class={`sidebar-note-row ${selected?'active':''} ${workspaceOpen?'open':''}`} title={`${label} · opens in the focused pane`} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openNoteContext(resourceId,targetProject,event.clientX,event.clientY)}} onClick={event=>{event.stopPropagation();showNoteResource(resourceId,targetProject);setSidebarOpen(false)}}>
+    return <button class={`sidebar-note-row ${selected?'active':''} ${workspaceOpen?'open':''}`} title={`${label} · opens in the focused pane`} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openNoteContext(resourceId,targetProject,event.clientX,event.clientY)}} onClick={event=>{event.stopPropagation();showNoteResource(resourceId,targetProject);setSidebarOpen(false)}}>
       <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>{label}</strong></span>
     </button>
-  }
-  // Note and Files share one nested row (single guideline, divider between them) so each
-  // project costs one line instead of two. They now open different kinds of surface: the
-  // note is a pane tab (a document you edit), Files is the drawer's navigator tab. Each
-  // chip therefore reads its "active" state from where its surface actually lives.
-  const sidebarProjectResourceRow=(targetProject:string)=>{
-    const noteLayout=resolveLayout(layoutMap[targetProject],projects.find(item=>item.id===targetProject)?.layout)
-    const noteId=noteResourceId('note',targetProject)
-    const noteOpen=workspaceNoteIds(targetProject).includes(noteId)
-    const noteSelected=targetProject===projectId&&stackForView(noteLayout,noteId)?.active_child_id===noteId
-    const filesShowing=clipboardOpen&&drawerTabId==='files'&&targetProject===projectId
-    return <div class="sidebar-note-row note-files-row">
-      <span class="note-branch" aria-hidden="true">└</span>
-      <span class="note-resource-group">
-        <button data-tutorial="project-note" class={`note-resource-chip ${noteSelected?'active':''} ${noteOpen?'open':''}`} title="Project note · opens in the focused pane" onContextMenu={event=>{event.preventDefault();event.stopPropagation();openNoteContext(noteId,targetProject,event.clientX,event.clientY)}} onClick={event=>{event.stopPropagation();showNoteResource(noteId,targetProject);setSidebarOpen(false)}}><strong>Note</strong></button>
-        <span class="note-resource-divider" aria-hidden="true"></span>
-        <button class={`note-resource-chip ${filesShowing?'active open':''}`} title="Files · browse this project in the side panel" onClick={event=>{event.stopPropagation();const project=projects.find(item=>item.id===targetProject);if(project)openProjectFiles(project);setSidebarOpen(false)}}><strong>Files</strong></button>
-      </span>
-    </div>
   }
   // A server a session spawned lives beside it: nested under its sidebar row and
   // activated as a tab in the same region, so it is always one click away.
@@ -3287,7 +3275,6 @@ export function App() {
               <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title="Drag to reorder Project" onPointerDown={event=>{beginLongPress(event,(x,y)=>setProjectMenu({project,x,y}));beginProjectPointerDrag(event,project,bucket.id,peerIds)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setProjectMenu({ project, x: event.clientX, y: event.clientY }) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id)}}>
                 <button class="project-chevron project-collapse-toggle" aria-expanded={!collapsed} aria-label={`${collapsed?'Expand':'Collapse'} ${project.name}`} title={collapsed?'Expand project':'Collapse project'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();toggleProjectCollapsed(project.id)}}>{collapsed?'▸':'▾'}</button><strong class="project-name-cell"><span class="project-name-text">{project.name}</span>{collapsed&&liveCount>0&&<span class="project-collapsed-badge" title={`${liveCount} active session${liveCount===1?'':'s'}`}>{liveCount}</span>}</strong><button data-tutorial="project-run" class="project-row-run" title={`Run in ${project.name}`} aria-label={`Run in ${project.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
               </div>
-              {!collapsed&&<div data-tutorial="project-resources" class="project-note-list">{sidebarProjectResourceRow(project.id)}</div>}
               {!collapsed&&<div class="session-list">
                 {sidebarNode(projectLayout.root)}
                 {unpanedChildren.map(session=>sessionRow(session))}
@@ -3493,6 +3480,11 @@ export function App() {
           duplicating it here left two doors to one action. */}
       {/* The same surfaces the app menu opens globally, prefiltered to this Project. */}
       <div class="context-subtitle">BROWSE THIS PROJECT</div>
+      {/* No ellipsis, unlike every row below it: those open a browser (a drawer tab or a
+          modal) over this Project, while this one opens the document itself into a pane.
+          It is here because the sidebar's Note chip is gone, and a Project note reachable
+          only by selecting the Project first would be a step backwards from that chip. */}
+      <button onClick={()=>{const target=projectMenu.project;setProjectMenu(null);openProjectNotes(target)}}>Project note</button>
       <button onClick={() => runNamedCommand('history.openProject')}>Session history…</button>
       <button onClick={()=>{const target=projectMenu.project;setProjectMenu(null);openNotesBrowser(target)}}>Session notes…</button>
       <button onClick={() => runNamedCommand('processes.project')}>Processes…</button>

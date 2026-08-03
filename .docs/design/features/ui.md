@@ -13,12 +13,19 @@ responsive controls.
   strip beside that rail.
 - The sidebar is pointer/keyboard resizable from 190–480 px and collapsible. Width and collapse
   state are device-local browser preferences, not Project layout state.
-- The sidebar shows only Projects marked for active navigation. Each Project row exposes a fixed
-  `Note` / `Files` chip pair, then layout/session rows. An initialized or open session note
-  appears beneath its terminal. The two chips open different kinds of surface — the note is a
-  pane tab, Files is the drawer's navigator tab — so each reads its active state from where its
-  surface actually lives, and the Files chip selects that Project before opening the drawer,
-  since the drawer's Files view follows the active Project.
+- The sidebar shows only Projects marked for active navigation. A Project row is followed
+  directly by its layout/session rows. An initialized or open session note appears beneath its
+  terminal, and is the only note row the sidebar draws.
+- **Project rows carry no `Note` / `Files` chips.** They used to, as a fixed pair costing every
+  Project a permanent second line whether or not either surface was ever used, and both are
+  pure navigation into surfaces that live elsewhere: the drawer's Notes tab pins the Project
+  note first and unconditionally (so the creation affordance survives), and Files is its own
+  drawer tab. What the chips uniquely offered was reaching *another* Project's note or files
+  without selecting that Project first; the Project context menu now covers that with a
+  `Project note` row beside its existing `Browse files…`. What is genuinely lost is the ambient
+  indicator of which Project notes are currently open in the workspace, which is the price of
+  the row. The session note row stays because it is conditional — drawn only once the note
+  holds text or is open — so it costs nothing on a Project that has no session notes.
 - Projects sit in sections: one per Group, plus the ungrouped remainder headed `PROJECTS`, which
   behaves as a section in every respect rather than as a pinned leftover. A section header does
   two jobs, and they compose rather than competing: press-and-move reorders it, press-and-release
@@ -340,8 +347,15 @@ responsive controls.
   marker and starts immediately.
 - The action-driven walkthrough covers the real Projects registry and creation form,
   provider-native Claude/Codex login or current-login capture, Run menu, shell launch, pane/tab
-  lifetime, second-tab creation, tab movement, pane-edge splitting, Project notes, menu browsers,
+  lifetime, second-tab creation, tab movement, pane-edge splitting, session notes, menu browsers,
   and keyboard shortcuts. Replay with an existing Project opens it instead of forcing a duplicate.
+- The notes step is anchored on the **pane header's `note` chip**, not on a sidebar row. An
+  action step replaces **Next** with a highlighted control, so a step whose anchor can be absent
+  strands the tour with only **Exit**: the anchor has to be one that is guaranteed rendered on
+  both desktop and mobile at that point in the walkthrough, and the pane chip is (two shell
+  sessions exist by then). This is why removing the sidebar's Project-note chip required moving
+  the step rather than re-pointing it at another Project-note affordance — the remaining ones
+  are behind a context menu or a drawer tab that may be closed.
 - Highlighted product controls replace **Next** for action steps. Transparent blockers leave only
   the spotlight opening and tutorial card interactive; Project creation, account save, terminal
   launch, and layout drops advance only after their ordinary operation reports success.

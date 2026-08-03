@@ -887,14 +887,7 @@ body {
 .sidebar-note-row:hover{background:var(--panel2);color:var(--text)}.sidebar-note-row.active{color:var(--blue)}
 .sidebar-note-row .note-branch{align-self:start;padding-top:5px;color:var(--line);font-size:9px}.sidebar-note-row.active .note-branch{color:var(--blue)}
 .sidebar-note-row .note-copy{min-width:0;display:flex;gap:7px;align-items:center;overflow:hidden}.sidebar-note-row .note-copy strong{flex:none;color:inherit;font-size:9px;font-weight:500}.sidebar-note-row .note-copy small{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
-.sidebar-note-row.unattached{border-left:1px dotted var(--amber)}.project-note-list{margin:0 6px 2px 20px}.project-note-list .sidebar-note-row{margin-left:0;width:100%}
-/* Combined Note+Files row: the guideline stays row-level; hover/active live on the chips. */
-.sidebar-note-row.note-files-row{cursor:default;padding:0 5px}.sidebar-note-row.note-files-row:hover{background:transparent;color:var(--muted)}
-.note-resource-group{min-width:0;display:flex;align-items:center;gap:6px;overflow:hidden}
-.note-resource-chip{flex:none;min-width:0;display:flex;align-items:center;border:0;background:transparent;color:inherit;cursor:pointer;padding:2px 5px;border-radius:3px}
-.note-resource-chip strong{color:inherit;font-size:9px;font-weight:500;white-space:nowrap}
-.note-resource-chip:hover{background:var(--panel2);color:var(--text)}.note-resource-chip.active{color:var(--blue)}
-.note-resource-divider{flex:none;width:1px;height:12px;background:var(--line)}
+.sidebar-note-row.unattached{border-left:1px dotted var(--amber)}
 .layout-cluster .session-entry{position:relative;z-index:2}
 @media(max-width:760px){.sidebar-note-row{min-height:34px}.sidebar-note-row .note-copy{display:block}.sidebar-note-row .note-copy strong,.sidebar-note-row .note-copy small{display:block}}
 
