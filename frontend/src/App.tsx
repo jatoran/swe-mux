@@ -3450,15 +3450,20 @@ export function App() {
       <button onClick={() => runNamedCommand('session.copyCwd')}>Copy working directory</button>
       <button onClick={() => runNamedCommand('session.note')}>Open session note</button>
       <button onClick={()=>{setContextMenu(null);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
-      {contextMenu.source!=='mobile'&&directionRow('Open in split:',option=>{const leaf=terminalLeaf(contextMenu.session.id);if(contextMenu.source==='tab'||contextMenu.source==='pane')void splitExistingLeaf(leaf,contextMenu.session.project_id,option.direction,option.position);else{const current=resolveLayout(layoutMap[contextMenu.session.project_id],projects.find(project=>project.id===contextMenu.session.project_id)?.layout);const target=leaves(current).find(item=>item.id!==contextMenu.session.id)?.id||null;void openInSplit(contextMenu.session,option.direction,option.position,target)}},()=>contextMenu.source==='sidebar'||(stackForView(activeLayout,contextMenu.session.id)?.children.length||0)>1)}
-      {contextMenu.source!=='mobile'&&directionRow('New terminal in split:',option=>{setContextMenu(null);void spawnTerminal(contextMenu.session.project_id,option.direction,undefined,contextMenu.session.id,option.position)})}
+      {/* Layout surgery (split / stack / dissolve) lives on the pane's own ⋯ menu and
+          nowhere else. The sidebar row and the tab strip are for picking *which* session
+          you are looking at; loading them with pane geometry made a 20-item menu you had
+          to read past every time you wanted Rename or Kill. All of it is still reachable
+          from the command palette (session.openSplit*, pane.split*, session.groupStack,
+          stack.dissolve, session.customSplit) and therefore still bindable to a key. */}
+      {contextMenu.source==='pane'&&directionRow('Open in split:',option=>void splitExistingLeaf(terminalLeaf(contextMenu.session.id),contextMenu.session.project_id,option.direction,option.position),()=>(stackForView(activeLayout,contextMenu.session.id)?.children.length||0)>1)}
+      {contextMenu.source==='pane'&&directionRow('New terminal in split:',option=>{setContextMenu(null);void spawnTerminal(contextMenu.session.project_id,option.direction,undefined,contextMenu.session.id,option.position)})}
       {(contextMenu.source==='tab'||contextMenu.source==='pane')&&directionRow('Move tab:',option=>void moveTabDirection(terminalLeaf(contextMenu.session.id),contextMenu.session.project_id,option.id),direction=>!!paneNeighborIds(activeLayout,contextMenu.session.id)[direction])}
       {contextMenu.source==='mobile'&&mobileMoveRow(contextMenu.session.id)}
-      {contextMenu.source==='sidebar'&&<button disabled={!activeId||activeId===contextMenu.session.id} onClick={()=>runNamedCommand('session.groupStack')}>Stack with focused terminal</button>}
       <button onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
       <button onClick={()=>runNamedCommand('pane.stackNew')}>New terminal as tab</button>
-      {contextMenu.source!=='mobile'&&activeStack&&activeStack.children.length>1&&<button onClick={()=>runNamedCommand('stack.dissolve')}>Dissolve tab stack into splits</button>}
-      {contextMenu.source!=='mobile'&&<button onClick={() => runNamedCommand('session.customSplit')}>New terminal custom in split…</button>}
+      {contextMenu.source==='pane'&&activeStack&&activeStack.children.length>1&&<button onClick={()=>runNamedCommand('stack.dissolve')}>Dissolve tab stack into splits</button>}
+      {contextMenu.source==='pane'&&<button onClick={() => runNamedCommand('session.customSplit')}>New terminal custom in split…</button>}
       {voiceStatus?.enabled&&isAgent(contextMenu.session)&&<>
         <div class="context-subtitle">READ ALOUD</div>
         {(['off','on_demand','auto'] as VoiceMode[]).map(mode=><button key={mode} onClick={()=>{void setVoiceMode(contextMenu.session,mode);setContextMenu(null)}}>{effectiveVoiceMode(contextMenu.session)===mode?'✓ ':''}{mode==='off'?'Off':mode==='on_demand'?'On demand':'Auto on reply'}</button>)}
@@ -3562,8 +3567,9 @@ export function App() {
 
     {tabMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu tab-context-menu" role="menu" aria-label={`Tab actions for ${tabMenu.label}`} style={{left:clampContextMenuLeft(tabMenu.x,innerWidth),top:Math.max(4,Math.min(tabMenu.y,innerHeight-300))}}>
       <div class="context-title"><strong>{tabMenu.label}</strong></div>
-      {tabMenu.source==='tab'&&directionRow('Open in split:',option=>void splitExistingLeaf(tabMenu.leaf,tabMenu.projectId,option.direction,option.position),()=>{const current=resolveLayout(layoutMap[tabMenu.projectId],projects.find(project=>project.id===tabMenu.projectId)?.layout);return (stackForView(current,tabMenu.leaf.id)?.children.length||0)>1})}
-      {tabMenu.source==='tab'&&directionRow('New terminal in split:',option=>{const target=tabMenu;setTabMenu(null);void spawnTerminal(target.projectId,option.direction,undefined,target.leaf.id,option.position)})}
+      {/* Same rule as the session menu above: a tab strip decides what you look at, not
+          how the panes are arranged. Splitting a resource tab out is a drag; the keyboard
+          route is the palette. */}
       {tabMenu.source==='tab'&&directionRow('Move tab:',option=>void moveTabDirection(tabMenu.leaf,tabMenu.projectId,option.id),direction=>{const current=resolveLayout(layoutMap[tabMenu.projectId],projects.find(project=>project.id===tabMenu.projectId)?.layout);return !!paneNeighborIds(current,tabMenu.leaf.id)[direction]})}
       {tabMenu.source==='mobile'&&mobileMoveRow(tabMenu.leaf.id)}
       {tabMenu.source==='mobile'&&<button onClick={()=>{const target=tabMenu;setTabMenu(null);void spawnTerminal(target.projectId,'stack',undefined,target.leaf.id)}}>New terminal as tab</button>}

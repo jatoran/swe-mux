@@ -135,6 +135,16 @@ responsive controls.
 - Context menus are source-aware. Terminal-only operations never appear on resource tabs;
   obsolete focused-terminal, detach/remove-from-group, Project-note, pane-swap, and pane-header
   minimize/close actions are absent.
+- **Pane geometry has exactly one menu: the pane's.** Open-in-split, new-terminal-in-split,
+  new-custom-terminal-in-split, stack-with-focused, and dissolve-stack render only for
+  `source==='pane'` — the pane bar's right-click and its `⋯` button. The sidebar session row
+  and the tab strip choose *which* session you are looking at; they answered a different
+  question, and carrying five direction rows put Rename and Kill below the fold in the menu
+  whose job is to act on one session. Nothing was deleted: every one has a registry command
+  (`session.openSplit*`, `pane.split*`, `session.groupStack`, `stack.dissolve`,
+  `session.customSplit`), so each stays searchable in the palette and bindable to a key, and
+  drag still splits by pointer. `Move tab` is the exception that stays on the tab menu — it
+  reorders what the strip itself shows.
 - Split/new-terminal/move commands use non-clickable labels with directional arrow buttons.
   Only directions valid for the current desktop split tree are enabled. Mobile omits pane
   geometry actions entirely.

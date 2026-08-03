@@ -47,10 +47,13 @@ try {
   if (!inactiveCount) throw new Error('No inactive session available for explicit split')
   await inactiveRows.nth(inactiveCount - 1).dispatchEvent('contextmenu', { clientX: 220, clientY: 180, button: 2 })
   await page.waitForTimeout(200)
-  if (!await page.getByText('Open in split', { exact: true }).count()) {
+  if (!await page.getByText('Open in focused pane', { exact: true }).count()) {
     throw new Error(`Session context menu did not open; rows=${await page.locator('.session-row').count()} inactive=${await page.locator('.session-row:not(.active)').count()} errors=${errors.join('|')}`)
   }
-  await page.getByText('Open in split', { exact: true }).click()
+  // The sidebar menu no longer carries pane geometry, so the split runs as the command the
+  // palette and keybindings run. Dispatched rather than clicked on purpose: a real pointer
+  // would dismiss the menu, and the menu is what makes this session the command's target.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('mux:command', { detail: 'session.openSplitHorizontal' })))
   await page.waitForTimeout(1000)
   const explicitPaneCount = await page.locator('.terminal-pane').count()
   if (explicitPaneCount !== 2) throw new Error(`Explicit split action failed: ${explicitPaneCount} panes`)
