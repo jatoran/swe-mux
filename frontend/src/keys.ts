@@ -7,3 +7,10 @@ export function keyChord(event: KeyboardEvent): string {
   parts.push(event.key.toLowerCase())
   return parts.join('+')
 }
+
+/** True for Tab/Shift+Tab focus traversal, excluding app-level modified chords. */
+export function isFocusTraversalKey(
+  event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'altKey' | 'metaKey'>,
+): boolean {
+  return event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey
+}

@@ -51,6 +51,10 @@ PaneLeaf = terminal | note | preview | history | queue
   rearranges the pane tree except an explicit split, drag, or move.
 - Every pane has its own tab strip and active tab. There is no global tab strip, dock/pop-out
   mode, detached layout, or separate resource workspace.
+- `tab.next` / `tab.previous` are the presentation-aware cycling commands. On desktop they walk
+  the focused pane's stored tab order and wrap without jumping across splits; on mobile they walk
+  the unified Project rail. Their desktop-app defaults are `Ctrl+Tab` / `Ctrl+Shift+Tab`, and both
+  commands and chords remain editable in Settings.
 - A terminal tab is labelled by the **same rule as the sidebar**: `agentTargetName` — the
   generated title while the session is auto-named, the explicit name once a human renames it.
   Every session-naming surface delegates to that one function rather than re-deriving it.

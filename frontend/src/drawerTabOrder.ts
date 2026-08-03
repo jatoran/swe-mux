@@ -7,8 +7,8 @@
 // It is server-persisted rather than device-local (see `deviceSettings.ts`), for the same reason
 // the command rail and the file tree are: a tab order expresses which surfaces *you* reach for,
 // not anything about screen size, so a phone should inherit what a desktop arranged. Drawer width
-// and last-used tab stay in localStorage, which is correct for them — those genuinely differ per
-// device.
+// and per-Project selected-tab/desktop-expansion state stay in localStorage, which is correct for
+// them — those genuinely differ per device.
 
 // Explicit extension: this module is reachable from the node test runner, whose
 // type-stripping ESM loader does not resolve extensionless specifiers.

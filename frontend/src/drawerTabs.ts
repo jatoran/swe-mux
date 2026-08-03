@@ -65,10 +65,26 @@ export const DRAWER_TABS: DrawerTab[] = [
 export const isNavigatorTab = (id: DrawerTabId): boolean => id === 'files' || id === 'notes'
 
 export const DRAWER_TAB_KEY = 'mux.drawer.tab.v1'
+export const DRAWER_PROJECT_STATE_KEY = 'mux.drawer.projects.v1'
 export const DRAWER_WIDTH_KEY = 'mux.drawer.width.v1'
 export const DRAWER_MIN_WIDTH = 300
 export const DRAWER_MAX_WIDTH = 620
 export const DRAWER_DEFAULT_WIDTH = 380
+
+export type DrawerProjectState = Readonly<{
+  tab: DrawerTabId
+  desktopExpanded: boolean
+}>
+
+/** Project id → the device-local presentation of that Project's drawer. */
+export type DrawerProjectStateMap = Readonly<Record<string, DrawerProjectState>>
+
+export const DEFAULT_DRAWER_PROJECT_STATE: DrawerProjectState = {
+  tab: 'clipboard',
+  desktopExpanded: false,
+}
+
+export const EMPTY_DRAWER_PROJECT_STATES: DrawerProjectStateMap = {}
 
 export function clampDrawerWidth(value: number): number {
   if (!Number.isFinite(value)) return DRAWER_DEFAULT_WIDTH
@@ -80,9 +96,79 @@ export function storedDrawerWidth(raw: string | null): number {
   return parsed ? clampDrawerWidth(parsed) : DRAWER_DEFAULT_WIDTH
 }
 
-/** Last-used tab, so the drawer reopens where you left it. */
+/** Validate a stored tab id; each Project's last-used tab is restored through the map below. */
 export function parseDrawerTab(raw: string | null): DrawerTabId {
   return DRAWER_TABS.some(tab => tab.id === raw) ? (raw as DrawerTabId) : 'clipboard'
+}
+
+/** Read the per-Project drawer map without letting stale or hand-edited storage break boot. */
+export function parseDrawerProjectStates(raw: string | null): DrawerProjectStateMap {
+  if (!raw) return EMPTY_DRAWER_PROJECT_STATES
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch {
+    return EMPTY_DRAWER_PROJECT_STATES
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return EMPTY_DRAWER_PROJECT_STATES
+  const map: Record<string, DrawerProjectState> = {}
+  for (const [projectId, stored] of Object.entries(value as Record<string, unknown>)) {
+    if (!projectId || !stored || typeof stored !== 'object' || Array.isArray(stored)) continue
+    const candidate = stored as { tab?: unknown; desktopExpanded?: unknown }
+    map[projectId] = {
+      tab: typeof candidate.tab === 'string' ? parseDrawerTab(candidate.tab) : DEFAULT_DRAWER_PROJECT_STATE.tab,
+      desktopExpanded: candidate.desktopExpanded === true,
+    }
+  }
+  return map
+}
+
+export function serializeDrawerProjectStates(map: DrawerProjectStateMap): string {
+  return JSON.stringify(map)
+}
+
+export function drawerProjectStateFor(map: DrawerProjectStateMap, projectId: string): DrawerProjectState {
+  return (projectId && map[projectId]) || DEFAULT_DRAWER_PROJECT_STATE
+}
+
+/** Apply one presentation change without disturbing any other Project's drawer. */
+export function updateDrawerProjectState(
+  map: DrawerProjectStateMap,
+  projectId: string,
+  patch: Partial<DrawerProjectState>,
+): DrawerProjectStateMap {
+  if (!projectId) return map
+  const current = drawerProjectStateFor(map, projectId)
+  const next: DrawerProjectState = {
+    tab: patch.tab ?? current.tab,
+    desktopExpanded: patch.desktopExpanded ?? current.desktopExpanded,
+  }
+  if (map[projectId] && next.tab === current.tab && next.desktopExpanded === current.desktopExpanded) return map
+  if (!map[projectId] && next.tab === DEFAULT_DRAWER_PROJECT_STATE.tab && next.desktopExpanded === DEFAULT_DRAWER_PROJECT_STATE.desktopExpanded) return map
+  return { ...map, [projectId]: next }
+}
+
+/** Seed only the initially active Project from the former one-tab-for-the-whole-app key. */
+export function migrateLegacyDrawerTab(
+  map: DrawerProjectStateMap,
+  projectId: string,
+  legacyTab: string | null,
+): DrawerProjectStateMap {
+  if (!projectId || legacyTab === null || map[projectId]) return map
+  return updateDrawerProjectState(map, projectId, { tab: parseDrawerTab(legacyTab) })
+}
+
+/** Remove state belonging to Projects that no longer exist. */
+export function pruneDrawerProjectStates(
+  map: DrawerProjectStateMap,
+  knownProjectIds: readonly string[],
+): DrawerProjectStateMap {
+  const known = new Set(knownProjectIds)
+  const stale = Object.keys(map).filter(projectId => !known.has(projectId))
+  if (!stale.length) return map
+  const next = { ...map }
+  for (const projectId of stale) delete next[projectId]
+  return next
 }
 
 export function drawerTab(id: DrawerTabId): DrawerTab {

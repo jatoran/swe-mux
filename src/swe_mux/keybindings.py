@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import re
 
+KEYBINDINGS_FILE_VERSION = 2
+V2_DEFAULT_KEYBINDINGS = {
+    "ctrl+tab": "tab.next",
+    "ctrl+shift+tab": "tab.previous",
+}
+
 DEFAULT_KEYBINDINGS = {
+    **V2_DEFAULT_KEYBINDINGS,
     "ctrl+alt+t": "session.spawnShell",
     "ctrl+alt+o": "session.quickLaunch",
     "ctrl+alt+p": "palette.open",
@@ -63,6 +70,8 @@ KEYBINDING_COMMANDS = (
     ("pane.zoom", "Toggle focused pane zoom", "pane"),
     ("pane.next", "Focus next pane", "pane"),
     ("pane.previous", "Focus previous pane", "pane"),
+    ("tab.next", "Focus next workspace tab", "pane"),
+    ("tab.previous", "Focus previous workspace tab", "pane"),
     ("mobileTab.next", "Focus next tab (mobile)", "pane"),
     ("mobileTab.previous", "Focus previous tab (mobile)", "pane"),
     ("sidebar.open", "Open navigation sidebar", "view"),
@@ -150,10 +159,8 @@ _BROWSER_RESERVED = {
     "ctrl+r",
     "ctrl+s",
     "ctrl+t",
-    "ctrl+tab",
     "ctrl+shift+n",
     "ctrl+shift+p",
-    "ctrl+shift+tab",
     "ctrl+shift+t",
     "ctrl+w",
     "meta+d",
@@ -165,6 +172,10 @@ _BROWSER_RESERVED = {
     "meta+s",
     "meta+t",
     "meta+w",
+}
+_DESKTOP_ONLY = {
+    "ctrl+tab",
+    "ctrl+shift+tab",
 }
 _TERMINAL_RESERVED = {
     "ctrl+a",
@@ -185,11 +196,13 @@ _TERMINAL_RESERVED = {
 def keybinding_policy() -> dict[str, object]:
     return {
         "browser_reserved": sorted(_BROWSER_RESERVED),
+        "desktop_only": sorted(_DESKTOP_ONLY),
         "terminal_reserved": sorted(_TERMINAL_RESERVED),
         "rules": [
             "Use Ctrl, Alt, or Meta plus a non-modifier key.",
             "Shift alone is rejected so normal typing always reaches the terminal.",
             "Known browser and terminal shortcuts are reserved.",
+            "Desktop-only chords work in the desktop app; an ordinary browser keeps them.",
             "One chord can be assigned to only one command.",
         ],
     }

@@ -127,6 +127,31 @@ def test_project_resources_share_unified_mixed_view_panes() -> None:
     assert ".notes-workspace-shell.popout" not in css
 
 
+def test_continuity_find_is_available_from_the_shared_resource_header() -> None:
+    resource = source("ProjectResource.tsx")
+    drawer = source("UtilityDrawer.tsx")
+
+    assert 'aria-label="Find in this note"' in resource
+    assert "onClick={openFind}>⌕</button>" in resource
+    assert "autosaved||onSendToAgent" in resource
+    # Drawer notes mount the same resource component as workspace tabs, so the
+    # header trigger cannot drift between the two surfaces.
+    assert "drawer-note:" in drawer
+    assert "<ProjectResource" in drawer
+
+
+def test_note_selection_can_be_consumed_only_after_an_accepted_agent_handoff() -> None:
+    resource = source("ProjectResource.tsx")
+    picker = source("SendToAgentPicker.tsx")
+
+    assert "isNote&&selected&&snapshot&&!slice.truncated" in resource
+    assert "removeSelectionAfterSend" in resource
+    assert "const [removeSelection, setRemoveSelection]" in picker
+    assert "checked={removeSelection}" in picker
+    assert picker.count("finishAccepted()") == 2
+    assert "if (result.status === 'done')" in picker
+
+
 def test_session_note_is_one_click_from_the_pane_bar_and_opens_in_the_anchor_pane() -> None:
     app = source("App.tsx")
     layout = source("layout.ts")
@@ -211,8 +236,8 @@ def test_files_is_a_drawer_navigator_rather_than_a_workspace_tab() -> None:
     assert "resource={{ kind: 'files', id: project.id }}" in drawer
     # Opened, never toggled: a click that names a surface and switches Project must not
     # close the panel it was asking for.
-    assert "openDrawerTab('files')" in app
-    assert "openDrawerTab('notes')" in app
+    assert "openDrawerTab('files',project.id)" in app
+    assert "openDrawerTab('notes'," in app
 
     # No Files leaf, and no placement rule that has to dodge one.
     assert "isRetiredFilesLeaf" in layout
@@ -479,11 +504,13 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     assert "let scrollMemory" in view
     assert "useState" not in view
 
-    # Refreshed by turn boundaries, which are the only moment a conversation gains a
-    # message. A timer would re-read a whole transcript to learn nothing for most of an
-    # agent's working minute.
+    # Refreshed after the observer consumes a user message and when the assistant turn
+    # ends. A timer would re-read a whole transcript to learn nothing most of the time.
     assert "TURN_ENDED_EVENT" in tab and "turn_ended" in source("App.tsx")
+    assert "TRANSCRIPT_CHANGED_EVENT" in tab and "transcript_message" in source("App.tsx")
     assert "setInterval" not in tab
+    assert "session.regenerateTitle" in source("App.tsx")
+    assert "/title/regenerate" in source("App.tsx")
 
     # A reader already scrolled up is not carried along by an arriving message; it is
     # offered as a button instead. Yanking the column mid-sentence every time an agent

@@ -62,3 +62,13 @@ test('same-grid reflow restores a stale DOM renderer surface', async ({ page }) 
   expect(result.afterFit).not.toEqual(result.before)
   expect(result.afterReflow).toEqual(result.before)
 })
+
+test('mobile IME focus initializes a visible Codex DOM cursor', async ({ page }) => {
+  await page.goto('/renderer-harness.html')
+  const result = await page.evaluate(() => window.runTerminalMobileCursorInitialization())
+
+  expect(result.beforeInitialized, 'a normal-screen Codex frame alone does not initialize xterm cursor rendering').toBe(false)
+  expect(result.afterInitialized, 'the cursor is rendered after the one-time xterm focus bootstrap').toBe(true)
+  expect(result.inactiveBar, 'the externally-focused mobile terminal uses its inactive bar cursor').toBe(true)
+  expect(result.mobileInputFocused, 'the native mobile IME bridge keeps input focus').toBe(true)
+})

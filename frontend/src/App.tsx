@@ -67,7 +67,7 @@ import { Settings } from './Settings'
 import { GuidedTutorial, type TutorialStepId } from './GuidedTutorial'
 import { completeTutorial, emitTutorialAction, resetTutorial, shouldStartTutorial } from './tutorial'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
-import { TURN_ENDED_EVENT } from './transcriptView'
+import { TRANSCRIPT_CHANGED_EVENT, TURN_ENDED_EVENT } from './transcriptView'
 import { applyNoteEditorConfig } from './noteEditorSettings'
 import { DEFAULT_UI_SCALE, applyUiScale, watchUiScaleProfile, type UiScale } from './uiScale'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command } from './commands'
@@ -82,6 +82,7 @@ import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusV
 import { reorderForHover, reorderTargetFromContainer, type DropSide, type ReorderAxis } from './dragReorder'
 import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from './pointerDragClaim'
 import { horizontalWheelDelta } from './wheelScroll'
+import { relativeStackTab } from './workspaceTabs'
 import {
   COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
   projectInitials, projectOpenWork, serializeCollapsedProjects, setAllCollapsed, toggleCollapsed,
@@ -430,8 +431,8 @@ export function App() {
   // inject yet, so it hands the template to the Prompts tab to be filled in.
   const [promptPreselect,setPromptPreselect]=useState<{key:string}|undefined>()
   const [drawerWidth,setDrawerWidth]=useState(()=>storedDrawerWidth(localStorage.getItem(DRAWER_WIDTH_KEY)))
-  // The drawer's tab arrangement. Unlike width and last-used tab (localStorage, genuinely
-  // per-device) this is server-persisted, so a phone inherits what a desktop arranged.
+  // The drawer's tab arrangement. Unlike width and per-Project presentation (localStorage,
+  // genuinely per-device) this is server-persisted, so a phone inherits what a desktop arranged.
   const [drawerOrder,setDrawerOrder]=useState<DrawerTabId[]>(()=>normalizeDrawerTabOrder(loadDrawerTabOrder()))
   const [dragDrawerTab,setDragDrawerTab]=useState<DrawerTabId|null>(null)
   const dragDrawerOrderRef=useRef<DrawerTabId[]|null>(null)
@@ -598,9 +599,8 @@ export function App() {
       ()=>{dragDrawerOrderRef.current=null;setDragDrawerTab(null)},
     )
   }
-  // Mirrors the sidebar resizer, mirrored: dragging left widens the dock. Every
-  // width change reflows the pane tree and refits its terminals, which is why the
-  // width is persisted and the drawer is never opened automatically.
+  // Mirrors the sidebar resizer, mirrored: dragging left widens the dock. Every width change
+  // reflows the pane tree and refits its terminals, so the drag commits only on pointer-up.
   const beginDrawerResize=(event:PointerEvent)=>{
     event.preventDefault()
     const startX=event.clientX,startWidth=drawerWidth
@@ -1103,6 +1103,7 @@ export function App() {
           // Replayed turns are re-broadcast on purpose: a reconnect is exactly when the
           // reader's copy is stalest, and a reread is cheap and idempotent.
           if (event.type === 'turn_ended') window.dispatchEvent(new CustomEvent(TURN_ENDED_EVENT, { detail: { sessionId: event.session_id } }))
+          if (event.type === 'transcript_message') window.dispatchEvent(new CustomEvent(TRANSCRIPT_CHANGED_EVENT, { detail: { sessionId: event.session_id } }))
           if (event.type === 'voice_clip_ready' || event.type === 'voice_clip_failed') {
             const clipId = String(event.payload?.clip_id || '')
             window.dispatchEvent(new CustomEvent('mux:voice-clip', { detail: {
@@ -1162,7 +1163,9 @@ export function App() {
 
   useEffect(()=>{
     const query=window.matchMedia('(max-width:760px)')
-    const changed=()=>setMobileWorkspace(query.matches)
+    // Responsive transitions never turn a remembered desktop column into an unsolicited
+    // mobile overlay, and a formerly open overlay does not reappear after another transition.
+    const changed=()=>{setMobileWorkspace(query.matches);setMobileDrawerOpen(false)}
     changed();query.addEventListener('change',changed)
     return()=>query.removeEventListener('change',changed)
   },[])
@@ -1606,9 +1609,9 @@ export function App() {
   // freshly spawned TUI is not ready for input for seconds, and anything written before it is
   // would be swallowed.
   const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after', backend:'shell'|'claude'|'codex'='shell', options?:{argv?:string[];seedText?:string}) => {
-    if (spawning.current) return
+    if (spawning.current) return false
     const target=projectsRef.current.find(item=>item.id===targetProject)
-    if(!target){setError('Project is not available yet.');return}
+    if(!target){setError('Project is not available yet.');return false}
     spawning.current = true
     const startupOrigin=performance.now()
     const pendingId=`pending-${browserUuid()}`
@@ -1659,6 +1662,7 @@ export function App() {
       emitTutorialAction({action:'session-launched',backend})
       // Protect against an event refresh that began with the pre-spawn layout.
       window.setTimeout(()=>{delete pendingSpawns.current[pendingId]},500)
+      return true
     } catch (cause) {
       delete pendingSpawns.current[pendingId]
       setSessions(items=>items.filter(item=>item.id!==pendingId))
@@ -1669,6 +1673,7 @@ export function App() {
       setActiveId(current=>current===pendingId?fallback:current)
       setFocusedViewId(current=>current===pendingId?fallback:current)
       setError(cause instanceof Error ? cause.message : String(cause))
+      return false
     } finally {
       spawning.current = false
     }
@@ -1820,6 +1825,15 @@ export function App() {
     setProjectMenu(null)
     setRenameTarget(target)
     setRenameValue(target.kind === 'session' ? sessionName(target.session) : target.project.name)
+  }
+
+  const regenerateSessionTitle = async (session: Session) => {
+    setContextMenu(null)
+    try {
+      await api('POST', `/api/sessions/${session.id}/title/regenerate`)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
   }
 
   // On open, place the caret in the name field with the current name selected so typing
@@ -2117,6 +2131,7 @@ export function App() {
   // a plain project switch when nothing valid is remembered.
   const selectProject = (id:string) => {
     setProjectId(id)
+    setSidebarOpen(false)
     const current = resolveLayout(layoutMap[id],projects.find(item=>item.id===id)?.layout)
     const remembered = rememberedView(focusMemory.current,id)
     if(!remembered||!leaves(current).some(leaf=>leaf.id===remembered))return
@@ -2181,10 +2196,10 @@ export function App() {
    */
   const deliverToAgent = async (target: SendToAgentTarget, message: string): Promise<SendToAgentResult> => {
     if (target.kind === 'new') {
-      setSendToAgent(null)
-      // spawnTerminal reports its own failures through the toast and unwinds the layout.
-      await spawnTerminal(target.projectId,'horizontal',undefined,undefined,'after',target.backend,{seedText:message})
-      return { status: 'done' }
+      // Keep the dialog and its captured selection alive until the spawn is actually accepted.
+      // spawnTerminal also reports the detailed failure through the app toast.
+      const started=await spawnTerminal(target.projectId,'horizontal',undefined,undefined,'after',target.backend,{seedText:message})
+      return started?{status:'done'}:{status:'error',error:'The new session could not be started.'}
     }
     const sid = target.session.id
     try {
@@ -2399,6 +2414,21 @@ export function App() {
     const pane = stackForView(layout, next.id)
     if (pane && pane.active_child_id !== next.id) void updateLayout(projectId, activateStackChild(layout, pane.id, next.id))
   }
+
+  const navigateWorkspaceTab = (offset: number) => {
+    if (mobileWorkspace) { navigateMobileTab(offset); return }
+    const layout = layoutValues.current[projectId] || activeLayout
+    const currentId = focusedViewId || activeId
+    const pane = currentId ? stackForView(layout, currentId) : null
+    // The layout ref advances synchronously before its PATCH. Reading the pane's
+    // active child lets key repeat continue from the optimistic tab even before
+    // Preact has rendered the new focusedViewId closure.
+    const next = relativeStackTab(pane, pane?.active_child_id || currentId, offset)
+    if (!pane || !next) return
+    setFocusedViewId(next.id)
+    if (next.kind === 'terminal') setActiveId(next.id)
+    if (pane.active_child_id !== next.id) void updateLayout(projectId, activateStackChild(layout, pane.id, next.id))
+  }
   async function reloadDaemon() {
     setMainMenuOpen(false)
     setPaletteOpen(false)
@@ -2508,6 +2538,8 @@ export function App() {
     // sessions survive and a failed build leaves the current app running.
     { id: 'app.redeploy', label: 'Rebuild + redeploy app (keep sessions)', category: 'view', available: true, run: () => redeployApp() },
     { id: 'ui.reload', label: 'Reload UI', category: 'view', available: true, run: () => location.reload() },
+    { id: 'tab.next', label: 'Focus next workspace tab', category: 'pane', available: mobileWorkspace ? leaves(activeLayout).length > 1 : !!activeStack && activeStack.children.length > 1, disabledReason: mobileWorkspace ? 'Only one tab is open in this project' : 'Only one tab is open in the focused pane', run: () => navigateWorkspaceTab(1) },
+    { id: 'tab.previous', label: 'Focus previous workspace tab', category: 'pane', available: mobileWorkspace ? leaves(activeLayout).length > 1 : !!activeStack && activeStack.children.length > 1, disabledReason: mobileWorkspace ? 'Only one tab is open in this project' : 'Only one tab is open in the focused pane', run: () => navigateWorkspaceTab(-1) },
     { id: 'mobileTab.next', label: 'Focus next tab (mobile)', category: 'pane', available: mobileWorkspace, disabledReason: 'Available on the mobile workspace', run: () => navigateMobileTab(1) },
     { id: 'mobileTab.previous', label: 'Focus previous tab (mobile)', category: 'pane', available: mobileWorkspace, disabledReason: 'Available on the mobile workspace', run: () => navigateMobileTab(-1) },
     { id: 'sidebar.open', label: 'Open navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(true) },
@@ -2599,6 +2631,7 @@ export function App() {
     { id: 'voice.autoplayDevice', label: `Read aloud: turn device autoplay ${autoplayEnabled() ? 'off' : 'on'}`, category: 'voice', available: !!voiceStatus?.enabled, disabledReason: 'Enable read aloud in Settings first', run: () => { setAutoplayEnabled(!autoplayEnabled()); setContextMenu(null) } },
     { id: 'session.open', label: 'Open selected session in focused pane', category: 'session', available: !!commandSession && !['exited', 'crashed'].includes(commandSession.state), disabledReason: 'No live session selected', run: () => commandSession && void selectSession(commandSession) },
     { id: 'session.rename', label: 'Rename selected session', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && openRename({ kind: 'session', session: commandSession }) },
+    { id: 'session.regenerateTitle', label: 'Regenerate generated title', category: 'session', available: !!commandSession && isAgent(commandSession) && commandSession.auto_named !== false && !isEndedSession(commandSession), disabledReason: 'Select a live auto-named agent session', run: () => commandSession && void regenerateSessionTitle(commandSession) },
     { id: 'session.copyId', label: 'Copy selected session ID', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(commandSession.id).catch(() => setError('Clipboard access was blocked.')) ; setContextMenu(null) } },
     { id: 'session.copyCwd', label: 'Copy selected working directory', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(workingCwd(commandSession)).catch(() => setError('Clipboard access was blocked.')); setContextMenu(null) } },
     { id: 'session.openSplitHorizontal', label: 'Open selected session in split right', category: 'pane', available: !!commandSession && !['exited', 'crashed'].includes(commandSession.state), disabledReason: 'No live session selected', run: () => commandSession && void openInSplit(commandSession, 'horizontal') },
@@ -3640,6 +3673,7 @@ export function App() {
         {(()=>{const startup=startupSummary(contextMenu.session);return startup&&<span class="startup-chip" title={startupTimingTitle(contextMenu.session,clientStartupTimings[contextMenu.session.id]||{})}>{startup.label}:{formatStartupMs(startup.value)}</span>})()}
       </div>
       <button onClick={() => runNamedCommand('session.rename')}>Rename</button>
+      {isAgent(contextMenu.session)&&contextMenu.session.auto_named!==false&&!isEndedSession(contextMenu.session)&&<button onClick={() => runNamedCommand('session.regenerateTitle')}>Regenerate title</button>}
       {contextMenu.source==='sidebar'&&<button onClick={() => runNamedCommand('session.open')}>Open in focused pane</button>}
       {['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button onClick={() => runNamedCommand('session.resume')}>Resume as new…</button>}
       <button onClick={() => runNamedCommand('session.copyId')}>Copy session ID</button>

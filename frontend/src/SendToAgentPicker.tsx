@@ -21,6 +21,9 @@ export type SendToAgentRequest = {
   scope: MessageScope
   /** The composed message, already bounded; the dialog lets the user edit it before sending. */
   message: string
+  /** Present only for a complete selection captured from a project/session note. The picker
+   *  calls it after the payload has been accepted, never on cancel, refusal, or error. */
+  removeSelectionAfterSend?: () => void
 }
 
 export type SendToAgentTarget =
@@ -59,6 +62,7 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
     defaultNewTarget(projects.find(item => item.id === request.projectId)),
   )
   const [submit, setSubmit] = useState(true)
+  const [removeSelection, setRemoveSelection] = useState(!!request.removeSelectionAfterSend)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   // A not-safe refusal from the queue's send operation: the message is already staged
@@ -88,6 +92,14 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
   const activeRefusal = refusal && chosen && refusal.sessionId === chosen.id ? refusal : null
   const confirmMode = !!activeRefusal && !activeRefusal.protected
 
+  const finishAccepted = () => {
+    try {
+      if (removeSelection) request.removeSelectionAfterSend?.()
+    } finally {
+      onClose()
+    }
+  }
+
   const send = async () => {
     if (!message.trim()) {
       setError('There is nothing to send.')
@@ -114,7 +126,7 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
     const result = await onSend(payload, message)
     setBusy(false)
     if (result.status === 'done') {
-      onClose()
+      finishAccepted()
       return
     }
     if (result.status === 'blocked') {
@@ -144,7 +156,7 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
     setError('')
     try {
       await enqueueMessage(chosen.id, message, { armed: true })
-      onClose()
+      finishAccepted()
     } catch (cause) {
       setBusy(false)
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -235,6 +247,17 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
                 onChange={event => setSubmit(event.currentTarget.checked)}
               />
               <span>Press Enter after inserting (off fills the composer and leaves it to you)</span>
+            </label>
+          )}
+          {request.removeSelectionAfterSend && (
+            <label class="send-agent-submit">
+              <input
+                type="checkbox"
+                checked={removeSelection}
+                disabled={busy}
+                onChange={event => setRemoveSelection(event.currentTarget.checked)}
+              />
+              <span>Remove the selected text from the note after this handoff is accepted</span>
             </label>
           )}
           {unreadied && chosen && readiness && !activeRefusal && (

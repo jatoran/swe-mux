@@ -79,7 +79,7 @@ def test_terminal_clipboard_rail_and_selection_autocopy_are_wired() -> None:
     rail = (root / "frontend" / "src" / "commandRail.ts").read_text(encoding="utf-8")
     css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 
-    assert 'class="terminal-action-rail"' in pane
+    assert "terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}" in pane
     assert "Copy reply" in pane and "manual-terminal-paste" in pane
     assert "/last-reply" in pane
     assert "autoCopySelection" in pane and "requestAnimationFrame(autoCopySelection)" in pane
@@ -100,7 +100,7 @@ def test_mobile_terminal_ime_streams_composition_without_xterm_overlay() -> None
     css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 
     assert 'class="mobile-terminal-live-input"' in pane
-    assert "mobileImeDelta(mobileInputValue,next)" in pane
+    assert "mobileImeDelta(mobileInputValue,next,mobileLineBreak())" in pane
     assert "term.input(data,true)" in pane
     assert "TERMINAL_DELETE.repeat" in ime
     assert ".terminal-surface .xterm .composition-view{display:none!important}" in css
@@ -239,6 +239,24 @@ def test_pane_local_tab_rails_and_resizable_collapsible_sidebar_are_wired() -> N
     # 34px at chrome scale 1; the row follows `--ui-scale` so the tab strip grows
     # with the tab titles in it (`features/ui.md`, Appearance → chrome scale).
     assert "grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)" in css
+
+
+def test_mobile_sidebars_use_the_full_selection_and_width_contract() -> None:
+    root = Path(__file__).parents[1] / "frontend" / "src"
+    app = (root / "App.tsx").read_text(encoding="utf-8")
+    css = (root / "style.css").read_text(encoding="utf-8")
+
+    select_project = app[
+        app.index("const selectProject =") : app.index("const selectSession =")
+    ]
+    assert "setSidebarOpen(false)" in select_project
+    assert select_project.index("setSidebarOpen(false)") < select_project.index("if(!remembered")
+    # A fixed pixel cap made the drawer look closer to 80% on wide phones and small tablets.
+    assert ".utility-drawer.overlay{" in css
+    overlay_start = css.index(".utility-drawer.overlay{")
+    overlay = css[overlay_start : css.index("}", overlay_start)]
+    assert "width:90vw" in overlay
+    assert "min(" not in overlay
 
 
 def test_collapsed_sidebar_rail_keeps_sidebar_controls_reachable() -> None:

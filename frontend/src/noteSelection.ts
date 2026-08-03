@@ -150,15 +150,13 @@ export function selectionText(snapshot: EditorSnapshot | null | undefined): stri
 /**
  * The message an agent receives. The body keeps its leading whitespace (indentation carries
  * meaning in a code block) and loses only its trailing run, so the composer is not left with a
- * blank tail. The origin line is the agent's only context for a fragment that arrives with no
- * file attached.
+ * blank tail. A selection is already identified by the dialog and enters the editable composer
+ * as plain selected text; whole-document sends retain their origin line.
  */
 export function composeAgentMessage(body: string, source: MessageSource): string {
-  const origin =
-    source.scope === 'selection'
-      ? `From \`${source.label}\` (selected text):`
-      : `From \`${source.label}\`:`
-  return `${origin}\n\n${body.replace(/\s+$/, '')}`
+  const message = body.replace(/\s+$/, '')
+  if (source.scope === 'selection') return message
+  return `From \`${source.label}\`:\n\n${message}`
 }
 
 // New-session seeding travels as `seed_text` on the spawn request: the daemon inlines short

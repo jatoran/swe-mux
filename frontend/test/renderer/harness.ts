@@ -12,10 +12,18 @@ type DomDimensionRepairResult = {
   rows: number
 }
 
+type MobileCursorInitializationResult = {
+  beforeInitialized: boolean
+  afterInitialized: boolean
+  inactiveBar: boolean
+  mobileInputFocused: boolean
+}
+
 declare global {
   interface Window {
     runTerminalRendererStress: () => Promise<{ renderer: 'dom' | 'webgl'; cols: number; rows: number }>
     runTerminalDomDimensionRepair: () => Promise<DomDimensionRepairResult>
+    runTerminalMobileCursorInitialization: () => Promise<MobileCursorInitializationResult>
   }
 }
 
@@ -102,6 +110,47 @@ window.runTerminalDomDimensionRepair = async () => {
   await frame()
   const afterReflow = dimensions()
   const result = { before, afterFit, afterReflow, cols: domTerm.cols, rows: domTerm.rows }
+  domTerm.dispose()
+  return result
+}
+
+window.runTerminalMobileCursorInitialization = async () => {
+  host.style.display = 'none'
+  const domHost = document.querySelector<HTMLDivElement>('#dom-terminal')!
+  const mobileInput = document.querySelector<HTMLTextAreaElement>('#mobile-input')!
+  domHost.style.display = 'block'
+  const domTerm = new Terminal({
+    cursorBlink: true,
+    cursorStyle: 'bar',
+    cursorInactiveStyle: 'bar',
+    cursorWidth: 2,
+    fontFamily: 'Consolas, monospace',
+    fontSize: 12,
+    theme: { background: '#090a0c', foreground: '#d9dde2', cursor: '#ffffff' },
+  })
+  const domFit = new FitAddon()
+  domTerm.loadAddon(domFit)
+  domTerm.open(domHost)
+  domFit.fit()
+
+  // Codex uses the normal screen and explicitly enables the cursor. Unlike Claude's
+  // alternate-screen startup, that does not initialize xterm's cursor renderer.
+  await writeTo(domTerm, '\x1b[?2026h\x1b[2J\x1b[H› \x1b[0 q\x1b[?25h\x1b[1;3H\x1b[?2026l')
+  await frame()
+  const beforeInitialized = domHost.querySelector('.xterm-cursor') !== null
+
+  // Production bootstraps xterm once, then leaves the external IME bridge focused.
+  domTerm.focus()
+  mobileInput.focus({ preventScroll: true })
+  await frame()
+  await frame()
+  const cursor = domHost.querySelector('.xterm-cursor')
+  const result = {
+    beforeInitialized,
+    afterInitialized: cursor !== null,
+    inactiveBar: cursor?.classList.contains('xterm-cursor-bar') ?? false,
+    mobileInputFocused: document.activeElement === mobileInput,
+  }
   domTerm.dispose()
   return result
 }

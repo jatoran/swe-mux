@@ -101,11 +101,14 @@ test('positions order by line first, then byte', () => {
   assert.equal(comparePositions({ line: 3, byteInLine: 4 }, { line: 3, byteInLine: 4 }), 0)
 })
 
-test('the composed message names its source and says whether it is a selection', () => {
+test('a selection enters the composer without an origin preamble', () => {
   assert.equal(
     composeAgentMessage('body text', { label: '.docs/design.md', scope: 'selection' }),
-    'From `.docs/design.md` (selected text):\n\nbody text',
+    'body text',
   )
+})
+
+test('a whole-document message retains its source', () => {
   assert.equal(
     composeAgentMessage('body text', { label: 'project note (swe-mux)', scope: 'document' }),
     'From `project note (swe-mux)`:\n\nbody text',
@@ -114,7 +117,7 @@ test('the composed message names its source and says whether it is a selection',
 
 test('the message keeps leading indentation and drops only the trailing run', () => {
   const message = composeAgentMessage('    indented\n\n', { label: 'a.md', scope: 'selection' })
-  assert.ok(message.endsWith('\n\n    indented'))
+  assert.equal(message, '    indented')
 })
 
 test('a delivered body is wrapped in bracketed paste with CR line breaks', () => {
@@ -127,4 +130,3 @@ test('CRLF and bare CR normalize to the same single break', () => {
   assert.equal(pastePayload('a\r\nb'), pastePayload('a\nb'))
   assert.equal(pastePayload('a\rb'), pastePayload('a\nb'))
 })
-

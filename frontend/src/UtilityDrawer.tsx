@@ -16,6 +16,7 @@ import type { WatchScope, WatchSnapshot } from './processWatch'
 import { parseNoteResourceId } from './layout'
 import type { NotePlacement } from './NotesTab'
 import { DRAWER_TAB_ICONS } from './railIcons'
+import { isFocusTraversalKey } from './keys'
 import type { SendToAgentRequest, SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
 import type { Project, ProjectBackend, Session } from './types'
 
@@ -286,7 +287,7 @@ export function UtilityDrawer(props: Props) {
         // Tab cycling stays on the strip's own buttons so it cannot steal Tab from
         // a filter field or a template's placeholder inputs. It walks the user's order,
         // not the default one, or the keys would jump around a rearranged strip.
-        if (event.key !== 'Tab' || !(event.target as Element | null)?.closest?.('.drawer-tabs')) return
+        if (!isFocusTraversalKey(event) || !(event.target as Element | null)?.closest?.('.drawer-tabs')) return
         event.preventDefault()
         onTab(nextDrawerTab(tab, event.shiftKey ? -1 : 1, props.tabs.map(item => item.id)))
       }}

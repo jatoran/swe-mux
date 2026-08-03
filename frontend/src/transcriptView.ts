@@ -27,6 +27,7 @@ export type SessionTranscript = {
 /** Dispatched by the events socket when a session finishes a turn, which is the
  *  only moment its conversation can have gained a message. */
 export const TURN_ENDED_EVENT = 'mux:turn-ended'
+export const TRANSCRIPT_CHANGED_EVENT = 'mux:transcript-changed'
 
 /** A reader lands at the newest message; only a deliberate scroll up overrides that. */
 export const TRANSCRIPT_BOTTOM_SLACK = 48

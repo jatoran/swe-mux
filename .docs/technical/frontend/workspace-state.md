@@ -12,6 +12,9 @@
 | warm-pane recency (which terminals stay mounted) | `warmHistory` in App, derived from layout | device/session-local |
 | mobile unified tab rail | projection of layout | derived only |
 | sidebar width/collapse | local storage | device-local |
+| utility drawer width | local storage | device-local |
+| utility drawer selected tab, desktop expansion | local storage keyed by Project | device-local |
+| mobile utility drawer visibility | `mobileDrawerOpen` in App | browser session |
 | pointer drag target/ghost | refs and direct DOM attributes | one gesture |
 | note/file draft | resource component/save queue | resource-local |
 | terminal touch selection | xterm buffer selection + component-local action state | one selection |

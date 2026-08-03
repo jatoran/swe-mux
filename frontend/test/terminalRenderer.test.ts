@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { shouldLoadWebgl, terminalAttachReadyFrame, windowsPtyCompatibility } from '../src/terminalRenderer.ts'
+import { shouldLoadWebgl, terminalAttachReadyFrame, terminalCursorOptions, windowsPtyCompatibility } from '../src/terminalRenderer.ts'
+
+test('the mobile IME bridge keeps a visible terminal caret while it owns DOM focus', () => {
+  assert.deepEqual(terminalCursorOptions(true), {
+    cursorInactiveStyle: 'bar',
+    cursorWidth: 2,
+  })
+  assert.deepEqual(terminalCursorOptions(false), {
+    cursorInactiveStyle: 'outline',
+    cursorWidth: 1,
+  })
+})
 
 test('desktop auto and webgl preferences keep accelerated rendering enabled', () => {
   assert.equal(shouldLoadWebgl('auto', false, 'shell'), true)

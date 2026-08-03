@@ -11,6 +11,7 @@ import {
   transcriptConversationText,
   transcriptEmptyMessage,
   transcriptSpeaker,
+  TRANSCRIPT_CHANGED_EVENT,
   TURN_ENDED_EVENT,
   type SessionTranscript,
   type TranscriptMessage,
@@ -106,9 +107,9 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     if (sessionId) void load(sessionId)
   }, [sessionId, runId])
 
-  // Turn boundaries are the only moment the conversation gains a message, so they
-  // are the refresh signal. Polling would re-read a whole transcript on a timer to
-  // learn nothing for most of an agent's working minute.
+  // The observer signals after it has consumed a user record, avoiding both timer
+  // polling and the race where UserPromptSubmit arrives before the transcript write.
+  // Turn end remains the assistant-message boundary.
   useEffect(() => {
     if (!sessionId) return
     const onTurnEnded = (event: Event) => {
@@ -116,8 +117,12 @@ export function TranscriptTab({ session }: { session: Session | null }) {
       if (detail?.sessionId && detail.sessionId !== sessionId) return
       void load(sessionId)
     }
+    window.addEventListener(TRANSCRIPT_CHANGED_EVENT, onTurnEnded)
     window.addEventListener(TURN_ENDED_EVENT, onTurnEnded)
-    return () => window.removeEventListener(TURN_ENDED_EVENT, onTurnEnded)
+    return () => {
+      window.removeEventListener(TRANSCRIPT_CHANGED_EVENT, onTurnEnded)
+      window.removeEventListener(TURN_ENDED_EVENT, onTurnEnded)
+    }
   }, [sessionId])
 
   // Where a load leaves the viewport. First sight of a session opens at its newest

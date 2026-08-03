@@ -2,9 +2,9 @@
 
 The point of this endpoint existing at all is that it only reads: the history
 transcript route reindexes the run's searchable messages and loads its
-annotations on every call, which a surface that refreshes on every turn must not
-do. The tests below pin that, plus the rule that "nothing to show" is an ordinary
-200 with a reason rather than an error.
+annotations on every call, which a surface that refreshes on user messages and turn
+boundaries must not do. The tests below pin that, plus the rule that "nothing to
+show" is an ordinary 200 with a reason rather than an error.
 """
 
 from __future__ import annotations
@@ -16,8 +16,9 @@ from typing import Any
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux.event_bus import EventBus
 from swe_mux.models import SessionRecord
-from swe_mux.server import error_middleware, session_transcript
+from swe_mux.server import error_middleware, regenerate_session_title, session_transcript
 
 
 class SessionStub:
@@ -51,7 +52,9 @@ def record(**overrides: Any) -> SessionRecord:
 def build(session_record: SessionRecord, transcript: Path | None) -> web.Application:
     app = web.Application(middlewares=[error_middleware])
     app["sessions"] = ManagerStub(SessionStub(session_record, transcript))
+    app["events"] = EventBus()
     app.router.add_get("/api/sessions/{sid}/transcript", session_transcript)
+    app.router.add_post("/api/sessions/{sid}/title/regenerate", regenerate_session_title)
     return app
 
 
@@ -149,3 +152,26 @@ async def test_the_limit_is_bounded_and_rejects_nonsense(tmp_path: Path) -> None
         body = await (await client.get("/api/sessions/sess-1/transcript?limit=99999")).json()
         assert body["truncated"] is False
         assert (await client.get("/api/sessions/sess-1/transcript?limit=soon")).status == 400
+
+
+async def test_generated_title_regeneration_emits_a_forced_async_request() -> None:
+    app = build(record(agent_run_id="run-1", auto_named=True), None)
+    queue = app["events"].subscribe(name="title-regenerate-test")
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post("/api/sessions/sess-1/title/regenerate")
+        assert response.status == 202
+        assert await response.json() == {"ok": True}
+    event = await queue.get()
+    assert (event.type, event.session_id, event.source) == (
+        "title_regenerate_requested",
+        "sess-1",
+        "user",
+    )
+    assert event.payload["force_title"] is True
+
+
+async def test_manually_named_session_cannot_regenerate_its_title() -> None:
+    app = build(record(agent_run_id="run-1", auto_named=False), None)
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post("/api/sessions/sess-1/title/regenerate")
+    assert response.status == 400

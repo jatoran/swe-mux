@@ -51,6 +51,7 @@ test('shell panes keep Shift+Enter and Ctrl+Enter as a submit', () => {
 
 test('configured allowlisted commands are routed and unmatched chords pass', () => {
   assert.deepEqual(terminalKeyDecision(key('f', { ctrlKey: true, shiftKey: true }), 'terminal.find', false), { kind: 'command', command: 'terminal.find' })
+  assert.deepEqual(terminalKeyDecision(key('Tab', { ctrlKey: true }), 'tab.next', false), { kind: 'command', command: 'tab.next' })
   assert.deepEqual(terminalKeyDecision(key('x', { altKey: true }), undefined, false), { kind: 'pass' })
   assert.deepEqual(terminalKeyDecision(key('x', { ctrlKey: true }), 'unknown.disabled', false), { kind: 'command', command: 'unknown.disabled' })
 })

@@ -2,7 +2,7 @@ import { Fragment } from 'preact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { displayChord } from './commands'
-import { keyChord } from './keys'
+import { isFocusTraversalKey, keyChord } from './keys'
 import { AccountSettings } from './ProviderAccounts'
 import { NotificationSoundSettings } from './NotificationSoundSettings'
 import { NotificationPushSettings } from './NotificationPushSettings'
@@ -103,7 +103,7 @@ type RemoteStatus = {
   mobile_voice_configured:boolean;mobile_voice_url?:string|null;mobile_voice_https_port:number
 }
 type KeybindingCommand = {id:string;label:string;category:string}
-type KeybindingPolicy = {browser_reserved:string[];terminal_reserved:string[];rules:string[]}
+type KeybindingPolicy = {browser_reserved:string[];desktop_only:string[];terminal_reserved:string[];rules:string[]}
 type KeybindingsResponse = {
   bindings:Record<string,string>;defaults:Record<string,string>;commands:KeybindingCommand[]
   policy:KeybindingPolicy;rejected:Record<string,string>
@@ -286,7 +286,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   const [bindings, setBindings] = useState<Record<string,string>>({})
   const [bindingDefaults, setBindingDefaults] = useState<Record<string,string>>({})
   const [bindingCommands, setBindingCommands] = useState<KeybindingCommand[]>([])
-  const [bindingPolicy, setBindingPolicy] = useState<KeybindingPolicy>({browser_reserved:[],terminal_reserved:[],rules:[]})
+  const [bindingPolicy, setBindingPolicy] = useState<KeybindingPolicy>({browser_reserved:[],desktop_only:[],terminal_reserved:[],rules:[]})
   const [capturingCommand, setCapturingCommand] = useState<string|null>(null)
   const [bindingError, setBindingError] = useState('')
   const [claudeArgs, setClaudeArgs] = useState('[]')
@@ -333,7 +333,10 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
       setConfig(next); setDraft(next); setRules(rulesData.text);setSavedRules(rulesData.text)
       setClaudeArgs(JSON.stringify(next.claude_args)); setCodexArgs(JSON.stringify(next.codex_args))
       setBindings(keyData.bindings);setSavedBindings(keyData.bindings);setBindingDefaults(keyData.defaults||{})
-      setBindingCommands(keyData.commands||[]);setBindingPolicy(keyData.policy||{browser_reserved:[],terminal_reserved:[],rules:[]})
+      setBindingCommands(keyData.commands||[]);setBindingPolicy({
+        browser_reserved:keyData.policy?.browser_reserved||[],desktop_only:keyData.policy?.desktop_only||[],
+        terminal_reserved:keyData.policy?.terminal_reserved||[],rules:keyData.policy?.rules||[],
+      })
       if(Object.keys(keyData.rejected||{}).length)setBindingError(`Ignored saved shortcuts · ${Object.entries(keyData.rejected).map(([chord,message])=>`${displayChord(chord)}: ${message}`).join(' · ')}`)
       setStatus('ready')
       if(bundle.profiles)setDetectedProfiles(bundle.profiles.detected)
@@ -455,7 +458,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         searchInput.current?.select()
       }
       const focusRoot=closeIntent?confirmPanel.current:panel.current
-      if (event.key === 'Tab' && focusRoot) {
+      if (isFocusTraversalKey(event) && focusRoot) {
         const focusable = [...focusRoot.querySelectorAll<HTMLElement>('button,input,select,textarea')].filter(item => !item.hasAttribute('disabled'))
         if (!focusable.length) return
         const first = focusable[0], last = focusable[focusable.length - 1]
@@ -788,14 +791,14 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         </Fragment>}
 
         {activeTab==='agents'&&<section><h3>Agents</h3><label>Claude executable<input value={draft.claude_exe} onInput={e=>change('claude_exe',e.currentTarget.value)} /></label><label>Claude default args<input value={claudeArgs} onInput={e=>setClaudeArgs(e.currentTarget.value)} /></label><label>Codex executable<input value={draft.codex_exe} onInput={e=>change('codex_exe',e.currentTarget.value)} /></label><label>Codex default args<input value={codexArgs} onInput={e=>setCodexArgs(e.currentTarget.value)} /></label><label class="check"><span>Reconcile native history</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
-          <div class="keybinding-heading"><div><strong>PROMPT QUEUE::AUTO-DELIVERY</strong><p>Queued messages wait for your explicit Send now. This switch does not change that on its own: it only makes the per-session opt-in in a session's queue pane available, and an opted-in session still sends nothing until the agent has held a safe-to-interrupt state for the whole stability window. Both switches are required, and the opt-in expires on its own.</p></div></div>
-          <label class="check"><span>Allow auto-delivery (per-session opt-in still required)</span><input type="checkbox" checked={draft.auto_delivery_enabled} onChange={e=>change('auto_delivery_enabled',e.currentTarget.checked)} /></label>
+          <div class="keybinding-heading"><div><strong>PROMPT QUEUE::AUTO-DELIVERY</strong><p>When this install-wide switch is on, every new Claude/Codex conversation starts with bounded auto-delivery enabled. Armed messages still wait until the agent has held a safe-to-interrupt state for the whole stability window. A conversation can be turned off from its queue pane, and its grant expires on its own.</p></div></div>
+          <label class="check"><span>Allow auto-delivery for agent conversations</span><input type="checkbox" checked={draft.auto_delivery_enabled} onChange={e=>change('auto_delivery_enabled',e.currentTarget.checked)} /></label>
           <label>Stability window seconds<input type="number" min="2" max="600" step="0.5" value={draft.auto_delivery_stable_seconds} onInput={e=>change('auto_delivery_stable_seconds',Number(e.currentTarget.value))} /></label>
-          <label>Consecutive automatic sends before the opt-in disables itself<input type="number" min="1" max="50" value={draft.auto_delivery_max_consecutive} onInput={e=>change('auto_delivery_max_consecutive',Number(e.currentTarget.value))} /></label>
-          <label>Opt-in expiry minutes<input type="number" min="1" max="1440" value={draft.auto_delivery_session_ttl_minutes} onInput={e=>change('auto_delivery_session_ttl_minutes',Number(e.currentTarget.value))} /></label>
+          <label>Consecutive automatic sends before the grant disables itself<input type="number" min="1" max="50" value={draft.auto_delivery_max_consecutive} onInput={e=>change('auto_delivery_max_consecutive',Number(e.currentTarget.value))} /></label>
+          <label>Grant expiry minutes<input type="number" min="1" max="1440" value={draft.auto_delivery_session_ttl_minutes} onInput={e=>change('auto_delivery_session_ttl_minutes',Number(e.currentTarget.value))} /></label>
           <label>Back-off seconds after a refused attempt<input type="number" min="0" max="3600" step="0.5" value={draft.auto_delivery_refusal_backoff_seconds} onInput={e=>change('auto_delivery_refusal_backoff_seconds',Number(e.currentTarget.value))} /></label>
           <div class="quiet-hours"><label>Quiet from<input type="time" value={draft.auto_delivery_quiet_start} onInput={e=>change('auto_delivery_quiet_start',e.currentTarget.value)} /></label><label>Until<input type="time" value={draft.auto_delivery_quiet_end} onInput={e=>change('auto_delivery_quiet_end',e.currentTarget.value)} /></label></div>
-          <p>These are the bounds every opt-in runs under, not a schedule. A manual send resets the consecutive count, because it is evidence you are watching; quiet hours (local time, both empty for none) pause automatic sends only and never your own Send now. The emergency pause in the queue pane is separate and takes effect instantly.</p>
+          <p>These are the bounds every conversation grant runs under, not a schedule. A manual send resets the consecutive count, because it is evidence you are watching; quiet hours (local time, both empty for none) pause automatic sends only and never your own Send now. The emergency pause in the queue pane is separate and takes effect instantly.</p>
         </section>}
 
         {activeTab==='accounts'&&<AccountSettings/>}
@@ -826,7 +829,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <div class="keybinding-list">
             {[...new Set(bindingCommands.map(command=>command.category))].map(category=><section class="keybinding-group" aria-label={`${category} shortcuts`}><h4>{category}</h4>{bindingCommands.filter(command=>command.category===category).map(command=>{const chord=bindingForCommand(command.id);return <article class={capturingCommand===command.id?'capturing':''}><button class="keybinding-command" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} title={command.id}><span>{command.label}</span><small>{command.id}</small></button><button class="keybinding-chord" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} aria-label={`Set shortcut for ${command.label}`}><kbd>{chord?displayChord(chord):'not set'}</kbd></button><button class="keybinding-clear" disabled={!chord} onClick={()=>clearBinding(command.id)} aria-label={`Clear shortcut for ${command.label}`}>×</button></article>})}</section>)}
           </div>
-          <details class="keybinding-policy"><summary>Reserved shortcut policy</summary><ul>{bindingPolicy.rules.map(rule=><li>{rule}</li>)}</ul><div><strong>BROWSER</strong>{bindingPolicy.browser_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>TERMINAL</strong>{bindingPolicy.terminal_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div></details>
+          <details class="keybinding-policy"><summary>Reserved shortcut policy</summary><ul>{bindingPolicy.rules.map(rule=><li>{rule}</li>)}</ul><div><strong>BROWSER</strong>{bindingPolicy.browser_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>DESKTOP APP</strong>{bindingPolicy.desktop_only.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>TERMINAL</strong>{bindingPolicy.terminal_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div></details>
         </section>}
 
         {activeTab==='commandrail'&&<section class="commandrail-settings"><h3>Command rail</h3>

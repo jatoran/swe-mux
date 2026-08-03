@@ -13,6 +13,9 @@ responsive controls.
   strip beside that rail.
 - The sidebar is pointer/keyboard resizable from 190–480 px and collapsible. Width and collapse
   state are device-local browser preferences, not Project layout state.
+- On mobile, selecting either a Project row or a session row closes the navigation overlay. Project
+  selection closes it before restoring that Project's remembered active view, including when no
+  valid remembered view exists.
 - The sidebar shows only Projects marked for active navigation. A Project row is followed
   directly by its layout/session rows. An initialized or open session note appears beneath its
   terminal, and is the only note row the sidebar draws.
@@ -257,6 +260,10 @@ responsive controls.
   cycle). It also kept Cancel/Save in a horizontally scrolling footer on phones. Per-section
   resets that genuinely are scoped — gesture defaults, shortcut defaults, the command rail —
   stay with their own section.
+- Keyboard shortcuts distinguish browser-reserved chords from desktop-only chords. WebView2
+  releases the latter to the app, while an ordinary browser keeps its own tab/window behavior;
+  Settings exposes both categories and accepts `Ctrl+Tab` / `Ctrl+Shift+Tab` as mappable desktop
+  inputs. Modified Tab chords never enter focus traps, drawer-tab traversal, or editor indentation.
 - Notes configures the shared Markdown editor behind every note and Markdown file: spellcheck,
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
@@ -375,8 +382,9 @@ responsive controls.
   test playback are device preferences. A custom upload joins the same previewable library and
   does not replace existing event assignments.
 - Agents carries the auto-delivery master switch and its bounds (`auto-delivery.md`). It is a
-  bounds editor, not a schedule: the switch only makes the per-session opt-in available, and
-  the runtime state it governs — the emergency pause and the opt-ins themselves — stays in
+  bounds editor, not a schedule: when the switch is on, each new Claude/Codex conversation gets
+  a bounded default-on grant that can be turned off in its Queue panel. The runtime state it
+  governs — the emergency pause and conversation grants/overrides — stays in
   SQLite behind the queue pane, outside the draft/Save cycle.
 - General exposes **Reset & run tutorial**. Starting it shares the ordinary Settings
   Save/Discard guard, so replay never silently loses a dirty draft.
@@ -587,6 +595,15 @@ responsive controls.
 - Narrow and coarse-pointer terminals focus a dedicated native IME bridge. Android composition
   replacements are converted to incremental terminal text and DEL input as they happen, so Gboard
   and other composing keyboards provide live PTY input without xterm's temporary composition box.
+  Because that bridge, rather than xterm's internal textarea, owns DOM focus, xterm uses a static
+  bar for its inactive cursor on these devices. The first terminal focus briefly initializes
+  xterm before focus moves to the bridge; without that bootstrap a normal-screen Codex session
+  has no cursor node at all. The bridge's own caret remains transparent; the visible bar is drawn
+  at the real terminal buffer position.
+  Every Android Enter path (`keydown`, cancelable `beforeinput`, and the final value-delta fallback)
+  maps to the same backend-aware payload: Claude/Codex receive `ESC+CR` to insert a composer newline,
+  while shells retain `CR` submit. Agent submission is the fixed rail **Send** action, never the
+  soft-keyboard Enter key.
 - A terminal pane is three rows: the header bar, an optional read-aloud player strip, then the
   terminal surface (terminal + action rail). The rows are placed explicitly so the middle track
   collapses to nothing when no strip is rendered.
@@ -612,8 +629,17 @@ responsive controls.
 - Every terminal has an in-flow action rail at the bottom of its pane on desktop and mobile,
   below the terminal rather than over it. It carries a keyboard toggle plus terminal-key
   buttons (Esc, Enter, Tab,
-  Ctrl-C, and the four arrows), then Copy reply, Paste, and the clipboard-history picker (`Clip`),
-  then a status readout. Rail items now carry a **placement**: `strip` (here), `drawer` (the
+  Ctrl-C, and the four arrows), then Attach (agent sessions), Copy reply, Paste, and the
+  clipboard-history picker (`Clip`),
+  then a status readout. On narrow/coarse Claude and Codex panes, the configurable Enter item is
+  removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate
+  grid column. The four arrows are non-focusing pointer controls: press sends once, then a 350 ms
+  hold repeats every 75 ms until release or cancellation. Preventing pointer focus keeps an open
+  mobile keyboard open; keyboard and assistive activation remain one-shot. A touch beginning on
+  an arrow steers the terminal rather than horizontally scrolling the rail.
+  The inner strip alone owns horizontal overflow, so Send does not scroll, cannot be
+  reordered/hidden, and remains reachable after soft-keyboard Enter becomes newline-only. Shell and
+  desktop Enter behavior is unchanged. Rail items now carry a **placement**: `strip` (here), `drawer` (the
   utility drawer's Commands tab), or `both`. That replaces the old enabled/disabled toggle, which
   was a bad model — the strip is horizontally scarce, so "off" was the only way to get an item out
   of it, and several useful built-ins (Home/End, ^Home/^End, newline, clear input, `/rewind`)
@@ -644,7 +670,8 @@ responsive controls.
   `branch`, `relaunch`, `endSession`): the pane stays the single owner of terminal writes, so
   broadcast, replay, and read/select mode keep applying. With no terminal focused the tab says so instead of rendering
   dead buttons. Keys inject
-  raw bytes on the normal input path. The rail overflows on narrow panes and scrolls
+  raw bytes on the normal input path. The built-in newline uses `ESC+CR`, the legacy sequence both
+  Claude and Codex bind to composer newline; raw LF works in Claude but not Codex. The rail overflows on narrow panes and scrolls
   horizontally (touch drag, scrollbar, or mouse wheel); it never wraps. Voice controls are not
   here — they are in the pane header (`voice.md`), because the rail is a scroller the user pages
   through and they kept scrolling out of reach.
@@ -723,6 +750,11 @@ responsive controls.
   than typing `/copy` or waiting for OSC 52. Reply extraction walks back to the newest turn with
   meaningful assistant text; provider control acknowledgements such as `No response requested.`
   never replace the last copyable reply.
+- Claude/Codex terminal bodies also accept OS file drops and copied-file paste, while the visible
+  **Attach** rail button supplies the same multi-file picker on desktop and mobile. Upload status
+  is reported in the rail. A general file inserts a quoted workspace-local path into the draft;
+  a recognized image keeps the provider's native image reference. Neither path submits, and
+  attachment input never follows terminal broadcast to sibling panes.
 - Terminal copy is success-preserving: keyboard, menu, automatic selection, the action rail, and
   provider OSC 52 requests retain the exact text until a write succeeds. Blocked or insecure
   clipboard contexts open a prepared fallback automatically, leaving one explicit Copy tap.
@@ -792,11 +824,16 @@ responsive controls.
   speaks cannot be read at all, which is the failure this tab exists to fix. Returning to a
   session still focused restores where reading stopped; moving to another session starts at its
   newest message, and nothing is remembered per session beyond the one you are on.
-- It refreshes on turn boundaries (the events socket's `turn_ended`), never on a timer: that is
-  the only moment a conversation can gain a message, and polling would re-read a whole transcript
-  to learn nothing for most of an agent's working minute. A pane whose conversation rolled over
+- It refreshes when the transcript observer consumes a user message (`transcript_message`) and at
+  the assistant turn boundary (`turn_ended`), never on a timer. The first event makes a submitted
+  prompt appear without waiting for the response; the second collects the completed answer.
+  Polling would re-read a whole transcript to learn nothing for most of an agent's working minute.
+  A pane whose conversation rolled over
   (`/clear`, `/new`) reloads onto the new run; the retired conversation stays in History, which
   is also where anything older than the loaded window lives.
+- A live auto-named agent's session menu includes **Regenerate title**. It requests a fresh
+  generated title from the latest observed user request. A manual Rename remains authoritative and
+  removes this action because automation never overwrites a user title.
 - When the transcript observer's link to the PTY has gone stale, the tab **says so** rather than
   presenting another conversation as this session's. Everywhere else that fault reads as odd
   telemetry; here it would be a stranger's words under this session's name.
@@ -896,19 +933,25 @@ responsive controls.
   mutually exclusive with the navigation sidebar (opening either closes the other). **Desktop** is
   an in-flow column of the workspace grid: the pane tree shrinks rather than being covered, because
   covering a terminal in a tiling workspace is exactly backwards for a panel you opened to work
-  *with* that terminal. Width is pointer-resizable and device-local, like the sidebar's.
+  *with* that terminal. The mobile overlay is an uncapped `90vw`, leaving a narrow strip of context
+  and scrim on every phone and small tablet. Desktop width is pointer-resizable and device-local,
+  like the sidebar's.
 - Every width change reflows the pane tree and refits its terminals, which sends a resize to each
-  PTY and makes agent TUIs redraw. That is why the drawer never opens itself, its width persists,
-  and the drag commits on pointer-up rather than per-frame.
+  PTY and makes agent TUIs redraw. Width persists globally for the device and the drag commits on
+  pointer-up rather than per-frame. Restoring a Project whose desktop drawer was expanded performs
+  one deliberate reflow as part of restoring that Project's workspace presentation.
 - **Which tab a reopen lands on is a property of the entry point, not of the drawer.** The last
-  tab is device-local state (`mux.drawer.tab.v1`), written on every selection and read at boot, so
-  `drawer.toggle` — the gesture, the menu row, the palette — always reopens where you left it,
-  across a close, a sidebar stealing the screen, or a PWA relaunch. The per-tab commands
+  tab and desktop expanded/collapsed state are device-local **per Project** state
+  (`mux.drawer.projects.v1`). Switching Projects or relaunching restores each Project's pair;
+  `drawer.toggle` — the gesture, the menu row, the palette — reopens the active Project where it
+  was left. The per-tab commands
   (`drawer.<tab>`, `clipboard.open` behind the rail's Clip button, the bell, "Browse files…")
-  deliberately force their own tab: they name a surface, so honouring a remembered tab would
-  ignore what was asked for. Binding one of those to the gesture you *open the panel* with is
-  therefore indistinguishable from the drawer forgetting its tab, which is why the keybinding
-  catalog's labels say outright which commands restore the last tab and which always force one.
+  deliberately force their own tab and update the target Project's memory: they name a surface, so
+  honouring a remembered tab would ignore what was asked for. Binding one of those to the gesture
+  you *open the panel* with is therefore indistinguishable from the drawer forgetting its tab,
+  which is why the keybinding catalog's labels say outright which commands restore the last tab
+  and which always force one. The former global `mux.drawer.tab.v1` value migrates once to the
+  initially active Project; no per-Project history can be inferred for the others.
 - Desktop additionally has an always-visible 40 px **icon rail** on the far right, one icon per tab,
   with badges for unread notifications (amber, "unread") and pending queue items (accent,
   "staged" — a different colour because staged work is not an alert). The rail is the part that
@@ -956,9 +999,9 @@ responsive controls.
   its duration, which is what keeps rearranging the strip from doubling as a swipe gesture.
 - The order is **server-persisted** in the `drawerTabs` settings domain, in one canonical bucket
   like the command rail and the file tree, rather than in localStorage beside drawer width and
-  last-used tab. Those two are genuinely per-device; an arrangement says which surfaces *you*
-  reach for, so a phone should inherit what a desktop set. Another device editing it arrives as
-  the same `settings_changed` event as the cache first loading, so one listener handles both.
+  per-Project presentation. Those are genuinely per-device; an arrangement says which surfaces
+  *you* reach for, so a phone should inherit what a desktop set. Another device editing it arrives
+  as the same `settings_changed` event as the cache first loading, so one listener handles both.
 - Normalization is not optional (`drawerTabOrder.ts`): unknown and duplicate ids are dropped,
   and a tab the stored order predates is merged in beside its default predecessor rather than
   appended. A saved order must never hide a tab added later, and appending would put every new
@@ -969,7 +1012,7 @@ responsive controls.
   keys would jump around a rearranged strip. `drawer.resetTabs` restores the default, because
   an arrangement is persistent state a drag can scramble and "drag five tabs back from memory"
   is not a way out.
-- Last-used tab is remembered per device, so
+- Last-used tab is remembered per Project and device, so
   `drawer.toggle` (default two-finger swipe **left**, the swipe that drags a right-edge panel in;
   the rightward swipe keeps the left-edge sidebar) reopens where you left off, while `drawer.<tab>`
   commands open one tab directly and close it if it is already showing.
@@ -982,8 +1025,10 @@ responsive controls.
   mark, because like `drawer.toggle` it opens whichever tab was last used.
 - Acting closes the drawer on mobile, where it covers the surface just acted on, and leaves it
   open on desktop, where the column sits beside that surface and a second insert (or a second
-  file) is the common next action. One rule, applied to inserting text and to opening a file or
-  a note.
+  file) is the common next action. Mobile overlay visibility is transient and never overwrites a
+  Project's remembered desktop expansion. Crossing the responsive breakpoint closes the overlay;
+  returning to desktop restores the Project's docked state. One rule, applied to inserting text
+  and to opening a file or a note.
 - **Clipboard history** is a shared, bounded ring of every text copied *inside* swe-mux, and the
   drawer's first tab. Capture is installed once at boot in `clipboardHistory.ts` rather than at each copy
   site: `Clipboard.prototype.writeText` is wrapped (which covers all ~30 in-app calls *and* the
@@ -1013,13 +1058,12 @@ responsive controls.
   note. `deepActiveElement` descends `activeElement.shadowRoot` until it stops moving (a closed
   root has no `activeElement`, so it stops at the host, which is the old answer and the best one
   available). Depth is capped so a malformed tree cannot spin a handler that runs on every gesture.
-- The panels also dismiss the keyboard at **touchstart, as soon as a second finger lands**, not
-  only when the resolved command runs. A gesture's command is dispatched at touchend, but an
-  editor focuses its input on every pointerdown — that is how a tap places the caret — so a
-  two-finger swipe starting over a note *raises* the keyboard on the way in and a dismissal a
-  swipe later cannot hide that it happened. Two fingers is never text entry, so the blur is safe
-  to do immediately, and doing it in the same frame as the focus is what keeps the keyboard from
-  animating up at all. Single-finger touches are left alone: one of them is the tap that focuses.
+- The panels also dismiss any keyboard already visible at **touchstart, as soon as a second
+  finger lands**, rather than waiting for the resolved command at touchend. Two fingers are never
+  text entry, so the early blur is safe. Continuity 0.2.18 separately owns note-touch
+  arbitration: pointerdown does not focus, a resolved tap places the caret and focuses, and
+  scroll/cancel/long-press paths leave the keyboard closed. swe-mux adds no shadow-DOM or caret
+  hit-testing workaround; single-finger touches pass to the editor unchanged.
 - Spawning a terminal closes the mobile sidebar. Every launch focuses the new tab, so every
   launch has to clear what is covering it — launching from a sidebar Project row otherwise
   focused a tab the drawer was still hiding, which reads as "the Run button did nothing". This

@@ -2,6 +2,12 @@ export type TerminalRendererPreference = 'auto' | 'dom' | 'webgl'
 export type ActiveTerminalRenderer = 'dom' | 'webgl'
 export type TerminalRendererBackend = 'shell' | 'claude' | 'codex'
 
+export function terminalCursorOptions(mobileInput: boolean) {
+  return mobileInput
+    ? { cursorInactiveStyle: 'bar' as const, cursorWidth: 2 }
+    : { cursorInactiveStyle: 'outline' as const, cursorWidth: 1 }
+}
+
 export function shouldLoadWebgl(
   preference: TerminalRendererPreference,
   mobileViewport: boolean,
