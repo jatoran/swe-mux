@@ -12,8 +12,9 @@
 | warm-pane recency (which terminals stay mounted) | `warmHistory` in App, derived from layout | device/session-local |
 | mobile unified tab rail | projection of layout | derived only |
 | sidebar width/collapse | local storage | device-local |
-| utility drawer width | local storage | device-local |
-| utility drawer selected tab, desktop expansion | local storage keyed by Project | device-local |
+| utility drawer split tree, membership, order, ratios | `mux.drawer.layout.v1` through `drawerLayout.ts` | device-local, global across Projects |
+| utility drawer width | `mux.drawer.width.v1` | device-local, global across Projects |
+| utility drawer pane selections, focused tab, desktop expansion | `mux.drawer.projects.v2` keyed by Project | device-local |
 | mobile utility drawer visibility | `mobileDrawerOpen` in App | browser session |
 | pointer drag target/ghost | refs and direct DOM attributes | one gesture |
 | note/file draft | resource component/save queue | resource-local |
@@ -24,6 +25,31 @@
 | canonical file tab identity | `file:<project_id>:<relative_path>` layout leaf | durable, multi-client |
 | worktree file tab identity | `worktree-file:<project_id>:<encoded_root>:<encoded_relative_path>` layout leaf | durable, multi-client |
 | open Git review snapshot and annotations | `GitReviewModal` component memory | one modal |
+
+## Utility drawer authority and migration
+
+`DrawerLayout` is a browser-local recursive split tree that is structurally independent from Project layout v7.
+It stores stable stack and split IDs, tab membership, tab order, split directions, and ratios, but it stores no active selection.
+`normalizeDrawerLayout` is the read and write boundary that repairs invalid JSON, malformed branches, duplicate IDs, duplicate or missing registered tabs, invalid ratios, stale tabs, empty stacks, and trees deeper than 24.
+
+Each Project's `DrawerProjectPresentation` stores a selected tab per current stack, one focused utility tab, and desktop expanded state.
+Normalization prefers that Project's focused tab in its owner stack, preserves each other valid stack selection, and otherwise selects the stack's first tab.
+A global layout edit reconciles every saved Project presentation while preserving expanded state and the focused tab in its new owner stack.
+Deleting a Project prunes only its presentation record and does not alter global drawer geometry.
+Before any Project exists, App uses a transient normalized presentation so application-scoped utilities remain reachable.
+
+The first v1 layout waits for the asynchronous device-settings cache, then seeds from the former normalized server `drawerTabs` order if no local layout was created while that read was in flight.
+The former `mux.drawer.projects.v1` tab and expansion pair migrates to `mux.drawer.projects.v2`, and the former `mux.drawer.tab.v1` value seeds only the initially active Project when valid.
+The old keys are removed only after both new serializations succeed.
+The server continues accepting the legacy flat domain for compatibility, but recursive edits never write it or adopt later settings changes.
+
+Mobile visibility remains transient in `mobileDrawerOpen`.
+Mobile derives one depth-first tab rail and one selected body from the desktop tree, and activation updates only the owning stack's Project presentation.
+Responsive transitions never flatten or persist replacement geometry.
+
+Notes is the only inactive drawer body kept mounted.
+Its singleton host is derived from the unique Notes tab's owner stack, remains hidden while another tab is selected there, and preserves cursor, undo, save-queue ownership, and editor insert targeting.
+Closing the complete drawer releases its note claim so a workspace placeholder never targets a hidden host.
 
 ## Warm terminal panes
 

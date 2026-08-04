@@ -123,20 +123,14 @@ export async function saveExpandedFolders(projectId: string, paths: string[]): P
   await saveDomain(FILE_TREE_PROFILE, 'fileTree', next as Record<string, unknown>)
 }
 
-// The drawer's tab order is one arrangement shared by the strip and the desktop rail, and —
-// like the command rail and the file tree — it says which surfaces the user reaches for rather
-// than anything about screen size, so it lives in one canonical bucket instead of per device
-// class. The blob is `{order: DrawerTabId[]}`; validation is the browser's (`drawerTabOrder.ts`),
-// which is why the daemon stores it opaquely.
+// Read-only migration input for the former server-synced flat drawer order. New recursive drawer
+// layouts are device-local in `drawerLayout.ts`; this domain remains accepted by the daemon so an
+// upgraded browser can seed its first layout without losing the user's former order.
 const DRAWER_TAB_PROFILE: SettingsProfile = 'desktop'
 
 /** Persisted tab order, unvalidated. Callers normalize; an unloaded cache yields undefined. */
 export function loadDrawerTabOrder(): unknown {
   return rawDomain(DRAWER_TAB_PROFILE, 'drawerTabs')?.order
-}
-
-export async function saveDrawerTabOrder(order: string[]): Promise<void> {
-  await saveDomain(DRAWER_TAB_PROFILE, 'drawerTabs', { order })
 }
 
 // One-time import of the pre-server sound blob into this device's profile, so an

@@ -29,6 +29,7 @@ type Config = {
   terminal_renderer:'auto'|'dom'|'webgl'
   claude_args:string[]; codex_args:string[]
   git_poll_seconds:number; reconcile_external_history:boolean; theme:ThemeName
+  drawer_tab_display:'icon'|'title'
   process_poll_seconds:number;process_orphan_grace_seconds:number;process_evidence_retention_days:number
   operational_telemetry_retention_days:number;provider_quota_poll_minutes:number
   provider_quota_turn_refresh_enabled:boolean;provider_quota_turn_refresh_min_minutes:number
@@ -994,6 +995,9 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         </section>}
 
         {activeTab==='appearance'&&<section><h3>Appearance</h3><label>Theme<select value={draft.theme} onChange={e=>{const value=e.currentTarget.value as ThemeName;change('theme',value);applyTheme(value)}}><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option><option value="solarized-dark">Solarized Dark</option><option value="tokyo-night">Tokyo Night</option><option value="gruvbox-dark">Gruvbox Dark</option><option value="catppuccin-mocha">Catppuccin Mocha</option><option value="catppuccin-latte">Catppuccin Latte</option><option value="nord">Nord</option><option value="dracula">Dracula</option><option value="everforest-dark">Everforest Dark</option><option value="rose-pine">Rosé Pine</option><option value="kanagawa">Kanagawa</option><option value="ayu-dark">Ayu Dark</option><option value="tron">Tron</option><option value="synthwave-84">Synthwave '84</option><option value="cyberpunk-neon">Cyberpunk Neon</option><option value="amber-crt">Amber CRT</option><option value="green-phosphor">Green Phosphor</option><option value="borland-dos">Borland DOS</option><option value="custom">Custom</option></select></label>{draft.theme==='custom' && <div class="theme-tokens">{Object.entries(draft.custom_theme).map(([key,value])=><label>{key}<input value={value} onInput={e=>{const custom={...draft.custom_theme,[key]:e.currentTarget.value};change('custom_theme',custom);configureCustomTheme(custom);applyTheme('custom')}} /></label>)}</div>}<input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} /><div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div><p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
+          <h3>Side panel tabs</h3>
+          <label>Side panel tabs<select value={draft.drawer_tab_display} onChange={e=>change('drawer_tab_display',e.currentTarget.value as Config['drawer_tab_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>
+          <p>Choose compact icons or visible short titles for every side-panel pane rail and the desktop launcher.</p>
           <h3>Interface scale</h3>
           <label>Desktop interface scale<select value={String(draft.ui_scale_desktop)} onChange={e=>changeUiScale('ui_scale_desktop',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>
           <label>Mobile interface scale<select value={String(draft.ui_scale_mobile)} onChange={e=>changeUiScale('ui_scale_mobile',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>

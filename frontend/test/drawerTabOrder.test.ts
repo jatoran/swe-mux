@@ -1,25 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { DRAWER_TABS, nextDrawerTab, type DrawerTabId } from '../src/drawerTabs.ts'
-import {
-  DEFAULT_DRAWER_TAB_ORDER,
-  isDefaultDrawerTabOrder,
-  normalizeDrawerTabOrder,
-  orderedDrawerTabs,
-  sameDrawerTabOrder,
-} from '../src/drawerTabOrder.ts'
+import { DRAWER_TABS, type DrawerTabId } from '../src/drawerTabs.ts'
+import { DEFAULT_DRAWER_TAB_ORDER, normalizeDrawerTabOrder } from '../src/drawerTabOrder.ts'
 
 test('the default order is the registry order', () => {
   assert.deepEqual(DEFAULT_DRAWER_TAB_ORDER, DRAWER_TABS.map(tab => tab.id))
-  assert.ok(isDefaultDrawerTabOrder(DEFAULT_DRAWER_TAB_ORDER))
-  assert.ok(isDefaultDrawerTabOrder(normalizeDrawerTabOrder(undefined)))
+  assert.deepEqual(normalizeDrawerTabOrder(undefined), DEFAULT_DRAWER_TAB_ORDER)
 })
 
-test('a stored arrangement round-trips and reports as custom', () => {
+test('a stored arrangement round-trips', () => {
   const custom: DrawerTabId[] = ['files', 'notes', 'context', 'git', 'processes', 'clipboard', 'commands', 'prompts', 'queue', 'transcript', 'notifications']
   assert.deepEqual(normalizeDrawerTabOrder(custom), custom)
-  assert.ok(!isDefaultDrawerTabOrder(custom))
-  assert.deepEqual(orderedDrawerTabs(custom).map(tab => tab.id), custom)
 })
 
 test('arranging never loses, hides, or duplicates a tab', () => {
@@ -37,7 +28,6 @@ test('arranging never loses, hides, or duplicates a tab', () => {
     const normalized = normalizeDrawerTabOrder(raw)
     assert.equal(normalized.length, DRAWER_TABS.length, JSON.stringify(raw))
     assert.deepEqual([...normalized].sort(), [...DEFAULT_DRAWER_TAB_ORDER].sort(), JSON.stringify(raw))
-    assert.equal(orderedDrawerTabs(normalized).filter(Boolean).length, DRAWER_TABS.length)
   }
 })
 
@@ -64,19 +54,4 @@ test('a tab the stored order predates lands beside its default neighbour, not at
 
   // A first tab the order predates goes to the front rather than after everything.
   assert.deepEqual(normalizeDrawerTabOrder(['notes'])[0], 'clipboard')
-})
-
-test('keyboard cycling walks the arranged order, not the registry order', () => {
-  const custom: DrawerTabId[] = ['notes', 'files', 'context', 'git', 'clipboard', 'commands', 'prompts', 'queue', 'notifications']
-  assert.equal(nextDrawerTab('notes', 1, custom), 'files')
-  assert.equal(nextDrawerTab('notes', -1, custom), 'notifications')
-  assert.equal(nextDrawerTab('notifications', 1, custom), 'notes')
-  // No arrangement supplied falls back to the registry order.
-  assert.equal(nextDrawerTab('clipboard', 1), 'commands')
-  assert.equal(nextDrawerTab('clipboard', 1, []), 'commands')
-})
-
-test('order comparison is exact, so an unchanged drag writes nothing', () => {
-  assert.ok(sameDrawerTabOrder(DEFAULT_DRAWER_TAB_ORDER, [...DEFAULT_DRAWER_TAB_ORDER]))
-  assert.ok(!sameDrawerTabOrder(DEFAULT_DRAWER_TAB_ORDER, [...DEFAULT_DRAWER_TAB_ORDER].reverse()))
 })

@@ -10,13 +10,16 @@ import { TranscriptTab } from './TranscriptTab'
 import { GitTab } from './GitTab'
 import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
-import { drawerTab, nextDrawerTab, type DrawerTab, type DrawerTabId } from './drawerTabs'
+import { drawerTab, type DrawerTabId } from './drawerTabs'
+import {
+  drawerTabs, setDrawerSplitRatio,
+  type DrawerLayout, type DrawerNode, type DrawerProjectPresentation, type DrawerStack,
+} from './drawerLayout'
 import { ProcessesTab } from './ProcessesTab'
 import type { WatchScope, WatchSnapshot } from './processWatch'
 import { parseNoteResourceId } from './layout'
 import type { NotePlacement } from './NotesTab'
 import { DRAWER_TAB_ICONS } from './railIcons'
-import { isFocusTraversalKey } from './keys'
 import type { SendToAgentRequest, SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
 import type { Project, ProjectBackend, Session } from './types'
 
@@ -33,10 +36,13 @@ import type { Project, ProjectBackend, Session } from './types'
 // surfaces discoverable without a menu or a chord.
 
 type Props = {
-  tab: DrawerTabId
+  layout: DrawerLayout
+  presentation: DrawerProjectPresentation
   onTab: (tab: DrawerTabId) => void
+  onLayout: (layout: DrawerLayout) => void
   onClose: () => void
   mobile: boolean
+  tabDisplay: 'icon' | 'title'
   /** Focused session, for the session-scoped tabs. */
   session: Session | null
   project?: Project
@@ -92,10 +98,6 @@ type Props = {
   onCloseDrawerNote: () => void
   /** Give it back and put it in a pane, focused. */
   onPopDrawerNoteToTab: (resourceId: string) => void
-  /** Tabs in the user's arranged order, and the pointer-drag that rearranges them. Both come
-   *  from the caller because the desktop icon rail renders the same order and the same drag,
-   *  and the two must never disagree about it. */
-  tabs: DrawerTab[]
   onTabDragStart: (event: JSX.TargetedPointerEvent<HTMLElement>, id: DrawerTabId) => void
   /** True while a tab is being dragged, so the strip can suppress its own click. */
   draggingTab: DrawerTabId | null
@@ -110,20 +112,27 @@ type Props = {
    *  rather than per-session on purpose — the badge answers "is anything waiting anywhere",
    *  which is the question you have while looking at some other session. */
   queuePending: number
+  announcement: string
   /** Desktop only: pointer-drag handle for the column width. Typed as the plain
    *  DOM event so this module needs no `JSX` import for it (which would shadow the
    *  global namespace the intrinsic elements below resolve through). */
   onResize?: (event: PointerEvent) => void
+  width: number
+  minimumWidth: number
+  maximumWidth: number
+  defaultWidth: number
+  onWidth: (width: number) => void
 }
 
 export function UtilityDrawer(props: Props) {
-  const { tab, onTab, onClose, mobile, session, project } = props
-  const active = drawerTab(tab)
+  const { layout, presentation, onTab, onClose, mobile, session, project } = props
+  const focusedTab = presentation.focused_tab
   const tabStrip = useRef<HTMLDivElement>(null)
+  const stackOrder = drawerTabs(layout)
   useEffect(() => {
-    tabStrip.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+    tabStrip.current?.querySelector<HTMLElement>(`[data-drawer-tab-id="${focusedTab}"]`)
       ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [tab])
+  }, [focusedTab, layout, mobile])
   // Acting closes the drawer on mobile (it covers the surface just acted on) and
   // leaves it open on desktop, where the column sits beside that surface and a
   // second insert (or a second file) is the common next action.
@@ -173,8 +182,8 @@ export function UtilityDrawer(props: Props) {
    * (`.drawer-note-host[hidden]` must stay `display:none` even though the class sets a flex
    * layout, since a class rule would otherwise beat the UA default).
    */
-  const noteHost = drawerNote && project
-    ? <div class="drawer-note-host" hidden={tab !== 'notes'}>
+  const renderNoteHost = (visible: boolean) => drawerNote && project
+    ? <div class="drawer-note-host" hidden={!visible}>
       <div class="drawer-note-bar">
         <button class="drawer-note-back" title="Back to the note index" onClick={props.onCloseDrawerNote}>‹ Notes</button>
         <span class="drawer-note-kind">{drawerNoteLabel}</span>
@@ -196,7 +205,7 @@ export function UtilityDrawer(props: Props) {
 
   // One body per tab. A flat dispatch rather than the nested ternary this grew out of:
   // several branches deep, every added surface used to reindent the ones below it.
-  const renderBody = () => {
+  const renderBody = (tab: DrawerTabId) => {
     switch (tab) {
       case 'clipboard':
         return <ClipboardTab onInsert={insertText} onDone={onInsertDone} onOpenSettings={() => props.onOpenSettings('Input')} />
@@ -269,7 +278,179 @@ export function UtilityDrawer(props: Props) {
         return <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} onChanged={props.onNotificationsChanged} />
     }
   }
-  const body = renderBody()
+  const scopeContext = (tab: DrawerTabId) => {
+    const scope = drawerTab(tab).scope
+    if (scope === 'session') return session ? `Session: ${session.name}` : 'No focused session'
+    if (scope === 'project') return project ? `Project: ${project.name}` : 'No active Project'
+    return 'Application-wide'
+  }
+
+  const tabDomId = (stackId: string, tab: DrawerTabId) => `drawer-tab-${stackId}-${tab}`
+  const panelDomId = (stackId: string) => `drawer-panel-${stackId}`
+
+  const renderTabMark = (id: DrawerTabId) => {
+    const item = drawerTab(id)
+    if (props.tabDisplay === 'title') return <span class="drawer-tab-title">{item.label}</span>
+    const Icon = DRAWER_TAB_ICONS[id]
+    return <Icon />
+  }
+
+  const focusTabButton = (stackId: string, tab: DrawerTabId) => {
+    queueMicrotask(() => document.getElementById(tabDomId(stackId, tab))?.focus())
+  }
+
+  const renderRail = (stack: DrawerStack, selected: DrawerTabId, projection = false) => <div
+    class={`drawer-tabs drawer-pane-rail ${props.tabDisplay === 'title' ? 'title-mode' : 'icon-mode'}`}
+    data-drawer-stack-id={stack.id}
+    role="tablist"
+    aria-label={projection ? 'Panel sections' : `Panel section ${stack.id}`}
+  >
+    {stack.tabs.map((id, index) => {
+      const item = drawerTab(id)
+      return <button
+        id={tabDomId(stack.id, id)}
+        key={id}
+        role="tab"
+        data-reorder-id={id}
+        data-drawer-tab-id={id}
+        data-scope={item.scope}
+        aria-controls={panelDomId(stack.id)}
+        aria-selected={id === selected}
+        aria-label={`${item.label}${item.scope === 'session' ? ', session scoped' : ''}`}
+        tabIndex={id === selected ? 0 : -1}
+        class={`${id === selected ? 'active' : ''} ${props.draggingTab === id ? 'dragging' : ''}`}
+        title={`${item.title}${item.scope === 'session' ? ' - session scoped' : ''}${projection ? '' : ' - drag to rearrange or split'}`}
+        onPointerDown={projection ? undefined : event => props.onTabDragStart(event, id)}
+        onClick={() => onTab(id)}
+        onKeyDown={event => {
+          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+          event.preventDefault()
+          const offset = event.key === 'ArrowLeft' ? -1 : 1
+          const next = stack.tabs[(index + offset + stack.tabs.length) % stack.tabs.length]
+          onTab(next)
+          focusTabButton(stack.id, next)
+        }}
+      >
+        {renderTabMark(id)}
+        {id === 'notifications' && props.unread > 0 && <i class="drawer-badge">{props.unread > 99 ? '99+' : props.unread}</i>}
+        {id === 'queue' && props.queuePending > 0 && <i class="drawer-badge queue-badge">{props.queuePending > 99 ? '99+' : props.queuePending}</i>}
+      </button>
+    })}
+  </div>
+
+  const renderStack = (stack: DrawerStack, selectedOverride?: DrawerTabId) => {
+    const selected = selectedOverride || presentation.selected_tabs[stack.id] || stack.tabs[0]
+    const active = drawerTab(selected)
+    const notesHere = stack.tabs.includes('notes')
+    return <section
+      key={stack.id}
+      class={`drawer-pane ${focusedTab === selected ? 'focused' : ''}`}
+      data-drawer-stack-id={stack.id}
+      onFocusCapture={() => { if (focusedTab !== selected) onTab(selected) }}
+    >
+      {renderRail(stack, selected, selectedOverride !== undefined)}
+      <div
+        id={panelDomId(stack.id)}
+        role="tabpanel"
+        aria-labelledby={tabDomId(stack.id, selected)}
+        class={`drawer-body drawer-body-${selected}`}
+        style={{ '--drawer-panel-title-width': `${Math.min(22, active.heading.length + 2.5)}ch` } as JSX.CSSProperties}
+      >
+        <div class="drawer-pane-heading">
+          <h2 class="drawer-panel-title" title={active.title}>{active.heading}</h2>
+          <span class="drawer-scope-context">{scopeContext(selected)}</span>
+        </div>
+        {notesHere && renderNoteHost(selected === 'notes')}
+        {!(selected === 'notes' && drawerNote) && renderBody(selected)}
+      </div>
+    </section>
+  }
+
+  const resizeSplit = (event: JSX.TargetedPointerEvent<HTMLDivElement>, node: Extract<DrawerNode, { type: 'split' }>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const separator = event.currentTarget
+    const splitElement = separator.parentElement
+    if (!splitElement) return
+    separator.setPointerCapture(event.pointerId)
+    let ratio = node.ratio
+    const apply = (next: number) => {
+      ratio = Math.max(0.1, Math.min(0.9, next))
+      const first = splitElement.children[0] as HTMLElement
+      const second = splitElement.children[2] as HTMLElement
+      first.style.flex = `${ratio} 1 0`
+      second.style.flex = `${1 - ratio} 1 0`
+      separator.setAttribute('aria-valuenow', String(Math.round(ratio * 100)))
+    }
+    const move = (moveEvent: PointerEvent) => {
+      const rect = splitElement.getBoundingClientRect()
+      apply(node.direction === 'horizontal'
+        ? (moveEvent.clientX - rect.left) / Math.max(1, rect.width)
+        : (moveEvent.clientY - rect.top) / Math.max(1, rect.height))
+    }
+    const cleanup = () => {
+      separator.removeEventListener('pointermove', move)
+      separator.removeEventListener('pointerup', finish)
+      separator.removeEventListener('pointercancel', cancel)
+      separator.removeEventListener('lostpointercapture', cancel)
+      window.removeEventListener('blur', cancel)
+      window.removeEventListener('keydown', key, true)
+    }
+    const finish = () => {
+      cleanup()
+      props.onLayout(setDrawerSplitRatio(layout, node.id, ratio))
+    }
+    const cancel = () => {
+      cleanup()
+      apply(node.ratio)
+    }
+    const key = (keyboard: KeyboardEvent) => {
+      if (keyboard.key !== 'Escape') return
+      keyboard.preventDefault()
+      cancel()
+    }
+    separator.addEventListener('pointermove', move)
+    separator.addEventListener('pointerup', finish)
+    separator.addEventListener('pointercancel', cancel)
+    separator.addEventListener('lostpointercapture', cancel)
+    window.addEventListener('blur', cancel)
+    window.addEventListener('keydown', key, true)
+  }
+
+  const renderNode = (node: DrawerNode): JSX.Element => {
+    if (node.type === 'stack') return renderStack(node)
+    const updateRatio = (ratio: number) => props.onLayout(setDrawerSplitRatio(layout, node.id, ratio))
+    return <div key={node.id} class={`drawer-split ${node.direction}`} data-drawer-split-id={node.id}>
+      <div class="drawer-split-branch drawer-split-first" style={{ flex: `${node.ratio} 1 0` }}>{renderNode(node.first)}</div>
+      <div
+        class="drawer-splitter"
+        role="separator"
+        aria-label="Resize drawer panes"
+        aria-orientation={node.direction === 'horizontal' ? 'vertical' : 'horizontal'}
+        aria-valuemin={10}
+        aria-valuemax={90}
+        aria-valuenow={Math.round(node.ratio * 100)}
+        tabIndex={0}
+        onPointerDown={event => resizeSplit(event, node)}
+        onDblClick={() => updateRatio(0.5)}
+        onKeyDown={event => {
+          const decrease = node.direction === 'horizontal' ? 'ArrowLeft' : 'ArrowUp'
+          const increase = node.direction === 'horizontal' ? 'ArrowRight' : 'ArrowDown'
+          let ratio: number | null = null
+          if (event.key === decrease) ratio = node.ratio - 0.05
+          if (event.key === increase) ratio = node.ratio + 0.05
+          if (event.key === 'Home') ratio = 0.1
+          if (event.key === 'End') ratio = 0.9
+          if (ratio === null) return
+          event.preventDefault()
+          updateRatio(ratio)
+        }}
+      />
+      <div class="drawer-split-branch drawer-split-second" style={{ flex: `${1 - node.ratio} 1 0` }}>{renderNode(node.second)}</div>
+    </div>
+  }
+
+  const mobileStack: DrawerStack = { type: 'stack', id: 'mobile-projection', tabs: stackOrder }
 
   return <>
     {mobile && <button class="utility-drawer-scrim" aria-label="Close panel" onClick={onClose} />}
@@ -278,58 +459,41 @@ export function UtilityDrawer(props: Props) {
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize panel"
-      title="Drag to resize or collapse"
+      aria-valuemin={props.minimumWidth}
+      aria-valuemax={props.maximumWidth}
+      aria-valuenow={Math.round(props.width)}
+      tabIndex={0}
+      title="Drag to resize, or double click to restore the default width"
       onPointerDown={props.onResize}
+      onDblClick={() => props.onWidth(props.defaultWidth)}
+      onKeyDown={event => {
+        let width: number | null = null
+        if (event.key === 'ArrowLeft') width = props.width + 10
+        if (event.key === 'ArrowRight') width = props.width - 10
+        if (event.key === 'Home') width = props.minimumWidth
+        if (event.key === 'End') width = props.maximumWidth
+        if (width === null) return
+        event.preventDefault()
+        props.onWidth(width)
+      }}
     />}
     <aside
       class={`utility-drawer ${mobile ? 'overlay' : 'docked'}`}
-      role="dialog"
-      aria-label={`${active.label} panel`}
+      role={mobile ? 'dialog' : 'complementary'}
+      aria-modal={mobile || undefined}
+      aria-label="Utility drawer"
       onKeyDown={event => {
-        if (event.key === 'Escape') { event.stopPropagation(); onClose(); return }
-        // Tab cycling stays on the strip's own buttons so it cannot steal Tab from
-        // a filter field or a template's placeholder inputs. It walks the user's order,
-        // not the default one, or the keys would jump around a rearranged strip.
-        if (!isFocusTraversalKey(event) || !(event.target as Element | null)?.closest?.('.drawer-tabs')) return
-        event.preventDefault()
-        onTab(nextDrawerTab(tab, event.shiftKey ? -1 : 1, props.tabs.map(item => item.id)))
+        if (event.key === 'Escape' && !event.defaultPrevented) { event.stopPropagation(); onClose() }
       }}
     >
-      {/* Icon-only, like the desktop rail and from the same icon map. Labelled tabs
-          overflowed a phone drawer and silently parked later tabs off-screen; compact icons
-          fit many more, with the one-row scroller handling the remainder. The label
-          survives as the accessible name and the title as the hover explanation. */}
-      <div class="drawer-tabs-shell">
-        <div ref={tabStrip} class="drawer-tabs" role="tablist" aria-label="Panel sections">
-          {props.tabs.map(item => {
-            const Icon = DRAWER_TAB_ICONS[item.id]
-            return <button
-              key={item.id}
-              role="tab"
-              data-reorder-id={item.id}
-              data-scope={item.scope}
-              aria-selected={item.id === tab}
-              aria-label={`${item.label}${item.scope === 'session' ? ', session scoped' : ''}`}
-              class={`${item.id === tab ? 'active' : ''} ${props.draggingTab === item.id ? 'dragging' : ''}`}
-              title={`${item.title}${item.scope === 'session' ? ' · session-scoped' : ''} · drag to rearrange`}
-              onPointerDown={event => props.onTabDragStart(event, item.id)}
-              onClick={() => onTab(item.id)}
-            >
-              <Icon />
-              {item.id === 'notifications' && props.unread > 0 && <i class="drawer-badge">{props.unread > 99 ? '99+' : props.unread}</i>}
-              {item.id === 'queue' && props.queuePending > 0 && <i class="drawer-badge queue-badge">{props.queuePending > 99 ? '99+' : props.queuePending}</i>}
-            </button>
-          })}
-        </div>
+      <div class="drawer-chrome">
+        <span>Utilities</span>
         <button class="drawer-close" aria-label="Close panel" title="Close panel" onClick={onClose}>×</button>
       </div>
-      <div
-        class={`drawer-body drawer-body-${tab}`}
-        style={{ '--drawer-panel-title-width': `${Math.min(22, active.heading.length + 2.5)}ch` } as JSX.CSSProperties}
-      >
-        <h2 class="drawer-panel-title" title={active.title}>{active.heading}</h2>
-        {noteHost}{body}
+      <div ref={tabStrip} class="drawer-tree">
+        {mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root)}
       </div>
+      <span class="sr-only" aria-live="polite">{props.announcement}</span>
     </aside>
   </>
 }

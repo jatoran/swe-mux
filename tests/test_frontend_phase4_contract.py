@@ -252,8 +252,8 @@ def test_files_is_a_drawer_navigator_rather_than_a_workspace_tab() -> None:
     assert "onFileDragStart={mobileWorkspace?undefined:" in app
 
 
-def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
-    """Eleven icon tabs stay reachable in one horizontally scrolling phone row.
+def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
+    """Every pane and launcher renders one configured mark from the shared registry.
 
     `drawerTabs.ts` stays JSX-free so it can be unit-tested under plain type-stripping, which
     is why the icon map lives in `railIcons.tsx` and why this cross-file invariant — every tab
@@ -290,8 +290,7 @@ def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
     assert len(ids) == 11, ids
     tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
     assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
-    assert ".drawer-tabs-shell:after" in css
-    assert ".drawer-tabs-shell>.drawer-close" in css
+    assert ".drawer-chrome>.drawer-close" in css
     assert ".drawer-tabs button{position:relative;min-height:34px;flex:1 0 32px" in css
     assert ".drawer-tabs button{min-height:44px;flex-basis:36px;min-width:36px" in css
     assert "scrollIntoView({ block: 'nearest', inline: 'nearest' })" in drawer
@@ -299,11 +298,13 @@ def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
     for tab_id in ids:
         assert re.search(rf"^  {tab_id}: \w+Icon,$", icon_map, re.MULTILINE), tab_id
 
-    # No text glyph survives on either surface, and neither renders a label.
+    # No text glyph survives. The configured primary mark is either the short title or icon.
     assert "glyph" not in tabs
     assert "glyph" not in drawer
-    # The label is the accessible name only; it is never rendered as a child of the button.
-    assert ">{item.label}" not in drawer and "{item.label}<" not in drawer
+    assert "props.tabDisplay === 'title'" in drawer
+    assert '<span class="drawer-tab-title">{item.label}</span>' in drawer
+    assert "drawerTabDisplay==='title'" in app
+    assert '<span class="drawer-tab-title">{tab.label}</span>' in app
     assert "<Icon />" in drawer and "<Icon/>" in app
 
     # Icon-only means the accessible name can no longer come from visible text. Session tabs
@@ -326,49 +327,82 @@ def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
     assert ".drawer-tabs button{min-height:44px;" in css
 
 
-def test_drawer_tabs_are_user_arrangeable_and_the_order_persists() -> None:
-    """One arrangement, two surfaces, one drag contract, stored on the daemon.
-
-    The strip and the rail are two renderings of one control, so they render one order and
-    share one drag handler; a per-surface order would let them disagree about what "third"
-    means. The order is server-persisted (unlike drawer width and last-used tab, which are
-    genuinely per-device) so a phone inherits what a desktop arranged.
-    """
+def test_drawer_tabs_use_recursive_device_local_layout_and_pane_dragging() -> None:
+    """Pane rails edit one recursive local layout while the outer rail remains a mirror."""
     app = source("App.tsx")
     drawer = source("UtilityDrawer.tsx")
-    settings = source("deviceSettings.ts")
+    layout = source("drawerLayout.ts")
     order = source("drawerTabOrder.ts")
     css = source("style.css")
 
-    # One ordered list feeds both surfaces, and one handler reorders from either.
-    assert "tabs={orderedDrawerTabs}" in app
-    assert "orderedDrawerTabs.map(tab=>{" in app
-    assert "props.tabs.map(item => {" in drawer
+    # The recursive layout feeds pane rails. The depth-first projection feeds the launcher.
+    assert "layout={drawerLayout}" in app
+    assert "presentation={activeDrawerPresentation}" in app
+    assert "drawerLauncherTabs.map(tab=>{" in app
+    assert "stack.tabs.map((id, index) => {" in drawer
+    assert "renderNode(layout.root)" in drawer
     assert "onTabDragStart={beginDrawerTabDrag}" in app
-    assert "onPointerDown={event=>beginDrawerTabDrag(event,tab.id)}" in app
-    assert "props.onTabDragStart(event, item.id)" in drawer
+    assert "props.onTabDragStart(event, id)" in drawer
+    assert "onPointerDown={event=>beginDrawerTabDrag(event,tab.id)}" not in app
 
-    # The app's pointer-drag contract, not native DnD: no `draggable` attribute, refs plus one
-    # DOM indicator during the move, commit on pointer-up.
+    # The app pointer-drag contract keeps a prospective tree in refs and commits once.
     assert "beginPointerDrag(event,drawerTab(id).label" in app
     assert "draggable" not in drawer
-    assert 'data-reorder-id={item.id}' in drawer and "data-reorder-id={tab.id}" in app
-    assert "reorderTargetFromContainer(container,id,axis" in app
+    assert "data-reorder-id={id}" in drawer
+    assert "dragDrawerLayoutRef.current=moveDrawerTabToStack" in app
+    assert "dragDrawerLayoutRef.current=edge" in app
+    assert "commitDrawerLayout(next,id)" in app
     assert ".drawer-tabs button[data-pointer-drop-indicator" in css
-    assert ".utility-rail button[data-pointer-drop-indicator" in css
-    # The drag's pointer-up also clicks the tab it started from; both surfaces suppress it.
-    assert app.count("suppressDragClickRef.current===`drawer-tab:") == 2
+    assert ".drawer-pane[data-pointer-drop-indicator" in css
+    assert "suppressDragClickRef.current===`drawer-tab:${tab}`" in app
 
-    # Server-persisted in one canonical bucket, like the command rail and the file tree.
-    assert "'drawerTabs'" in settings
-    assert "const DRAWER_TAB_PROFILE: SettingsProfile = 'desktop'" in settings
-    assert "saveDrawerTabOrder" in app and "loadDrawerTabOrder" in app
-    # Another device editing the order is the same event as the cache first loading.
-    assert "window.addEventListener('mux:settings-changed',adopt)" in app
+    # Legacy flat order is input only. Recursive state has its own device-local key.
+    assert "mux.drawer.layout.v1" in layout
+    assert "loadDrawerTabOrder()" in app
+    assert "loadSettings().then" in app
+    assert "!drawerLegacySettingsReady" in app
+    assert "localStorage.getItem(DRAWER_LAYOUT_KEY)===null" in app
+    assert "saveDrawerTabOrder" not in app
+    assert "mux:settings-changed',adopt" not in app
 
-    # Arranging can never lose a tab, and persistent state a drag can scramble needs a way back.
+    # Normalization preserves singleton ownership and reset restores the canonical stack.
+    assert "export function normalizeDrawerLayout" in layout
     assert "export function normalizeDrawerTabOrder" in order
-    assert "id: 'drawer.resetTabs'" in app
+    assert "id: 'drawer.resetLayout'" in app
+
+
+def test_drawer_tab_display_is_live_and_searchable() -> None:
+    app = source("App.tsx")
+    settings = source("Settings.tsx")
+    drawer = source("UtilityDrawer.tsx")
+    css = source("style.css")
+
+    assert "drawer_tab_display?:'icon'|'title'" in app
+    assert "setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')" in app
+    assert "Side panel tabs<select" in settings
+    assert '<option value="icon">Icons</option>' in settings
+    assert '<option value="title">Titles</option>' in settings
+    assert "tabDisplay={drawerTabDisplay}" in app
+    assert "props.tabDisplay === 'title'" in drawer
+    assert "--utility-rail-width" in app
+    assert "var(--utility-rail-width,40px)" in css
+
+
+def test_recursive_drawer_exposes_tab_and_separator_accessibility() -> None:
+    drawer = source("UtilityDrawer.tsx")
+
+    assert 'role="tablist"' in drawer
+    assert 'role="tab"' in drawer
+    assert 'role="tabpanel"' in drawer
+    assert "aria-controls={panelDomId(stack.id)}" in drawer
+    assert "aria-labelledby={tabDomId(stack.id, selected)}" in drawer
+    assert "tabIndex={id === selected ? 0 : -1}" in drawer
+    assert "event.key !== 'ArrowLeft' && event.key !== 'ArrowRight'" in drawer
+    assert "aria-valuenow={Math.round(node.ratio * 100)}" in drawer
+    assert "onDblClick={() => updateRatio(0.5)}" in drawer
+    assert "onPointerDown={projection ? undefined" in drawer
+    assert "mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root)" in drawer
+    assert 'aria-live="polite"' in drawer
 
 
 def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:

@@ -6,6 +6,11 @@ One Project-owned mixed-view workspace. Desktop renders a recursive split tree w
 each own an independent ordered tab stack. Mobile presents every tab in one rail as a projection
 of that same tree; it does not maintain a second layout.
 
+The utility drawer uses the same visual language for stacks, edge splits, separators, pointer thresholds, drop indicators, and mobile flattening.
+It remains a separate device-local `DrawerLayout` owned by `drawerLayout.ts`, not a `PaneLayout` branch or `PaneLeaf` kind.
+Utility moves never enter Project layout PATCHes, SQLite state, workspace focus traversal, warm terminal accounting, or `mobileWorkspaceProjection`.
+The drawer has its own depth-first mobile projection and its own per-Project presentation map, while the Project workspace remains daemon-authoritative and multi-client.
+
 ## Layout-v7 model
 
 ```text

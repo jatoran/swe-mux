@@ -34,21 +34,29 @@ import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
 import { UtilityDrawer } from './UtilityDrawer'
 import {
-  DEFAULT_DRAWER_PROJECT_STATE, DRAWER_COLLAPSE_WIDTH, DRAWER_PROJECT_STATE_KEY, DRAWER_REOPEN_WIDTH,
-  DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY, clampDrawerWidth, drawerMaximumWidth,
-  drawerProjectStateFor, drawerTab, migrateLegacyDrawerTab, parseDrawerProjectStates,
-  pruneDrawerProjectStates, serializeDrawerProjectStates, storedDrawerWidth, updateDrawerProjectState,
-  type DrawerProjectState, type DrawerProjectStateMap, type DrawerTabId,
+  DRAWER_COLLAPSE_WIDTH, DRAWER_PROJECT_STATE_KEY, DRAWER_REOPEN_WIDTH,
+  DRAWER_DEFAULT_WIDTH, DRAWER_MIN_WIDTH, DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY,
+  clampDrawerWidth, drawerMaximumWidth,
+  drawerTab, storedDrawerWidth, type DrawerTabId,
 } from './drawerTabs'
+import {
+  DRAWER_LAYOUT_KEY, DRAWER_PROJECT_PRESENTATIONS_KEY, activateDrawerTab,
+  defaultDrawerLayout, drawerProjectPresentationFor, drawerStackForTab, drawerStacks, drawerTabs,
+  isDefaultDrawerLayout,
+  migrateDrawerProjectPresentations, moveDrawerTabDirection, moveDrawerTabToSplit,
+  moveDrawerTabToStack, normalizeDrawerLayout, normalizeDrawerProjectPresentation,
+  parseDrawerLayout, pruneDrawerProjectPresentations, reconcileDrawerProjectPresentations,
+  resetDrawerLayout, serializeDrawerLayout, serializeDrawerProjectPresentations,
+  setDrawerProjectPresentation, setDrawerSplitRatio, updateDrawerProjectPresentation,
+  type DrawerEdge, type DrawerLayout, type DrawerProjectPresentation,
+  type DrawerProjectPresentationMap,
+} from './drawerLayout'
 import {
   SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH, SIDEBAR_REOPEN_WIDTH, SIDEBAR_RESIZER_WIDTH, clampSidebarWidth,
   dragCollapsedAtWidth,
 } from './sidebarResize'
-import {
-  isDefaultDrawerTabOrder, normalizeDrawerTabOrder, orderedDrawerTabs as orderedTabsFor,
-  sameDrawerTabOrder, DEFAULT_DRAWER_TAB_ORDER,
-} from './drawerTabOrder'
+import { normalizeDrawerTabOrder } from './drawerTabOrder'
 import {
   DRAWER_NOTE_KEY, claimDrawerNote, drawerNoteFor, isDrawerOwned, parseDrawerNotes,
   pruneDrawerNotes, releaseDrawerNote, serializeDrawerNotes, type DrawerNoteMap,
@@ -64,7 +72,7 @@ import { VoicePlayer } from './VoicePlayer'
 import { ConversationControl } from './ConversationControl'
 import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
-import { currentProfile, loadDrawerTabOrder, loadSettings, refreshSettings, saveDrawerTabOrder } from './deviceSettings'
+import { currentProfile, loadDrawerTabOrder, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
 import type { Project, ProjectGroup, Session, ShellProfile, VoiceClip, VoiceMode, VoiceStatus } from './types'
@@ -405,6 +413,7 @@ export function App() {
   const dragStackTabRef=useRef<StackTabDrag|null>(null)
   const suppressDragClickRef=useRef<string|null>(null)
   const pointerDropIndicatorRef=useRef<HTMLElement|null>(null)
+  const activePointerDragCancelRef=useRef<(()=>void)|null>(null)
   const setDragProject=(next:ProjectDrag|null)=>{dragProjectRef.current=next;setDragProjectState(next)}
   const setDragStackTab=(next:StackTabDrag|null)=>{dragStackTabRef.current=next;setDragStackTabState(next)}
   const previewDragStackTab=(next:StackTabDrag)=>{dragStackTabRef.current=next}
@@ -416,42 +425,53 @@ export function App() {
   // the same chip twice focuses the composer twice) plus the scope to land on. Switching
   // to the tab by hand leaves the panel wherever it was.
   const [queueOpen,setQueueOpen]=useState<{token:number;scope:QueueScope}>({token:0,scope:'session'})
-  // The utility drawer's selected tab and desktop expansion are device-local but keyed by
-  // Project. Mobile visibility is deliberately separate and transient: closing an overlay on
-  // a phone must not collapse this Project's docked desktop drawer.
+  // The utility workspace has one device-local split tree shared by every Project. Selection
+  // and desktop expansion remain device-local per Project. Mobile visibility is transient.
   const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
   const [viewportWidth,setViewportWidth]=useState(()=>window.innerWidth)
   const [mobileDrawerOpen,setMobileDrawerOpen]=useState(false)
+  useEffect(()=>{ activePointerDragCancelRef.current?.() },[projectId,mobileWorkspace])
+  useEffect(()=>()=>activePointerDragCancelRef.current?.(),[])
   // A desktop resize previews collapse without writing per-Project persistence on every
   // threshold crossing. Null means the Project's durable presentation owns visibility.
   const [drawerResizeOpen,setDrawerResizeOpen]=useState<boolean|null>(null)
-  const legacyDrawerTab=useRef<{pending:boolean;raw:string|null}>({pending:false,raw:null})
-  const [drawerProjectStates,setDrawerProjectStates]=useState<DrawerProjectStateMap>(()=>{
-    const raw=localStorage.getItem(DRAWER_PROJECT_STATE_KEY)
-    if(raw===null)legacyDrawerTab.current={pending:true,raw:localStorage.getItem(DRAWER_TAB_KEY)}
-    return parseDrawerProjectStates(raw)
-  })
-  // The no-Project state keeps app-scoped tabs usable before the first Project exists. It is
-  // transient because there is no durable Project identity to own it.
-  const [unscopedDrawerState,setUnscopedDrawerState]=useState<DrawerProjectState>(DEFAULT_DRAWER_PROJECT_STATE)
-  const activeDrawerState=projectId?drawerProjectStateFor(drawerProjectStates,projectId):unscopedDrawerState
-  const drawerTabId=activeDrawerState.tab
-  const clipboardOpen=mobileWorkspace?mobileDrawerOpen:(drawerResizeOpen??activeDrawerState.desktopExpanded)
+  const legacyDrawerTab=useRef(localStorage.getItem(DRAWER_TAB_KEY))
+  const drawerMigrationPending=useRef(localStorage.getItem(DRAWER_PROJECT_PRESENTATIONS_KEY)===null)
+  const [drawerLegacySettingsReady,setDrawerLegacySettingsReady]=useState(
+    ()=>localStorage.getItem(DRAWER_LAYOUT_KEY)!==null,
+  )
+  const [drawerLayout,setDrawerLayoutState]=useState<DrawerLayout>(()=>parseDrawerLayout(
+    localStorage.getItem(DRAWER_LAYOUT_KEY),normalizeDrawerTabOrder(loadDrawerTabOrder())))
+  const drawerLayoutRef=useRef(drawerLayout)
+  drawerLayoutRef.current=drawerLayout
+  const [drawerProjectPresentations,setDrawerProjectPresentations]=useState<DrawerProjectPresentationMap>(()=>
+    migrateDrawerProjectPresentations(
+      localStorage.getItem(DRAWER_PROJECT_PRESENTATIONS_KEY),
+      localStorage.getItem(DRAWER_PROJECT_STATE_KEY),drawerLayout,
+      legacyDrawerTab.current,projectId,
+    ))
+  const [unscopedDrawerPresentation,setUnscopedDrawerPresentation]=useState<DrawerProjectPresentation>(()=>
+    normalizeDrawerProjectPresentation(null,drawerLayout))
+  const activeDrawerPresentation=projectId
+    ?drawerProjectPresentationFor(drawerProjectPresentations,projectId,drawerLayout)
+    :normalizeDrawerProjectPresentation(unscopedDrawerPresentation,drawerLayout)
+  const drawerTabId=activeDrawerPresentation.focused_tab
+  const clipboardOpen=mobileWorkspace?mobileDrawerOpen:(drawerResizeOpen??activeDrawerPresentation.desktop_expanded)
   // A command-rail prompt button whose template has {{placeholders}} has nothing to
   // inject yet, so it hands the template to the Prompts tab to be filled in.
   const [promptPreselect,setPromptPreselect]=useState<{key:string}|undefined>()
+  const [drawerTabDisplay,setDrawerTabDisplay]=useState<'icon'|'title'>('icon')
+  const utilityRailWidth=drawerTabDisplay==='title'?112:40
   const [drawerWidth,setDrawerWidth]=useState(()=>storedDrawerWidth(localStorage.getItem(DRAWER_WIDTH_KEY)))
   const leftChromeWidth=sidebarCollapsed?SIDEBAR_COLLAPSED_WIDTH:sidebarWidth+SIDEBAR_RESIZER_WIDTH
-  const drawerWidthLimit=drawerMaximumWidth(viewportWidth,leftChromeWidth)
+  const drawerWidthLimit=drawerMaximumWidth(viewportWidth,leftChromeWidth,utilityRailWidth)
   const renderedDrawerWidth=clampDrawerWidth(drawerWidth,drawerWidthLimit)
-  // The drawer's tab arrangement. Unlike width and per-Project presentation (localStorage,
-  // genuinely per-device) this is server-persisted, so a phone inherits what a desktop arranged.
-  const [drawerOrder,setDrawerOrder]=useState<DrawerTabId[]>(()=>normalizeDrawerTabOrder(loadDrawerTabOrder()))
   const [dragDrawerTab,setDragDrawerTab]=useState<DrawerTabId|null>(null)
-  const dragDrawerOrderRef=useRef<DrawerTabId[]|null>(null)
-  const drawerOrderRef=useRef(drawerOrder)
-  drawerOrderRef.current=drawerOrder
-  const orderedDrawerTabs=useMemo(()=>orderedTabsFor(drawerOrder),[drawerOrder])
+  const dragDrawerBaseRef=useRef<DrawerLayout|null>(null)
+  const dragDrawerLayoutRef=useRef<DrawerLayout|null>(null)
+  const dragDrawerTargetRef=useRef<{stackId:string;kind:'join'|'split';edge?:DrawerEdge}|null>(null)
+  const [drawerAnnouncement,setDrawerAnnouncement]=useState('')
+  const drawerLauncherTabs=useMemo(()=>drawerTabs(drawerLayout).map(drawerTab),[drawerLayout])
   const [clipboardEnabled,setClipboardEnabled]=useState(true)
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [terminalRenderer, setTerminalRenderer] = useState<TerminalRendererPreference>('auto')
@@ -479,39 +499,65 @@ export function App() {
     setSidebarOpenState(open)
     if(open&&mobileWorkspace){setMobileDrawerOpen(false);dismissSoftKeyboard()}
   }
-  const setDrawerProjectState=(targetProject:string,patch:Partial<DrawerProjectState>)=>{
-    if(!targetProject){setUnscopedDrawerState(current=>({...current,...patch}));return}
-    setDrawerProjectStates(current=>{
-      const updated=updateDrawerProjectState(current,targetProject,patch)
-      if(updated!==current)localStorage.setItem(DRAWER_PROJECT_STATE_KEY,serializeDrawerProjectStates(updated))
+  const storeDrawerValue=(key:string,value:string)=>{
+    try{localStorage.setItem(key,value)}
+    catch(cause){setError(`Side panel layout is active for this session but could not be saved: ${cause instanceof Error?cause.message:String(cause)}`)}
+  }
+  const updateDrawerPresentation=(
+    targetProject:string,
+    update:(current:DrawerProjectPresentation)=>DrawerProjectPresentation,
+  )=>{
+    if(!targetProject){
+      setUnscopedDrawerPresentation(current=>normalizeDrawerProjectPresentation(update(
+        normalizeDrawerProjectPresentation(current,drawerLayoutRef.current)),drawerLayoutRef.current))
+      return
+    }
+    setDrawerProjectPresentations(current=>{
+      const layout=drawerLayoutRef.current
+      const presentation=drawerProjectPresentationFor(current,targetProject,layout)
+      const updated=setDrawerProjectPresentation(current,targetProject,update(presentation),layout)
+      if(updated!==current)storeDrawerValue(DRAWER_PROJECT_PRESENTATIONS_KEY,serializeDrawerProjectPresentations(updated,layout))
       return updated
     })
   }
   const setClipboardOpen=(next:OpenState,targetProject=projectId)=>{
+    const closeOwnedNote=()=>{if(targetProject)setDrawerNotes(current=>releaseDrawerNote(current,targetProject))}
     if(mobileWorkspace){
       const open=typeof next==='function'?next(mobileDrawerOpen):next
+      if(!open){activePointerDragCancelRef.current?.();closeOwnedNote()}
       setMobileDrawerOpen(open)
       if(open){setSidebarOpenState(false);dismissSoftKeyboard()}
       return
     }
     if(!targetProject){
-      setUnscopedDrawerState(current=>({...current,desktopExpanded:typeof next==='function'?next(current.desktopExpanded):next}))
+      const current=normalizeDrawerProjectPresentation(unscopedDrawerPresentation,drawerLayoutRef.current)
+      const open=typeof next==='function'?next(current.desktop_expanded):next
+      if(!open){activePointerDragCancelRef.current?.();closeOwnedNote()}
+      updateDrawerPresentation('',current=>updateDrawerProjectPresentation(current,drawerLayoutRef.current,{
+        desktop_expanded:open,
+      }))
       return
     }
-    setDrawerProjectStates(current=>{
-      const state=drawerProjectStateFor(current,targetProject)
-      const open=typeof next==='function'?next(state.desktopExpanded):next
-      const updated=updateDrawerProjectState(current,targetProject,{desktopExpanded:open})
-      if(updated!==current)localStorage.setItem(DRAWER_PROJECT_STATE_KEY,serializeDrawerProjectStates(updated))
-      return updated
-    })
+    const current=drawerProjectPresentationFor(drawerProjectPresentations,targetProject,drawerLayoutRef.current)
+    const open=typeof next==='function'?next(current.desktop_expanded):next
+    if(!open){activePointerDragCancelRef.current?.();closeOwnedNote()}
+    updateDrawerPresentation(targetProject,presentation=>updateDrawerProjectPresentation(presentation,drawerLayoutRef.current,{
+      desktop_expanded:open,
+    }))
+  }
+  const selectDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
+    updateDrawerPresentation(targetProject,current=>activateDrawerTab(current,drawerLayoutRef.current,tab))
   }
   /** Open the drawer on a specific tab (or toggle that tab shut if it is already showing). */
   const showDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
-    const state=targetProject?drawerProjectStateFor(drawerProjectStates,targetProject):unscopedDrawerState
-    const open=mobileWorkspace?mobileDrawerOpen:state.desktopExpanded
-    setDrawerProjectState(targetProject,{tab})
-    setClipboardOpen(!(open&&state.tab===tab),targetProject)
+    const presentation=targetProject
+      ?drawerProjectPresentationFor(drawerProjectPresentations,targetProject,drawerLayoutRef.current)
+      :normalizeDrawerProjectPresentation(unscopedDrawerPresentation,drawerLayoutRef.current)
+    const stack=drawerStackForTab(drawerLayoutRef.current,tab)
+    const visible=Boolean(stack&&presentation.selected_tabs[stack.id]===tab)
+    const open=mobileWorkspace?mobileDrawerOpen:presentation.desktop_expanded
+    selectDrawerTab(tab,targetProject)
+    setClipboardOpen(!(open&&visible&&presentation.focused_tab===tab),targetProject)
     // Reaching Notes from the rail, the tab strip, or `drawer.notes` says nothing about scope,
     // so it means "this Project" — the drawer sits beside that Project's workspace. Only the
     // app menu's deliberately unscoped `notes.browse` widens it, and it goes through
@@ -524,23 +570,61 @@ export function App() {
    *  it is perverse, and worse when the click also switched Project — the panel would
    *  vanish instead of retargeting. */
   const openDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
-    setDrawerProjectState(targetProject,{tab})
+    selectDrawerTab(tab,targetProject)
     setClipboardOpen(true,targetProject)
     setMainMenuOpen(false);setProjectMenu(null);setContextMenu(null)
   }
-  // `mux.drawer.tab.v1` could describe only one Project. Preserve it for the Project active at
-  // upgrade, then remove it so every other Project starts from an honest default.
-  useEffect(()=>{
-    if(!projectId||!legacyDrawerTab.current.pending)return
-    const legacy=legacyDrawerTab.current
-    legacyDrawerTab.current={pending:false,raw:null}
-    setDrawerProjectStates(current=>{
-      const updated=migrateLegacyDrawerTab(current,projectId,legacy.raw)
-      localStorage.setItem(DRAWER_PROJECT_STATE_KEY,serializeDrawerProjectStates(updated))
-      localStorage.removeItem(DRAWER_TAB_KEY)
+  const commitDrawerLayout=(candidate:DrawerLayout,focusedTab?:DrawerTabId,targetProject=projectId)=>{
+    const normalized=normalizeDrawerLayout(candidate)
+    if(serializeDrawerLayout(normalized)===serializeDrawerLayout(drawerLayoutRef.current)){
+      if(focusedTab)selectDrawerTab(focusedTab,targetProject)
+      return
+    }
+    drawerLayoutRef.current=normalized
+    setDrawerLayoutState(normalized)
+    storeDrawerValue(DRAWER_LAYOUT_KEY,serializeDrawerLayout(normalized))
+    setDrawerProjectPresentations(current=>{
+      let updated=reconcileDrawerProjectPresentations(current,normalized)
+      if(focusedTab&&targetProject){
+        const active=drawerProjectPresentationFor(updated,targetProject,normalized)
+        updated=setDrawerProjectPresentation(updated,targetProject,activateDrawerTab(active,normalized,focusedTab),normalized)
+      }
+      storeDrawerValue(DRAWER_PROJECT_PRESENTATIONS_KEY,serializeDrawerProjectPresentations(updated,normalized))
       return updated
     })
-  },[projectId])
+    setUnscopedDrawerPresentation(current=>{
+      const normalizedPresentation=normalizeDrawerProjectPresentation(current,normalized,current.focused_tab)
+      return focusedTab&&!targetProject?activateDrawerTab(normalizedPresentation,normalized,focusedTab):normalizedPresentation
+    })
+  }
+  const resetDrawerArrangement=()=>{
+    setMainMenuOpen(false)
+    commitDrawerLayout(resetDrawerLayout(),drawerTabId)
+    setDrawerAnnouncement('Side panel layout reset')
+  }
+  // Serialize both new stores before removing either legacy key. An interrupted migration can
+  // therefore retry without losing the former selected tab or flat order.
+  useEffect(()=>{
+    if(!drawerMigrationPending.current||!drawerLegacySettingsReady)return
+    if(legacyDrawerTab.current&&!projectId)return
+    setDrawerProjectPresentations(current=>{
+      let updated=current
+      if(projectId&&legacyDrawerTab.current&&!current[projectId]){
+        const base=drawerProjectPresentationFor(current,projectId,drawerLayoutRef.current)
+        const legacy=DRAWER_TABS.some(tab=>tab.id===legacyDrawerTab.current)?legacyDrawerTab.current as DrawerTabId:null
+        if(legacy)updated=setDrawerProjectPresentation(current,projectId,activateDrawerTab(base,drawerLayoutRef.current,legacy),drawerLayoutRef.current)
+      }
+      try{
+        localStorage.setItem(DRAWER_LAYOUT_KEY,serializeDrawerLayout(drawerLayoutRef.current))
+        localStorage.setItem(DRAWER_PROJECT_PRESENTATIONS_KEY,serializeDrawerProjectPresentations(updated,drawerLayoutRef.current))
+        localStorage.removeItem(DRAWER_PROJECT_STATE_KEY)
+        localStorage.removeItem(DRAWER_TAB_KEY)
+        drawerMigrationPending.current=false
+        legacyDrawerTab.current=null
+      }catch(cause){setError(`Side panel migration could not be saved: ${cause instanceof Error?cause.message:String(cause)}`)}
+      return updated
+    })
+  },[projectId,drawerLegacySettingsReady])
   useEffect(()=>{localStorage.setItem(DRAWER_NOTE_KEY,serializeDrawerNotes(drawerNotes))},[drawerNotes])
   /**
    * Putting a note in a pane always takes it out of the drawer.
@@ -559,57 +643,67 @@ export function App() {
   useEffect(()=>{
     if(!projects.length)return
     setDrawerNotes(current=>pruneDrawerNotes(current,projects.map(project=>project.id)))
-    setDrawerProjectStates(current=>{
-      const updated=pruneDrawerProjectStates(current,projects.map(project=>project.id))
-      if(updated!==current)localStorage.setItem(DRAWER_PROJECT_STATE_KEY,serializeDrawerProjectStates(updated))
+    setDrawerProjectPresentations(current=>{
+      const updated=pruneDrawerProjectPresentations(current,projects.map(project=>project.id))
+      if(updated!==current)storeDrawerValue(DRAWER_PROJECT_PRESENTATIONS_KEY,serializeDrawerProjectPresentations(updated,drawerLayoutRef.current))
       return updated
     })
   },[projects])
   const persistDrawerWidth=(value:number,maximum=Number.POSITIVE_INFINITY)=>{
     const next=clampDrawerWidth(value,maximum)
-    setDrawerWidth(next);localStorage.setItem(DRAWER_WIDTH_KEY,String(Math.round(next)))
+    setDrawerWidth(next);storeDrawerValue(DRAWER_WIDTH_KEY,String(Math.round(next)))
   }
-  // Optimistic like every other settings write: `saveDrawerTabOrder` updates the shared cache
-  // before its PUT, so the adopt listener below reads back what we just set rather than
-  // fighting it. A failed PUT surfaces rather than silently reverting the strip under a cursor.
-  const commitDrawerTabOrder=async(nextIds:string[])=>{
-    const normalized=normalizeDrawerTabOrder(nextIds)
-    if(sameDrawerTabOrder(normalized,drawerOrderRef.current))return
-    setDrawerOrder(normalized)
-    try{await saveDrawerTabOrder(normalized)}
-    catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
-  }
-  const resetDrawerTabOrder=()=>{setMainMenuOpen(false);void commitDrawerTabOrder(DEFAULT_DRAWER_TAB_ORDER)}
-  // Adopt the persisted order when the settings cache first loads and whenever another device
-  // edits it. Both arrive as the same event, and both are just "the stored order changed".
-  useEffect(()=>{
-    const adopt=()=>{
-      const next=normalizeDrawerTabOrder(loadDrawerTabOrder())
-      setDrawerOrder(current=>sameDrawerTabOrder(next,current)?current:next)
-    }
-    window.addEventListener('mux:settings-changed',adopt)
-    return()=>window.removeEventListener('mux:settings-changed',adopt)
-  },[])
-  /** Drag a drawer tab to rearrange it, from either the strip (horizontal) or the rail
-   *  (vertical). One handler for both: they render one order, so they reorder one list.
-   *  Follows the app's pointer-drag contract — no native DnD, refs and one DOM attribute
-   *  during the move, commit on pointer-up. */
+  /** Drag within a pane rail, join another pane, or split on one of its four body edges. */
   const beginDrawerTabDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,id:DrawerTabId)=>{
-    const container=event.currentTarget.closest<HTMLElement>('.drawer-tabs,.utility-rail')
-    const axis:ReorderAxis=container?.classList.contains('utility-rail')?'vertical':'horizontal'
     beginPointerDrag(event,drawerTab(id).label,`drawer-tab:${id}`,
-      ()=>{cancelLongPress();dragDrawerOrderRef.current=drawerOrderRef.current;setDragDrawerTab(id)},
-      pointer=>{
-        const current=dragDrawerOrderRef.current
-        if(!current||!container){showPointerDropIndicator(null);return}
-        const target=reorderTargetFromContainer(container,id,axis,axis==='horizontal'?pointer.clientX:pointer.clientY)
-        if(!target){showPointerDropIndicator(null);return}
-        dragDrawerOrderRef.current=reorderForHover(current,id,target.id,target.side) as DrawerTabId[]
-        const element=Array.from(container.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).find(item=>item.dataset.reorderId===target.id)||null
-        showPointerDropIndicator(element,`insert-${target.side}`)
+      ()=>{
+        cancelLongPress()
+        dragDrawerBaseRef.current=drawerLayoutRef.current
+        dragDrawerLayoutRef.current=drawerLayoutRef.current
+        dragDrawerTargetRef.current=null
+        setDragDrawerTab(id)
       },
-      ()=>{const next=dragDrawerOrderRef.current;dragDrawerOrderRef.current=null;setDragDrawerTab(null);if(next)void commitDrawerTabOrder(next)},
-      ()=>{dragDrawerOrderRef.current=null;setDragDrawerTab(null)},
+      pointer=>{
+        const base=dragDrawerBaseRef.current
+        const hit=document.elementFromPoint(pointer.clientX,pointer.clientY) as HTMLElement|null
+        const pane=hit?.closest<HTMLElement>('.drawer-pane[data-drawer-stack-id]')||null
+        if(!base||!pane){dragDrawerLayoutRef.current=null;dragDrawerTargetRef.current=null;showPointerDropIndicator(null);return}
+        const stackId=pane.dataset.drawerStackId||''
+        const targetStack=drawerStacks(base).find(stack=>stack.id===stackId)
+        if(!targetStack){dragDrawerLayoutRef.current=null;dragDrawerTargetRef.current=null;showPointerDropIndicator(null);return}
+        const rail=hit?.closest<HTMLElement>('.drawer-tabs[data-drawer-stack-id]')||null
+        if(rail){
+          const buttons=Array.from(rail.querySelectorAll<HTMLElement>(':scope > button[data-reorder-id]')).filter(button=>button.dataset.reorderId!==id)
+          let index=buttons.length
+          for(let position=0;position<buttons.length;position+=1){
+            const bounds=buttons[position].getBoundingClientRect()
+            if(pointer.clientX<bounds.left+bounds.width/2){index=position;break}
+          }
+          const indicator=buttons[Math.min(index,Math.max(0,buttons.length-1))]||rail
+          const side=index>=buttons.length?'after':'before'
+          dragDrawerLayoutRef.current=moveDrawerTabToStack(base,id,stackId,index)
+          dragDrawerTargetRef.current={stackId,kind:'join'}
+          showPointerDropIndicator(indicator,`insert-${side}`)
+          return
+        }
+        const bounds=pane.getBoundingClientRect()
+        const x=(pointer.clientX-bounds.left)/Math.max(1,bounds.width)
+        const y=(pointer.clientY-bounds.top)/Math.max(1,bounds.height)
+        let edge:DrawerEdge|null=null
+        const nearest=Math.min(x,1-x,y,1-y)
+        if(nearest<=0.24)edge=nearest===x?'left':nearest===1-x?'right':nearest===y?'top':'bottom'
+        dragDrawerLayoutRef.current=edge
+          ?moveDrawerTabToSplit(base,id,stackId,edge)
+          :moveDrawerTabToStack(base,id,stackId,targetStack.tabs.length)
+        dragDrawerTargetRef.current={stackId,kind:edge?'split':'join',edge:edge||undefined}
+        showPointerDropIndicator(pane,edge?`split-${edge}`:'join')
+      },
+      ()=>{
+        const next=dragDrawerLayoutRef.current,target=dragDrawerTargetRef.current
+        dragDrawerBaseRef.current=null;dragDrawerLayoutRef.current=null;dragDrawerTargetRef.current=null;setDragDrawerTab(null)
+        if(next){commitDrawerLayout(next,id);setDrawerAnnouncement(`${drawerTab(id).label} ${target?.kind==='split'?`split ${target.edge}`:'moved'}`)}
+      },
+      ()=>{dragDrawerBaseRef.current=null;dragDrawerLayoutRef.current=null;dragDrawerTargetRef.current=null;setDragDrawerTab(null)},
     )
   }
   // Mirrors the sidebar resizer: dragging left widens the dock, while crossing its collapse
@@ -622,6 +716,7 @@ export function App() {
     const maximum=()=>drawerMaximumWidth(
       window.innerWidth,
       sidebarCollapsed?SIDEBAR_COLLAPSED_WIDTH:sidebarWidth+SIDEBAR_RESIZER_WIDTH,
+      utilityRailWidth,
     )
     const preview=(rawWidth:number)=>{
       lastRawWidth=rawWidth
@@ -682,6 +777,7 @@ export function App() {
     // pointer-down so a swipe that merely *starts* on a draggable tab still works.
     let releaseDragClaim:(()=>void)|null=null
     const cleanup=()=>{
+      if(activePointerDragCancelRef.current===cancel)activePointerDragCancelRef.current=null
       releaseDragClaim?.();releaseDragClaim=null
       window.removeEventListener('pointermove',move)
       window.removeEventListener('pointerup',up)
@@ -725,6 +821,7 @@ export function App() {
     window.addEventListener('blur',cancel)
     window.addEventListener('keydown',key,true)
     source.addEventListener('lostpointercapture',lostCapture)
+    activePointerDragCancelRef.current=cancel
   }
   const startupOrigins=useRef<Record<string,number>>({})
   const pendingSpawns=useRef<Record<string,PendingSpawnPlacement>>({})
@@ -896,6 +993,7 @@ export function App() {
     custom_theme:CustomTheme
     xterm_scrollback_lines:number
     terminal_renderer:TerminalRendererPreference
+    drawer_tab_display?:'icon'|'title'
   }&Record<string,unknown>
 
   // One place that turns a daemon config into browser state. The boot path, the
@@ -924,6 +1022,7 @@ export function App() {
     setMobileGestures(mobileGestureSettings(config))
     setSwipeAwayClose(swipeAwayCloseEnabled(config))
     setClipboardEnabled(config.clipboard_history_enabled!==false)
+    setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')
   }
 
   const loadConfig = (includeTheme:boolean) =>
@@ -1038,7 +1137,22 @@ export function App() {
     }
   }, [])
 
-  useEffect(() => { void loadSettings(); void initPush() }, [])
+  useEffect(() => {
+    void loadSettings().then(()=>{
+      // The former flat order lives in the asynchronous device-settings cache. Do not
+      // persist the new default before that cache has had one chance to seed the layout.
+      // A user interaction that creates the new key while this request is in flight wins.
+      if(localStorage.getItem(DRAWER_LAYOUT_KEY)===null){
+        const migrated=defaultDrawerLayout(normalizeDrawerTabOrder(loadDrawerTabOrder()))
+        drawerLayoutRef.current=migrated
+        setDrawerLayoutState(migrated)
+        setDrawerProjectPresentations(current=>reconcileDrawerProjectPresentations(current,migrated))
+        setUnscopedDrawerPresentation(current=>normalizeDrawerProjectPresentation(current,migrated,current.focused_tab))
+      }
+      setDrawerLegacySettingsReady(true)
+    })
+    void initPush()
+  }, [])
 
   // Point the boot-installed clipboard capture at live app state. Runs once: the
   // getters read refs, so they never go stale and never re-install the hooks.
@@ -1280,7 +1394,7 @@ export function App() {
     setWarmHistory(history=>recordPaneVisits(history,visibleSessionIds))
   },[visibleSessionKey])
   const layoutTerminalIds=terminalIds(activeLayout)
-  const layoutTerminalKey=layoutTerminalIds.join(' ')
+  const layoutTerminalKey=layoutTerminalIds.join('\u0000')
   // Budgeted across the whole workspace, not per stack: three hidden terminals is
   // three sockets and three scrollbacks however they are arranged on screen.
   const warmTerminalIds=useMemo(
@@ -2570,6 +2684,21 @@ export function App() {
     setError('Redeploy did not complete within 8 minutes. Check redeploy.log in the data directory.')
   }
 
+  const focusedDrawerStack=drawerStackForTab(drawerLayout,drawerTabId)
+  const navigateDrawerTab=(offset:number)=>{
+    if(!focusedDrawerStack)return
+    const index=focusedDrawerStack.tabs.indexOf(drawerTabId)
+    const next=focusedDrawerStack.tabs[(index+offset+focusedDrawerStack.tabs.length)%focusedDrawerStack.tabs.length]
+    selectDrawerTab(next)
+  }
+  const drawerDirectionLayout=(edge:DrawerEdge)=>moveDrawerTabDirection(drawerLayout,drawerTabId,edge)
+  const moveFocusedDrawerTab=(edge:DrawerEdge)=>{
+    const next=drawerDirectionLayout(edge)
+    if(serializeDrawerLayout(next)===serializeDrawerLayout(drawerLayout))return
+    commitDrawerLayout(next,drawerTabId)
+    setDrawerAnnouncement(`${drawerTab(drawerTabId).label} moved ${edge}`)
+  }
+
   const commands: Command[] = [
     { id: 'palette.open', label: 'Open command palette', category: 'view', available: true, run: () => setPaletteOpen(true) },
     // Session-preserving daemon restart (PTY supervisor); refused server-side
@@ -2656,7 +2785,17 @@ export function App() {
     })),
     // Tab order is persistent state a drag can scramble, so it needs a way back that is not
     // "drag five tabs into place from memory".
-    { id: 'drawer.resetTabs', label: 'Reset side panel tab order', category: 'view', available: !isDefaultDrawerTabOrder(drawerOrder), disabledReason: 'Side panel tabs are already in their default order', run: resetDrawerTabOrder },
+    { id: 'drawer.resetLayout', label: 'Reset side panel layout', category: 'view', available: !isDefaultDrawerLayout(drawerLayout), disabledReason: 'Side panel layout is already at its default', run: resetDrawerArrangement },
+    { id: 'drawer.next', label: 'Side panel: focus next tab in pane', category: 'view', available: !!focusedDrawerStack&&focusedDrawerStack.tabs.length>1, disabledReason: 'The focused side panel pane has one tab', run: ()=>navigateDrawerTab(1) },
+    { id: 'drawer.previous', label: 'Side panel: focus previous tab in pane', category: 'view', available: !!focusedDrawerStack&&focusedDrawerStack.tabs.length>1, disabledReason: 'The focused side panel pane has one tab', run: ()=>navigateDrawerTab(-1) },
+    ...([['left','Left'],['right','Right'],['top','Up'],['bottom','Down']] as const).map(([edge,name]):Command=>({
+      id:`drawer.move${name}`,
+      label:`Side panel: move focused tab ${name.toLowerCase()}`,
+      category:'view',
+      available:serializeDrawerLayout(drawerDirectionLayout(edge))!==serializeDrawerLayout(drawerLayout),
+      disabledReason:'The focused tab cannot move in that direction',
+      run:()=>moveFocusedDrawerTab(edge),
+    })),
     { id: 'clipboard.open', label: 'Open clipboard history', category: 'clipboard', available: true, run: () => showDrawerTab('clipboard') },
     { id: 'clipboard.clear', label: 'Clear unpinned clipboard history', category: 'clipboard', available: true, run: () => void clearClipboardHistory().then(removed => { window.dispatchEvent(new CustomEvent(CLIPBOARD_CHANGED_EVENT)); setError(`Cleared ${removed} clipboard entr${removed===1?'y':'ies'}.`) }).catch(cause => setError(cause instanceof Error?cause.message:String(cause))) },
     ...(['copy', 'paste', 'selectAll', 'clear'] as const).map((action): Command => ({
@@ -3467,7 +3606,7 @@ export function App() {
     <ContinuityBanner />
     {broadcast && <div class="broadcast-banner"><strong>Broadcast input is on</strong><span>Keystrokes mirror to sessions in the broadcast set.</span><button onClick={() => setBroadcast(false)}>Stop broadcasting</button></div>}
 
-    <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`} as JSX.CSSProperties}>
+    <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''} ${drawerTabDisplay==='title'?'drawer-tabs-title':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`,'--utility-rail-width':`${utilityRailWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
         <div class="app-identity"><strong>swe_mux</strong><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span>{activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
@@ -3567,12 +3706,14 @@ export function App() {
           Mobile takes the same element out of flow (position:fixed) and adds a
           scrim, which is why both renderings share one component. */}
       {clipboardOpen&&<UtilityDrawer
-        tab={drawerTabId}
+        layout={drawerLayout}
+        presentation={activeDrawerPresentation}
+        onLayout={layout=>commitDrawerLayout(layout)}
         // The drag ghost's pointer-up also fires a click on the tab it started from, which
         // would switch to the tab the user was only moving.
         onTab={tab=>{
           if(suppressDragClickRef.current===`drawer-tab:${tab}`){suppressDragClickRef.current=null;return}
-          showDrawerTab(tab)
+          selectDrawerTab(tab)
         }}
         onClose={()=>setClipboardOpen(false)}
         mobile={mobileWorkspace}
@@ -3624,11 +3765,17 @@ export function App() {
         drawerNoteId={drawerNoteId}
         onCloseDrawerNote={()=>closeDrawerNote(projectId)}
         onPopDrawerNoteToTab={resourceId=>popDrawerNoteToTab(resourceId,projectId)}
-        tabs={orderedDrawerTabs}
+        tabDisplay={drawerTabDisplay}
         onTabDragStart={beginDrawerTabDrag}
         draggingTab={dragDrawerTab}
+        announcement={drawerAnnouncement}
         promptPreselect={promptPreselect}
         onResize={beginDrawerResize}
+        width={renderedDrawerWidth}
+        minimumWidth={DRAWER_MIN_WIDTH}
+        maximumWidth={drawerWidthLimit}
+        defaultWidth={DRAWER_DEFAULT_WIDTH}
+        onWidth={width=>persistDrawerWidth(width,drawerWidthLimit)}
         onInsert={text=>{
           const target=insertIntoFocusedSurface(text,activeId)
           if(target==='none')setError('Focus a terminal or note before inserting text.')
@@ -3647,23 +3794,20 @@ export function App() {
       {/* Desktop only: the always-visible strip that makes these surfaces
           discoverable without a menu or a chord. Mobile reaches the same tabs
           through the drawer's own tab strip after a two-finger swipe. */}
-      {!mobileWorkspace&&<nav class="utility-rail" aria-label="Side panel">
-        {orderedDrawerTabs.map(tab=>{
+      {!mobileWorkspace&&<nav class={`utility-rail ${drawerTabDisplay==='title'?'title-mode':'icon-mode'}`} aria-label="Side panel">
+        {drawerLauncherTabs.map(tab=>{
           const Icon=DRAWER_TAB_ICONS[tab.id]
+          const owner=drawerStackForTab(drawerLayout,tab.id)
+          const visible=!!owner&&clipboardOpen&&activeDrawerPresentation.selected_tabs[owner.id]===tab.id
           return <button
             key={tab.id}
-            data-reorder-id={tab.id}
             data-scope={tab.scope}
-            class={`${clipboardOpen&&drawerTabId===tab.id?'active':''} ${dragDrawerTab===tab.id?'dragging':''}`}
-            aria-pressed={clipboardOpen&&drawerTabId===tab.id}
+            class={visible?'active':''}
+            aria-pressed={visible}
             aria-label={`${tab.title}${tab.scope==='session'?'. Session scoped.':''}`}
-            title={`${tab.title}${tab.scope==='session'?' · session-scoped':''} · drag to rearrange`}
-            onPointerDown={event=>beginDrawerTabDrag(event,tab.id)}
-            onClick={()=>{
-              if(suppressDragClickRef.current===`drawer-tab:${tab.id}`){suppressDragClickRef.current=null;return}
-              showDrawerTab(tab.id)
-            }}
-          ><Icon/>{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}{tab.id==='queue'&&queuePendingTotal>0&&<i class="drawer-badge queue-badge">{queuePendingTotal>99?'99+':queuePendingTotal}</i>}</button>
+            title={`${tab.title}${tab.scope==='session'?' - session scoped':''}`}
+            onClick={()=>showDrawerTab(tab.id)}
+          >{drawerTabDisplay==='title'?<span class="drawer-tab-title">{tab.label}</span>:<Icon/>}{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}{tab.id==='queue'&&queuePendingTotal>0&&<i class="drawer-badge queue-badge">{queuePendingTotal>99?'99+':queuePendingTotal}</i>}</button>
         })}
       </nav>}
 

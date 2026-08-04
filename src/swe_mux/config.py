@@ -287,6 +287,10 @@ class Config:
     startup_cwd: str = ""
     history_limit: int = 200
     theme: str = "dark"
+    # Utility tab rails and the desktop launcher render either their compact
+    # icon or their short registry title. This is presentation-only and applies
+    # live in every connected browser.
+    drawer_tab_display: str = "icon"
     custom_theme: dict[str, str] = field(
         default_factory=lambda: {
             "background": "#090a0c",
@@ -802,6 +806,8 @@ def _validate(config: Config) -> None:
                 )
     if config.theme not in THEMES:
         errors["theme"] = f"must be one of {', '.join(sorted(THEMES))}"
+    if config.drawer_tab_display not in {"icon", "title"}:
+        errors["drawer_tab_display"] = "must be icon or title"
     for scale_field in ("ui_scale_desktop", "ui_scale_mobile"):
         # TOML round-trips 1.0 as a float but a JSON PATCH sends bare `1`, so an
         # int is a legitimate spelling of a scale and must not be rejected here.

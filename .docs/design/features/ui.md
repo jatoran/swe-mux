@@ -770,12 +770,10 @@ responsive controls.
   clipboard contexts open a prepared fallback automatically, leaving one explicit Copy tap.
 ## Utility drawer
 
-- The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they
-  are one gesture (mobile) or one visible click (desktop) away instead of two menu levels deep.
-  Tabs, in order: **Clipboard**, **Commands** (the rail's long tail), **Prompts**, **Queue**,
-  **Transcript**,
-  **Files**, **Notes**, **Context**, **Git**, **Alerts** (notifications). Order groups by what a tab acts on,
-  and the groups must stay contiguous so the rail reads as blocks rather than a list. The first
+- The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they are one gesture on mobile or one visible click on desktop away instead of two menu levels deep.
+  The canonical default order is **Clipboard**, **Commands**, **Prompts**, **Queue**, **Transcript**, **Files**, **Notes**, **Context**, **Git**, **Processes**, and **Alerts**.
+  Users may distribute those singleton tabs across a recursive arrangement, but the default order groups by what a tab acts on.
+  The first
   four are the same verb — text into the focused session — and Transcript closes that block by
   reading the same session back. Files and Notes are the **navigators**:
   project-scoped indexes over documents rather than surfaces that type into one. Files opens what
@@ -815,8 +813,8 @@ responsive controls.
   Search temporarily showing a full matching message does not change that saved choice.
   Only expanded identifiers and recency timestamps are stored, and a 500-entry cap bounds stale state without storing transcript text.
   It is a drawer tab and not a pane because the point is to read *beside* the
-  terminal rather than in place of it; the cost is that the drawer unmounts a tab body on every
-  switch, which is why the scroll place is kept outside the component.
+  terminal rather than in place of it.
+  Its owning stack unmounts the body when another tab is selected there, which is why the scroll place is kept outside the component.
 - **What the reader shows is a filtered conversation, not the transcript.** Tool calls are gone
   entirely — not collapsed, not summarised. So is CLI machinery that both providers write into
   the transcript as `user` records: slash-command expansions and their output, `!` shell escapes,
@@ -860,8 +858,8 @@ responsive controls.
   placement each had to skip Files panes) and it seeded every new Project with a narrow column
   most people ignored. Nothing is lost by the move: expanded-folder state was already persisted per Project
   outside the layout, and on desktop the drawer is an in-flow column, so a file row can still be
-  dragged onto any pane. The one real cost is that Files and Clipboard can no longer be visible
-  at once — the drawer shows one tab at a time — which is the trade the tab model makes.
+  dragged onto any pane.
+  Files can remain visible beside Clipboard or another utility body when the user places them in separate drawer panes.
 - **Notes** is an index *and* an editor, and a note is open in exactly one of the two hosts at a time.
   The tab pins a visually prominent Project note first and unconditionally, reports its stored size, pins the focused terminal's note second when that note holds text, then lists every other session note with content, searchable and scoped to this Project or to all of them.
   Selecting a row opens that note **in the drawer**; the `⇥` on each row opens it as a workspace tab instead.
@@ -883,10 +881,9 @@ responsive controls.
   first, because a placement that landed on the placeholder would look like it did nothing.
 - **The claim is device-local and never touches the layout.** `project.layout` is persisted
   server-side and shared, so removing the leaf would let a phone rearrange the desktop's panes.
-  The leaf keeps its slot and only stands down. The claim is stored per Project
-  (`mux.drawer.note.v1`), so switching Projects and back restores what the drawer was holding, and
-  it is scoped to an *open* drawer: closing the panel hands the note back to its pane, which keeps
-  the placeholder from ever pointing at a panel that is not on screen. Reopening resumes.
+  The leaf keeps its slot and only stands down while the drawer owns the note.
+  The claim is stored per Project under `mux.drawer.note.v1` so switching Projects and back preserves it while the drawer remains open.
+  Closing the complete drawer releases the claim and hands the note back to its pane, so a placeholder never points at a hidden panel.
 - **The Notes body is the one drawer body kept mounted across tab switches**, hidden rather than
   unmounted. Both reasons are load-bearing: an editor unmounted on every switch loses cursor and
   undo history, and `insertTarget` refuses a detached editor handle, so switching to Clipboard to
@@ -967,89 +964,50 @@ responsive controls.
   pointer-up rather than per-frame.
   Collapse preview is transient during the drag; only the final open or collapsed state is written on release.
   Restoring a Project whose desktop drawer was expanded performs one deliberate reflow as part of restoring that Project's workspace presentation.
-- **Which tab a reopen lands on is a property of the entry point, not of the drawer.** The last
-  tab and desktop expanded/collapsed state are device-local **per Project** state
-  (`mux.drawer.projects.v1`). Switching Projects or relaunching restores each Project's pair;
-  `drawer.toggle` — the gesture, the menu row, the palette — reopens the active Project where it
-  was left. The per-tab commands
-  (`drawer.<tab>`, `clipboard.open` behind the rail's Clip button, the bell, "Browse files…")
-  deliberately force their own tab and update the target Project's memory: they name a surface, so
-  honouring a remembered tab would ignore what was asked for. Binding one of those to the gesture
-  you *open the panel* with is therefore indistinguishable from the drawer forgetting its tab,
-  which is why the keybinding catalog's labels say outright which commands restore the last tab
-  and which always force one. The former global `mux.drawer.tab.v1` value migrates once to the
-  initially active Project; no per-Project history can be inferred for the others.
-- Desktop additionally has an always-visible 40 px **icon rail** on the far right, one icon per tab,
-  with badges for unread notifications (amber, "unread") and pending queue items (accent,
-  "staged" — a different colour because staged work is not an alert). The rail is the part that
-  actually fixes discoverability:
-  the surfaces are visible without a menu, a chord, or any configuration. Mobile reaches the same
-  tabs through the drawer's own tab strip.
-- Both surfaces are **icon-only**, drawing from one map (`DRAWER_TAB_ICONS` in `railIcons.tsx`)
-  so the strip and the rail agree by construction instead of by two lists kept in sync. The tabs
-  used to carry glyph *and* label: six of them measured ~444 px, which overflowed a phone
-  drawer (`min(430px, 92vw)`) into a scrollbar-less scroller and silently parked the last two
-  tabs off-screen. Six icons were ~234 px. Adding Files and Notes is what pushed it over, and
-  the icon-only strip is what left room for Git and Queue without repeating that. Past the ninth
-  (Context) the mobile tablist deliberately overflows horizontally on one row: a fade signals
-  more content, the fixed close button never scrolls away, and selecting a tab scrolls it into
-  view. It must never wrap into a second header row. Every tab added since — Transcript,
-  Processes — inherits that, and the scroller is why the count is not itself a reason to refuse
-  one; the bar is whether the surface belongs beside a terminal.
-- The marks are stroke SVG on a 24 viewBox, sized in CSS (17 px in the strip, 19 px on touch,
-  16 px on the rail), never in `em`: these surfaces run a 9–12 px font. They replaced text
-  glyphs for the same reason the command rail's did — a monospace font gives every glyph one
-  advance width but wildly different ink, so `!` came out a hairline beside a heavy `⧉` with no
-  way to normalize it. Two of the old glyphs were also simply wrong: `⌘` is the macOS Command
-  key on a Windows-first app, and `❯` read as a shell prompt right next to the tab named
-  Commands. The set is now clipboard-with-clock, terminal, speech bubble, ordered lines feeding
-  a chevron, folder, page, commit fork, pulse trace, bell — the injection tabs and the two
-  navigators each form a legible group. Context is brackets around linked memory nodes, distinct
-  from both the page (Notes) and folder (Files). Processes is a pulse on a screen rather than a
-  gauge or a chip: the tab is about live activity per session, and the trace is the one mark that
-  reads as "running" instead of "capacity". Queue is deliberately not an envelope: the queue is *ordered* and the
-  order is the whole point of it, and the chevron is what stops three lines reading as a
-  hamburger menu. Git's
-  fork is deliberately close kin to the command rail's Branch mark: they never appear together
-  (one is a terminal action, one a drawer tab), and the fork is the one mark that says
-  "branches".
-- The rail and tab strip stay icon-only, so every icon button uses the short label as its accessible name and leads its descriptive `title` with that label.
-  Each active drawer body separately identifies itself with a compact bordered heading badge integrated into its existing top chrome rather than a new full-width title bar.
-  Hovering the heading badge shows the exact descriptive `title` used by the corresponding rail icon.
-  `DRAWER_TABS` owns the short label, visible content heading, and shared description so those identities cannot drift.
-  Session-scoped tabs use a three-pixel neutral-muted scope dot in the lower-right icon corner on both tab surfaces.
-  The scope dot has no glow or count, uses the opposite corner from notification badges, and stays deliberately lower-contrast because scope is passive metadata rather than attention state.
-  The icon tooltip and accessible name identify its meaning.
-- Tabs are **user-arrangeable** by dragging one, from the strip or the rail. Both surfaces
-  render one order and share one drag handler (`beginDrawerTabDrag`), because they are two
-  renderings of one control: a per-surface order would let them disagree about what "third" is.
-  It uses the app's pointer-drag contract like every other reorderable surface — no native DnD,
-  refs and a single DOM drop-indicator attribute during the move, commit on pointer-up
-  (`workspace-layout.md`) — so the pointer-up that ends a drag has its click suppressed on both
-  surfaces, or moving a tab would also switch to it. On touch the drag also owns the pointer for
-  its duration, which is what keeps rearranging the strip from doubling as a swipe gesture.
-- The order is **server-persisted** in the `drawerTabs` settings domain, in one canonical bucket
-  like the command rail and the file tree, rather than in localStorage beside drawer width and
-  per-Project presentation. Those are genuinely per-device; an arrangement says which surfaces
-  *you* reach for, so a phone should inherit what a desktop set. Another device editing it arrives
-  as the same `settings_changed` event as the cache first loading, so one listener handles both.
-- Normalization is not optional (`drawerTabOrder.ts`): unknown and duplicate ids are dropped,
-  and a tab the stored order predates is merged in beside its default predecessor rather than
-  appended. A saved order must never hide a tab added later, and appending would put every new
-  surface in the position that reads as an afterthought. The merge is relative to where that
-  predecessor sits in the *user's* arrangement, so a new tab joins its neighbour wherever the
-  neighbour was moved to. This mirrors the rule the mobile tab rail uses for the same problem.
-- Keyboard cycling inside the strip walks the arranged order, not the registry order, or the
-  keys would jump around a rearranged strip. `drawer.resetTabs` restores the default, because
-  an arrangement is persistent state a drag can scramble and "drag five tabs back from memory"
-  is not a way out.
-- Last-used tab is remembered per Project and device, so
+- **The drawer arrangement is a separate recursive utility workspace.**
+  `drawerLayout.ts` owns a binary split tree whose leaves are tab stacks, and every registered utility tab occurs in exactly one stack.
+  The tree supports nested horizontal and vertical splits, stable split ratios, independent pane rails, and any arrangement bounded by the number of registered tabs.
+  It is not part of Project layout v7 and never adds utility leaves to Project layout PATCHes, SQLite state, workspace focus traversal, warm terminals, or the Project mobile projection.
+- The complete tree is device-local and global across Projects under `mux.drawer.layout.v1`.
+  Drawer width is also global per device.
+  Each Project stores only `selected_tabs`, `focused_tab`, and `desktop_expanded` under `mux.drawer.projects.v2`.
+  Switching Projects preserves geometry, membership, order, ratios, and width while restoring that Project's selections and desktop visibility.
+  A transient no-Project presentation keeps app-scoped tabs usable before a Project exists.
+- The former `drawerTabs` server setting is read once as migration input and is no longer written by drawer operations.
+  The former `mux.drawer.projects.v1` and `mux.drawer.tab.v1` values migrate into the v2 presentation map only after valid new serializations succeed.
+  Parsing repairs malformed branches, duplicate or missing tabs, duplicate node IDs, invalid ratios, stale selections, and excess depth without losing registered tabs.
+- Desktop renders every saved stack simultaneously, with one selected body per stack and one independently scrolling rail.
+  The focused utility tab identifies the focused drawer pane for reopen, cycling, mobile selection, and geometry commands without taking terminal input ownership or changing Project workspace focus.
+  Session-scoped bodies follow the focused session, Project-scoped bodies follow the active Project, and app-scoped bodies remain independent.
+  Every body shows its current scope because several scoped bodies can be visible at once.
+- Tabs move only through pane rails.
+  Dragging across a rail gap performs exact insertion, dropping in a pane center joins that pane, and dropping on a pane edge creates a left, right, top, or bottom split.
+  Moving the last tab out of a stack collapses its redundant parent split immediately.
+  The desktop outer launcher is a depth-first mirror and activation control only, so it never becomes a second layout editor or content host.
+- Dragging uses the shared pointer contract with a 5 px threshold, pointer ownership after activation, one fixed ghost, direct DOM indicators, a prospective tree in refs, and one commit on pointer-up.
+  Escape, invalid targets, pointer cancellation, lost capture, window blur, Project changes, breakpoint changes, drawer closure, and unmount cancel without persistence.
+  Mobile exposes no drag targets or split separators.
+- Each internal split separator supports pointer resizing, arrow keys, Home, End, and double-click reset to an equal ratio.
+  The outer divider supports pointer resizing, arrow keys, Home, End, and double-click reset to the default drawer width.
+  `drawer.moveLeft`, `drawer.moveRight`, `drawer.moveUp`, and `drawer.moveDown` provide keyboard geometry changes, while `drawer.next` and `drawer.previous` cycle within the focused utility pane.
+  `drawer.resetLayout` restores one canonical stack and reconciles every Project presentation.
+  Existing bindings for `drawer.resetTabs` migrate through a hidden alias.
+- Settings > Appearance exposes `drawer_tab_display` as **Icons** or **Titles**, defaulting to Icons.
+  The setting applies to every pane rail, the mobile projection, and the desktop launcher.
+  Icon mode uses `DRAWER_TAB_ICONS`, while title mode uses the short `DrawerTab.label`; neither mode renders both marks.
+  Title rails remain one-line scrollers and title mode widens the outer launcher through `--utility-rail-width`.
+  Queue and Alerts badges, scope dots, accessible names, tooltips, selection, focus, and drag state remain intact in both modes.
+- Mobile renders one flattened depth-first rail and one body from the same desktop tree without rewriting tree membership, stack IDs, directions, ratios, or ordering.
+  Selecting a mobile tab updates only its owning stack's Project selection and the Project's focused tab.
+  Returning to desktop restores the exact recursive tree.
+  The close control stays in stable drawer chrome outside the scrolling rail.
+- The focused utility tab is remembered per Project and device, so
   `drawer.toggle` (default two-finger swipe **left**, the swipe that drags a right-edge panel in;
   the rightward swipe keeps the left-edge sidebar) reopens where you left off, while `drawer.<tab>`
   commands open one tab directly and close it if it is already showing.
-- On mobile the toolbar's right-corner toggle is the drawer's only *visible* entry point: the
-  desktop icon rail is hidden there, which left the panel reachable by gesture or command
-  palette alone — neither of which announces itself. It mirrors the nav toggle at the opposite
+- On mobile the toolbar's right-corner toggle is the drawer's only *visible* entry point because the desktop launcher is hidden there.
+  Without it, the panel would be reachable only by gesture or command palette, neither of which announces itself.
+  It mirrors the nav toggle at the opposite
   edge because the two full-height drawers they open are mirror images, and an edge toggle
   sitting anywhere but its own edge reads as unrelated to the panel it opens; Run gives up the
   corner for it and is found by its label instead. Its icon is the panel, not any one tab's

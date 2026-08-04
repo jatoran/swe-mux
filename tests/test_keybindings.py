@@ -48,6 +48,13 @@ def test_binding_validation_rejects_unknown_commands() -> None:
         normalize_binding("ctrl+alt+x", "not.a.command")
 
 
+def test_legacy_drawer_reset_binding_migrates() -> None:
+    assert normalize_binding("ctrl+alt+x", "drawer.resetTabs") == (
+        "ctrl+alt+x",
+        "drawer.resetLayout",
+    )
+
+
 def test_pane_swap_is_available_for_custom_bindings() -> None:
     assert normalize_binding("ctrl+alt+x", "pane.swapNext") == (
         "ctrl+alt+x",
@@ -69,6 +76,8 @@ def test_keybinding_editor_metadata_exposes_commands_and_reserved_lists() -> Non
 
     assert "projects.open" in commands
     assert "pane.stackNew" in commands
+    assert "drawer.moveLeft" in commands
+    assert "drawer.queue" in commands
     assert "project.activate(9)" in commands
     assert "ctrl+w" in policy["browser_reserved"]
     assert policy["desktop_only"] == ["ctrl+shift+tab", "ctrl+tab"]

@@ -67,8 +67,8 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
   (sidebar row, pane `note` chip, tab menu open/split, drag, `notes.open`) releases the claim
   first so it cannot land on that placeholder. The claim is **device-local** and stored per
   Project (`mux.drawer.note.v1`), never in `project.layout`, which is shared: a phone must not be
-  able to rearrange the desktop's panes. It also only applies while the drawer is open, so closing
-  the panel hands the note back to its pane and reopening resumes.
+  able to rearrange the desktop's panes.
+  Closing the complete drawer releases the claim and hands the note back to its pane.
 - Moving between hosts unmounts one editor and mounts the other, which is lossless because the
   save queue outlives both. The unmount flushes, and the arriving editor adopts any text the
   daemon has not acknowledged yet (`noteSaveQueue.pendingText`, which covers both debounced typing
@@ -79,7 +79,7 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
   editor and would otherwise route a Clipboard paste into a terminal).
 - The tab replaced the session-notes modal and is reached from a Project's sidebar context menu
   (scoped to that Project), the main menu, the `notes.browse`/`notes.browseProject` commands, and
-  its own icon on the desktop rail.
+  its own control on the desktop launcher.
 - Scope follows how you arrived, the same rule the rest of the app's browsers use. Reaching the
   tab from the rail icon, the tab strip, or `drawer.notes` says nothing about scope, so it means
   *this Project* — the drawer sits beside that Project's workspace. Only the app menu's

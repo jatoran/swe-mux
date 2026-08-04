@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
-  DEFAULT_DRAWER_PROJECT_STATE,
   DRAWER_COLLAPSE_WIDTH,
   DRAWER_DEFAULT_WIDTH,
   DRAWER_MIN_WIDTH,
@@ -11,17 +10,9 @@ import {
   DRAWER_TABS,
   clampDrawerWidth,
   drawerMaximumWidth,
-  drawerProjectStateFor,
   drawerTab,
   isNavigatorTab,
-  migrateLegacyDrawerTab,
-  nextDrawerTab,
-  parseDrawerProjectStates,
-  parseDrawerTab,
-  pruneDrawerProjectStates,
-  serializeDrawerProjectStates,
   storedDrawerWidth,
-  updateDrawerProjectState,
 } from '../src/drawerTabs.ts'
 import {
   SIDEBAR_COLLAPSE_WIDTH,
@@ -52,8 +43,8 @@ test('injection surfaces lead, then navigators, then attention surfaces', () => 
   // two blocks rather than an arbitrary list.
   const scopes = DRAWER_TABS.map(tab => tab.scope)
   assert.deepEqual(scopes, [...new Set(scopes)].flatMap(scope => scopes.filter(item => item === scope)))
-  // Both surfaces render an icon, so the label is only ever an accessible name. It still has
-  // to be short and distinct: it is what a screen reader announces for the tab.
+  // The label is both the accessible name and the visible title-mode mark, so it must stay
+  // short and distinct.
   const labels = DRAWER_TABS.map(tab => tab.label)
   assert.equal(new Set(labels).size, labels.length, 'tab labels must be distinct')
   assert.deepEqual(DRAWER_TABS.map(tab => tab.heading), [
@@ -69,69 +60,15 @@ test('injection surfaces lead, then navigators, then attention surfaces', () => 
   // it runs under plain type-stripping. A contract test checks the map covers every id.
 })
 
-test('a stored tab is restored, anything else falls back to clipboard', () => {
-  assert.equal(parseDrawerTab('commands'), 'commands')
-  assert.equal(parseDrawerTab('notifications'), 'notifications')
-  assert.equal(parseDrawerTab(null), 'clipboard')
-  assert.equal(parseDrawerTab('processes'), 'processes')
-  assert.equal(parseDrawerTab('usage'), 'clipboard')
+test('registry lookup falls back safely for an unknown tab', () => {
   assert.equal(drawerTab('prompts').label, 'Prompts')
-  // An unknown id must still yield a tab rather than crashing the host.
   assert.equal(drawerTab('nope' as never).id, 'clipboard')
-})
-
-test('drawer presentation is isolated per Project', () => {
-  let states = updateDrawerProjectState({}, 'p1', { tab: 'files', desktopExpanded: true })
-  states = updateDrawerProjectState(states, 'p2', { tab: 'git' })
-
-  assert.deepEqual(drawerProjectStateFor(states, 'p1'), { tab: 'files', desktopExpanded: true })
-  assert.deepEqual(drawerProjectStateFor(states, 'p2'), { tab: 'git', desktopExpanded: false })
-  assert.equal(drawerProjectStateFor(states, 'p3'), DEFAULT_DRAWER_PROJECT_STATE)
-
-  states = updateDrawerProjectState(states, 'p2', { desktopExpanded: true })
-  assert.deepEqual(drawerProjectStateFor(states, 'p1'), { tab: 'files', desktopExpanded: true })
-  assert.deepEqual(drawerProjectStateFor(states, 'p2'), { tab: 'git', desktopExpanded: true })
-})
-
-test('per-Project drawer persistence round-trips and rejects bad stored shapes', () => {
-  let states = updateDrawerProjectState({}, 'p1', { tab: 'notes', desktopExpanded: true })
-  states = updateDrawerProjectState(states, 'p2', { tab: 'transcript' })
-  assert.deepEqual(parseDrawerProjectStates(serializeDrawerProjectStates(states)), states)
-  assert.deepEqual(parseDrawerProjectStates(null), {})
-  assert.deepEqual(parseDrawerProjectStates('not json'), {})
-  assert.deepEqual(parseDrawerProjectStates('[]'), {})
-  assert.deepEqual(
-    parseDrawerProjectStates('{"p1":{"tab":"git","desktopExpanded":true},"p2":{"tab":"removed","desktopExpanded":"yes"},"p3":17}'),
-    {
-      p1: { tab: 'git', desktopExpanded: true },
-      p2: { tab: 'clipboard', desktopExpanded: false },
-    },
-  )
-})
-
-test('legacy global tab seeds only the initially active Project', () => {
-  const migrated = migrateLegacyDrawerTab({}, 'p1', 'processes')
-  assert.deepEqual(drawerProjectStateFor(migrated, 'p1'), { tab: 'processes', desktopExpanded: false })
-  assert.equal(drawerProjectStateFor(migrated, 'p2'), DEFAULT_DRAWER_PROJECT_STATE)
-  assert.equal(migrateLegacyDrawerTab(migrated, 'p1', 'notes'), migrated, 'migration must not overwrite new state')
-  const empty = {}
-  assert.equal(migrateLegacyDrawerTab(empty, 'p1', null), empty)
-})
-
-test('deleted Projects are pruned from drawer persistence', () => {
-  let states = updateDrawerProjectState({}, 'kept', { tab: 'commands' })
-  states = updateDrawerProjectState(states, 'gone', { tab: 'queue', desktopExpanded: true })
-  assert.deepEqual(pruneDrawerProjectStates(states, ['kept']), {
-    kept: { tab: 'commands', desktopExpanded: false },
-  })
-  const clean = updateDrawerProjectState({}, 'kept', { tab: 'commands' })
-  assert.equal(pruneDrawerProjectStates(clean, ['kept']), clean)
 })
 
 test('App restores desktop state per Project without persisting mobile visibility', () => {
   const app = readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8')
-  assert.match(app, /const activeDrawerState=projectId\?drawerProjectStateFor\(drawerProjectStates,projectId\):unscopedDrawerState/)
-  assert.match(app, /const clipboardOpen=mobileWorkspace\?mobileDrawerOpen:\(drawerResizeOpen\?\?activeDrawerState\.desktopExpanded\)/)
+  assert.match(app, /const activeDrawerPresentation=projectId[\s\S]*?drawerProjectPresentationFor\(drawerProjectPresentations,projectId,drawerLayout\)/)
+  assert.match(app, /const clipboardOpen=mobileWorkspace\?mobileDrawerOpen:\(drawerResizeOpen\?\?activeDrawerPresentation\.desktop_expanded\)/)
   assert.match(app, /if\(mobileWorkspace\)\{\s*const open=.*?setMobileDrawerOpen\(open\).*?return\s*\}/s)
   assert.doesNotMatch(app, /setClipboardOpenState/)
   assert.ok(app.includes("openDrawerTab('files',project.id)"), 'cross-Project Files actions must name their target')
@@ -142,7 +79,7 @@ test('App restores desktop state per Project without persisting mobile visibilit
 test('each drawer body shows a compact heading with the rail tooltip description', () => {
   const host = readFileSync(join(import.meta.dirname, '..', 'src', 'UtilityDrawer.tsx'), 'utf8')
   const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
-  assert.ok(host.includes('class={`drawer-body drawer-body-${tab}`}'))
+  assert.ok(host.includes('class={`drawer-body drawer-body-${selected}`}'))
   assert.ok(host.includes('<h2 class="drawer-panel-title" title={active.title}>{active.heading}</h2>'))
   assert.match(css, /\.drawer-panel-title\{[^}]*border:[^}]*background:/)
   assert.ok(css.includes('padding-left:calc(var(--drawer-panel-title-width) + 13px)'), 'existing top chrome must make room for the heading')
@@ -179,6 +116,7 @@ test('dock width has no fixed maximum and preserves a minimum workspace', () => 
   assert.equal(clampDrawerWidth(420), 420)
   assert.equal(clampDrawerWidth(Number.NaN), DRAWER_DEFAULT_WIDTH)
   assert.equal(drawerMaximumWidth(1920, 258), 1468)
+  assert.equal(drawerMaximumWidth(1920, 258, 112), 1396)
   assert.equal(drawerMaximumWidth(761, 484), DRAWER_MIN_WIDTH, 'drawer minimum wins when fixed chrome exhausts the viewport')
   assert.equal(storedDrawerWidth('440'), 440)
   assert.equal(storedDrawerWidth('9000'), 9000)
@@ -206,22 +144,10 @@ test('desktop sidebar drags collapse reversibly beyond their minimum widths', ()
 test('App previews drag-collapse but persists only the final state', () => {
   const app = readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8')
   const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
-  assert.ok(app.includes('drawerResizeOpen??activeDrawerState.desktopExpanded'))
+  assert.ok(app.includes('drawerResizeOpen??activeDrawerPresentation.desktop_expanded'))
   assert.ok(app.includes('setDrawerResizeOpen(dragOpen)'))
   assert.ok(app.includes('setClipboardOpen(dragOpen)'))
   assert.ok(app.includes("localStorage.setItem('mux.sidebar.collapsed.v1',String(dragCollapsed))"))
   assert.match(css, /workspace\.drawer-open\{[^}]*minmax\(150px,1fr\)/)
   assert.match(css, /workspace\.sidebar-collapsed\.drawer-open\{[^}]*minmax\(150px,1fr\)/)
-})
-
-test('tab cycling wraps in both directions', () => {
-  assert.equal(nextDrawerTab('clipboard', 1), 'commands')
-  assert.equal(nextDrawerTab('prompts', 1), 'queue')
-  assert.equal(nextDrawerTab('queue', 1), 'transcript')
-  assert.equal(nextDrawerTab('transcript', 1), 'files')
-  assert.equal(nextDrawerTab('notes', 1), 'context')
-  assert.equal(nextDrawerTab('context', 1), 'git')
-  assert.equal(nextDrawerTab('notifications', 1), 'clipboard')
-  assert.equal(nextDrawerTab('clipboard', -1), 'notifications')
-  assert.equal(nextDrawerTab('prompts', -2), 'clipboard')
 })

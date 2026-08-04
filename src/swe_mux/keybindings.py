@@ -120,11 +120,21 @@ KEYBINDING_COMMANDS = (
     ("drawer.clipboard", "Side panel: always clipboard history", "clipboard"),
     ("drawer.commands", "Side panel: always session commands", "terminal"),
     ("drawer.prompts", "Side panel: always prompt templates", "input"),
+    ("drawer.queue", "Side panel: always prompt queue", "input"),
     ("drawer.transcript", "Side panel: always this session's transcript", "terminal"),
     ("drawer.files", "Side panel: always project files", "view"),
     ("drawer.notes", "Side panel: always project and session notes", "view"),
+    ("drawer.context", "Side panel: always agent context", "view"),
+    ("drawer.git", "Side panel: always project Git status", "view"),
+    ("drawer.processes", "Side panel: always project processes", "view"),
     ("drawer.notifications", "Side panel: always notifications", "view"),
-    ("drawer.resetTabs", "Reset side panel tab order", "view"),
+    ("drawer.resetLayout", "Reset side panel layout", "view"),
+    ("drawer.next", "Side panel: focus next tab in pane", "view"),
+    ("drawer.previous", "Side panel: focus previous tab in pane", "view"),
+    ("drawer.moveLeft", "Side panel: move focused tab left", "view"),
+    ("drawer.moveRight", "Side panel: move focused tab right", "view"),
+    ("drawer.moveUp", "Side panel: move focused tab up", "view"),
+    ("drawer.moveDown", "Side panel: move focused tab down", "view"),
     ("clipboard.open", "Side panel: always clipboard history (rail Clip button)", "clipboard"),
     ("clipboard.clear", "Clear unpinned clipboard history", "clipboard"),
     *tuple(
@@ -136,6 +146,7 @@ KEYBINDING_COMMANDS = (
 COMMAND_IDS = {command_id for command_id, _, _ in KEYBINDING_COMMANDS}
 
 _PROJECT_COMMAND = re.compile(r"project\.activate\(([1-9])\)\Z")
+_COMMAND_MIGRATIONS = {"drawer.resetTabs": "drawer.resetLayout"}
 
 
 def is_command(command_id: object) -> bool:
@@ -224,7 +235,7 @@ def normalize_binding(chord: object, command: object) -> tuple[str, str]:
         raise ValueError("browser-reserved chord")
     if key in _TERMINAL_RESERVED:
         raise ValueError("terminal-reserved chord")
-    command_id = str(command)
+    command_id = _COMMAND_MIGRATIONS.get(str(command), str(command))
     if command_id not in COMMAND_IDS and not _PROJECT_COMMAND.fullmatch(command_id):
         raise ValueError("unknown command id")
     return key, command_id

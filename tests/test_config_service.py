@@ -532,6 +532,21 @@ def test_terminal_renderer_is_hot_reloadable_and_validated(tmp_path: Path) -> No
         update_config(config, {"terminal_renderer": "canvas"})
 
 
+def test_drawer_tab_display_is_hot_reloadable_and_validated(tmp_path: Path) -> None:
+    config = load_config(tmp_path / "config.toml")
+    assert config.drawer_tab_display == "icon"
+
+    hot, restart = update_config(config, {"drawer_tab_display": "title"})
+    assert hot == {"drawer_tab_display"}
+    assert restart == set()
+    assert load_config(tmp_path / "config.toml").drawer_tab_display == "title"
+
+    with pytest.raises(ValueError, match="drawer_tab_display"):
+        update_config(config, {"drawer_tab_display": "both"})
+    assert config.drawer_tab_display == "title"
+    assert load_config(tmp_path / "config.toml").drawer_tab_display == "title"
+
+
 def test_builtin_themes_and_custom_text_meet_readability_contract(tmp_path: Path) -> None:
     assert all(contrast_ratio(*pair) >= 4.5 for pair in BUILTIN_THEME_PAIRS.values())
     config = load_config(tmp_path / "config.toml")

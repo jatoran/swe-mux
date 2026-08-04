@@ -1004,16 +1004,16 @@ body {
 
 /* Desktop app identity occupies only the cell above the sidebar. Each pane owns the
    adjacent tab strip at the top of its own stack, including both branches of a split. */
-.workspace{grid-template-columns:var(--sidebar-width,254px) 4px minmax(0,1fr) 40px;grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)}
+.workspace{grid-template-columns:var(--sidebar-width,254px) 4px minmax(0,1fr) var(--utility-rail-width,40px);grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)}
 /* The docked utility drawer adds its own resizer + column ahead of the icon
    rail. Negative column lines keep the rail last whatever the sidebar does. */
-.workspace.drawer-open{grid-template-columns:var(--sidebar-width,254px) 4px minmax(150px,1fr) 4px var(--drawer-width,380px) 40px}
+.workspace.drawer-open{grid-template-columns:var(--sidebar-width,254px) 4px minmax(150px,1fr) 4px var(--drawer-width,380px) var(--utility-rail-width,40px)}
 .app-topbar{position:relative;z-index:48;grid-column:1;grid-row:1;min-width:0;display:flex;align-items:stretch;border-right:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--panel);box-shadow:0 1px #000}
 .app-identity{min-width:0;flex:1 1 0;display:flex;align-items:center;gap:5px;padding:0 7px 0 11px;white-space:nowrap}.app-identity strong{margin-right:4px;color:var(--text);text-transform:lowercase}.app-identity button{width:25px;height:calc(25px*var(--ui-scale));border:0;background:transparent;color:var(--muted);cursor:pointer}.app-identity button:hover{background:var(--panel2);color:var(--accent)}.app-identity .daemon-ok{width:20px;height:calc(25px*var(--ui-scale));margin:0;justify-content:center}.app-identity .daemon-ok i{width:6px;height:8px}
 .pane-stack{grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)}.pane-stack>.stack-tabs{display:flex}.pane-stack>.stack-tabs button{height:calc(33px*var(--ui-scale))}.pane-stack.focused-pane{outline:1px solid color-mix(in srgb,var(--accent) 32%,transparent);outline-offset:-1px}
 
 /* Desktop sidebar sizing is device-local UI state. */
-.sidebar{grid-column:1;grid-row:2;min-width:0;overflow:hidden}.sidebar-resizer{grid-column:2;grid-row:1/3;position:relative;z-index:8;cursor:col-resize;background:var(--line);touch-action:none}.sidebar-resizer:after{content:"";position:absolute;inset:0 -3px}.sidebar-resizer:hover,.sidebar-resizing .sidebar-resizer{background:var(--accent)}.main-stage{grid-column:3;grid-row:1/3}.workspace.sidebar-collapsed{grid-template-columns:40px 0 minmax(0,1fr) 40px}.workspace.sidebar-collapsed.drawer-open{grid-template-columns:40px 0 minmax(150px,1fr) 4px var(--drawer-width,380px) 40px}
+.sidebar{grid-column:1;grid-row:2;min-width:0;overflow:hidden}.sidebar-resizer{grid-column:2;grid-row:1/3;position:relative;z-index:8;cursor:col-resize;background:var(--line);touch-action:none}.sidebar-resizer:after{content:"";position:absolute;inset:0 -3px}.sidebar-resizer:hover,.sidebar-resizing .sidebar-resizer{background:var(--accent)}.main-stage{grid-column:3;grid-row:1/3}.workspace.sidebar-collapsed{grid-template-columns:40px 0 minmax(0,1fr) var(--utility-rail-width,40px)}.workspace.sidebar-collapsed.drawer-open{grid-template-columns:40px 0 minmax(150px,1fr) 4px var(--drawer-width,380px) var(--utility-rail-width,40px)}
 /* The rail shares the collapsed sidebar's cell; the sidebar itself is only
    visibility-hidden, so it still reserves the column but paints nothing. */
 .sidebar-rail{grid-column:1;grid-row:2;display:flex;flex-direction:column;align-items:center;gap:4px;min-height:0;padding:6px 0;border-right:1px solid var(--line);background:var(--panel);overflow:hidden}
@@ -1605,17 +1605,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .pane-stack[data-pointer-drop-indicator]{position:relative}.pane-stack[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:24;pointer-events:none;border:2px solid var(--green);background:color-mix(in srgb,var(--green) 16%,transparent);box-shadow:inset 0 0 20px color-mix(in srgb,var(--green) 14%,transparent),0 0 8px #0008}.pane-stack[data-pointer-drop-indicator="split-left"]:after{inset:calc(34px*var(--ui-scale)) 72% 0 0}.pane-stack[data-pointer-drop-indicator="split-right"]:after{inset:calc(34px*var(--ui-scale)) 0 0 72%}.pane-stack[data-pointer-drop-indicator="split-top"]:after{inset:calc(34px*var(--ui-scale)) 0 72%}.pane-stack[data-pointer-drop-indicator="split-bottom"]:after{inset:72% 0 0}
 .stack-tabs[data-pointer-drop-indicator="tab-bar"]{position:relative;box-shadow:inset 0 0 0 1px var(--green),inset 0 -3px color-mix(in srgb,var(--green) 72%,transparent);background:color-mix(in srgb,var(--green) 9%,var(--panel))}.stack-tabs[data-pointer-drop-indicator="tab-bar"]:after{content:"";position:sticky;z-index:28;right:2px;flex:0 0 3px;align-self:stretch;background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 75%,transparent);pointer-events:none}
 .stack-tab-shell[data-pointer-drop-indicator]:after,.project-group[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:30;pointer-events:none;background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 75%,transparent)}.stack-tab-shell[data-pointer-drop-indicator="insert-before"]:after{left:-2px;top:3px;bottom:3px;width:3px}.stack-tab-shell[data-pointer-drop-indicator="insert-after"]:after{right:-2px;top:3px;bottom:3px;width:3px}.project-group[data-pointer-drop-indicator="insert-before"]:after{left:2px;right:2px;top:-3px;height:3px}.project-group[data-pointer-drop-indicator="insert-after"]:after{left:2px;right:2px;bottom:-3px;height:3px}
-/* Drawer tabs reorder from either surface: a vertical bar between tabs in the horizontal
-   strip, a horizontal one between buttons in the vertical rail. `touch-action:none` keeps the
-   drag deterministic on a phone, where the strip is the only tab control. */
-.drawer-tabs button,.utility-rail button{touch-action:none}
+/* Pane tabs use pointer dragging. The outer launcher is a mirror and does not rearrange. */
+.drawer-tabs button{touch-action:none}
 .drawer-tabs button[data-scope="session"]:before,.utility-rail button[data-scope="session"]:before{content:"";position:absolute;z-index:2;right:5px;bottom:5px;width:3px;height:3px;border-radius:50%;background:color-mix(in srgb,var(--muted) 52%,var(--panel2));box-shadow:none;opacity:.8;pointer-events:none}
-.drawer-tabs button[data-pointer-drop-indicator]:after,.utility-rail button[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:30;pointer-events:none;background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 75%,transparent)}
+.drawer-tabs button[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:30;pointer-events:none;background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 75%,transparent)}
 .drawer-tabs button[data-pointer-drop-indicator="insert-before"]:after{left:-1px;top:4px;bottom:4px;width:3px}
 .drawer-tabs button[data-pointer-drop-indicator="insert-after"]:after{right:-1px;top:4px;bottom:4px;width:3px}
-.utility-rail button[data-pointer-drop-indicator="insert-before"]:after{left:-1px;right:-1px;top:-3px;height:3px}
-.utility-rail button[data-pointer-drop-indicator="insert-after"]:after{left:-1px;right:-1px;bottom:-3px;height:3px}
-.drawer-tabs button.dragging,.utility-rail button.dragging{opacity:.4}
+.drawer-tabs button.dragging{opacity:.4}
 .session-row[data-pointer-drop-indicator="group-session"],.layout-cluster.stack[data-pointer-drop-indicator="join-stack"]{outline:1px solid var(--blue);outline-offset:-1px;background:color-mix(in srgb,var(--blue) 12%,var(--panel));box-shadow:inset 0 0 12px color-mix(in srgb,var(--blue) 12%,transparent)}.layout-cluster.stack[data-pointer-drop-indicator="join-stack"]{outline-offset:1px}.session-row[data-pointer-drop-indicator="invalid"],.layout-cluster[data-pointer-drop-indicator="invalid"]{outline:1px solid var(--red);outline-offset:-1px;background:color-mix(in srgb,var(--red) 9%,var(--panel))}
 /* Collapsible / hideable sidebar projects. The chevron cell is now a toggle
    button; the badge surfaces live session count while the tree is hidden. */
@@ -1674,20 +1670,21 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .utility-drawer.docked{grid-column:-3/-2;grid-row:1/3;border-left:1px solid var(--line)}
 .drawer-resizer{grid-column:-4/-3;grid-row:1/3;position:relative;z-index:8;cursor:col-resize;background:var(--line);touch-action:none}
 .drawer-resizer:after{content:"";position:absolute;inset:0 -3px}
-.drawer-resizer:hover,.sidebar-resizing .drawer-resizer{background:var(--accent)}
+.drawer-resizer:hover,.drawer-resizer:focus-visible,.sidebar-resizing .drawer-resizer{background:var(--accent);outline:0}
 .utility-drawer.overlay{position:fixed;z-index:60;top:0;right:0;bottom:0;width:90vw;border-left:1px solid var(--line);box-shadow:-9px 0 22px #000a;animation:utility-drawer-in .14s ease-out}
 @keyframes utility-drawer-in{from{transform:translateX(101%)}to{transform:translateX(0)}}
 .utility-drawer-scrim{position:fixed;z-index:59;inset:0;border:0;background:#020403aa}
 /* Always-visible desktop strip: the reason these surfaces stop being buried. */
 .utility-rail{grid-column:-2/-1;grid-row:1/3;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0;border-left:1px solid var(--line);background:var(--panel)}
 .utility-rail button{position:relative;width:28px;height:calc(30px*var(--ui-scale));flex:none;display:grid;place-items:center;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:12px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+.utility-rail.title-mode{align-items:stretch;padding-inline:6px}
+.utility-rail.title-mode button{width:100%;min-width:0;padding:0 7px;display:flex;justify-content:flex-start;font-size:9px;overflow:hidden}
+.drawer-tab-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Icons are sized here, not in `em`: this surface runs a 9-12px font. */
 .utility-rail button svg{width:16px;height:16px;display:block}
 .utility-rail button:hover,.utility-rail button:focus-visible{border-color:var(--accent);color:var(--text)}
 .utility-rail button.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel2));color:var(--text);box-shadow:inset -2px 0 var(--accent)}
 .drawer-badge{position:absolute;top:-4px;right:-4px;min-width:14px;height:14px;padding:0 3px;display:grid;place-items:center;border-radius:7px;background:var(--amber);color:#12140c;font:600 8px 'Cascadia Mono',Consolas,monospace;font-style:normal}
-.drawer-tabs-shell{position:relative;flex:none;min-width:0;display:flex;align-items:stretch;border-bottom:1px solid var(--line);background:var(--panel2)}
-.drawer-tabs-shell:after{content:"";position:absolute;z-index:2;top:0;right:30px;bottom:0;width:14px;pointer-events:none;background:linear-gradient(to right,transparent,var(--panel2))}
 .drawer-tabs{flex:1 1 auto;min-width:0;display:flex;flex-wrap:nowrap;align-items:stretch;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain}
 .drawer-tabs::-webkit-scrollbar{display:none}
 /* Icon-only tabs. They share the strip evenly but are capped, because a 17px mark centred in
@@ -1699,8 +1696,6 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-tabs button svg{width:17px;height:17px;display:block}
 .drawer-tabs button:hover{color:var(--text)}
 .drawer-tabs button.active{border-bottom-color:var(--accent);color:var(--text);background:var(--panel)}
-.drawer-tabs-shell>.drawer-close{position:relative;z-index:3;flex:0 0 30px;width:30px;padding:0;border:0;border-bottom:2px solid transparent;background:var(--panel2);color:var(--muted);font:inherit;font-size:15px;cursor:pointer}
-.drawer-tabs-shell>.drawer-close:hover{color:var(--text)}
 .drawer-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
 .drawer-status{flex:none;margin:0;padding:6px 9px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .drawer-empty{margin:0;padding:22px 12px;color:var(--muted);font-size:9px;line-height:1.45;text-align:center}
@@ -1716,6 +1711,36 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-body-transcript .transcript-tab-meta{padding-left:calc(var(--drawer-panel-title-width) + 4px)}
 .drawer-body-context .agent-context-header>div>strong{display:none}
 .drawer-body-files>.drawer-empty:first-of-type,.drawer-body-transcript>.drawer-empty:first-of-type{padding-top:38px}
+
+/* The dock owns one persistent layout tree. Each leaf is a tab stack and every internal
+   node is a keyboard and pointer resizable split. */
+.drawer-chrome{flex:none;min-height:28px;display:flex;align-items:center;justify-content:space-between;padding-left:8px;border-bottom:1px solid var(--line);background:var(--panel2);color:var(--muted);font-size:8px;letter-spacing:.06em;text-transform:uppercase}
+.drawer-chrome>.drawer-close{align-self:stretch;width:32px;border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);font:15px/1 inherit;cursor:pointer}
+.drawer-chrome>.drawer-close:hover,.drawer-chrome>.drawer-close:focus-visible{color:var(--text);background:var(--panel)}
+.drawer-tree{flex:1 1 auto;min-width:0;min-height:0;display:flex;overflow:hidden}
+.drawer-split{flex:1 1 auto;min-width:0;min-height:0;display:flex;overflow:hidden}
+.drawer-split.horizontal{flex-direction:row}
+.drawer-split.vertical{flex-direction:column}
+.drawer-split-branch{min-width:0;min-height:0;display:flex;overflow:hidden}
+.drawer-splitter{position:relative;z-index:7;flex:none;background:var(--line);touch-action:none}
+.drawer-split.horizontal>.drawer-splitter{width:4px;cursor:col-resize}
+.drawer-split.vertical>.drawer-splitter{height:4px;cursor:row-resize}
+.drawer-splitter:after{content:"";position:absolute;inset:-3px}
+.drawer-splitter:hover,.drawer-splitter:focus-visible{background:var(--accent);outline:0}
+.drawer-pane{position:relative;flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--panel)}
+.drawer-pane.focused{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 62%,transparent)}
+.drawer-pane-rail{flex:none;border-bottom:1px solid var(--line);background:var(--panel2)}
+.drawer-pane-rail.title-mode button{flex-basis:auto;min-width:max-content;max-width:none;padding:0 9px;font-size:8px}
+.drawer-pane-heading{position:relative;z-index:6;flex:none;min-height:27px;display:flex;align-items:center;gap:6px;padding:3px 7px;border-bottom:1px solid var(--line);background:var(--panel)}
+.drawer-pane-heading .drawer-panel-title{position:static;flex:0 1 auto;width:auto;max-width:55%;cursor:help}
+.drawer-scope-context{min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:7px}
+.drawer-pane-heading+.drawer-status,.drawer-pane-heading+.clipboard-disabled{padding-left:9px}
+.drawer-pane[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:30;pointer-events:none;border:2px solid var(--green);background:color-mix(in srgb,var(--green) 14%,transparent);box-shadow:inset 0 0 18px color-mix(in srgb,var(--green) 13%,transparent)}
+.drawer-pane[data-pointer-drop-indicator="join"]:after{inset:34px 0 0}
+.drawer-pane[data-pointer-drop-indicator="split-left"]:after{inset:34px 76% 0 0}
+.drawer-pane[data-pointer-drop-indicator="split-right"]:after{inset:34px 0 0 76%}
+.drawer-pane[data-pointer-drop-indicator="split-top"]:after{inset:34px 0 76%}
+.drawer-pane[data-pointer-drop-indicator="split-bottom"]:after{inset:76% 0 0}
 /* Transcript: a reading column. Text sets larger than the rest of the drawer because this
    is the one surface whose whole job is prose a human reads at length, and the drawer's 8-9px
    dense-index type is unreadable for that. `position:relative` on the host anchors the

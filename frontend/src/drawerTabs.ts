@@ -1,10 +1,9 @@
 // The right-edge utility drawer: tab registry, persistence, and pure helpers.
 //
-// One host, two renderings. On mobile it is an overlay drawer entering from the
-// right edge (the sidebar's mirror image, and mutually exclusive with it). On
-// desktop it is an in-flow column of the workspace grid, next to an always-visible
-// icon rail, because an overlay covering a tiling pane manager hides the terminal
-// you opened it to work with.
+// One singleton host per tab, with two responsive projections. On mobile it is an
+// overlay drawer entering from the right edge. On desktop it is an in-flow recursive
+// split tree next to an always-visible launcher rail, so it never covers the Project
+// workspace.
 //
 // Tab order groups by what a tab acts on. First the surfaces that *inject into the
 // focused session* (clipboard, session commands, prompt templates, the prompt queue),
@@ -34,7 +33,7 @@ export type DrawerTabScope = 'session' | 'project' | 'app'
 
 export type DrawerTab = {
   id: DrawerTabId
-  /** Short accessible name. Both surfaces render an icon, so this is never drawn. */
+  /** Short accessible name, also drawn when the Appearance setting uses titles. */
   label: string
   /** Visible identity inside the content surface. Kept separate from the compact rail label. */
   heading: string
@@ -77,21 +76,6 @@ export const DRAWER_RESIZER_WIDTH = 4
 export const DRAWER_RAIL_WIDTH = 40
 export const MAIN_WORKSPACE_MIN_WIDTH = 150
 
-export type DrawerProjectState = Readonly<{
-  tab: DrawerTabId
-  desktopExpanded: boolean
-}>
-
-/** Project id → the device-local presentation of that Project's drawer. */
-export type DrawerProjectStateMap = Readonly<Record<string, DrawerProjectState>>
-
-export const DEFAULT_DRAWER_PROJECT_STATE: DrawerProjectState = {
-  tab: 'clipboard',
-  desktopExpanded: false,
-}
-
-export const EMPTY_DRAWER_PROJECT_STATES: DrawerProjectStateMap = {}
-
 export function clampDrawerWidth(value: number, maximum = Number.POSITIVE_INFINITY): number {
   if (!Number.isFinite(value)) return DRAWER_DEFAULT_WIDTH
   const ceiling = Number.isFinite(maximum) ? Math.max(DRAWER_MIN_WIDTH, maximum) : Number.POSITIVE_INFINITY
@@ -99,9 +83,13 @@ export function clampDrawerWidth(value: number, maximum = Number.POSITIVE_INFINI
 }
 
 /** Largest dock width that preserves the main workspace's usable desktop strip. */
-export function drawerMaximumWidth(viewportWidth: number, leftChromeWidth: number): number {
-  if (!Number.isFinite(viewportWidth) || !Number.isFinite(leftChromeWidth)) return DRAWER_DEFAULT_WIDTH
-  const available = viewportWidth - leftChromeWidth - DRAWER_RESIZER_WIDTH - DRAWER_RAIL_WIDTH - MAIN_WORKSPACE_MIN_WIDTH
+export function drawerMaximumWidth(
+  viewportWidth: number,
+  leftChromeWidth: number,
+  launcherWidth = DRAWER_RAIL_WIDTH,
+): number {
+  if (!Number.isFinite(viewportWidth) || !Number.isFinite(leftChromeWidth) || !Number.isFinite(launcherWidth)) return DRAWER_DEFAULT_WIDTH
+  const available = viewportWidth - leftChromeWidth - DRAWER_RESIZER_WIDTH - launcherWidth - MAIN_WORKSPACE_MIN_WIDTH
   return Math.max(DRAWER_MIN_WIDTH, Math.floor(available))
 }
 
@@ -110,93 +98,6 @@ export function storedDrawerWidth(raw: string | null): number {
   return parsed ? clampDrawerWidth(parsed) : DRAWER_DEFAULT_WIDTH
 }
 
-/** Validate a stored tab id; each Project's last-used tab is restored through the map below. */
-export function parseDrawerTab(raw: string | null): DrawerTabId {
-  return DRAWER_TABS.some(tab => tab.id === raw) ? (raw as DrawerTabId) : 'clipboard'
-}
-
-/** Read the per-Project drawer map without letting stale or hand-edited storage break boot. */
-export function parseDrawerProjectStates(raw: string | null): DrawerProjectStateMap {
-  if (!raw) return EMPTY_DRAWER_PROJECT_STATES
-  let value: unknown
-  try {
-    value = JSON.parse(raw)
-  } catch {
-    return EMPTY_DRAWER_PROJECT_STATES
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return EMPTY_DRAWER_PROJECT_STATES
-  const map: Record<string, DrawerProjectState> = {}
-  for (const [projectId, stored] of Object.entries(value as Record<string, unknown>)) {
-    if (!projectId || !stored || typeof stored !== 'object' || Array.isArray(stored)) continue
-    const candidate = stored as { tab?: unknown; desktopExpanded?: unknown }
-    map[projectId] = {
-      tab: typeof candidate.tab === 'string' ? parseDrawerTab(candidate.tab) : DEFAULT_DRAWER_PROJECT_STATE.tab,
-      desktopExpanded: candidate.desktopExpanded === true,
-    }
-  }
-  return map
-}
-
-export function serializeDrawerProjectStates(map: DrawerProjectStateMap): string {
-  return JSON.stringify(map)
-}
-
-export function drawerProjectStateFor(map: DrawerProjectStateMap, projectId: string): DrawerProjectState {
-  return (projectId && map[projectId]) || DEFAULT_DRAWER_PROJECT_STATE
-}
-
-/** Apply one presentation change without disturbing any other Project's drawer. */
-export function updateDrawerProjectState(
-  map: DrawerProjectStateMap,
-  projectId: string,
-  patch: Partial<DrawerProjectState>,
-): DrawerProjectStateMap {
-  if (!projectId) return map
-  const current = drawerProjectStateFor(map, projectId)
-  const next: DrawerProjectState = {
-    tab: patch.tab ?? current.tab,
-    desktopExpanded: patch.desktopExpanded ?? current.desktopExpanded,
-  }
-  if (map[projectId] && next.tab === current.tab && next.desktopExpanded === current.desktopExpanded) return map
-  if (!map[projectId] && next.tab === DEFAULT_DRAWER_PROJECT_STATE.tab && next.desktopExpanded === DEFAULT_DRAWER_PROJECT_STATE.desktopExpanded) return map
-  return { ...map, [projectId]: next }
-}
-
-/** Seed only the initially active Project from the former one-tab-for-the-whole-app key. */
-export function migrateLegacyDrawerTab(
-  map: DrawerProjectStateMap,
-  projectId: string,
-  legacyTab: string | null,
-): DrawerProjectStateMap {
-  if (!projectId || legacyTab === null || map[projectId]) return map
-  return updateDrawerProjectState(map, projectId, { tab: parseDrawerTab(legacyTab) })
-}
-
-/** Remove state belonging to Projects that no longer exist. */
-export function pruneDrawerProjectStates(
-  map: DrawerProjectStateMap,
-  knownProjectIds: readonly string[],
-): DrawerProjectStateMap {
-  const known = new Set(knownProjectIds)
-  const stale = Object.keys(map).filter(projectId => !known.has(projectId))
-  if (!stale.length) return map
-  const next = { ...map }
-  for (const projectId of stale) delete next[projectId]
-  return next
-}
-
 export function drawerTab(id: DrawerTabId): DrawerTab {
   return DRAWER_TABS.find(tab => tab.id === id) || DRAWER_TABS[0]
-}
-
-/** Cycle tabs (wrapping) for keyboard navigation inside the drawer.
- *
- * `order` is the user's arrangement when they have one, because Tab has to walk the strip in
- * the order it is drawn; without it, keyboard cycling would jump around a rearranged strip.
- */
-export function nextDrawerTab(current: DrawerTabId, offset: number, order?: DrawerTabId[]): DrawerTabId {
-  const ids = order?.length ? order : DRAWER_TABS.map(tab => tab.id)
-  const index = ids.indexOf(current)
-  const at = (index < 0 ? 0 : index) + offset
-  return ids[((at % ids.length) + ids.length) % ids.length]
 }
