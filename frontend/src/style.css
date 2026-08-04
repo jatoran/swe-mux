@@ -23,12 +23,12 @@
 .row-actions button.confirming,.pane-tools button.confirming,.context-menu button.confirming { width:auto;min-width:43px;padding:0 6px;background:#4b2025;color:#ff9da4 }
 .empty-list { text-align:center;padding:52px 20px;color:#737d8a;display:flex;flex-direction:column;gap:8px;font-size:11px;line-height:1.5 }.empty-list strong { color:#b5bcc6;font-size:12px }.empty-glyph { font:18px 'JetBrains Mono';color:#586357 }.sidebar-footer { flex:none;height:calc(46px*var(--ui-scale));padding:7px;border-top:1px solid var(--line);display:flex;gap:6px }.sidebar-footer button { border:1px solid #2a3038;background:#14181d;border-radius:6px;cursor:pointer;font-size:11px }.sidebar-footer button:first-child { flex:1;text-align:left;padding-left:9px }.sidebar-footer button:first-child span { color:var(--green);margin-right:6px }.sidebar-footer button:not(:first-child) { width:32px }.sidebar-footer button:hover,.sidebar-footer button.on { border-color:#526143;background:#1a2118 }
 .main-stage { min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr);background:#0a0c0f }.pane-bar { display:grid;grid-template-columns:auto minmax(50px,1fr) auto;align-items:center;padding:0 8px 0 12px;border-bottom:1px solid #242931;background:#111419;font-size:11px }.pane-bar>div { display:flex;align-items:center;gap:7px }.pane-bar .state-dot { margin:0 }.pane-path { justify-content:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#636d7a;font:9px 'JetBrains Mono' }.pane-tools { color:#68727f;font:9px 'JetBrains Mono' }.pane-tools button { background:transparent;border:0;border-radius:4px;width:25px;height:calc(23px*var(--ui-scale));cursor:pointer;color:#7d8692 }.pane-tools button:hover { background:#252b32;color:var(--text) }.terminal-host { min-height:0;padding:7px 7px 3px 10px;overflow:hidden }.terminal-host .xterm { height:100% }
-/* The header is [state] [cwd] [voice] [tools]. `grid-auto-flow:column` is load-bearing: it
-   is what guarantees the bar stays ONE row. Without it an item beyond the declared column
-   count auto-places into a second row, which is how the voice chips (a variable-length set)
-   would silently wrap the pane tools under the status line. Overflow is absorbed inside
-   `.pane-voice`, which scrolls, rather than by growing the bar. */
+/* A shell header is [state] [cwd] [voice] [tools]; an agent header omits cwd and gives that
+   space to voice controls. `grid-auto-flow:column` keeps both variants on one row. Without it
+   an item beyond the declared column count auto-places into a second row, which is how the
+   variable-length voice set would silently wrap the pane tools under the status line. */
 .pane-bar { grid-auto-flow:column;grid-template-columns:auto minmax(50px,1fr) auto auto }
+.pane-bar.agent-pane-bar { grid-template-columns:auto minmax(50px,1fr) auto }
 /* The trailing fade is the group's overflow affordance. It costs nothing when the chips fit
    (it lands on empty track) and turns the chip the scroller cuts in half into a visible
    "there is more, scroll me" instead of something that reads as a clipping bug. */

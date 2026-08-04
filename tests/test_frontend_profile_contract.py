@@ -34,6 +34,18 @@ def test_terminal_creation_is_visible_optimistically_before_the_api_returns() ->
     assert "pending-terminal-body" in source
 
 
+def test_agent_pane_headers_omit_the_working_directory() -> None:
+    root = Path(__file__).parents[1]
+    source = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert "const agentSession=isAgent(session)" in source
+    assert "{!agentSession&&<div class=\"pane-path\">{session.cwd}</div>}" in source
+    assert "{!agentSession&&<div class={`pane-path ${cwdIsLive?'live':'last-known'}`}" in source
+    assert "pane-bar ${agentSession?'agent-pane-bar':''}" in source
+    assert ".pane-bar.agent-pane-bar { grid-template-columns:auto minmax(50px,1fr) auto }" in css
+
+
 def test_settings_panel_is_top_aligned_and_viewport_bounded() -> None:
     css = (Path(__file__).parents[1] / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 

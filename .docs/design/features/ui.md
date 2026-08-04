@@ -501,11 +501,10 @@ responsive controls.
   rules.
 - The selected terminal keeps an in-flow session header above a remaining-height terminal
   surface. Terminal visibility does not depend on convergence with a separate global active ID.
-- That header is a single row on touch: status at the left, note/proc/⋯ at the right. The cwd
-  column (including its `last-known::` spawn-cwd marking) is desktop-only — on a phone it is the
-  least useful field in the bar, and as a third item in a two-column grid it wrapped the tools
-  onto a second row. It is hidden via `.pane-bar>.pane-path`, since the bar's own `.pane-bar>div`
-  layout rule out-specifies a bare `.pane-path` override.
+- Agent headers omit cwd on every device. A spawn path marked `last-known::` is stale metadata,
+  not an actionable session control, and consumed the header's central space. Shell headers keep
+  cwd on desktop; touch hides the shell cwd via `.pane-bar>.pane-path` so status and tools remain
+  on one row.
 - Touch gestures are configurable command slots: single-finger horizontal swipes, two-finger
   horizontal *and vertical* swipes, and a two-finger tap. Only the **single**-finger vertical
   channel is reserved (terminal scrollback / application wheel); two-finger vertical is a real

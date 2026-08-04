@@ -3304,14 +3304,15 @@ export function App() {
     const session = sessions.find(item => item.id === node.id)
     if (!session) return null
     const id = session.id
+    const agentSession=isAgent(session)
     if(session.pending)return <section class={`terminal-pane pending-terminal-pane ${activeId===id?'focused':''}`} onPointerDown={()=>{setActiveId(id);setFocusedViewId(id)}}>
-      <div class="pane-bar"><div><span class="pane-state starting">starting terminal…</span></div><div class="pane-path">{session.cwd}</div></div>
+      <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`}><div><span class="pane-state starting">starting terminal…</span></div>{!agentSession&&<div class="pane-path">{session.cwd}</div>}</div>
       <div class="pending-terminal-body" role="status" aria-live="polite"><span class="pending-terminal-spinner" aria-hidden="true"/><strong>Starting terminal</strong><small>Resolving the project and opening the shell…</small></div>
     </section>
     const displayedCwd=session.runtime_cwd||session.spawn_cwd||session.cwd
     const cwdIsLive=session.runtime_cwd_live
     const openPaneMenu=(event:{clientX:number;clientY:number;preventDefault?:()=>void;stopPropagation?:()=>void})=>{event.preventDefault?.();event.stopPropagation?.();openSessionMenu(session,event.clientX,event.clientY,'pane')}
-    const agentVoice=isAgent(session)
+    const agentVoice=agentSession
     const voiceMode=voiceStatus?.enabled&&agentVoice?effectiveVoiceMode(session):'off'
     const voiceAvailable=!!voiceStatus?.enabled&&agentVoice
     const conversationAvailable=!!voiceStatus?.stt_enabled&&agentVoice
@@ -3338,13 +3339,13 @@ export function App() {
     // renders its active pane *and* its warm siblings, so without a stable identity a
     // reorder would rebuild terminals rather than move them.
     const terminalPane=<section key={id} class={`terminal-pane ${activeId === id ? 'focused' : ''} ${paneVisible ? '' : 'pane-warm'}`} aria-hidden={paneVisible?undefined:'true'} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
-      <div class="pane-bar" onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
+      <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`} onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
         {/* A stale transcript is the one fault that looks like a healthy session: the state
             below is being read off a conversation this PTY may no longer be running (an
             unfollowable /clear or /new). Marked visibly, not just in the tooltip, because the
             whole failure mode is that nothing looks wrong. */}
         <div><span class={`pane-state ${session.state}${session.observation_stale_since?' observation-stale':''}`} title={[session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}{session.observation_stale_since?' · stale':''}</span></div>
-        <div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>
+        {!agentSession&&<div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
         <div class="pane-voice">{paneVoice}</div>
         <div class="pane-tools"><button data-tutorial="session-note" class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button>{isAgent(session)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{/* No `proc` chip. It was the only pane tool carrying no state of its own — `note` reports
             empty/written/open and `queue` its pending count, while `proc` was pure navigation — and
