@@ -1538,6 +1538,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .utility-drawer .drawer-note-host .project-resource>header{min-height:26px;padding:4px 9px}
 .utility-drawer .drawer-note-host .project-resource>header>div{gap:0}
 .utility-drawer .drawer-note-host .resource-actions button{min-width:0;padding:0 6px;font-size:9px}
+@media(min-width:761px){.utility-drawer .drawer-note-host .resource-actions .resource-find{order:-1;min-width:31px;padding:0 8px;font-size:13px}}
 /* A note is open in exactly one place, so the tab it left keeps its slot and says where it
    went rather than quietly rendering a second, conflicting editor. */
 .workspace-leaf-placeholder.note-in-drawer span{max-width:44ch}

@@ -46,6 +46,18 @@ def test_agent_pane_headers_omit_the_working_directory() -> None:
     assert ".pane-bar.agent-pane-bar { grid-template-columns:auto minmax(50px,1fr) auto }" in css
 
 
+def test_desktop_drawer_note_search_precedes_the_agent_action() -> None:
+    root = Path(__file__).parents[1]
+    source = (root / "frontend" / "src" / "ProjectResource.tsx").read_text(encoding="utf-8")
+    css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert 'class="resource-find"' in source
+    assert "@media(min-width:761px)" in css
+    assert ".drawer-note-host .resource-actions .resource-find{order:-1" in css
+    assert "min-width:31px" in css
+    assert "font-size:13px" in css
+
+
 def test_settings_panel_is_top_aligned_and_viewport_bounded() -> None:
     css = (Path(__file__).parents[1] / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 

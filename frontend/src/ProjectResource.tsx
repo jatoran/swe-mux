@@ -1022,7 +1022,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       {/* Continuity-backed views send the live selection (or the document); a plain-text
           editor owns no selection engine, so its send is always the whole document. */}
       {canSendText&&<button class="resource-send" title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}
-      {autosaved&&<button disabled={!editable} title="Find in this note" aria-label="Find in this note" onClick={openFind}>⌕</button>}
+      {autosaved&&<button class="resource-find" disabled={!editable} title="Find in this note" aria-label="Find in this note" onClick={openFind}>⌕</button>}
       {isDelimitedFile&&<><button class={fileViewMode==='preview'?'active':''} onClick={()=>setFileViewMode('preview')}>Table</button><button class={fileViewMode==='raw'?'active':''} onClick={()=>setFileViewMode('raw')}>Raw</button></>}
       {isFile&&!isMarkdownFile&&presentation?.kind!=='image'&&presentation?.kind!=='unsupported'&&(!isDelimitedFile||fileViewMode==='raw')&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}
     </div>:null}</header>
