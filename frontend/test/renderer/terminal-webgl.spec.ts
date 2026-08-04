@@ -82,3 +82,12 @@ test('a synthetic touch tap reaches xterm mouse tracking as press and release re
   expect(result.reports[0]).toMatch(/^\x1b\[<0;\d+;\d+M$/)
   expect(result.reports[1]).toMatch(/^\x1b\[<0;\d+;\d+m$/)
 })
+
+test('an unstyled Codex composer resolves against xterm buffer cells',async({page})=>{
+  await page.goto('/renderer-harness.html')
+  const result=await page.evaluate(()=>window.runUnstyledCodexCaretResolution())
+
+  expect(result.prefixBgMode).toBe(0)
+  expect(result.current).not.toBeNull()
+  expect(result.target).toEqual({column:4,row:result.current!.row})
+})

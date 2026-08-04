@@ -108,12 +108,34 @@ test('Codex target refuses scrollback and rows outside the draft',()=>{
   assert.equal(resolveCodexCaretTarget(snapshot(),{column:3,row:6}),null)
 })
 
-test('Codex target refuses an unstyled prompt that could be transcript text',()=>{
+test('Codex target resolves when palette detection leaves the composer unstyled',()=>{
   const state=snapshot()
   for(const line of state.lines){
     for(const cell of line.cells){cell.bgMode=0;cell.bg=0}
   }
+  assert.deepEqual(
+    resolveCodexCaretTarget(state,{column:3,row:3}),
+    {current:{column:7,row:4},target:{column:3,row:3},promptRow:3,textStart:2},
+  )
+})
+
+test('unstyled Codex target requires the blank composer frame around the cursor',()=>{
+  const state=snapshot()
+  for(const line of state.lines){
+    for(const cell of line.cells){cell.bgMode=0;cell.bg=0}
+  }
+  state.lines[2].cells[0]={chars:'x',code:120,width:1,bgMode:0,bg:0,dim:false}
   assert.equal(resolveCodexCaretTarget(state,{column:3,row:3}),null)
+
+  state.lines[2].cells[0]=blankCell()
+  state.lines[5].cells[0]={chars:'x',code:120,width:1,bgMode:0,bg:0,dim:false}
+  assert.equal(resolveCodexCaretTarget(state,{column:3,row:3}),null)
+})
+
+test('Codex Ultra live prefix resolves like the standard prefix',()=>{
+  const state=snapshot()
+  state.lines[3].cells[0]={chars:'»',code:'»'.codePointAt(0)??0,width:1,bgMode:1,bg:17,dim:false}
+  assert.deepEqual(resolveCodexCaretTarget(state,{column:4,row:3})?.target,{column:4,row:3})
 })
 
 test('empty Codex placeholder text is not mistaken for editable draft content',()=>{

@@ -50,6 +50,7 @@ export interface CaretSteerCommand {
 }
 
 const DEFAULT_BG_MODE = 0
+const CODEX_LIVE_PREFIXES = new Set(['›', '!', '»'])
 
 function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value))
@@ -65,6 +66,30 @@ function sameBackground(a: TerminalCaretCell | undefined, b: TerminalCaretCell |
   return !!a && !!b && a.bgMode === b.bgMode && a.bg === b.bg
 }
 
+function cellHasVisibleText(cell: TerminalCaretCell | undefined): boolean {
+  return !!cell && cell.code !== 0 && cell.chars.trim().length > 0
+}
+
+function rowIsBlank(snapshot: TerminalCaretSnapshot, row: number): boolean {
+  for (let column = 0; column < snapshot.cols; column += 1) {
+    if (cellHasVisibleText(cellAt(snapshot, row, column))) return false
+  }
+  return true
+}
+
+function rowHasEmptyGutter(
+  snapshot: TerminalCaretSnapshot,
+  row: number,
+  textStart: number,
+  prompt?: { row: number; column: number },
+): boolean {
+  for (let column = 0; column < textStart; column += 1) {
+    if (prompt?.row === row && prompt.column === column) continue
+    if (cellHasVisibleText(cellAt(snapshot, row, column))) return false
+  }
+  return true
+}
+
 function rowHasComposerBackground(
   snapshot: TerminalCaretSnapshot,
   row: number,
@@ -74,6 +99,31 @@ function rowHasComposerBackground(
   if (promptCell.bgMode === DEFAULT_BG_MODE) return true
   const probes = [promptColumn, Math.floor(snapshot.cols / 2), Math.max(0, snapshot.cols - 2)]
   return probes.every(column => sameBackground(cellAt(snapshot, row, column), promptCell))
+}
+
+/**
+ * Validate Codex's stable textarea frame when terminal palette detection leaves the
+ * composer unstyled. Codex renders a blank row above and below the textarea, keeps its
+ * live prefix in the left gutter, and places the hardware cursor inside that frame.
+ */
+function unstyledComposerLastRow(
+  snapshot: TerminalCaretSnapshot,
+  prompt: { row: number; column: number },
+  cursorRow: number,
+  textStart: number,
+): number | null {
+  if (prompt.row <= snapshot.viewportY || !rowIsBlank(snapshot, prompt.row - 1)) return null
+
+  for (let row = prompt.row; row <= cursorRow; row += 1) {
+    if (!rowHasEmptyGutter(snapshot, row, textStart, prompt)) return null
+  }
+
+  const viewportEnd = snapshot.viewportY + snapshot.rows
+  for (let row = cursorRow + 1; row < viewportEnd; row += 1) {
+    if (rowIsBlank(snapshot, row)) return row - 1
+    if (!rowHasEmptyGutter(snapshot, row, textStart)) return null
+  }
+  return null
 }
 
 function contentBoundary(
@@ -95,10 +145,12 @@ function contentBoundary(
  * Resolve a click/tap to a reachable cursor position inside Codex's live composer.
  *
  * Codex does not negotiate a terminal mouse protocol. Its stable observable contract is
- * the `›`/`!` live prefix, a two-column textarea inset, the composer background block,
- * and the hardware cursor. Refusing targets outside that structure is important: arrow
- * keys sent while a dialog, transcript, or ordinary terminal output is active would be
- * a real user-visible mutation rather than a harmless missed click.
+ * the `›`/`!`/`»` live prefix, a two-column textarea inset, the composer frame, and the
+ * hardware cursor. A distinct background is used when available, but Codex deliberately
+ * falls back to the terminal's default background when palette detection is unavailable.
+ * Refusing targets outside the remaining structure is important: arrow keys sent while a
+ * dialog, transcript, or ordinary terminal output is active would be a real user-visible
+ * mutation rather than a harmless missed click.
  */
 export function resolveCodexCaretTarget(
   snapshot: TerminalCaretSnapshot,
@@ -118,10 +170,7 @@ export function resolveCodexCaretTarget(
   for (let row = cursorRow; row >= snapshot.viewportY; row -= 1) {
     for (let column = 0; column <= Math.min(1, snapshot.cols - 1); column += 1) {
       const cell = cellAt(snapshot, row, column)
-      if (!cell || (cell.chars !== '›' && cell.chars !== '!')) continue
-      // Without Codex's distinct user-message background there is no reliable way to
-      // distinguish a live prefix from identical transcript text behind a dialog.
-      if (cell.bgMode === DEFAULT_BG_MODE) continue
+      if (!cell || !CODEX_LIVE_PREFIXES.has(cell.chars)) continue
       const textStart = column + 2
       if (current.column < textStart || !rowHasComposerBackground(snapshot, cursorRow, column, cell)) continue
       prompt = { row, column, cell }
@@ -132,15 +181,25 @@ export function resolveCodexCaretTarget(
   if (!prompt) return null
 
   const textStart = prompt.column + 2
+  const unstyledLastRow = prompt.cell.bgMode === DEFAULT_BG_MODE
+    ? unstyledComposerLastRow(snapshot, prompt, cursorRow, textStart)
+    : null
+  if (prompt.cell.bgMode === DEFAULT_BG_MODE && unstyledLastRow === null) return null
+
   let lastDraftRow = cursorRow
   for (let row = prompt.row; row < snapshot.viewportY + snapshot.rows; row += 1) {
-    if (!rowHasComposerBackground(snapshot, row, prompt.column, prompt.cell)) break
+    if (unstyledLastRow !== null) {
+      if (row > unstyledLastRow || !rowHasEmptyGutter(snapshot, row, textStart, prompt)) break
+    } else if (!rowHasComposerBackground(snapshot, row, prompt.column, prompt.cell)) break
     const ignorePlaceholder = row === prompt.row && current.row === prompt.row && current.column === textStart
     if (contentBoundary(snapshot, row, textStart, ignorePlaceholder) > textStart) lastDraftRow = row
   }
 
   const targetRow = clamp(requested.row, prompt.row, lastDraftRow)
-  if (targetRow !== requested.row || !rowHasComposerBackground(snapshot, targetRow, prompt.column, prompt.cell)) return null
+  const targetIsComposerRow = unstyledLastRow !== null
+    ? targetRow <= unstyledLastRow && rowHasEmptyGutter(snapshot, targetRow, textStart, prompt)
+    : rowHasComposerBackground(snapshot, targetRow, prompt.column, prompt.cell)
+  if (targetRow !== requested.row || !targetIsComposerRow) return null
   const ignorePlaceholder = targetRow === prompt.row && current.row === prompt.row && current.column === textStart
   const boundary = contentBoundary(snapshot, targetRow, textStart, ignorePlaceholder)
   let targetColumn = clamp(requested.column, textStart, boundary)

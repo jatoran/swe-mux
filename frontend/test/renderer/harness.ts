@@ -3,7 +3,11 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import { reflowVisibleTerminalRenderer } from '../../src/terminalViewport'
-import { dispatchTerminalMouseTap } from '../../src/terminalCaretPlacement'
+import {
+  dispatchTerminalMouseTap,
+  resolveCodexCaretTarget,
+  type TerminalCaretSnapshot,
+} from '../../src/terminalCaretPlacement'
 
 type DomDimensionRepairResult = {
   before: { width: string; height: string }
@@ -25,12 +29,19 @@ type SyntheticMouseTapResult = {
   reports: string[]
 }
 
+type UnstyledCodexCaretResult = {
+  prefixBgMode: number
+  current: { column: number; row: number } | null
+  target: { column: number; row: number } | null
+}
+
 declare global {
   interface Window {
     runTerminalRendererStress: () => Promise<{ renderer: 'dom' | 'webgl'; cols: number; rows: number }>
     runTerminalDomDimensionRepair: () => Promise<DomDimensionRepairResult>
     runTerminalMobileCursorInitialization: () => Promise<MobileCursorInitializationResult>
     runTerminalSyntheticMouseTap: () => Promise<SyntheticMouseTapResult>
+    runUnstyledCodexCaretResolution: () => Promise<UnstyledCodexCaretResult>
   }
 }
 
@@ -181,6 +192,56 @@ window.runTerminalSyntheticMouseTap = async () => {
   input.dispose()
   domTerm.dispose()
   return result
+}
+
+window.runUnstyledCodexCaretResolution = async () => {
+  host.style.display = 'none'
+  const domHost = document.querySelector<HTMLDivElement>('#dom-terminal')!
+  domHost.style.display = 'block'
+  const domTerm = new Terminal({fontFamily:'Consolas, monospace',fontSize:12})
+  const domFit = new FitAddon()
+  domTerm.loadAddon(domFit)
+  domTerm.open(domHost)
+  domFit.fit()
+
+  const promptRow=Math.max(2,domTerm.rows-4)
+  await writeTo(domTerm,`\x1b[2J\x1b[H\x1b[${promptRow+1};1H\x1b[1m›\x1b[22m alpha beta`)
+  await writeTo(domTerm,`\x1b[${promptRow+3};3H100% left\x1b[${promptRow+1};8H`)
+  const snapshot=caretSnapshot(domTerm)
+  const result=resolveCodexCaretTarget(snapshot,{column:4,row:promptRow})
+  const prefixBgMode=snapshot.lines[promptRow-snapshot.viewportY]?.cells[0]?.bgMode??-1
+  domTerm.dispose()
+  return {prefixBgMode,current:result?.current??null,target:result?.target??null}
+}
+
+function caretSnapshot(target:Terminal):TerminalCaretSnapshot {
+  const buffer=target.buffer.active
+  const lines=[]
+  for(let row=buffer.viewportY;row<buffer.viewportY+target.rows;row+=1){
+    const line=buffer.getLine(row)
+    const cells=[]
+    for(let column=0;column<target.cols;column+=1){
+      const cell=line?.getCell(column)
+      cells.push({
+        chars:cell?.getChars()??'',
+        code:cell?.getCode()??0,
+        width:cell?.getWidth()??1,
+        bgMode:cell?.getBgColorMode()??0,
+        bg:cell?.getBgColor()??0,
+        dim:cell?.isDim()===1,
+      })
+    }
+    lines.push({row,cells})
+  }
+  return {
+    cols:target.cols,
+    rows:target.rows,
+    viewportY:buffer.viewportY,
+    baseY:buffer.baseY,
+    cursorX:buffer.cursorX,
+    cursorY:buffer.cursorY,
+    lines,
+  }
 }
 
 function writeTo(target: Terminal, data: string): Promise<void> {

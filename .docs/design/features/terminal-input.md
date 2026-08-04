@@ -55,7 +55,8 @@ Desktop mouse events already enter xterm directly; touch release synthesizes the
 The later browser compatibility mouse event remains suppressed, so one tap produces one press/release pair.
 
 Codex enables no terminal mouse mode, so its path is bounded cursor steering rather than a fabricated mouse sequence.
-The client recognizes the bottom composer from Codex's `›`/`!` prefix, two-column text inset, background block, visible hardware cursor, and tail position, then sends unicast Left/Right batches through xterm's ordinary input path.
+The client recognizes the bottom composer from Codex's `›`/`!`/`»` prefix, two-column text inset, visible hardware cursor, tail position, and either its background block or its blank-row textarea frame, then sends unicast Left/Right batches through xterm's ordinary input path.
+The frame fallback is required because Codex deliberately uses the terminal's default background when its palette probe is unavailable.
 Each batch waits for Codex's redraw and re-reads the hardware cursor before continuing.
 If the movement crosses the target it switches to single-key precision; popup height changes are handled by anchoring the target row to the live prefix.
 The operation stops on user input, selection, resize, replay, ownership loss, buffer changes, hidden panes, missing progress, or a changed composer.
