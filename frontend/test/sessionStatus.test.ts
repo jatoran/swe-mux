@@ -107,6 +107,12 @@ test('shell sessions render the raw state', () => {
   assert.equal(sessionStatus(shell), 'running')
 })
 
+test('dense status chrome omits compaction counts', () => {
+  const status = sessionStatus(agent('working', { context_pct: 0.42, compaction_count: 3 }))
+  assert.equal(status, 'working · 42%')
+  assert.ok(!status.includes('compact'))
+})
+
 const ALL_ACTIVITY: StandingActivityKind[] = ['loop', 'cron', 'background_tasks', 'subagents']
 
 const annotation = (kind: StandingActivityKind, extra: Partial<StandingActivity> = {}): StandingActivity =>

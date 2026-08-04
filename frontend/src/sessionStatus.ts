@@ -132,18 +132,17 @@ export function activityBadges(session: Session): ActivityBadge[] {
 export function sessionStatus(session: Session): string {
   if (!isAgentBackend(session)) return session.state
   const context = session.context_pct > 0 ? ` · ${Math.round(session.context_pct * 100)}%` : ''
-  const compactions = session.compaction_count > 0 ? ` · compacted ${session.compaction_count}×` : ''
   const badges = activityBadges(session)
   const standing = badges.map(badge => ` · ${badge.label}`).join('')
-  if (session.state === 'working') return `working${session.state_detail ? ` · ${session.state_detail}` : ''}${standing}${context}${compactions}`
+  if (session.state === 'working') return `working${session.state_detail ? ` · ${session.state_detail}` : ''}${standing}${context}`
   if (session.state === 'idle') {
     // The background annotation supersedes the derived idle_reason text: one
     // fact must not render twice ("background work running · 2 background
     // tasks"). With any badge present, "ready" alone keeps the line scannable.
     const base = badges.length ? 'ready' : idleLabel(session)
-    return `${base}${standing}${context}${compactions}`
+    return `${base}${standing}${context}`
   }
-  if (session.state === 'awaiting') return `${awaitingLabel(session)}${session.state_detail ? ` · ${session.state_detail}` : ''}${standing}${context}${compactions}`
+  if (session.state === 'awaiting') return `${awaitingLabel(session)}${session.state_detail ? ` · ${session.state_detail}` : ''}${standing}${context}`
   if (session.state === 'starting') return 'starting agent…'
-  return `${session.state}${context}${compactions}`
+  return `${session.state}${context}`
 }
