@@ -6,20 +6,23 @@ id = "29a044bb-a06b-4216-95e4-39c5e91d48fb"
 # swe-mux Agentic Controle Plane (ACP)
 
 
-in the agent context right sidebar drawer section - can we also show global claude/agents files as well
+maybe a global notes scratchpad. project agnostic
 
+- in the right sidebar drawer: each separate section should show the section title at the top of its drawer content (File Explorer, Clipboard History, Commands), etc. Right now it doesnt display those titles in any of them and so if you dont know what any are, you wont know what you're looking at
 
-OPINIONS.md
-VOICE.md
-symlinking agents and claude
-rtk hmm
+- in the right sidebar drawer notes section:
+	- ability to delete session notes
+	- make the projetc note button a bit more standout so it is clearly a button or something and shows its size as well, right now its small compared to the session note cards
+
+ability to tap, on mobile in agent sessions, to a specific part of your chat input (this doesn't work on native codex on desktop, but it works on claude code.. hmm). i wonder if we can just make it work foe both? to move the carat to wherever you tap or click in your currently being typed message in these agent cli sessions?
+	codex never allowed this, but maybe with swe-mux we can enable this completelyfor both CLI?
+
 
 codex:
 	Treat the 703 MiB log database as suspect. Do not modify it while Codex processes are using it. A controlled cleanup would require stopping all Codex processes, backing up the SQLite files, and letting Codex recreate the diagnostic database. That is an upstream workaround, not a supported swe-mux operation.
 
 
 
-maybe a global notes scratchpad. project agnostic
 
 
 on mobile, all current agents were idle, but I kept getting notifications that agent is ready. or that it was waiting for my input. annoying.
@@ -78,7 +81,6 @@ task list - that an agent can check off and add comments too - maybe replace or 
 - [ ] the remaining roadmap updates
 
 
-ability to tap, on mobile in agent sessions, to a specific part of your chat input (this doesn't work on native codex on desktop, but it works on claude code.. hmm). i wonder if we can just make it work foe both? to move the carat to wherever you tap or click in your currently being typed message in these agent cli sessions?
 
 
 on mobile agent sessions:
