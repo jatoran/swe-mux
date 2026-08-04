@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   AGENT_CONTEXT_SYNC_OPTIONS,
   AGENT_CONTEXT_DESKTOP_MENU_QUERY,
+  AGENT_CONTEXT_DISCLOSURE_DEFAULTS,
   agentContextSourceMenuEnabled,
   backupAction,
   comparisonLabel,
@@ -48,4 +49,12 @@ test('source reveal menus require a real file and a desktop pointer', () => {
   assert.equal(agentContextSourceMenuEnabled({ revealable: true }, true), true)
   assert.equal(agentContextSourceMenuEnabled({ revealable: true }, false), false)
   assert.equal(agentContextSourceMenuEnabled({ revealable: false }, true), false)
+})
+
+test('only Project instructions are expanded by default', () => {
+  assert.deepEqual(AGENT_CONTEXT_DISCLOSURE_DEFAULTS, {
+    projectInstructions: true,
+    globalInstructions: false,
+    memories: false,
+  })
 })

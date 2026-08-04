@@ -19,6 +19,11 @@ export interface AgentContextSource {
 }
 
 export const AGENT_CONTEXT_DESKTOP_MENU_QUERY = '(pointer:fine) and (min-width:761px)'
+export const AGENT_CONTEXT_DISCLOSURE_DEFAULTS = {
+  projectInstructions: true,
+  globalInstructions: false,
+  memories: false,
+} as const
 
 export function agentContextSourceMenuEnabled(
   source: Pick<AgentContextSource, 'revealable'>,

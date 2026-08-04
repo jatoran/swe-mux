@@ -1744,15 +1744,22 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .agent-context-header>div{flex:1;min-width:0;display:grid;gap:2px}
 .agent-context-header strong{font-size:10px}
 .agent-context-header small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
-.agent-context-header button,.agent-context-section button,.agent-context-confirm button,.agent-context-sync-card button{min-height:27px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:8px;cursor:pointer}
-.agent-context-header button:hover:not(:disabled),.agent-context-section button:hover:not(:disabled),.agent-context-confirm button:hover:not(:disabled),.agent-context-sync-card button:hover:not(:disabled){border-color:var(--accent)}
+.agent-context-header button,.agent-context-disclosure button,.agent-context-confirm button,.agent-context-sync-card button{min-height:27px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:8px;cursor:pointer}
+.agent-context-header button:hover:not(:disabled),.agent-context-disclosure button:hover:not(:disabled),.agent-context-confirm button:hover:not(:disabled),.agent-context-sync-card button:hover:not(:disabled){border-color:var(--accent)}
 .agent-context button:disabled{opacity:.45;cursor:not-allowed}
 .agent-context-notice{margin:0;padding:7px 9px;border-bottom:1px solid color-mix(in srgb,var(--green) 45%,var(--line));background:color-mix(in srgb,var(--green) 8%,var(--panel));color:var(--green);font-size:8px;line-height:1.45}
 .agent-context-notice.error{border-color:color-mix(in srgb,var(--red) 45%,var(--line));background:color-mix(in srgb,var(--red) 8%,var(--panel));color:var(--red)}
-.agent-context-section{display:grid;gap:7px;padding:9px;border-bottom:1px solid var(--line);background:var(--panel)}
-.agent-context-section>header{display:flex;align-items:center;gap:6px}
-.agent-context-section h4{flex:1;margin:0;color:var(--text);font-size:9px;text-transform:uppercase;letter-spacing:.05em}
-.agent-context-section>p{margin:0;color:var(--muted);font-size:8px;line-height:1.45}
+.agent-context-disclosure{border-bottom:1px solid var(--line);background:var(--panel)}
+.agent-context-disclosure>summary{display:flex;align-items:center;gap:6px;padding:9px;color:var(--text);cursor:pointer;list-style:none;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.agent-context-disclosure>summary::-webkit-details-marker{display:none}
+.agent-context-disclosure>summary:before{content:'›';color:var(--muted);font-size:13px;line-height:1;transform-origin:center;transition:transform .12s ease}
+.agent-context-disclosure[open]>summary:before{transform:rotate(90deg)}
+.agent-context-disclosure>summary:hover{background:color-mix(in srgb,var(--text) 4%,var(--panel))}
+.agent-context-disclosure>summary span{flex:1}
+.agent-context-disclosure-body{display:grid;gap:7px;padding:9px;border-top:1px solid var(--line);background:var(--panel)}
+.agent-context-disclosure-body>p,.agent-context-disclosure-intro>p{margin:0;color:var(--muted);font-size:8px;line-height:1.45}
+.agent-context-disclosure-intro{display:flex;align-items:start;gap:8px}
+.agent-context-disclosure-intro>p{flex:1}
 .context-state,.context-comparison{flex:none;padding:1px 4px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:7px;font-style:normal;text-transform:uppercase;letter-spacing:.03em}
 .context-state.available,.context-comparison.in_sync{border-color:color-mix(in srgb,var(--green) 55%,var(--line));color:var(--green)}
 .context-state.unreadable,.context-state.too_large,.context-comparison.different{border-color:color-mix(in srgb,var(--amber) 55%,var(--line));color:var(--amber)}
@@ -1767,15 +1774,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .agent-context-source-flags{min-width:0;display:flex;align-items:center;gap:4px;flex-wrap:wrap}
 .agent-context-source strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:9px;white-space:nowrap}
 .agent-context-source small{overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:7px;line-height:1.35;white-space:nowrap}
-.agent-context-memories{border-bottom:1px solid var(--line);background:var(--panel)}
-.agent-context-memories>summary{display:flex;align-items:center;gap:6px;padding:9px;color:var(--text);cursor:pointer;list-style:none;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
-.agent-context-memories>summary::-webkit-details-marker{display:none}
-.agent-context-memories>summary:before{content:'›';color:var(--muted);font-size:13px;line-height:1;transform-origin:center;transition:transform .12s ease}
-.agent-context-memories[open]>summary:before{transform:rotate(90deg)}
-.agent-context-memories>summary span{flex:1}
 .agent-context-memories>summary i{padding:1px 5px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:7px;font-style:normal;font-weight:400;letter-spacing:.02em}
-.agent-context-memory-list{display:grid;border-top:1px solid var(--line)}
-.agent-context-memory-provider{display:grid;gap:7px;padding:9px;background:var(--panel)}
+.agent-context-memory-list{display:grid;border-top:1px solid var(--line);background:var(--bg)}
+.agent-context-memory-provider{display:grid;gap:7px;padding:9px;background:var(--bg)}
 .agent-context-memory-provider+.agent-context-memory-provider{border-top:1px solid var(--line)}
 .agent-context-memory-provider>header{display:flex;align-items:center;gap:6px}
 .agent-context-memory-provider h4{flex:1;margin:0;color:var(--text);font-size:9px;text-transform:uppercase;letter-spacing:.05em}
@@ -1971,7 +1972,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .drawer-grid button{min-height:46px}
   .drawer-fields input{min-height:38px;font-size:16px}
   .drawer-actions button{min-height:40px}
-  .agent-context-header button,.agent-context-section button,.agent-context-confirm button,.agent-context-sync-card button{min-height:38px}
+  .agent-context-header button,.agent-context-disclosure button,.agent-context-confirm button,.agent-context-sync-card button{min-height:38px}
   .agent-context-sync{grid-template-columns:1fr}
   .agent-context-sync>strong,.agent-context-sync>small{grid-column:auto}
 }

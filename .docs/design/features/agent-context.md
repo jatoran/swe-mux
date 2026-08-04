@@ -15,14 +15,15 @@ root instruction files. There is no automatic, watched, scheduled, or startup sy
 The utility drawer's **Context** tab is titled **Agent Context** in its body and follows Notes in
 the project-scoped block. It contains:
 
-- the Project-root `CLAUDE.md` and `AGENTS.md`, including typed availability, byte size,
-  modification time, line-ending style, and whether each revision changed since this daemon
-  run began;
-- the fixed global instruction sources `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` with the
-  same read-only metadata;
+- an initially expanded **Project instructions** disclosure for Project-root `CLAUDE.md` and
+  `AGENTS.md`, including typed availability, byte size, modification time, line-ending style,
+  and whether each revision changed since this daemon run began;
+- an initially collapsed **Global instructions** disclosure for fixed
+  `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`, with the same read-only metadata;
 - an `in_sync | different | missing` comparison after normalizing CRLF/CR to LF;
-- one collapsed **Memories** disclosure whose badge counts the complete provider inventory;
-  expanding it shows Claude's learned `MEMORY.md` and Markdown topic files plus provider status;
+- one initially collapsed **Memories** disclosure whose badge counts the complete provider
+  inventory; expanding it shows Claude's learned `MEMORY.md` and Markdown topic files plus
+  provider status, using the same high-contrast file rows as the instruction disclosures;
 - an explicit Codex state (`disabled`, `unsupported`, or `unreadable`) rather than an empty list
   that implies no memory exists;
 - a read-only preformatted viewer and manual rescan; one `sync…` button opens a focus-trapped

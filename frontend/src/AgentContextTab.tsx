@@ -3,6 +3,7 @@ import { api, type ApiError } from './api'
 import {
   AGENT_CONTEXT_SYNC_OPTIONS,
   AGENT_CONTEXT_DESKTOP_MENU_QUERY,
+  AGENT_CONTEXT_DISCLOSURE_DEFAULTS,
   agentContextSourceMenuEnabled,
   backupAction,
   comparisonLabel,
@@ -333,45 +334,63 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       {error || message}
     </p>}
 
-    <section class="agent-context-section">
-      <header>
-        <h4>Project instructions</h4>
+    <details
+      key={`project-instructions:${project.id}`}
+      class="agent-context-disclosure agent-context-instructions"
+      open={AGENT_CONTEXT_DISCLOSURE_DEFAULTS.projectInstructions}
+    >
+      <summary>
+        <span>Project instructions</span>
         {inventory && <i class={`context-comparison ${inventory.instructions.comparison}`}>
           {comparisonLabel(inventory.instructions.comparison)}
         </i>}
-        <button disabled={!inventory || !!busy} onClick={() => setSyncOpen(true)}>sync…</button>
-      </header>
-      <p>Root instruction files read by Claude and Codex. Viewing never edits them.</p>
-      <div class="agent-context-sources">
-        {instructions.map(item => <SourceRow
-          key={item.id}
-          item={item}
-          selected={selectedId === item.id}
-          focusedBackend={focusedAgent?.backend}
-          runStartedAt={focusedAgent?.agent_run_started_at}
-          onOpen={setSelectedId}
-          onRevealMenu={(item, x, y) => setSourceMenu({ item, x, y })}
-        />)}
+      </summary>
+      <div class="agent-context-disclosure-body">
+        <div class="agent-context-disclosure-intro">
+          <p>Root instruction files read by Claude and Codex. Viewing never edits them.</p>
+          <button disabled={!inventory || !!busy} onClick={() => setSyncOpen(true)}>sync…</button>
+        </div>
+        <div class="agent-context-sources">
+          {instructions.map(item => <SourceRow
+            key={item.id}
+            item={item}
+            selected={selectedId === item.id}
+            focusedBackend={focusedAgent?.backend}
+            runStartedAt={focusedAgent?.agent_run_started_at}
+            onOpen={setSelectedId}
+            onRevealMenu={(item, x, y) => setSourceMenu({ item, x, y })}
+          />)}
+        </div>
       </div>
-    </section>
+    </details>
 
-    <section class="agent-context-section">
-      <header><h4>Global instructions</h4></header>
-      <p>User-level instruction files shared by every Project for each provider.</p>
-      <div class="agent-context-sources">
-        {globalInstructions.map(item => <SourceRow
-          key={item.id}
-          item={item}
-          selected={selectedId === item.id}
-          focusedBackend={focusedAgent?.backend}
-          runStartedAt={focusedAgent?.agent_run_started_at}
-          onOpen={setSelectedId}
-          onRevealMenu={(item, x, y) => setSourceMenu({ item, x, y })}
-        />)}
+    <details
+      key={`global-instructions:${project.id}`}
+      class="agent-context-disclosure agent-context-instructions"
+      open={AGENT_CONTEXT_DISCLOSURE_DEFAULTS.globalInstructions}
+    >
+      <summary><span>Global instructions</span></summary>
+      <div class="agent-context-disclosure-body">
+        <p>User-level instruction files shared by every Project for each provider.</p>
+        <div class="agent-context-sources">
+          {globalInstructions.map(item => <SourceRow
+            key={item.id}
+            item={item}
+            selected={selectedId === item.id}
+            focusedBackend={focusedAgent?.backend}
+            runStartedAt={focusedAgent?.agent_run_started_at}
+            onOpen={setSelectedId}
+            onRevealMenu={(item, x, y) => setSourceMenu({ item, x, y })}
+          />)}
+        </div>
       </div>
-    </section>
+    </details>
 
-    <details class="agent-context-memories">
+    <details
+      key={`memories:${project.id}`}
+      class="agent-context-disclosure agent-context-memories"
+      open={AGENT_CONTEXT_DISCLOSURE_DEFAULTS.memories}
+    >
       <summary>
         <span>Memories</span>
         <i>{memories} file{memories === 1 ? '' : 's'}</i>
