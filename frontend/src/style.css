@@ -1128,7 +1128,9 @@ body {
    Overflow belongs only to the inner strip so Send never moves with its siblings. */
 .terminal-action-rail{grid-row:2;grid-column:1;min-width:0;min-height:34px;display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;border-top:1px solid var(--line);background:var(--panel)}
 .terminal-action-rail.mobile-pinned-send{grid-template-columns:minmax(0,1fr) auto}
-.terminal-action-scroll{min-width:0;display:flex;align-items:center;gap:5px;padding:3px 7px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;touch-action:pan-x;-webkit-overflow-scrolling:touch}
+.terminal-action-scroller{position:relative;min-width:0;overflow:hidden}
+.terminal-action-scroll{width:100%;height:100%;min-width:0;display:flex;align-items:center;gap:5px;padding:3px 7px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;touch-action:pan-x;-webkit-overflow-scrolling:touch}
+.terminal-action-scroll::-webkit-scrollbar{display:none}
 .terminal-action-scroll>*{flex:0 0 auto}
 .terminal-action-rail .terminal-mobile-send{align-self:center;min-width:72px;margin:3px 7px 3px 0;border-color:color-mix(in srgb,var(--green) 60%,var(--line));background:color-mix(in srgb,var(--green) 10%,var(--panel2));color:var(--green);font-weight:700}
 .terminal-action-rail .term-key{min-width:30px;padding:0 6px}
@@ -1203,13 +1205,19 @@ body {
    as a class on click (never pointerdown — the rail scrolls, so a finger landing on
    a button may be a drag) and cleared on animationend (see TerminalPane). */
 @media(hover:hover){.terminal-action-rail button:hover:not(:disabled){border-color:var(--green);color:var(--green)}}
+.terminal-action-rail button.rail-scroll-edge{position:absolute;z-index:2;top:0;bottom:0;width:28px;min-width:28px;height:100%;padding:0;border:0;border-radius:0;color:color-mix(in srgb,var(--text) 76%,var(--muted));font-size:16px;line-height:1;transition:color .12s ease,background-color .12s ease}
+.terminal-action-rail button.rail-scroll-left{left:0;padding-right:8px;background:linear-gradient(to right,var(--panel) 28%,color-mix(in srgb,var(--panel) 90%,transparent) 62%,transparent)}
+.terminal-action-rail button.rail-scroll-right{right:0;padding-left:8px;background:linear-gradient(to left,var(--panel) 28%,color-mix(in srgb,var(--panel) 90%,transparent) 62%,transparent)}
+@media(hover:hover){.terminal-action-rail button.rail-scroll-edge:hover{color:var(--green)}.terminal-action-rail button.rail-scroll-left:hover{background:linear-gradient(to right,var(--panel) 28%,color-mix(in srgb,var(--green) 11%,var(--panel)) 62%,transparent)}.terminal-action-rail button.rail-scroll-right:hover{background:linear-gradient(to left,var(--panel) 28%,color-mix(in srgb,var(--green) 11%,var(--panel)) 62%,transparent)}}
+.terminal-action-rail button.rail-scroll-edge:active{color:var(--green)}
+.terminal-action-rail button.rail-scroll-edge:focus-visible{outline-offset:-3px}
 .terminal-action-rail button.rail-pulse:not(:disabled){animation:rail-pulse .34s ease-out}
 @keyframes rail-pulse{
   0%{border-color:var(--green);color:var(--green);background:color-mix(in srgb,var(--green) 26%,var(--panel2));box-shadow:0 0 0 0 color-mix(in srgb,var(--green) 50%,transparent)}
   70%{border-color:var(--green);color:var(--green);box-shadow:0 0 0 4px transparent}
   100%{box-shadow:0 0 0 0 transparent}
 }
-@media(prefers-reduced-motion:reduce){.terminal-action-rail button.rail-pulse:not(:disabled){animation-duration:.12s}}
+@media(prefers-reduced-motion:reduce){.terminal-action-rail button.rail-pulse:not(:disabled){animation-duration:.12s}.terminal-action-rail button.rail-scroll-edge{transition:none}}
 /* End session: destructive, so it reads red on hover instead of the rail's green,
    and fills in once armed — the armed state is the only thing distinguishing a
    click that focuses the confirm from the click that actually kills the pty. */

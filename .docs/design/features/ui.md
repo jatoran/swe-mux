@@ -684,8 +684,11 @@ responsive controls.
   broadcast, replay, and read/select mode keep applying. With no terminal focused the tab says so instead of rendering
   dead buttons. Keys inject
   raw bytes on the normal input path. The built-in newline uses `ESC+CR`, the legacy sequence both
-  Claude and Codex bind to composer newline; raw LF works in Claude but not Codex. The rail overflows on narrow panes and scrolls
-  horizontally (touch drag, scrollbar, or mouse wheel); it never wraps. Voice controls are not
+  Claude and Codex bind to composer newline; raw LF works in Claude but not Codex.
+  The rail overflows on narrow panes and scrolls horizontally; it never wraps.
+  The scrollbar stays hidden: endpoint-aware gradient chevrons overlay the strip without taking layout space, appear only when content remains in their direction, page to a command boundary on click, and keep focused commands clear of the overlays.
+  Touch drag, native horizontal trackpad input, and translated vertical mouse-wheel input remain direct scrolling paths.
+  Voice controls are not
   here — they are in the pane header (`voice.md`), because the rail is a scroller the user pages
   through and they kept scrolling out of reach.
 - Below the configured rail items, an agent session's Commands tab lists **the skills that
