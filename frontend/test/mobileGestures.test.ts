@@ -5,13 +5,53 @@ import {
   defaultMobileGestureSettings,
   GESTURE_SLOTS,
   mobileGestureSettings,
+  pathOwnsHorizontalScroll,
   resolveGestureCommand,
   swipeAwayCloseEnabled,
 } from '../src/mobileGestures.ts'
 
+type FakeElement = {
+  className: string
+  scrollWidth: number
+  clientWidth: number
+  overflowX: string
+  matches: (selector: string) => boolean
+}
+
+function fakeElement(className: string, scrollWidth: number, clientWidth: number, overflowX: string): FakeElement {
+  return {
+    className,
+    scrollWidth,
+    clientWidth,
+    overflowX,
+    matches: selector => selector.split(',').some(token => token.trim() === `.${className}`),
+  }
+}
+
 test('single-finger horizontal swipes map to tab navigation slots', () => {
   assert.equal(classifyGesture({ pointerCount: 1, dx: -80, dy: 10, durationMs: 120 }), 'swipe_left')
   assert.equal(classifyGesture({ pointerCount: 1, dx: 80, dy: -10, durationMs: 120 }), 'swipe_right')
+})
+
+test('a composed path exposes an overflowing scroller inside a shadow root', () => {
+  const button = fakeElement('command-rail-button', 48, 48, 'visible')
+  const shadowStrip = fakeElement('command-rail-buttons', 520, 300, 'auto')
+  const host = fakeElement('note-editor', 390, 390, 'hidden')
+  const overflowX = (element: FakeElement) => element.overflowX
+
+  // A window listener's retargeted event.target sees only the host and misses
+  // the internal strip. TouchEvent.composedPath() includes both.
+  assert.equal(pathOwnsHorizontalScroll([host], overflowX), false)
+  assert.equal(pathOwnsHorizontalScroll([button, shadowStrip, host], overflowX), true)
+})
+
+test('horizontal scroll ownership requires overflow or a registered strip', () => {
+  const fittingStrip = fakeElement('command-rail-buttons', 300, 300, 'auto')
+  const registeredStrip = fakeElement('terminal-action-rail', 300, 300, 'hidden')
+  const overflowX = (element: FakeElement) => element.overflowX
+
+  assert.equal(pathOwnsHorizontalScroll([fittingStrip], overflowX), false)
+  assert.equal(pathOwnsHorizontalScroll([registeredStrip], overflowX), true)
 })
 
 test('vertical single-finger drags are left to the terminal', () => {

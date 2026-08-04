@@ -507,6 +507,10 @@ responsive controls.
   server-side, so adding one requires the same slot list in `config.py`.
 - The gesture recognizer yields to anything that owns horizontal scrolling (the action rail,
   tab strips, the voice strip, plus a generic `overflow-x` scan), and it must yield *cheaply*.
+  Ownership is resolved from the touch event's **composed path**, not `event.target` plus
+  `parentElement`: shadow-DOM retargeting hides an embedded component's internal scroller from
+  ordinary ancestor walks. This is how Continuity's command rail keeps horizontal touch drags
+  inside the editor instead of turning them into swe-mux tab or panel gestures.
   Only the `touchmove` listener ever calls `preventDefault`, and a non-passive `touchmove`
   registered on `window` forces Chrome to route every touch through the main thread before it
   may scroll — on a busy pane that is enough to swallow the first drag on the rail. So

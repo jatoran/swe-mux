@@ -77,7 +77,7 @@ import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { dismissSoftKeyboard, softKeyboardHolder } from './mobileKeyboard'
-import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
+import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import { reorderForHover, reorderTargetFromContainer, type DropSide, type ReorderAxis } from './dragReorder'
 import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from './pointerDragClaim'
@@ -2783,25 +2783,17 @@ export function App() {
       for (let i = 0; i < touches.length; i++) { x += touches[i].clientX; y += touches[i].clientY }
       return { x: x / touches.length, y: y / touches.length }
     }
-    // Horizontal swipe nav must yield to elements that own horizontal scrolling — the
-    // command rail, tab strips, etc. — or their native scroll gets hijacked into a tab
-    // switch. Named strips plus a generic overflow-x scan cover current and future ones.
-    const startsInHorizontalScroller = (element: Element | null) => {
-      for (let node = element; node && node !== document.body; node = node.parentElement) {
-        if (node.matches('.terminal-action-rail, .stack-tabs, .voice-strip')) return true
-        const overflowX = getComputedStyle(node).overflowX
-        if ((overflowX === 'auto' || overflowX === 'scroll') && node.scrollWidth > node.clientWidth + 1) return true
-      }
-      return false
-    }
     const onStart = (event: TouchEvent) => {
       const target = event.target
+      // Use the composed path rather than parentElement so a scroller inside an
+      // open shadow root, including Continuity's command rail, keeps its drag.
+      const path = event.composedPath().filter((node): node is Element => node instanceof Element)
       // Act over the workspace, the sidebar, or its scrim (so a swipe over the dimmed
       // area toggles the open sidebar shut). Taps inside modals/menus/palette match none
       // of these, so open overlays stay immune to gesture hijacking.
       // The utility drawer and its scrim are included so the leftward two-finger
       // swipe that pulls the drawer in can also push it back out from over it.
-      if (!(target instanceof Element) || !target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim, .utility-drawer, .utility-drawer-scrim') || startsInHorizontalScroller(target)) { state = null; detachMove(); return }
+      if (!(target instanceof Element) || !target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim, .utility-drawer, .utility-drawer-scrim') || pathOwnsHorizontalScroll(path, node => getComputedStyle(node).overflowX)) { state = null; detachMove(); return }
       // A drag that has claimed the pointer owns it outright (`pointerDragClaim.ts`); a
       // second finger landing mid-drag does not get to start a gesture behind it.
       if (pointerDragOwnsPointer()) { state = null; detachMove(); return }

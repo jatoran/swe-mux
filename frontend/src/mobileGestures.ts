@@ -77,6 +77,28 @@ export type GestureSample = {
   durationMs: number
 }
 
+type HorizontalScrollElement = Pick<Element, 'matches' | 'scrollWidth' | 'clientWidth'>
+
+const KNOWN_HORIZONTAL_SCROLLERS = '.terminal-action-rail, .stack-tabs, .voice-strip'
+
+/**
+ * Return whether a touch's composed event path crosses a horizontal scroller.
+ * The composed path is required here: a window listener sees a shadow-DOM touch
+ * target retargeted to its host, so walking `parentElement` cannot see an
+ * embedded component's internal scrolling strip.
+ */
+export function pathOwnsHorizontalScroll<T extends HorizontalScrollElement>(
+  path: readonly T[],
+  overflowX: (element: T) => string,
+): boolean {
+  for (const element of path) {
+    if (element.matches(KNOWN_HORIZONTAL_SCROLLERS)) return true
+    const overflow = overflowX(element)
+    if ((overflow === 'auto' || overflow === 'scroll') && element.scrollWidth > element.clientWidth + 1) return true
+  }
+  return false
+}
+
 export function classifyGesture(sample: GestureSample): GestureSlot | null {
   const { pointerCount, dx, dy, durationMs } = sample
   const absX = Math.abs(dx)
