@@ -225,7 +225,7 @@ test('commit graph parsing keeps Git connector rows and typed commits', () => {
         graph: '*   ',
         oid: 'aabbccdd00112233',
         parents: ['parent-a', 'parent-b'],
-        refs: ['HEAD', 'integration'],
+        refs: ['HEAD', 'master'],
         author: 'Ada',
         committed_at: 123,
         subject: 'Merge the map',

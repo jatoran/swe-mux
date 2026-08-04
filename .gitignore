@@ -10,6 +10,7 @@ desktop.ini
 
 # === Git ===
 .git/
+.claude/worktrees/
 
 # === Node.js ===
 node_modules/

@@ -48,14 +48,14 @@
   sibling `repo-old` is never read as inside `repo` and a nested worktree is not attributed
   to the repository root containing it.
 - Each worktree row reports **unlanded commits**: how many commits its branch holds that the
-  agent trunk (`integration`, overridable with `?trunk=`) does not. This is the answer to
-  "is there agent work sitting here that never reached master", which previously required
-  asking at a shell. Measured with one `for-each-ref` call using the `ahead-behind` atom,
+  shared trunk (`master`, overridable with `?trunk=`) does not. This answers whether a
+  worktree branch still contains work absent from the shared trunk. Measured with one
+  `for-each-ref` call using the `ahead-behind` atom,
   gated behind a cheap `show-ref` so a repo with no trunk pays nothing.
 - Opening/refreshing Map explicitly measures every listed non-bare worktree, including one
   with no attached session. `git status --porcelain=v2 -z --untracked-files=all` supplies
   local files. `git diff --name-status -z --find-renames
-  integration...<checked-out-branch>` supplies the branch delta. Each list carries the exact
+  master...<checked-out-branch>` supplies the branch delta. Each list carries the exact
   total and at most 200 file records; `truncated` says the list is a prefix. These calls are
   drawer-request work behind concurrency four, not additions to the five-second monitor.
 - **Unmeasured is `null`, never `0`.** A missing trunk, a failed call, or a timeout omits the
@@ -95,9 +95,9 @@
 
 ## Spawning a session into a worktree
 
-Parallel agent work needs a session *inside* the worktree, which collides with spawn
+Parallel agent work needs a session *inside* the worktree, which can collide with spawn
 containment: `resolve_contained_cwd` refuses any cwd outside the owning Project's root,
-and a worktree at `../.worktrees/<repo>/<slug>` is outside it by construction.
+and provider-managed worktrees may live outside that root.
 
 - `POST /api/git/worktrees` accepts an optional `spawn` object. When present, the worktree
   is created first and a session is then started with its cwd forced to the new tree; the
@@ -123,8 +123,8 @@ and a worktree at `../.worktrees/<repo>/<slug>` is outside it by construction.
 - **Dependency bootstrap is not performed.** A fresh worktree has no `.venv` or
   `node_modules`, and running a repo-authored setup script from an HTTP endpoint is
   untrusted code execution that belongs behind the Project Actions trust gate
-  (`project-actions.md`). Until that is wired, the spawned agent installs its own
-  dependencies, which is what `gwt new` does outside the API.
+  (`project-actions.md`). Until that is wired, the spawned agent runs `.worktree-setup`
+  or installs its own dependencies.
 
 ## Key files
 

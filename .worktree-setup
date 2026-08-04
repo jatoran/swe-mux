@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Bootstrap a fresh agent worktree. Run by `wt new <slug>` from inside the new
-# worktree; $WT_MAIN_ROOT points at the primary checkout.
+# Bootstrap a fresh provider-managed worktree from inside that worktree.
 #
-# Only gitignored state needs handling here — tracked files come with the checkout.
+# Only gitignored state needs handling here; tracked files come with the checkout.
 # swe-mux keeps its runtime state in ~/.mux (not in the repo), so there is no .env
 # or config to copy; the cost here is dependency installation.
 set -euo pipefail

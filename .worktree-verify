@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Gate for `wt land`. Must exit 0 or the branch does not land.
+# Canonical verification for a completed worktree branch.
 # Mirrors CLAUDE.md § Verification. Live-agent marks are excluded (they need a
 # real provider session and are not appropriate for an automated landing gate).
 #
-# This is safe to run in several worktrees at once — measured 2026-07-29, three
-# concurrent runs at 58/58/62s vs ~60s solo, 996 passed each. Do NOT set
-# WT_VERIFY_EXCLUSIVE=1; it would serialise lands for no benefit. CLAUDE.md
-# § Worktrees records why the suite is parallel-safe.
+# This is safe to run in several worktrees at once. Measured 2026-07-29, three
+# concurrent runs took 58/58/62s versus about 60s solo, with 996 passing in each.
+# CLAUDE.md records why the suite is parallel-safe.
 set -euo pipefail
 
 step() { printf '\n=== %s ===\n' "$*" >&2; }

@@ -7019,10 +7019,9 @@ async def hook_ingress(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
-# The branch parallel agent work lands onto before it reaches main/master. Worktree rows
-# are measured against it so unlanded work is visible rather than something you have to
-# remember to go looking for. Overridable per request; see `gwt` in ~/.claude/CLAUDE.md.
-DEFAULT_AGENT_TRUNK = "integration"
+# The shared development branch used to measure worktree-only commits and files.
+# It is overridable per request for repositories with another designated trunk.
+DEFAULT_SHARED_TRUNK = "master"
 GIT_CHANGE_FILE_LIMIT = 200
 GIT_GRAPH_DEFAULT_LIMIT = 80
 GIT_GRAPH_MAX_LIMIT = 200
@@ -7044,7 +7043,7 @@ async def list_worktrees(request: web.Request) -> web.Response:
             504 if code == 124 else 400,
         )
     items = _parse_worktrees(output)
-    trunk = request.query.get("trunk") or DEFAULT_AGENT_TRUNK
+    trunk = request.query.get("trunk") or DEFAULT_SHARED_TRUNK
     await asyncio.gather(
         _annotate_unlanded(cwd, trunk, items),
         _annotate_worktree_changes(cwd, trunk, items),
@@ -7182,7 +7181,7 @@ async def _annotate_worktree_changes(
     await asyncio.gather(*(measure(item) for item in items))
 
 
-async def unlanded_branch_counts(cwd: str, trunk: str = DEFAULT_AGENT_TRUNK) -> dict[str, int]:
+async def unlanded_branch_counts(cwd: str, trunk: str = DEFAULT_SHARED_TRUNK) -> dict[str, int]:
     """Commits each local branch holds that `trunk` does not, keyed by full refname.
 
     One `for-each-ref` call using the `ahead-behind` atom rather than a rev-list per

@@ -20,7 +20,7 @@ import type { Project, Session } from './types'
 // One repository, two readings:
 //
 //  * Map is the operational projection: one row per worktree, with uncommitted files,
-//    commits/files not yet in the agent trunk, and the live sessions using the directory.
+//    commits/files not yet in the shared trunk, and the live sessions using the directory.
 //  * Log is the repository's real commit DAG. Git computes the ASCII lanes; the browser
 //    styles them and attaches the structured commit metadata returned beside each prefix.
 //
@@ -36,7 +36,7 @@ type Props = {
 type RemoveState = { path: string; force: boolean; error: string }
 type GitView = 'map' | 'log'
 
-const AGENT_TRUNK = 'integration'
+const SHARED_TRUNK = 'master'
 const GRAPH_STEP = 80
 const GRAPH_MAX = 200
 
@@ -116,7 +116,7 @@ export function GitTab({ project, sessions }: Props) {
     try {
       const raw = await api<unknown>(
         'GET',
-        `/api/git/worktrees?cwd=${encodeURIComponent(root)}&trunk=${AGENT_TRUNK}`,
+        `/api/git/worktrees?cwd=${encodeURIComponent(root)}&trunk=${SHARED_TRUNK}`,
         undefined,
         { timeoutMs: 20000 },
       )
@@ -277,7 +277,7 @@ export function GitTab({ project, sessions }: Props) {
         <button role="tab" aria-selected={view === 'map'} onClick={() => setView('map')}>Map</button>
         <button role="tab" aria-selected={view === 'log'} onClick={() => setView('log')}>Log</button>
       </div>
-      <span class="git-trunk" title="Agent branches are measured against this branch">trunk:{AGENT_TRUNK}</span>
+      <span class="git-trunk" title="Worktree branches are measured against this branch">trunk:{SHARED_TRUNK}</span>
       <button class="git-toolbar-action" onClick={() => { setAdding(value => !value); setFormError('') }} aria-expanded={adding}>
         {adding ? 'Cancel' : '+ Worktree'}
       </button>
@@ -296,7 +296,7 @@ export function GitTab({ project, sessions }: Props) {
         </label>
         <label>
           <span>Start point</span>
-          <input value={form.start} spellcheck={false} placeholder={AGENT_TRUNK} onInput={event => setForm({ ...form, start: event.currentTarget.value })} />
+          <input value={form.start} spellcheck={false} placeholder={SHARED_TRUNK} onInput={event => setForm({ ...form, start: event.currentTarget.value })} />
         </label>
       </div>
       <button type="submit" disabled={busy === 'create'}>{busy === 'create' ? 'Creating…' : 'Create worktree'}</button>
@@ -357,10 +357,10 @@ export function GitTab({ project, sessions }: Props) {
                     unknown="Working-tree files could not be measured."
                   />
                   <ChangeList
-                    title={`BRANCH — NOT IN ${AGENT_TRUNK.toUpperCase()}`}
+                    title={`BRANCH - NOT IN ${SHARED_TRUNK.toUpperCase()}`}
                     summary={item.branchDelta}
-                    empty={`No files differ from ${AGENT_TRUNK}.`}
-                    unknown={`Branch files could not be measured against ${AGENT_TRUNK}.`}
+                    empty={`No files differ from ${SHARED_TRUNK}.`}
+                    unknown={`Branch files could not be measured against ${SHARED_TRUNK}.`}
                   />
                   <div class="git-map-actions">
                     {blocked

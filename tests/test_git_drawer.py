@@ -57,7 +57,7 @@ async def test_every_worktree_gets_local_and_trunk_relative_file_summaries(
         {"worktree": "C:/wt/map", "branch": "refs/heads/agent/map"},
         {"worktree": "C:/bare", "bare": True},
     ]
-    await server._annotate_worktree_changes("C:/repo", "integration", items)
+    await server._annotate_worktree_changes("C:/repo", "master", items)
 
     assert items[0]["working_tree"]["total"] == 1
     assert items[0]["branch_delta"]["total"] == 0
@@ -83,7 +83,7 @@ async def test_missing_trunk_does_not_hide_local_files_or_claim_a_branch_delta(
     items: list[dict[str, Any]] = [
         {"worktree": "C:/repo", "branch": "refs/heads/agent/map"}
     ]
-    await server._annotate_worktree_changes("C:/repo", "integration", items)
+    await server._annotate_worktree_changes("C:/repo", "master", items)
     assert items[0]["working_tree"]["total"] == 1
     assert "branch_delta" not in items[0]
 
@@ -94,7 +94,7 @@ def test_graph_parser_keeps_git_lanes_refs_and_connector_rows() -> None:
             "*   ",
             "a" * 40,
             f"{'b' * 40} {'c' * 40}",
-            "HEAD -> integration, tag: v1",
+            "HEAD -> master, tag: v1",
             "Ada",
             "1700000000",
             "Merge the map",
@@ -121,7 +121,7 @@ def test_graph_parser_keeps_git_lanes_refs_and_connector_rows() -> None:
         "commit",
         "connector",
     ]
-    assert lines[0]["refs"] == ["HEAD", "integration", "tag: v1"]
+    assert lines[0]["refs"] == ["HEAD", "master", "tag: v1"]
     assert lines[0]["parents"] == ["b" * 40, "c" * 40]
     assert lines[1]["graph"] == "|\\  "
 

@@ -798,7 +798,7 @@ not first-class frontend navigation.
 
 `GET /git/worktrees[?cwd=][&trunk=]` returns the porcelain worktree list. Each row that has
 a branch also carries `unlanded`: commits on that branch which `trunk` (default
-`integration`) does not have. The field is **absent** rather than `0` when it could not be
+`master`) does not have. The field is **absent** rather than `0` when it could not be
 measured — no such trunk, a Git failure, or a timeout — because zero would read as "nothing
 waiting to be landed". Each non-bare row also carries measured `working_tree` and, when the
 trunk/branch comparison succeeds, `branch_delta`:

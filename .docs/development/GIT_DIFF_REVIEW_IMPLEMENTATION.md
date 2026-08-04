@@ -49,9 +49,9 @@ Base-relative information must use an inferred comparison ref when possible, cle
 
 ### Neutral comparison-ref behavior
 
-- [ ] Remove hardcoded `integration` comparison behavior from `frontend/src/GitTab.tsx` and `src/swe_mux/server.py`.
+- [ ] Remove hardcoded comparison-branch behavior from `frontend/src/GitTab.tsx` and `src/swe_mux/server.py`.
 - [ ] Replace workflow terms such as `trunk`, `unlanded`, and `landed` in this UI and its new contracts with neutral terms such as `comparison ref`, `ahead`, `behind`, `changed`, and `matches`.
-- [ ] Keep upstream ahead/behind distinct from comparison-ref ahead/behind because an upstream is a push target, not necessarily the integration target.
+- [ ] Keep upstream ahead/behind distinct from comparison-ref ahead/behind because an upstream is a push target, not necessarily the comparison target.
 - [ ] Make the Git view fully usable when no comparison ref can be inferred.
 - [ ] Omit branch-relative commit and file claims when the comparison ref is unavailable or a Git call fails.
 - [ ] Preserve the invariant that unmeasured is `null` or absent and never a fabricated zero.
@@ -70,7 +70,7 @@ Base-relative information must use an inferred comparison ref when possible, cle
 - [ ] Infer a ref without network access or `git fetch` when there is no override.
 - [ ] Prefer the symbolic remote default `refs/remotes/origin/HEAD` when it resolves.
 - [ ] If `origin` is absent, accept the symbolic `HEAD` of exactly one other remote when unambiguous.
-- [ ] Fall back to the first resolving local ref in the documented order `main`, `master`, then `integration`.
+- [ ] Fall back to the first resolving local ref in the documented order `main`, then `master`.
 - [ ] Return no comparison ref when none of those sources resolves.
 - [ ] Return a bounded candidate list of local branches and remote-tracking branches, excluding symbolic `*/HEAD` aliases, for the selector.
 - [ ] Return the inference source as `project_override`, `origin_head`, `single_remote_head`, `local_fallback`, or `none` so the UI can explain the result.
@@ -532,7 +532,7 @@ type GitPatchSnapshot = {
 - [ ] Run the relevant Playwright renderer tests from `frontend/`.
 - [ ] Run `npm run build` from `frontend/`.
 - [ ] Confirm the production build contains one Preact runtime and lazy-loads the diff renderer.
-- [ ] Run `.worktree-verify` or rely on the identical `gwt land` gate when landing from an agent worktree.
+- [ ] Run `.worktree-verify` before integrating a completed worktree branch.
 
 ## Manual acceptance checklist
 
@@ -574,7 +574,7 @@ type GitPatchSnapshot = {
 - [ ] Update `.docs/CLAUDE.md` routing if the new worktree-file and Git-review paths need additional routed documents.
 - [ ] Verify every documented file path exists and every contract matches the implemented code.
 - [ ] Keep each complete sentence on its own physical Markdown line.
-- [ ] Remove stale hardcoded `integration`, `trunk`, `unlanded`, and `landed` descriptions from current-state documentation where they described this Git UI.
+- [ ] Remove stale hardcoded comparison-branch, `trunk`, `unlanded`, and `landed` descriptions from current-state documentation where they described this Git UI.
 
 ## Applying the completed update
 

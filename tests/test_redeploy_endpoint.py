@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -321,63 +320,3 @@ async def test_redeploy_env_scrub_covers_session_markers(
     response = await server.daemon_redeploy(FakeRequest(_app(tmp_path)))  # type: ignore[arg-type]
     assert response.status == 202
     assert marker not in captured["env"]
-
-
-def test_stale_trunk_detection_lists_commits_the_checkout_lacks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A build reads the working tree, so trunk commits it lacks would ship missing.
-
-    This exists because it already happened once: an agent landed four fixes, the
-    fast-forward of master was blocked by an unrelated dirty file, and the redeploy
-    built master and shipped none of them.
-    """
-    module = _redeploy_module()
-
-    def git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
-
-    git("init", "-q", "-b", "main")
-    git("config", "user.email", "t@t.t")
-    git("config", "user.name", "T")
-    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
-    git("add", "-A")
-    git("commit", "-qm", "base")
-    git("branch", "integration")
-    monkeypatch.setattr(module, "ROOT", tmp_path)
-
-    # Trunk level with HEAD: nothing missing.
-    assert module.unmerged_trunk_commits() == []
-
-    # Advance the trunk without touching HEAD, exactly what a land does.
-    git("worktree", "add", "-q", str(tmp_path / "wt"), "integration")
-    wt = tmp_path / "wt"
-    (wt / "b.txt").write_text("b", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=wt, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-qm", "landed fix"], cwd=wt, check=True, capture_output=True
-    )
-
-    stale = module.unmerged_trunk_commits()
-    assert len(stale) == 1
-    assert "landed fix" in stale[0]
-
-
-def test_stale_trunk_detection_is_silent_without_a_trunk(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Packaging must not start depending on git, or on this branch existing.
-    module = _redeploy_module()
-    subprocess.run(
-        ["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True, capture_output=True
-    )
-    monkeypatch.setattr(module, "ROOT", tmp_path)
-    assert module.unmerged_trunk_commits() == []
-
-
-def test_stale_trunk_detection_is_silent_outside_a_repo(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    module = _redeploy_module()
-    monkeypatch.setattr(module, "ROOT", tmp_path / "not-a-repo")
-    assert module.unmerged_trunk_commits() == []

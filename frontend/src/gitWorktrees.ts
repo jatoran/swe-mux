@@ -4,7 +4,7 @@
 //
 //  * `GET /api/git/worktrees` starts with `git worktree list --porcelain`, then annotates
 //    every tree with an explicit local-file summary and, where measurable, the files its
-//    checked-out branch changes relative to the agent trunk.
+//    checked-out branch changes relative to the shared trunk.
 //  * `git_monitor.py` polls the cwd of every *attached* session and mirrors branch, dirty
 //    count, and upstream divergence into that session's snapshot. Its remaining unique
 //    contribution here is live upstream divergence and session attribution.
@@ -47,14 +47,14 @@ export type Worktree = {
   prunable: string | null
   /** Git lists the main working tree first, and refuses to remove it. */
   main: boolean
-  /** Commits on this branch that the agent trunk does not have, so work that would be
+  /** Commits on this branch that the shared trunk does not have, so work that would be
    *  lost if the tree were removed. `null` means the daemon could not measure it (no
    *  trunk, or the Git call failed) — deliberately distinct from 0, because rendering an
    *  unmeasured tree as "nothing to land" is the one wrong answer here. */
   unlanded: number | null
   /** Uncommitted files in this worktree, measured when the drawer requested the inventory. */
   workingTree: GitChangeSummary | null
-  /** Files changed by this branch relative to the agent trunk's merge base. */
+  /** Files changed by this branch relative to the shared trunk's merge base. */
   branchDelta: GitChangeSummary | null
 }
 

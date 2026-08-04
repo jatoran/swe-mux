@@ -310,14 +310,9 @@ user/agent-facing triggers:
   below. Verify what's actually served by comparing the `index-*.css` hash from
   `curl -s http://127.0.0.1:<port>/` against `src/swe_mux/static/index.html`.
 - **Frozen redeploy** (`uv run python packaging/redeploy_desktop.py [--hidden|--no-launch|
-  --skip-build|--force|--allow-stale]`): first preflights that the agent trunk
-  (`integration`, or `$WT_TRUNK`) holds no commits this checkout lacks, and **aborts listing
-  them** if it does. A build takes its source from the working tree, so shipping a checkout
-  the trunk has outrun silently omits landed work — which has happened: an agent landed four
-  fixes, the fast-forward of `master` was blocked by an unrelated dirty file, and the
-  redeploy built `master` and shipped none of them. `gwt promote` fixes it; `--allow-stale`
-  ships anyway. The check is silent when there is no trunk, no repo, or no git, so packaging
-  does not start depending on git. It then preflights that a supervisor is running *outside*
+  --skip-build|--force]`) builds exactly the current checkout.
+  Worktree branches remain intentionally absent until they are integrated into `master`.
+  The command first preflights that a supervisor is running *outside*
   `dist/swe-mux`
   and that no legacy `swe-mux-action.exe` task terminals hold the dist tree (task steps no
   longer run any swe-mux binary, so only pre-removal terminals can), then runs a **staged**

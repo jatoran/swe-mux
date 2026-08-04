@@ -30,7 +30,7 @@ class FakeGit:
 AHEAD_BEHIND = (
     0,
     "refs/heads/master 0 0\n"
-    "refs/heads/integration 0 0\n"
+    "refs/heads/master 0 0\n"
     "refs/heads/agent/done 0 4\n"
     "refs/heads/agent/busy 3 1\n",
 )
@@ -111,7 +111,7 @@ async def test_rows_are_annotated_only_where_the_branch_was_measured(
         {"worktree": "C:/wt/detached", "detached": True},
         {"worktree": "C:/wt/unknown", "branch": "refs/heads/agent/never-heard-of"},
     ]
-    await server._annotate_unlanded("C:/repo", server.DEFAULT_AGENT_TRUNK, items)
+    await server._annotate_unlanded("C:/repo", server.DEFAULT_SHARED_TRUNK, items)
     assert items[0]["unlanded"] == 0
     assert items[1]["unlanded"] == 3
     assert items[2]["unlanded"] == 0
@@ -124,5 +124,5 @@ async def test_no_git_call_when_nothing_has_a_branch(monkeypatch: pytest.MonkeyP
     fake = FakeGit(**{"show-ref": (0, ""), "for-each-ref": AHEAD_BEHIND})
     monkeypatch.setattr(server, "_git", fake)
     items: list[dict[str, Any]] = [{"worktree": "C:/wt/a", "detached": True}]
-    await server._annotate_unlanded("C:/repo", server.DEFAULT_AGENT_TRUNK, items)
+    await server._annotate_unlanded("C:/repo", server.DEFAULT_SHARED_TRUNK, items)
     assert fake.calls == []

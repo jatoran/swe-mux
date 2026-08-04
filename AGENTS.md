@@ -53,11 +53,15 @@ Details, constraints, and the supervisor design: `.docs/development/SESSION_PRES
 `.docs/technical/backend/packages.md` (supervisor rules: hash-gated source closure, cwd-lock
 hazard, restart contract).
 
-## Worktrees and landing changes
+## Worktrees and parallel changes
 
-Parallel agent work happens in worktrees at `../.worktrees/swe-mux/<slug>` on `agent/*`
-branches, landing onto the `integration` trunk. The general rules and the `gwt` command
-live in `~/.claude/CLAUDE.md` § Git; this section covers what is specific to swe-mux.
+Use each provider's native worktree lifecycle: Claude Code native worktrees for Claude and
+Codex Worktree/Handoff for Codex.
+`master` is the single shared trunk; there is no agent-only integration branch or `gwt` landing flow.
+Claude worktrees own their generated branches.
+Codex-managed worktrees begin detached and use Create branch here before final commits.
+Worktree agents commit only their own branch.
+Reconcile a finished branch with current `master`, verify it, and integrate branches one at a time.
 
 **A worktree is for editing and testing, not for running the app.** Worktrees isolate the
 working tree, not the runtime. The daemon owns port 8765 and a single data dir at
@@ -66,9 +70,9 @@ app, or trigger a redeploy from inside a worktree — it will collide with the l
 and your real sessions. All of the session-preserving reload flows above apply to the
 **primary checkout only**.
 
-**Just `gwt land`.** Do NOT set `WT_VERIFY_EXCLUSIVE=1`: the suite is parallel-safe, so
-serialising verification only makes several agents finishing at once take N times longer
-for nothing.
+Run `.worktree-verify` directly in each finished worktree.
+The suite is parallel-safe, so serialising verification only makes several agents finishing
+at once take N times longer for nothing.
 
 Measured 2026-07-29 — two and then three worktrees running
 `.worktree-verify` simultaneously: 996 passed in each, at 58/58/62s against ~60s for a
@@ -81,8 +85,8 @@ tempted to re-add the lock on a hunch:
 - The SQLite files tests create live under `tests/`, which is per-worktree.
 - No test binds a port. Every `8765` in the suite is a string assertion.
 
-If any of those three stops being true, the lock is the stopgap — but fix the isolation
-instead, because serialised verification is the single biggest cost in a parallel land.
+If any of those three stops being true, a verification lock is a stopgap.
+Fix the isolation instead, because serialised verification is the largest cost in parallel work.
 
 Worktree bootstrap (`.worktree-setup`) is `uv sync` plus `npm ci`, sharing the uv and npm
 caches, so it is a dependency install rather than a download. It is not free: if agent
@@ -94,4 +98,4 @@ Backend: `uv run pytest tests -q -m "not live_agent and not live_subagent and no
 live_telemetry and not live_quota"`, `uv run ruff check src/swe_mux tests packaging`,
 `uv run mypy`. Frontend (in `frontend/`): `npx tsc --noEmit`, `npm test`.
 
-These are exactly what `.worktree-verify` runs, so `gwt land` gates on them automatically.
+These are exactly what `.worktree-verify` runs.
