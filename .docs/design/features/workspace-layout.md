@@ -69,12 +69,11 @@ PaneLeaf = terminal | note | preview | history | queue
   The workspace tab strip and the mobile projection each read `session.name` directly at one
   point, which is exactly the surface the title exists for: a strip of `claude-15036b`,
   `claude-77eaca`, `claude-34cebf` is unreadable while the sidebar beside it reads fine.
-- A tab strip that outgrows its pane scrolls sideways, and a plain wheel over it scrolls it.
-  The strip only ever overflows on one axis, so a vertical wheel there has no other meaning;
-  requiring Shift (the browser's only native way into an x-overflowing box) made the strip's
-  own scrollbar the discoverable route and cost a second hand. Events already carrying
-  horizontal intent — Shift+wheel, trackpad swipes — are left to the browser rather than
-  applied twice, and a strip that fits keeps its wheel events instead of swallowing them.
+- A tab strip that outgrows its pane scrolls sideways without exposing a scrollbar.
+  A soft edge fade and chevron appear only on sides with hidden content, occupy no layout space, and click-scroll to the next useful tab boundary.
+  Plain wheel input translates to horizontal movement because the strip only overflows on that axis.
+  Trackpad swipes, touch panning, and events already carrying horizontal intent remain native rather than being applied twice.
+  Selection and keyboard focus reveal the target tab automatically, and a strip that fits shows no affordance or consumes no wheel event.
 - The active tab carries an accent outline, a thick accent underline, and a tinted fill. A bare
   background swap is not enough: the previous treatment moved only `--panel` to `--bg`, a few
   RGB points that vanish on a phone screen in daylight and is easy to miss on desktop too. The

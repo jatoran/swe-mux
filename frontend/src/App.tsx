@@ -33,6 +33,7 @@ import { AccountSwitcher, providerGlyph, type ProviderName } from './ProviderAcc
 import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
 import { UtilityDrawer } from './UtilityDrawer'
+import { OverflowRail } from './RailScroller'
 import {
   DRAWER_COLLAPSE_WIDTH, DRAWER_PROJECT_STATE_KEY, DRAWER_REOPEN_WIDTH,
   DRAWER_DEFAULT_WIDTH, DRAWER_MIN_WIDTH, DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY,
@@ -95,7 +96,6 @@ import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, p
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import { reorderForHover, reorderTargetFromContainer, type DropSide, type ReorderAxis } from './dragReorder'
 import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from './pointerDragClaim'
-import { horizontalWheelDelta } from './wheelScroll'
 import { relativeStackTab } from './workspaceTabs'
 import {
   COLLAPSED_PROJECTS_KEY, canHideProject, describeOpenWork, loadCollapsedProjects,
@@ -129,21 +129,6 @@ function isAgent(session: Session) {
 
 function isEndedSession(session: Session) {
   return session.state === 'exited' || session.state === 'crashed'
-}
-
-/** Let a plain wheel scroll a tab strip that only overflows sideways.
- *
- * Shift+wheel is the browser's only native way in, which is not discoverable and
- * needs a second hand. `preventDefault` is deliberate: without it an overflowing
- * strip consumes the wheel *and* the page keeps whatever scroll chaining it would
- * have done, so the same notch moves two things.
- */
-function scrollStripByWheel(event:JSX.TargetedWheelEvent<HTMLDivElement>):void {
-  const strip=event.currentTarget
-  const delta=horizontalWheelDelta(event,strip)
-  if(!delta)return
-  event.preventDefault()
-  strip.scrollLeft+=delta
 }
 
 // One naming rule for every surface that shows a session: sidebar rows, workspace
@@ -671,7 +656,9 @@ export function App() {
         const stackId=pane.dataset.drawerStackId||''
         const targetStack=drawerStacks(base).find(stack=>stack.id===stackId)
         if(!targetStack){dragDrawerLayoutRef.current=null;dragDrawerTargetRef.current=null;showPointerDropIndicator(null);return}
-        const rail=hit?.closest<HTMLElement>('.drawer-tabs[data-drawer-stack-id]')||null
+        const rail=hit?.closest<HTMLElement>('.drawer-tabs[data-drawer-stack-id]')
+          ||hit?.closest<HTMLElement>('.drawer-tabs-rail')?.querySelector<HTMLElement>('.drawer-tabs[data-drawer-stack-id]')
+          ||null
         if(rail){
           const buttons=Array.from(rail.querySelectorAll<HTMLElement>(':scope > button[data-reorder-id]')).filter(button=>button.dataset.reorderId!==id)
           let index=buttons.length
@@ -1421,17 +1408,6 @@ export function App() {
    *  the layout carrying it is a refresh behind. A plain `setFocusedViewId` is undone by
    *  the reconciliation above before that refresh lands. */
   const requestFocusView=(id:string)=>{pendingFocusId.current=id;setFocusedViewId(id)}
-
-  useEffect(()=>{
-    if(!window.matchMedia('(max-width:760px)').matches)return
-    const frame=requestAnimationFrame(()=>{
-      const selected=document.querySelector<HTMLElement>('.mobile-unified-tabs [role="tab"][aria-selected="true"]')
-        ||document.querySelector<HTMLElement>('.pane-stack.focused-pane .stack-tabs [role="tab"][aria-selected="true"]')
-        ||document.querySelector<HTMLElement>('.pane-stack .stack-tabs [role="tab"][aria-selected="true"]')
-      selected?.scrollIntoView({block:'nearest',inline:'nearest'})
-    })
-    return()=>cancelAnimationFrame(frame)
-  },[projectId,focusedViewId,activeId,mobileWorkspace])
 
   useEffect(() => {
     if (focusHydrated || projects.length === 0) return
@@ -3112,7 +3088,7 @@ export function App() {
         const targetPane=paneStacks(latest).find(pane=>pane.id===targetStackId)
         const current=dragStackTabRef.current
         if(!targetPane||!current){showPointerDropIndicator(null);return}
-        const tabStrip=paneElement.querySelector<HTMLElement>(':scope > .stack-tabs')
+        const tabStrip=paneElement.querySelector<HTMLElement>(':scope > .stack-tabs-rail > .stack-tabs')
         const tabBox=tabStrip?.getBoundingClientRect()
         if(tabStrip&&tabBox&&pointer.clientY>=tabBox.top&&pointer.clientY<=tabBox.bottom){
           const target=reorderTargetFromContainer(tabStrip,current.childId,'horizontal',pointer.clientX)
@@ -3167,7 +3143,7 @@ export function App() {
         const latest=layoutValues.current[projectId]||activeLayout
         const targetPane=paneStacks(latest).find(pane=>pane.id===targetStackId)
         if(!targetPane){drop=null;showPointerDropIndicator(null);return}
-        const tabStrip=paneElement.querySelector<HTMLElement>(':scope > .stack-tabs')
+        const tabStrip=paneElement.querySelector<HTMLElement>(':scope > .stack-tabs-rail > .stack-tabs')
         const tabBox=tabStrip?.getBoundingClientRect()
         if(tabStrip&&tabBox&&pointer.clientY>=tabBox.top&&pointer.clientY<=tabBox.bottom){
           const target=reorderTargetFromContainer(tabStrip,childId,'horizontal',pointer.clientX)
@@ -3236,7 +3212,7 @@ export function App() {
           void updateLayout(projectId,removeLeaf(latest,child.kind,child.id))
         }}>{confirming?'✓':'×'}</button>
       }
-      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={event=>{if(event.button!==2)setFocusedViewId(activeChild.id)}}><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Workspace tabs" onWheel={scrollStripByWheel}>
+      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={event=>{if(event.button!==2)setFocusedViewId(activeChild.id)}}><OverflowRail className="stack-tabs" itemLabel="workspace tabs" wrapperClassName="stack-tabs-rail" activeKey={activeChild.id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Workspace tabs'}}>
         {node.children.map(child=>{
           const activate=()=>{if(suppressDragClickRef.current===`tab:${child.id}`){suppressDragClickRef.current=null;return}setFocusedViewId(child.id);if(child.kind==='terminal')setActiveId(child.id);if(child.id!==activeChild.id)void updateLayout(projectId,activateStackChild(activeLayout,node.id,child.id))}
           const dragClass=dragStackTab?.overId===child.id&&dragStackTab.side?`drag-over drop-${dragStackTab.side}`:''
@@ -3265,7 +3241,7 @@ export function App() {
           const label=session?sessionName(session):child.id
           return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session?.state)}/>{activityGlyphs(session)}{label}</button>{closeTab(child,label,session)}</div>
         })}
-      </div><div class="stack-active">{node.children
+      </OverflowRail><div class="stack-active">{node.children
         .filter(child=>child.id===activeChild.id||(child.kind==='terminal'&&warmTerminalIds.includes(child.id)))
         .map(child=>renderPaneNode(child,`${path}t`,true,child.id===activeChild.id))}</div></section>
     }
@@ -3357,9 +3333,9 @@ export function App() {
       <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
-    return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><div data-tutorial="tab-strip" class="stack-tabs" role="tablist" aria-label="Terminal tabs">
+    return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" itemLabel="terminal tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
       <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session.state)}/>{activityGlyphs(session)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${confirmKillId===id?'Confirm close':'Close'} terminal: ${sessionName(session)}`} title={confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
-    </div><div class="stack-active">{terminalPane}</div></section>
+    </OverflowRail><div class="stack-active">{terminalPane}</div></section>
   }
 
   const workspaceNoteIds=(targetProject:string)=>leaves(resolveLayout(layoutMap[targetProject],projects.find(item=>item.id===targetProject)?.layout),'note').map(leaf=>leaf.id)
@@ -3553,9 +3529,9 @@ export function App() {
   // With no new-tab button left in the rail, an empty projection would render a
   // bare strip; drop the row entirely and let the empty stage own the section.
   const mobileUnifiedWorkspace=<section data-tutorial="workspace-pane" class={`pane-stack mobile-unified-workspace ${mobileProjection.tabs.length?'':'no-tabs'}`}>
-    {mobileProjection.tabs.length>0&&<div data-tutorial="tab-strip" class="stack-tabs mobile-unified-tabs" role="tablist" aria-label="All Project tabs" onWheel={scrollStripByWheel}>
+    {mobileProjection.tabs.length>0&&<OverflowRail className="stack-tabs mobile-unified-tabs" itemLabel="Project tabs" wrapperClassName="stack-tabs-rail" activeKey={mobileProjection.selected?.id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'All Project tabs'}}>
       {mobileProjection.tabs.map(mobileTab)}
-    </div>}
+    </OverflowRail>}
     <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open the Project note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>}</div>
   </section>
 

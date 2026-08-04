@@ -47,6 +47,10 @@ Mobile visibility remains transient in `mobileDrawerOpen`.
 Mobile derives one depth-first tab rail and one selected body from the desktop tree, and activation updates only the owning stack's Project presentation.
 Responsive transitions never flatten or persist replacement geometry.
 
+`OverflowRail` wraps workspace and utility tablists without taking over their ARIA roles or drag targets.
+It owns endpoint detection, non-layout-consuming fade chevrons, wheel translation, boundary-aware paging, and selected or focused tab reveal.
+The underlying tablist remains the native horizontal touch and trackpad scroller, and the controls do not render when the content fits.
+
 Notes is the only inactive drawer body kept mounted.
 Its singleton host is derived from the unique Notes tab's owner stack, remains hidden while another tab is selected there, and preserves cursor, undo, save-queue ownership, and editor insert targeting.
 Closing the complete drawer releases its note claim so a workspace placeholder never targets a hidden host.

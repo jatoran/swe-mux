@@ -2064,7 +2064,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // click only fires for a real activation — a scroll drag never produces one.
   const pulseRail=(rail:HTMLElement,target:EventTarget|null)=>{
     const button=target instanceof Element?target.closest('button'):null
-    if(!button||button.disabled||!rail.contains(button))return
+    if(!button||button.disabled||!rail.contains(button)||button.classList.contains('overflow-rail-edge'))return
     button.classList.remove('rail-pulse')
     void button.offsetWidth
     button.classList.add('rail-pulse')

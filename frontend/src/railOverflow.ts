@@ -30,8 +30,8 @@ export function railOverflowState(metrics: RailScrollMetrics): RailOverflowState
 }
 
 /**
- * Page the rail while preserving one command-width of context, then settle on a
- * command boundary. Item offsets are normalized to the strip's leading padding.
+ * Page the rail while preserving one item-width of context, then settle on an
+ * item boundary. Item offsets are normalized to the strip's leading padding.
  */
 export function railPageTarget(
   metrics: RailScrollMetrics,
@@ -56,7 +56,7 @@ export function railPageTarget(
   return 0
 }
 
-/** Keep a focused command clear of the overlay controls. */
+/** Keep a focused item clear of the overlay controls. */
 export function railFocusTarget(
   metrics: RailScrollMetrics,
   itemStart: number,

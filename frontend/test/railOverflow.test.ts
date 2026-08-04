@@ -15,7 +15,7 @@ test('rail edge tolerance prevents controls flickering at endpoints', () => {
   assert.deepEqual(railOverflowState({ scrollLeft: -8, scrollWidth: 900, clientWidth: 300 }), { left: false, right: true })
 })
 
-test('rail paging preserves context and settles on command boundaries', () => {
+test('rail paging preserves context and settles on item boundaries', () => {
   const offsets = [0, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600]
   assert.equal(railPageTarget({ scrollLeft: 0, scrollWidth: 900, clientWidth: 300 }, offsets, 1), 300)
   assert.equal(railPageTarget({ scrollLeft: 300, scrollWidth: 900, clientWidth: 300 }, offsets, 1), 600)
@@ -23,7 +23,13 @@ test('rail paging preserves context and settles on command boundaries', () => {
   assert.equal(railPageTarget({ scrollLeft: 300, scrollWidth: 900, clientWidth: 300 }, offsets, -1), 0)
 })
 
-test('focused commands are moved clear of both overlay controls', () => {
+test('rail paging settles on uneven tab boundaries', () => {
+  const offsets = [0, 90, 235, 410, 585, 760]
+  assert.equal(railPageTarget({ scrollLeft: 0, scrollWidth: 940, clientWidth: 300 }, offsets, 1), 410)
+  assert.equal(railPageTarget({ scrollLeft: 410, scrollWidth: 940, clientWidth: 300 }, offsets, -1), 90)
+})
+
+test('focused items are moved clear of both overlay controls', () => {
   const metrics = { scrollLeft: 200, scrollWidth: 900, clientWidth: 300 }
   assert.equal(railFocusTarget(metrics, 210, 260), 182)
   assert.equal(railFocusTarget(metrics, 460, 520), 248)

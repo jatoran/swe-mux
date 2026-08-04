@@ -1,4 +1,4 @@
-import type { ComponentChildren } from 'preact'
+import type { ComponentChildren, JSX } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { horizontalWheelDelta } from './wheelScroll'
 import {
@@ -9,8 +9,17 @@ import {
   type RailScrollDirection,
 } from './railOverflow'
 
-interface Props {
+type OverflowRailStripProps = Omit<JSX.HTMLAttributes<HTMLDivElement>, 'class' | 'className' | 'ref' | 'onWheel' | 'onFocusCapture'> & {
+  [name: `data-${string}`]: string | number | boolean | undefined
+}
+
+interface OverflowRailProps {
   children: ComponentChildren
+  className: string
+  itemLabel: string
+  wrapperClassName?: string
+  activeKey?: string
+  stripProps?: OverflowRailStripProps
 }
 
 const NO_OVERFLOW: RailOverflowState = { left: false, right: false }
@@ -37,8 +46,26 @@ function reducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
-/** Horizontal command strip with endpoint-aware, non-layout-consuming controls. */
-export function RailScroller({ children }: Props) {
+function revealItem(strip: HTMLDivElement, item: HTMLElement): void {
+  let railItem = item
+  while (railItem.parentElement && railItem.parentElement !== strip) railItem = railItem.parentElement
+  if (railItem.parentElement !== strip) return
+  const stripBounds = strip.getBoundingClientRect()
+  const itemBounds = railItem.getBoundingClientRect()
+  const itemStart = strip.scrollLeft + itemBounds.left - stripBounds.left
+  const target = railFocusTarget(metrics(strip), itemStart, itemStart + itemBounds.width)
+  if (target !== strip.scrollLeft) strip.scrollTo({ left: target, behavior: reducedMotion() ? 'auto' : 'smooth' })
+}
+
+/** Horizontal strip with endpoint-aware, non-layout-consuming controls. */
+export function OverflowRail({
+  children,
+  className,
+  itemLabel,
+  wrapperClassName = '',
+  activeKey,
+  stripProps,
+}: OverflowRailProps) {
   const stripRef = useRef<HTMLDivElement>(null)
   const [overflow, setOverflow] = useState<RailOverflowState>(NO_OVERFLOW)
 
@@ -55,6 +82,7 @@ export function RailScroller({ children }: Props) {
 
     const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(syncOverflow)
     const observeSizes = () => {
+      resizeObserver?.disconnect()
       resizeObserver?.observe(strip)
       for (const child of Array.from(strip.children)) resizeObserver?.observe(child)
     }
@@ -80,6 +108,17 @@ export function RailScroller({ children }: Props) {
   // resizing the strip itself. Reconcile after every render as the cheap backstop.
   useEffect(syncOverflow)
 
+  useEffect(() => {
+    if (activeKey === undefined) return
+    const frame = requestAnimationFrame(() => {
+      const strip = stripRef.current
+      const selected = strip?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      if (strip && selected) revealItem(strip, selected)
+      syncOverflow()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [activeKey])
+
   const page = (direction: RailScrollDirection) => {
     const strip = stripRef.current
     if (!strip) return
@@ -89,10 +128,11 @@ export function RailScroller({ children }: Props) {
     })
   }
 
-  return <div class="terminal-action-scroller">
-    {overflow.left && <button class="rail-scroll-edge rail-scroll-left" type="button" aria-label="Scroll commands left" title="More commands to the left" onClick={() => page(-1)}>‹</button>}
+  return <div class={`overflow-rail ${wrapperClassName}`.trim()}>
+    {overflow.left && <button class="overflow-rail-edge overflow-rail-left" type="button" aria-label={`Scroll ${itemLabel} left`} title={`More ${itemLabel} to the left`} onClick={() => page(-1)}>‹</button>}
     <div
-      class="terminal-action-scroll"
+      {...stripProps}
+      class={`overflow-rail-strip ${className}`}
       ref={stripRef}
       onWheel={event => {
         const strip = event.currentTarget
@@ -105,10 +145,16 @@ export function RailScroller({ children }: Props) {
         const strip = event.currentTarget
         const item = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('button') : null
         if (!item || !strip.contains(item)) return
-        const target = railFocusTarget(metrics(strip), item.offsetLeft, item.offsetLeft + item.offsetWidth)
-        if (target !== strip.scrollLeft) strip.scrollTo({ left: target, behavior: reducedMotion() ? 'auto' : 'smooth' })
+        revealItem(strip, item)
       }}
     >{children}</div>
-    {overflow.right && <button class="rail-scroll-edge rail-scroll-right" type="button" aria-label="Scroll commands right" title="More commands to the right" onClick={() => page(1)}>›</button>}
+    {overflow.right && <button class="overflow-rail-edge overflow-rail-right" type="button" aria-label={`Scroll ${itemLabel} right`} title={`More ${itemLabel} to the right`} onClick={() => page(1)}>›</button>}
   </div>
+}
+
+/** Command-rail specialization of the shared overflow treatment. */
+export function RailScroller({ children }: Pick<OverflowRailProps, 'children'>) {
+  return <OverflowRail className="terminal-action-scroll" itemLabel="commands" wrapperClassName="terminal-action-scroller">
+    {children}
+  </OverflowRail>
 }

@@ -1,5 +1,5 @@
 import type { JSX } from 'preact'
-import { useEffect, useRef } from 'preact/hooks'
+import { useRef } from 'preact/hooks'
 import { AgentContextTab } from './AgentContextTab'
 import { ClipboardTab } from './ClipboardPanel'
 import { CommandsTab } from './CommandsTab'
@@ -20,6 +20,7 @@ import type { WatchScope, WatchSnapshot } from './processWatch'
 import { parseNoteResourceId } from './layout'
 import type { NotePlacement } from './NotesTab'
 import { DRAWER_TAB_ICONS } from './railIcons'
+import { OverflowRail } from './RailScroller'
 import type { SendToAgentRequest, SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
 import type { Project, ProjectBackend, Session } from './types'
 
@@ -127,12 +128,7 @@ type Props = {
 export function UtilityDrawer(props: Props) {
   const { layout, presentation, onTab, onClose, mobile, session, project } = props
   const focusedTab = presentation.focused_tab
-  const tabStrip = useRef<HTMLDivElement>(null)
   const stackOrder = drawerTabs(layout)
-  useEffect(() => {
-    tabStrip.current?.querySelector<HTMLElement>(`[data-drawer-tab-id="${focusedTab}"]`)
-      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [focusedTab, layout, mobile])
   // Acting closes the drawer on mobile (it covers the surface just acted on) and
   // leaves it open on desktop, where the column sits beside that surface and a
   // second insert (or a second file) is the common next action.
@@ -299,11 +295,16 @@ export function UtilityDrawer(props: Props) {
     queueMicrotask(() => document.getElementById(tabDomId(stackId, tab))?.focus())
   }
 
-  const renderRail = (stack: DrawerStack, selected: DrawerTabId, projection = false) => <div
-    class={`drawer-tabs drawer-pane-rail ${props.tabDisplay === 'title' ? 'title-mode' : 'icon-mode'}`}
-    data-drawer-stack-id={stack.id}
-    role="tablist"
-    aria-label={projection ? 'Panel sections' : `Panel section ${stack.id}`}
+  const renderRail = (stack: DrawerStack, selected: DrawerTabId, projection = false) => <OverflowRail
+    className="drawer-tabs"
+    itemLabel="panel tabs"
+    wrapperClassName={`drawer-tabs-rail drawer-pane-rail ${props.tabDisplay === 'title' ? 'title-mode' : 'icon-mode'}`}
+    activeKey={selected}
+    stripProps={{
+      'data-drawer-stack-id':stack.id,
+      role:'tablist',
+      'aria-label':projection ? 'Panel sections' : `Panel section ${stack.id}`,
+    }}
   >
     {stack.tabs.map((id, index) => {
       const item = drawerTab(id)
@@ -336,7 +337,7 @@ export function UtilityDrawer(props: Props) {
         {id === 'queue' && props.queuePending > 0 && <i class="drawer-badge queue-badge">{props.queuePending > 99 ? '99+' : props.queuePending}</i>}
       </button>
     })}
-  </div>
+  </OverflowRail>
 
   const renderStack = (stack: DrawerStack, selectedOverride?: DrawerTabId) => {
     const selected = selectedOverride || presentation.selected_tabs[stack.id] || stack.tabs[0]
@@ -490,7 +491,7 @@ export function UtilityDrawer(props: Props) {
         <span>Utilities</span>
         <button class="drawer-close" aria-label="Close panel" title="Close panel" onClick={onClose}>×</button>
       </div>
-      <div ref={tabStrip} class="drawer-tree">
+      <div class="drawer-tree">
         {mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root)}
       </div>
       <span class="sr-only" aria-live="polite">{props.announcement}</span>

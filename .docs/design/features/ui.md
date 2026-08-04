@@ -983,6 +983,8 @@ responsive controls.
   The former `mux.drawer.projects.v1` and `mux.drawer.tab.v1` values migrate into the v2 presentation map only after valid new serializations succeed.
   Parsing repairs malformed branches, duplicate or missing tabs, duplicate node IDs, invalid ratios, stale selections, and excess depth without losing registered tabs.
 - Desktop renders every saved stack simultaneously, with one selected body per stack and one independently scrolling rail.
+  An overflowing pane rail hides its scrollbar and exposes endpoint-aware fade chevrons only where more tabs exist.
+  The chevrons overlay the rail instead of reserving space, click-scroll by tab boundaries, and preserve wheel, trackpad, touch, keyboard, and drag-reorder behavior.
   The focused utility tab identifies the focused drawer pane for reopen, cycling, mobile selection, and geometry commands without taking terminal input ownership or changing Project workspace focus.
   Session-scoped bodies follow the focused session, Project-scoped bodies follow the active Project, and app-scoped bodies remain independent.
   Every body shows its current scope because several scoped bodies can be visible at once.
@@ -1001,7 +1003,7 @@ responsive controls.
 - Settings > Appearance exposes `drawer_tab_display` as **Icons** or **Titles**, defaulting to Icons.
   The setting applies to every pane rail, the mobile projection, and the desktop launcher.
   Icon mode uses `DRAWER_TAB_ICONS`, while title mode uses the short `DrawerTab.label`; neither mode renders both marks.
-  Title rails remain one-line scrollers and title mode widens the outer launcher through `--utility-rail-width`.
+  Title rails remain one-line scrollers with the same endpoint-aware overflow controls, and title mode widens the outer launcher through `--utility-rail-width`.
   Queue and Alerts badges, scope dots, accessible names, tooltips, selection, focus, and drag state remain intact in both modes.
 - Mobile renders one flattened depth-first rail and one body from the same desktop tree without rewriting tree membership, stack IDs, directions, ratios, or ordering.
   Selecting a mobile tab updates only its owning stack's Project selection and the Project's focused tab.
