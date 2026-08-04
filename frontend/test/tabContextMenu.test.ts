@@ -40,3 +40,17 @@ test('mobile long-press consumes its follow-up click and background close preser
   const closeFocus=section('const focusAfterMobileClose=', 'const closeMobileTab=')
   assert.match(closeFocus,/if\(mobileProjection\.selected\?\.id!==leaf\.id\)return/, 'closing a background tab must not move focus')
 })
+
+test('file resource tabs expose scoped filesystem actions',()=>{
+  const resolver=section('type FileMenuSource=', '// A server a session spawned')
+  assert.match(resolver,/menu\.leaf\.kind==='note'\?menu\.leaf\.id:''/, 'non-resource tabs must not resolve as files')
+  assert.match(resolver,/identity\?\.kind!=='file'&&identity\?\.kind!=='worktree-file'/)
+  assert.match(resolver,/\/api\/projects\/\$\{menu\.projectId\}\/reveal/)
+  assert.match(resolver,/\.\.\.\(target\.worktree\?\{worktree:target\.worktree\}:\{\}\)/, 'worktree reveal must retain its registered root')
+
+  const menu=section('{tabMenu&&<div', 'Close tab</button>')
+  assert.match(menu,/fileMenuTarget\(tabMenu\)/)
+  assert.match(menu,/>Open in default explorer<\/button>/)
+  assert.match(menu,/>Copy full path<\/button>/)
+  assert.match(menu,/Copy path from \{fileMenuTarget\(tabMenu\)!\.worktree\?'worktree':'project'\} root/)
+})

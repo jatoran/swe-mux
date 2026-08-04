@@ -3338,22 +3338,35 @@ export function App() {
     </OverflowRail><div class="stack-active">{terminalPane}</div></section>
   }
 
+  type FileMenuSource={resourceId:string;projectId:string}|{leaf:PaneLeaf;projectId:string}
   const workspaceNoteIds=(targetProject:string)=>leaves(resolveLayout(layoutMap[targetProject],projects.find(item=>item.id===targetProject)?.layout),'note').map(leaf=>leaf.id)
 
-  // Resource tabs cover notes, the Files browser, and opened files; only the last has a path
-  // worth copying, so the menu's copy group is gated on this resolving.
-  const fileMenuTarget=(menu:{resourceId:string;projectId:string})=>{
-    const identity=parseNoteResourceId(menu.resourceId)
+  // Resource menus cover notes and opened files; only the latter have filesystem actions.
+  // Accept both resource-list and workspace-tab targets so the two menus share one resolver.
+  const fileMenuTarget=(menu:FileMenuSource)=>{
+    const resourceId='resourceId' in menu?menu.resourceId:menu.leaf.kind==='note'?menu.leaf.id:''
+    const identity=parseNoteResourceId(resourceId)
     if(identity?.kind!=='file'&&identity?.kind!=='worktree-file')return null
     const root=identity.kind==='worktree-file'?identity.worktree:projects.find(item=>item.id===menu.projectId)?.root||''
     return { relative:identity.id, absolute:absoluteProjectPath(root,identity.id), worktree:identity.kind==='worktree-file'?identity.worktree:undefined }
   }
   // The tab menu has no recovery panel of its own, so a refused write says where the payload
   // still is (the Files tree offers the manual copy) rather than failing silently.
-  const copyFileClipboard=async(menu:{resourceId:string;projectId:string},form:'absolute'|'relative'|'contents')=>{
+  const revealFileResource=async(menu:FileMenuSource)=>{
     const target=fileMenuTarget(menu)
     if(!target)return
-    setNoteMenu(null)
+    setNoteMenu(null);setTabMenu(null)
+    try{
+      await api('POST',`/api/projects/${menu.projectId}/reveal`,{
+        path:target.relative,
+        ...(target.worktree?{worktree:target.worktree}:{}),
+      })
+    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+  }
+  const copyFileClipboard=async(menu:FileMenuSource,form:'absolute'|'relative'|'contents')=>{
+    const target=fileMenuTarget(menu)
+    if(!target)return
+    setNoteMenu(null);setTabMenu(null)
     try{
       let payload=form==='absolute'?target.absolute:target.relative
       if(form==='contents'){
@@ -3966,6 +3979,11 @@ export function App() {
           splits or reorders. Rearranging a resource tab is a drag; the keyboard route is
           the palette. */}
       {tabMenu.source==='mobile'&&<button onClick={()=>{const target=tabMenu;setTabMenu(null);void spawnTerminal(target.projectId,'stack',undefined,target.leaf.id)}}>New terminal as tab</button>}
+      {fileMenuTarget(tabMenu)&&<>
+        <button title={fileMenuTarget(tabMenu)!.absolute} onClick={()=>void revealFileResource(tabMenu)}>Open in default explorer</button>
+        <button title={fileMenuTarget(tabMenu)!.absolute} onClick={()=>void copyFileClipboard(tabMenu,'absolute')}>Copy full path</button>
+        <button title={fileMenuTarget(tabMenu)!.relative} onClick={()=>void copyFileClipboard(tabMenu,'relative')}>Copy path from {fileMenuTarget(tabMenu)!.worktree?'worktree':'project'} root</button>
+      </>}
       <div class="context-rule"/><button onClick={()=>{
         const target=tabMenu;setTabMenu(null)
         // Mobile has no per-tab close button, so this is the only close path

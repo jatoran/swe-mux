@@ -291,8 +291,8 @@ include a registered Project nested below another Git root.
 - A file/folder context menu can reveal it in the host file manager, copy either path form,
   copy a file's contents, add its basename to global ignores, or add its Project-relative path
   to Project ignores. Windows reveal selects a file and asks Explorer to foreground its window.
-  The tree, the search results, and an opened file's own resource tab all offer the copy group,
-  so a path never has to be transcribed by hand or re-found in the browser.
+  The tree and search results offer the full action set. An opened file's workspace-tab menu
+  repeats reveal plus both path forms, so a file never has to be re-found in the browser.
 - Right-click or guarded touch long-press opens the Files actions; there is no permanent create
   button. **New file** and **New folder** target the clicked directory, the containing directory
   of a clicked file, or the Project root when invoked on empty tree/results space. A naming dialog
