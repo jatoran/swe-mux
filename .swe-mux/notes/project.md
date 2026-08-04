@@ -6,16 +6,41 @@ id = "29a044bb-a06b-4216-95e4-39c5e91d48fb"
 # swe-mux Agentic Controle Plane (ACP)
 
 
+when drag left sidebar smaller, or right sidebar smaller, if you drag them all the way to the edge of UI or something (not all the way, but past their minimum width a bit and near edge), it should collapse it. so you can grab the divider and swipe mouse over to the side and it will just collapse it (and if you dont release mouse you can drag it back out too of course and it will expand, but it just stays at whaever state it is in when u release)
+
+stop limiting the right sidebar's width on desktop. you should be able to drag it wider up until the limit of the main workspace's minimum width which should bea bout 150px
+
+a small indicator on right sidebar drawer tab icons that indicatres when they are session-scoped, some little green dot in the corner. minimal. shouldnt be confused with a notification or something
+
+
+	
+
+and I also wonder..if we should pull out any of the other functionailty in this application into utility tabs - such as usage analytics (and maybe a condensed view of it and still can expand it to see full view in the modal?)
+
+
+transcript tab:
+	add a search input bar in its top bar
+	make it so that the copy button floats along with you if you are scrolling a long message, and isnt just at the top. so it should start at the top, and then if you scroll down and top is off view, the copy button hovers in the top right corner still, until you are past that message
+
+when project files are opened as tabs - add right click context option on the tabs for "open in default explorer", "copy full path", and  "copy path from project root"
+
 maybe a global notes scratchpad. project agnostic
 
 - in the right sidebar drawer: each separate section should show the section title at the top of its drawer content (File Explorer, Clipboard History, Commands), etc. Right now it doesnt display those titles in any of them and so if you dont know what any are, you wont know what you're looking at
 
 - in the right sidebar drawer notes section:
-	- ability to delete session notes
-	- make the projetc note button a bit more standout so it is clearly a button or something and shows its size as well, right now its small compared to the session note cards
+	- ability to delete session notes - an "x" icon to the left of the "open in workspace tab" button. 2 click inline confirm
+		- also make session notes have a right click context that has those 2 options as well
+		- on mobile, this will be in the tap and hold to bring up the right click context
+	- make the project note card a bit more standout so it is clearly a button or something and shows its size as well, right now its small compared to the session note cards
 
-ability to tap, on mobile in agent sessions, to a specific part of your chat input (this doesn't work on native codex on desktop, but it works on claude code.. hmm). i wonder if we can just make it work foe both? to move the carat to wherever you tap or click in your currently being typed message in these agent cli sessions?
-	codex never allowed this, but maybe with swe-mux we can enable this completelyfor both CLI?
+in the right sidebar drawer transcript tab, when a user expands a message "show more", I want it to persist that state for that message (even when more message are appended). taht way they can close drawer, change projects ,change sessions, etc. but when they come abck, and view transcript in that session again, it is still expanded
+	this way if you're having to go back and forth and doing multiple things, you dont have to keep expanding it
+
+
+
+
+
 
 
 codex:
