@@ -577,6 +577,10 @@ def create_app(
                 get_agent_context_source,
             ),
             web.post(
+                "/api/projects/{project_id}/agent-context/sources/{source_id}/reveal",
+                reveal_agent_context_source,
+            ),
+            web.post(
                 "/api/projects/{project_id}/agent-context/sync/preview",
                 preview_agent_context_sync,
             ),
@@ -5109,6 +5113,16 @@ async def get_agent_context_source(request: web.Request) -> web.Response:
         service.read_source, project.root, request.match_info["source_id"]
     )
     return json_response(payload)
+
+
+async def reveal_agent_context_source(request: web.Request) -> web.Response:
+    project = _request_project(request)
+    service: AgentContextService = request.app["agent_context"]
+    path = await asyncio.to_thread(
+        service.source_path, project.root, request.match_info["source_id"]
+    )
+    await asyncio.to_thread(open_in_file_manager, path)
+    return json_response({"ok": True})
 
 
 async def preview_agent_context_sync(request: web.Request) -> web.Response:

@@ -205,6 +205,7 @@ class AgentContextService:
             "scope": scope,
             "label": label,
             "status": "missing",
+            "revealable": False,
             "revision": "missing",
             "size": 0,
             "modified_at": None,
@@ -216,24 +217,26 @@ class AgentContextService:
                 info = path.stat()
                 if not stat.S_ISREG(info.st_mode):
                     item.update(status="unsupported", detail="This path is not a regular file.")
-                elif info.st_size > MAX_SOURCE_BYTES:
-                    item.update(
-                        status="too_large",
-                        size=info.st_size,
-                        modified_at=info.st_mtime,
-                        revision="too_large",
-                        detail=f"The file exceeds {MAX_SOURCE_BYTES // 1024} KiB.",
-                    )
                 else:
-                    data = path.read_bytes()
-                    _decode_text(data, label=filename)
-                    item.update(
-                        status="available",
-                        size=len(data),
-                        modified_at=info.st_mtime,
-                        revision=_revision(data),
-                        line_ending=_line_ending(data),
-                    )
+                    item["revealable"] = True
+                    if info.st_size > MAX_SOURCE_BYTES:
+                        item.update(
+                            status="too_large",
+                            size=info.st_size,
+                            modified_at=info.st_mtime,
+                            revision="too_large",
+                            detail=f"The file exceeds {MAX_SOURCE_BYTES // 1024} KiB.",
+                        )
+                    else:
+                        data = path.read_bytes()
+                        _decode_text(data, label=filename)
+                        item.update(
+                            status="available",
+                            size=len(data),
+                            modified_at=info.st_mtime,
+                            revision=_revision(data),
+                            line_ending=_line_ending(data),
+                        )
             except (OSError, ValueError) as exc:
                 item.update(status="unreadable", detail=str(exc), revision="unreadable")
         item["changed_since_start"] = self._changed_since_start(
@@ -310,6 +313,7 @@ class AgentContextService:
                 "scope": "project",
                 "label": path.name,
                 "status": "available",
+                "revealable": False,
                 "size": 0,
                 "modified_at": None,
             }
@@ -320,17 +324,19 @@ class AgentContextService:
                     info = path.stat()
                     if not stat.S_ISREG(info.st_mode):
                         item.update(status="unsupported", detail="This is not a regular file.")
-                    elif info.st_size > MAX_SOURCE_BYTES:
-                        item.update(
-                            status="too_large",
-                            size=info.st_size,
-                            modified_at=info.st_mtime,
-                            detail=f"The file exceeds {MAX_SOURCE_BYTES // 1024} KiB.",
-                        )
                     else:
-                        data = path.read_bytes()
-                        _decode_text(data, label=path.name)
-                        item.update(size=len(data), modified_at=info.st_mtime)
+                        item["revealable"] = True
+                        if info.st_size > MAX_SOURCE_BYTES:
+                            item.update(
+                                status="too_large",
+                                size=info.st_size,
+                                modified_at=info.st_mtime,
+                                detail=f"The file exceeds {MAX_SOURCE_BYTES // 1024} KiB.",
+                            )
+                        else:
+                            data = path.read_bytes()
+                            _decode_text(data, label=path.name)
+                            item.update(size=len(data), modified_at=info.st_mtime)
                 except (OSError, ValueError) as exc:
                     item.update(status="unreadable", detail=f"Unreadable: {exc}")
             provider["items"].append(item)
@@ -407,7 +413,9 @@ class AgentContextService:
             "backups": self._backups(project_id),
         }
 
-    def read_source(self, root: str | Path, source_id: str) -> dict[str, Any]:
+    def _source_descriptor(
+        self, root: str | Path, source_id: str
+    ) -> tuple[Path, str, str, str, str, str]:
         project_root = Path(root).resolve()
         if source_id in INSTRUCTION_SOURCES:
             provider, filename = INSTRUCTION_SOURCES[source_id]
@@ -433,6 +441,28 @@ class AgentContextService:
             label = filename
         else:
             raise ValueError("unknown agent context source")
+        return path, provider, kind, scope, label, filename
+
+    def source_path(self, root: str | Path, source_id: str) -> Path:
+        """Resolve an opaque source id to a regular file that the OS may reveal."""
+
+        path, _provider, _kind, _scope, _label, filename = self._source_descriptor(
+            root, source_id
+        )
+        if not path.exists():
+            raise ValueError(f"{filename} is missing")
+        if path.is_symlink():
+            raise ValueError(f"{filename} is a symbolic link and cannot be revealed here")
+        try:
+            info = path.stat()
+        except OSError as exc:
+            raise ValueError(f"{filename} is unreadable: {exc}") from exc
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"{filename} is not a regular file")
+        return path.resolve()
+
+    def read_source(self, root: str | Path, source_id: str) -> dict[str, Any]:
+        path, provider, kind, scope, label, filename = self._source_descriptor(root, source_id)
         if not path.exists():
             raise ValueError(f"{filename} is missing")
         data = _bounded_bytes(path, label=filename)
@@ -443,6 +473,7 @@ class AgentContextService:
                 "kind": kind,
                 "scope": scope,
                 "label": label,
+                "revealable": True,
                 "revision": _revision(data),
                 "size": len(data),
                 "modified_at": path.stat().st_mtime,

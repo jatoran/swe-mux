@@ -9,12 +9,22 @@ export interface AgentContextSource {
   scope: 'project' | 'global'
   label: string
   status: AgentContextStatus
+  revealable: boolean
   detail?: string
   revision?: string
   size: number
   modified_at: number | null
   line_ending?: 'lf' | 'crlf'
   changed_since_start?: boolean
+}
+
+export const AGENT_CONTEXT_DESKTOP_MENU_QUERY = '(pointer:fine) and (min-width:761px)'
+
+export function agentContextSourceMenuEnabled(
+  source: Pick<AgentContextSource, 'revealable'>,
+  desktopPointer: boolean,
+): boolean {
+  return desktopPointer && source.revealable
 }
 
 export interface AgentContextProvider {

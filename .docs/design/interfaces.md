@@ -270,6 +270,7 @@ provides live follow, not concurrent-edit merging.
 ```text
 GET  /projects/{project_id}/agent-context
 GET  /projects/{project_id}/agent-context/sources/{source_id}
+POST /projects/{project_id}/agent-context/sources/{source_id}/reveal
 POST /projects/{project_id}/agent-context/sync/preview   {direction}
 POST /projects/{project_id}/agent-context/sync           {direction, source_revision, target_revision}
 POST /projects/{project_id}/agent-context/restore        {backup_id, target_revision}
@@ -281,7 +282,8 @@ Project-root instruction items, their normalized `in_sync | different | missing`
 `~/.codex/AGENTS.md` sources, provider rows with complete `item_count`, and the newest valid
 restore-point manifests. Source/provider status is typed:
 `available | missing | disabled | unsupported | unreadable | too_large`. Claude learned memory
-items and root instructions carry opaque source ids; no route accepts a path.
+items and root instructions carry opaque source ids; `revealable` marks an existing regular
+non-symlink file. No route accepts a path.
 
 Source reads return `{source, text}` and are UTF-8, regular-file, non-symlink, and 512 KiB
 bounded. Instruction sources carry `scope: project | global`; resolved global host paths never
@@ -289,6 +291,10 @@ cross the API. Inventory caps Claude memory rows at 128 direct Markdown children
 `item_count` reports the complete count. Codex returns an explicit provider status and no files
 until its CLI publishes a stable project-memory file inventory; the daemon does not expose
 private database rows.
+
+Reveal re-resolves the opaque source ID, refuses missing, symlink, and non-file targets, and
+passes the resolved file to the same OS launcher as the Project file browser. Windows Explorer
+selects the file; other platforms retain the shared launcher's native behavior.
 
 Preview remains Project-root-only. It returns a bounded unified diff plus SHA-256
 `source.revision` and `target.revision`

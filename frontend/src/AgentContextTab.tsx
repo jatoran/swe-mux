@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
 import {
   AGENT_CONTEXT_SYNC_OPTIONS,
+  AGENT_CONTEXT_DESKTOP_MENU_QUERY,
+  agentContextSourceMenuEnabled,
   backupAction,
   comparisonLabel,
   memoryFileCount,
@@ -13,6 +15,7 @@ import {
   type AgentContextSource,
   type AgentContextSyncPreview,
 } from './agentContext'
+import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { useModalFocus } from './modalFocus'
 import type { Project, Session } from './types'
 
@@ -37,21 +40,30 @@ function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
-function SourceRow({ item, selected, focusedBackend, runStartedAt, onOpen }: {
+type SourceMenu = { item: AgentContextSource; x: number; y: number }
+
+function SourceRow({ item, selected, focusedBackend, runStartedAt, onOpen, onRevealMenu }: {
   item: AgentContextSource
   selected: boolean
   focusedBackend?: Session['backend']
   runStartedAt?: number
   onOpen: (id: string) => void
+  onRevealMenu: (item: AgentContextSource, x: number, y: number) => void
 }) {
   const available = item.status === 'available'
   const focused = focusedBackend === item.provider
   const newerThanRun = !!runStartedAt && !!item.modified_at && item.modified_at > runStartedAt
   return <button
     class={`agent-context-source ${selected ? 'selected' : ''}`}
-    disabled={!available}
-    title={item.detail || (available ? `View ${item.label}` : statusLabel(item.status))}
-    onClick={() => onOpen(item.id)}
+    aria-disabled={!available}
+    title={`${item.detail || (available ? `View ${item.label}` : statusLabel(item.status))}${item.revealable ? ' · right-click to open file location' : ''}`}
+    onClick={() => available && onOpen(item.id)}
+    onContextMenu={event => {
+      if (!agentContextSourceMenuEnabled(item, window.matchMedia(AGENT_CONTEXT_DESKTOP_MENU_QUERY).matches)) return
+      event.preventDefault()
+      event.stopPropagation()
+      onRevealMenu(item, event.clientX, event.clientY)
+    }}
   >
     <span class="agent-context-source-main">
       <strong>{item.label}</strong>
@@ -76,12 +88,14 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
   const [preview, setPreview] = useState<AgentContextSyncPreview | null>(null)
   const [restoreConfirm, setRestoreConfirm] = useState<AgentContextBackup | null>(null)
   const [syncOpen, setSyncOpen] = useState(false)
+  const [sourceMenu, setSourceMenu] = useState<SourceMenu | null>(null)
   const [busy, setBusy] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const generation = useRef(0)
   const syncPanel = useRef<HTMLElement>(null)
+  const sourceMenuPanel = useRef<HTMLDivElement>(null)
   const projectId = project?.id || ''
   const closeSync = useCallback(() => {
     setSyncOpen(false)
@@ -89,6 +103,29 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
     setRestoreConfirm(null)
   }, [])
   useModalFocus(syncPanel, closeSync, syncOpen)
+
+  useEffect(() => {
+    if (!sourceMenu) return
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const frame = requestAnimationFrame(() => sourceMenuPanel.current?.querySelector<HTMLButtonElement>('button')?.focus())
+    const dismiss = () => setSourceMenu(null)
+    const key = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      dismiss()
+    }
+    window.addEventListener('mousedown', dismiss)
+    window.addEventListener('blur', dismiss)
+    window.addEventListener('keydown', key, true)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener('mousedown', dismiss)
+      window.removeEventListener('blur', dismiss)
+      window.removeEventListener('keydown', key, true)
+      previous?.focus()
+    }
+  }, [sourceMenu])
 
   const refresh = useCallback(async () => {
     if (!projectId) { setInventory(null); return }
@@ -128,6 +165,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
     setPreview(null)
     setRestoreConfirm(null)
     setSyncOpen(false)
+    setSourceMenu(null)
     setMessage('')
     setError('')
     void refresh()
@@ -251,6 +289,21 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
     }
   }
 
+  const revealSource = async (item: AgentContextSource) => {
+    setSourceMenu(null)
+    try {
+      await api(
+        'POST',
+        `/api/projects/${project.id}/agent-context/sources/${encodeURIComponent(item.id)}/reveal`,
+        undefined,
+        { timeoutMs: REQUEST_TIMEOUT_MS },
+      )
+      setError('')
+    } catch (cause) {
+      setError(errorMessage(cause))
+    }
+  }
+
   const instructions = inventory?.instructions.items || []
   const globalInstructions = inventory?.global_instructions.items || []
   const providers = inventory?.providers || []
@@ -297,6 +350,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
           focusedBackend={focusedAgent?.backend}
           runStartedAt={focusedAgent?.agent_run_started_at}
           onOpen={setSelectedId}
+          onRevealMenu={(item, x, y) => setSourceMenu({ item, x, y })}
         />)}
       </div>
     </section>
@@ -312,6 +366,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
           focusedBackend={focusedAgent?.backend}
           runStartedAt={focusedAgent?.agent_run_started_at}
           onOpen={setSelectedId}
+          onRevealMenu={(item, x, y) => setSourceMenu({ item, x, y })}
         />)}
       </div>
     </section>
@@ -337,6 +392,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
               focusedBackend={focusedAgent?.backend}
               runStartedAt={focusedAgent?.agent_run_started_at}
               onOpen={setSelectedId}
+              onRevealMenu={(item, x, y) => setSourceMenu({ item, x, y })}
             />)}
           </div>}
           {provider.truncated && <p>Showing {provider.items.length} of {provider.item_count} memory files.</p>}
@@ -351,6 +407,21 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       </header>
       {selected ? <pre tabIndex={0}>{selected.text}</pre> : <p>Reading source…</p>}
     </section>}
+
+    {sourceMenu && <div
+      class="context-menu agent-context-source-menu"
+      ref={element => { sourceMenuPanel.current = element; fitMenuInViewport(element) }}
+      role="menu"
+      aria-label={`File actions for ${sourceMenu.item.label}`}
+      style={{
+        left: clampContextMenuLeft(sourceMenu.x, window.innerWidth),
+        top: Math.max(4, Math.min(sourceMenu.y, window.innerHeight - 80)),
+      }}
+      onMouseDown={event => event.stopPropagation()}
+    >
+      <div class="context-title"><strong>{sourceMenu.item.label}</strong></div>
+      <button role="menuitem" onClick={() => void revealSource(sourceMenu.item)}>Open in default explorer</button>
+    </div>}
 
     {syncOpen && <div class="modal-layer agent-context-sync-layer" onMouseDown={event => event.target === event.currentTarget && closeSync()}>
       <section ref={syncPanel} class="modal agent-context-sync-modal" role="dialog" aria-modal="true" aria-label="Manage instruction sync">

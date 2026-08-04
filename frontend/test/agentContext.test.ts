@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   AGENT_CONTEXT_SYNC_OPTIONS,
+  AGENT_CONTEXT_DESKTOP_MENU_QUERY,
+  agentContextSourceMenuEnabled,
   backupAction,
   comparisonLabel,
   memoryFileCount,
@@ -39,4 +41,11 @@ test('memory count uses the complete provider inventory count', () => {
     { item_count: 0, items: [] },
   ] as unknown as AgentContextProvider[]
   assert.equal(memoryFileCount(providers), 130)
+})
+
+test('source reveal menus require a real file and a desktop pointer', () => {
+  assert.equal(AGENT_CONTEXT_DESKTOP_MENU_QUERY, '(pointer:fine) and (min-width:761px)')
+  assert.equal(agentContextSourceMenuEnabled({ revealable: true }, true), true)
+  assert.equal(agentContextSourceMenuEnabled({ revealable: true }, false), false)
+  assert.equal(agentContextSourceMenuEnabled({ revealable: false }, true), false)
 })

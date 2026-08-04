@@ -885,6 +885,9 @@ responsive controls.
 - **Context** is the Agent Context surface (`agent-context.md`). It shows Project-root
   `CLAUDE.md`/`AGENTS.md`, fixed global `~/.claude/CLAUDE.md`/`~/.codex/AGENTS.md`, and one
   collapsed **Memories** disclosure badged with the provider file count. Bodies are read-only.
+  Fine-pointer desktop rows backed by real files expose **Open in default explorer** on
+  right-click, using the Files browser's native reveal behavior; mobile keeps its native
+  context-menu behavior.
   One `sync…` button opens a modal containing both deliberate Project-root whole-file copy
   directions, normalized diff confirmation, and revision-guarded restore points. Global
   instructions and learned memory are never write targets; nothing watches or synchronizes in

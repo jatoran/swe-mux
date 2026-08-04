@@ -1761,6 +1761,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .context-state.changed-daemon{border-color:color-mix(in srgb,var(--muted) 55%,var(--line));color:var(--muted)}
 .agent-context-sources{display:grid;gap:4px}
 .agent-context-source{min-width:0;display:grid;gap:3px;padding:6px 7px!important;text-align:left!important}
+.agent-context-source[aria-disabled="true"]{opacity:.45;cursor:not-allowed}
 .agent-context-source.selected{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,var(--panel2))}
 .agent-context-source-main{min-width:0;display:flex;align-items:center;gap:5px}
 .agent-context-source-flags{min-width:0;display:flex;align-items:center;gap:4px;flex-wrap:wrap}

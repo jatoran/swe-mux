@@ -8,6 +8,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import server as server_module
 from swe_mux.agent_context import AgentContextConflict, AgentContextService
 from swe_mux.event_bus import EventBus
 from swe_mux.server import (
@@ -16,6 +17,7 @@ from swe_mux.server import (
     get_agent_context_source,
     preview_agent_context_sync,
     restore_agent_context,
+    reveal_agent_context_source,
     sync_agent_context,
 )
 
@@ -58,6 +60,7 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
         "AGENTS.md",
     ]
     assert not any(item["changed_since_start"] for item in inventory["instructions"]["items"])
+    assert all(item["revealable"] for item in inventory["instructions"]["items"])
     assert [item["label"] for item in inventory["global_instructions"]["items"]] == [
         "~/.claude/CLAUDE.md",
         "~/.codex/AGENTS.md",
@@ -66,6 +69,7 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
         item["scope"] == "global"
         for item in inventory["global_instructions"]["items"]
     )
+    assert all(item["revealable"] for item in inventory["global_instructions"]["items"])
     claude, codex = inventory["providers"]
     assert claude["status"] == "available"
     assert [item["label"] for item in claude["items"]] == ["MEMORY.md", "testing.md"]
@@ -79,6 +83,9 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
     assert global_source["source"]["scope"] == "global"
     assert global_source["source"]["label"] == "~/.codex/AGENTS.md"
     assert global_source["text"].replace("\r\n", "\n") == "# Global Codex\n"
+    assert service.source_path(root, "instruction:global:codex") == (
+        home / ".codex" / "AGENTS.md"
+    ).resolve()
 
     (root / "AGENTS.md").write_text("changed\n", encoding="utf-8")
     changed = service.inventory("project-one", "Project One", root)
@@ -191,6 +198,8 @@ def test_sources_are_allowlisted_and_bounded(tmp_path: Path) -> None:
 
     inventory = service.inventory("project", "Project", root)
     assert inventory["instructions"]["items"][0]["status"] == "too_large"
+    assert inventory["instructions"]["items"][0]["revealable"] is True
+    assert service.source_path(root, "instruction:claude") == (root / "CLAUDE.md").resolve()
     with pytest.raises(ValueError, match="larger than"):
         service.read_source(root, "instruction:claude")
     with pytest.raises(ValueError, match="unknown"):
@@ -199,14 +208,24 @@ def test_sources_are_allowlisted_and_bounded(tmp_path: Path) -> None:
         service.read_source(root, "file:anywhere")
     with pytest.raises(ValueError, match="unknown"):
         service.read_source(root, "instruction:global:../../escape")
+    with pytest.raises(ValueError, match="unknown"):
+        service.source_path(root, "file:anywhere")
 
 
-async def test_agent_context_http_contract(tmp_path: Path) -> None:
+async def test_agent_context_http_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "project"
+    home = tmp_path / "home"
     root.mkdir()
     (root / "CLAUDE.md").write_text("shared\n", encoding="utf-8")
+    (home / ".claude").mkdir(parents=True)
+    global_claude = home / ".claude" / "CLAUDE.md"
+    global_claude.write_text("global\n", encoding="utf-8")
     project = SimpleNamespace(id="project-one", root=str(root), name="Project One")
-    service = AgentContextService(tmp_path / "backups", home=tmp_path / "home")
+    service = AgentContextService(tmp_path / "backups", home=home)
+    revealed: list[Path] = []
+    monkeypatch.setattr(
+        server_module, "open_in_file_manager", lambda path: revealed.append(Path(path))
+    )
     app = web.Application(middlewares=[error_middleware])
     app["projects"] = SimpleNamespace(projects={project.id: project})
     app["agent_context"] = service
@@ -214,6 +233,10 @@ async def test_agent_context_http_contract(tmp_path: Path) -> None:
     app.router.add_get("/projects/{project_id}/agent-context", get_agent_context)
     app.router.add_get(
         "/projects/{project_id}/agent-context/sources/{source_id}", get_agent_context_source
+    )
+    app.router.add_post(
+        "/projects/{project_id}/agent-context/sources/{source_id}/reveal",
+        reveal_agent_context_source,
     )
     app.router.add_post(
         "/projects/{project_id}/agent-context/sync/preview", preview_agent_context_sync
@@ -228,6 +251,12 @@ async def test_agent_context_http_contract(tmp_path: Path) -> None:
             "/projects/project-one/agent-context/sources/instruction:claude"
         )
         read_payload = await read_response.json()
+        reveal_response = await client.post(
+            "/projects/project-one/agent-context/sources/instruction:claude/reveal"
+        )
+        global_reveal_response = await client.post(
+            "/projects/project-one/agent-context/sources/instruction:global:claude/reveal"
+        )
         preview_response = await client.post(
             "/projects/project-one/agent-context/sync/preview",
             json={"direction": "claude_to_agents"},
@@ -259,11 +288,14 @@ async def test_agent_context_http_contract(tmp_path: Path) -> None:
     assert inventory_response.status == 200
     assert inventory_payload["instructions"]["comparison"] == "missing"
     assert [item["status"] for item in inventory_payload["global_instructions"]["items"]] == [
-        "missing",
+        "available",
         "missing",
     ]
     assert read_response.status == 200
     assert read_payload["text"].replace("\r\n", "\n") == "shared\n"
+    assert reveal_response.status == 200
+    assert global_reveal_response.status == 200
+    assert revealed == [(root / "CLAUDE.md").resolve(), global_claude.resolve()]
     assert preview_response.status == 200
     assert sync_response.status == 200
     assert conflict_response.status == 409

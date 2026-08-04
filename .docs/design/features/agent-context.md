@@ -28,6 +28,10 @@ the project-scoped block. It contains:
 - a read-only preformatted viewer and manual rescan; one `sync…` button opens a focus-trapped
   modal containing both copy directions, diff confirmation, and recent restore points.
 
+On a fine-pointer desktop, right-clicking any row backed by a real regular file opens the same
+one-action **Open in default explorer** menu used by the Project file browser. Missing,
+directory, and symlink rows cannot expose that action. The reveal changes no content.
+
 Every body is rendered as text, never as an editor. Selecting or rescanning a source does not
 write it. A Project must be selected; live session focus and runtime cwd do not retarget the
 inventory.
@@ -58,6 +62,10 @@ the fixed instruction allowlist or the freshly validated Claude memory filename 
 reads are UTF-8, regular-file only, reject symlinks, and cap each file at 512 KiB. An inventory
 contains at most 128 Claude memory rows while retaining the complete count. Blocking Git and
 filesystem work runs off the aiohttp event loop.
+
+Reveal also accepts only an opaque source ID. The daemon re-resolves the fixed instruction or
+validated memory source, requires an existing non-symlink regular file, then delegates to the
+shared OS file-manager launcher. Resolved host paths still never cross HTTP.
 
 ## Manual instruction sync
 
