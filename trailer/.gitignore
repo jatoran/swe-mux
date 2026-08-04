@@ -1,0 +1,6 @@
+# Renders, raw footage, and frame dumps. These are large binaries, and the
+# live captures record real session data that has not been cleared for
+# publication (see README.md). Rebuild them with the scripts in this folder.
+output/
+live-captures/
+stills/
