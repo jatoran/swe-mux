@@ -24,10 +24,10 @@ import {
   dragCollapsedAtWidth,
 } from '../src/sidebarResize.ts'
 
-test('injection surfaces lead, then navigators, then attention surfaces', () => {
+test('session surfaces lead, then Project surfaces, then application surfaces', () => {
   // Order is the argument for the drawer existing: clipboard, session commands, prompts
   // and the prompt queue are all "text into the focused terminal" and belong together.
-  // Files and Notes are the second group — project-scoped indexes that open a document
+  // Files and Notes are the second group - project-scoped indexes that open a document
   // into a pane instead of typing into one. Notifications is neither, and stays last.
   // Git closes the Project-scoped block: it reports on the repository behind the Project
   // rather than opening anything into a pane, so it sits with them without being a navigator.
@@ -35,9 +35,10 @@ test('injection surfaces lead, then navigators, then attention surfaces', () => 
   // reads that session back instead of writing into it. Processes closes the Project block
   // for the same shape of reason as Git: Project-scoped, reports rather than opens, and is
   // the watch half of a surface whose acting half stays modal.
-  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript', 'files', 'notes', 'context', 'git', 'processes', 'notifications'])
+  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript', 'files', 'notes', 'context', 'git', 'processes', 'mailbox', 'notifications'])
   assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'session').map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript'])
   assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'project').map(tab => tab.id), ['files', 'notes', 'context', 'git', 'processes'])
+  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'app').map(tab => tab.id), ['mailbox', 'notifications'])
   assert.deepEqual(DRAWER_TABS.filter(tab => isNavigatorTab(tab.id)).map(tab => tab.id), ['files', 'notes'])
   // The insert group and the navigator group must stay contiguous, so the rail reads as
   // two blocks rather than an arbitrary list.
@@ -49,7 +50,7 @@ test('injection surfaces lead, then navigators, then attention surfaces', () => 
   assert.equal(new Set(labels).size, labels.length, 'tab labels must be distinct')
   assert.deepEqual(DRAWER_TABS.map(tab => tab.heading), [
     'Clipboard History', 'Commands', 'Prompt Library', 'Prompt Queue', 'Transcript',
-    'File Explorer', 'Notes', 'Agent Context', 'Git', 'Processes', 'Alerts',
+    'File Explorer', 'Notes', 'Agent Context', 'Git', 'Processes', 'Mailbox', 'Alerts',
   ])
   for (const tab of DRAWER_TABS) {
     assert.ok(tab.label.length <= 10, `${tab.id} label is too long to also serve as a name`)

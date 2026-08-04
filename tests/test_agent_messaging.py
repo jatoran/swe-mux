@@ -341,16 +341,47 @@ async def test_request_spawn_can_be_disabled(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_mailbox_separates_inbox_from_outbox(harness: Harness) -> None:
+async def test_the_mailbox_separates_non_human_from_human_authors(harness: Harness) -> None:
     await harness.messaging.notify(
         harness.manager.sessions["s1"], target="s2", body="from an agent"
     )
     await harness.service.enqueue(target_session_id="s2", body="from me", armed=False)
-    inbox = await harness.messaging.mailbox(role="inbox")
-    outbox = await harness.messaging.mailbox(role="outbox")
-    assert [item["sender_kind"] for item in inbox["messages"]] == ["agent"]
-    assert [item["sender_kind"] for item in outbox["messages"]] == ["user"]
-    assert inbox["messages"][0]["target_label"] == "claude-s2"
+    non_human = await harness.messaging.mailbox(author="non_human")
+    human = await harness.messaging.mailbox(author="human")
+    assert [item["sender_kind"] for item in non_human["messages"]] == ["agent"]
+    assert [item["sender_kind"] for item in human["messages"]] == ["user"]
+    assert non_human["messages"][0]["target_label"] == "claude-s2"
+    assert {target["target_session_id"] for target in human["targets"]} == {"s2"}
+
+    # Compatibility only: old callers may still use the misleading directional names.
+    assert (await harness.messaging.mailbox(role="inbox"))["author"] == "non_human"
+    assert (await harness.messaging.mailbox(role="outbox"))["author"] == "human"
+
+
+@pytest.mark.asyncio
+async def test_the_mailbox_filters_before_its_result_limit(tmp_path: Path) -> None:
+    built = Harness(
+        tmp_path,
+        live_session("s1", project_id="p1"),
+        live_session("s2", project_id="p1"),
+        live_session("s3", project_id="p2"),
+    )
+    try:
+        await built.service.enqueue(target_session_id="s2", body="project one", armed=False)
+        await built.service.enqueue(target_session_id="s3", body="project two", armed=False)
+
+        by_project = await built.messaging.mailbox(
+            author="human", project_id="p1", limit=1
+        )
+        by_session = await built.messaging.mailbox(
+            author="human", target_session_id="s3", limit=1
+        )
+
+        assert [item["body"] for item in by_project["messages"]] == ["project one"]
+        assert [item["body"] for item in by_session["messages"]] == ["project two"]
+        assert {target["target_session_id"] for target in by_project["targets"]} == {"s2", "s3"}
+    finally:
+        built.close()
 
 
 @pytest.mark.asyncio

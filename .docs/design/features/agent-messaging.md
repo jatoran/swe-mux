@@ -10,8 +10,7 @@ one message store:
   queue. A caller over `PromptQueueService.enqueue`, never a second delivery path.
 - `mux.requestSpawn(prompt, …)` — an agent writes an **inert draft** into the Project's
   observation inbox. It starts nothing; a human approving it is what spawns the session.
-- The **mailbox** — inbox/outbox over the same `queue_messages` rows, with sender/target
-  labels, delivery state, revocation, and the emergency auto-delivery controls.
+- The **Mailbox** - an application-wide authorship view over the same `queue_messages` rows, with sender/target labels, delivery state, Project/session filters, revocation, and emergency auto-delivery controls.
 
 What is deliberately absent: an agent cannot deliver, cannot spawn, cannot address a
 session outside its Project, and cannot claim to be anyone else.
@@ -90,13 +89,12 @@ reasoning recorded so it is not rediscovered:
 
 ## UI
 
-- **Mailbox** — the `inbox`/`outbox` scopes of the drawer's Queue tab (app menu → Mailbox…
-  and `mailbox.open` land there; works on mobile): sender and target labels, delivery state,
-  per-item revoke, "open queue" (retargets the panel's session scope), pause-all
-  auto-delivery, and "report unsafe delivery". Not a transcript — it shows delivery state
-  and provenance only. It was a separate app-level modal until the Queue moved into the
-  drawer; one message store had grown two surfaces with two different action sets over it,
-  and the modal's own "open queue" bounced you out of itself into a workspace tab.
+- **Mailbox** is its own application-scoped drawer tab, reached by app menu -> Mailbox or `mailbox.open` on desktop and mobile.
+  It partitions by author (`all | non_human | human`), not message direction, because the operator observes messages sent between agents rather than being every message's recipient.
+  Project and target-session filters are applied by the daemon before the result limit.
+  Rows show sender and target labels, delivery state, per-item revoke, and an "Open queue" transition to the target's session-scoped Queue.
+  Mailbox also owns pause-all auto-delivery and "report unsafe delivery".
+  Mailbox is not a transcript and shows only delivery state and provenance.
 - **Queue rows** show `from <sender>` and the hop number for relayed messages.
 - **Observation inbox** renders `spawn_request` items with the prompt, the requesting
   session, and `approve & start session` / `dismiss`.
@@ -104,7 +102,7 @@ reasoning recorded so it is not rediscovered:
 ## API surface
 
 ```text
-GET  /api/queue/mailbox?role=all|inbox|outbox
+GET  /api/queue/mailbox?author=all|non_human|human[&project_id=...][&target_session_id=...]
 POST /api/queue/messages/{id}/cancel            {kind: revoked}
 POST /api/projects/{pid}/observations/{oid}/decide  {decision: approve|dismiss, …overrides}
 MCP  notify(target, body, reason?, correlation_id?)
@@ -126,8 +124,10 @@ in `queue_auto_policy`.
 - `src/swe_mux/project_files.py` — typed inbox items (`kind`/`request`) and
   `update_observation_request`.
 - `src/swe_mux/server.py` — mailbox route, spawn-request decision handler.
-- `frontend/src/QueuePane.tsx` (the `inbox`/`outbox` scopes), `frontend/src/Observations.tsx`,
-  `frontend/src/queueApi.ts`.
+- `frontend/src/MailboxPane.tsx` - application-wide authorship and target filters plus mailbox actions.
+- `frontend/src/QueuePane.tsx` - the target session's ordered queue reached by "Open queue".
+- `frontend/src/Observations.tsx` - drafted spawn requests.
+- `frontend/src/queueApi.ts` - typed mailbox query and response.
 - Tests: `tests/test_agent_messaging.py`, `tests/test_mcp.py`,
   `tests/test_frontend_phase5_contract.py`.
 

@@ -83,6 +83,14 @@ export const QueueIcon = () => <svg {...stroke}>
   <polyline points="17 8 21 12 17 16" />
 </svg>
 
+/** An envelope with a sender mark: fleet-wide message provenance, not queue order. */
+export const MailboxIcon = () => <svg {...stroke}>
+  <rect x="2" y="5" width="20" height="14" rx="2" />
+  <polyline points="3 7 12 13 21 7" />
+  <circle cx="18" cy="5" r="3" fill="var(--panel)" />
+  <path d="M18 3.5v3M16.5 5h3" />
+</svg>
+
 /** Two bubbles, tails on opposite sides: an exchange, read back.
  *
  * Deliberately built from the same bubble as `PromptsIcon` and deliberately doubled, because
@@ -166,5 +174,6 @@ export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   context: ContextIcon,
   git: GitIcon,
   processes: ProcessesIcon,
+  mailbox: MailboxIcon,
   notifications: AlertsIcon,
 }

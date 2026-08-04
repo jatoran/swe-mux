@@ -65,7 +65,7 @@ test('layout parse and serialization repair malformed singleton state', () => {
 test('missing shipped tabs join their canonical predecessor without moving existing tabs', () => {
   const layout = normalizeDrawerLayout({ type: 'stack', id: 'one', tabs: ['notifications', 'files', 'clipboard'] })
   assert.deepEqual(drawerTabs(layout), [
-    'notifications', 'files', 'notes', 'context', 'git', 'processes',
+    'notifications', 'files', 'notes', 'context', 'git', 'processes', 'mailbox',
     'clipboard', 'commands', 'prompts', 'queue', 'transcript',
   ])
 })

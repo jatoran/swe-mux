@@ -94,19 +94,14 @@ separately opt-in.
 
 ## UI
 
-- **The Queue tab of the utility drawer** (`QueuePane`, session-scoped, follows the focused
-  session like Clipboard/Commands/Prompts). The placement is the point: deciding whether to
-  interrupt an agent is a judgement about that agent's live state, and the terminal is the
-  only place that state is legible — a workspace tab replaces the terminal, a modal covers
-  it, and the docked column sits beside it. Opened by the pane header's `queue[:N]` chip
-  (which focuses that session first, so the panel and the click agree about the target),
-  by `queue.open`, or by the rail/tab strip; the rail icon carries a fleet-wide pending
-  badge. Live-updates off `mux:queue-changed` (re-dispatched `queue_updated`/
-  `queue_delivery` events).
-- **Three scopes in that one panel.** `this session` is the working view: the ordered queue
-  with the head marked `next`, per-state actions, and the composer. `inbox`/`outbox` are the
-  former Mailbox modal, folded in (`agent-messaging.md`) — one store had grown two surfaces
-  with two different action sets.
+- **The Queue tab of the utility drawer** (`QueuePane`) is session-scoped and follows the focused session like Clipboard, Commands, and Prompts.
+  The placement keeps the target terminal visible while the operator decides whether it is safe to interrupt that agent.
+  The pane header's `queue[:N]` chip focuses its named session before opening Queue, while `queue.open` and the rail open the focused session's queue.
+  Queue has no application-wide or Project-wide mode.
+  It live-updates from `mux:queue-changed`, re-dispatched from `queue_updated` and `queue_delivery` events.
+- **Mailbox is a separate application-scoped drawer tab** (`MailboxPane`) over the same message store.
+  It partitions rows by explicit authorship (`all authors | agents + automation | human`) and filters server-side by Project or target session.
+  Its rail icon carries the fleet-wide pending badge and its controls can pause all auto-delivery or report an unsafe delivery.
 - **Built for the drawer's 300 px minimum as well as its viewport-derived maximum.** Rows carry only `Send now` (head) and the arm toggle
   inline; edit, move, cancel/skip, the schedule presets and copy live behind a per-row `⋯`
   that opens a tray under the row rather than a floating menu. Terminal-state items
@@ -159,13 +154,14 @@ separately opt-in.
   `error_middleware`, service wiring + `_record_operator_input(source="queue")` injection,
   retention loop, `seed_text` handling in `_spawn_from_body`.
 - `src/swe_mux/spawn_contract.py` — `SpawnRequest.seed_text`.
-- `frontend/src/queueApi.ts` — typed client + refusal mapping; `frontend/src/QueuePane.tsx`
-  — the panel (three scopes, both renderings); `frontend/src/drawerTabs.ts` +
-  `railIcons.tsx` — the `queue` drawer tab and its mark; `frontend/src/UtilityDrawer.tsx` —
-  the drawer rendering; `frontend/src/SendToAgentPicker.tsx` — queue sender + confirm flow;
-  `frontend/src/App.tsx` — `deliverToAgent`, `openQueueForSession` (drawer) vs
-  `openQueueTab` (pop-out), pane chip, badge total, event re-dispatch;
-  `frontend/src/layout.ts` — `queue` leaf kind.
+- `frontend/src/queueApi.ts` - typed queue and mailbox clients plus refusal mapping.
+- `frontend/src/QueuePane.tsx` - session-scoped Queue in drawer-following and pinned-pop-out renderings.
+- `frontend/src/MailboxPane.tsx` - application-wide authorship and target filters, provenance rows, revocation, and emergency controls.
+- `frontend/src/drawerTabs.ts` + `railIcons.tsx` - distinct `queue` and `mailbox` drawer tabs and marks.
+- `frontend/src/UtilityDrawer.tsx` - drawer rendering and Mailbox-to-Queue navigation.
+- `frontend/src/SendToAgentPicker.tsx` - queue sender and confirm flow.
+- `frontend/src/App.tsx` - `deliverToAgent`, `openQueueForSession` versus `openQueueTab`, pane chip, fleet badge total, and event re-dispatch.
+- `frontend/src/layout.ts` - `queue` leaf kind.
 - Tests: `tests/test_prompt_queue.py`, `frontend/test/queueApi.test.ts`.
 
 ## Relates to

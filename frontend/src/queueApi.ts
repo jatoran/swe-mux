@@ -111,6 +111,20 @@ export interface QueueTargetSummary {
   live: boolean
 }
 
+export type MailboxAuthor = 'all' | 'non_human' | 'human'
+
+export interface MailboxTarget {
+  target_session_id: string
+  label: string | null
+  project_id: string | null
+}
+
+export interface MailboxView {
+  author: MailboxAuthor
+  messages: QueueMessage[]
+  targets: MailboxTarget[]
+}
+
 /** States that hold a place in the strict head-of-line order. */
 export const PENDING_QUEUE_STATES: readonly QueueMessageState[] =
   ['draft', 'armed', 'blocked', 'delivering']
@@ -206,13 +220,20 @@ export const setSessionAutoPolicy = (
 export const reportUnsafeDelivery = (note: string) =>
   api<QueueAutoStatus>('POST', '/api/queue/auto/report-unsafe', { note })
 
-export const fetchMailbox = (role: 'all' | 'inbox' | 'outbox') =>
-  api<{ role: string; messages: QueueMessage[] }>(
+export const fetchMailbox = (
+  author: MailboxAuthor,
+  filters: { projectId?: string; targetSessionId?: string } = {},
+) => {
+  const query = new URLSearchParams({ author })
+  if (filters.projectId) query.set('project_id', filters.projectId)
+  if (filters.targetSessionId) query.set('target_session_id', filters.targetSessionId)
+  return api<MailboxView>(
     'GET',
-    `/api/queue/mailbox?role=${role}`,
+    `/api/queue/mailbox?${query.toString()}`,
     undefined,
     { timeoutMs: 10_000 },
   )
+}
 
 /** `due` | `scheduled` | `expired` — mirrors the daemon's `schedule_status`. */
 export function scheduleStatus(message: QueueMessage, now = Date.now() / 1000): string {

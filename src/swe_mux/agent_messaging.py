@@ -330,11 +330,32 @@ class AgentMessagingService:
 
     # -- mailbox --------------------------------------------------------------
 
-    async def mailbox(self, *, role: str = "all", limit: int = 100) -> dict[str, Any]:
-        """Inbox/outbox view over the one message store (no second archive)."""
-        if role not in {"all", "inbox", "outbox"}:
-            raise QueueError("invalid_role", "role must be all, inbox, or outbox", status=400)
-        messages = await self.queue.store.mailbox(role=role, limit=limit)
+    async def mailbox(
+        self,
+        *,
+        author: str = "all",
+        role: str | None = None,
+        project_id: str | None = None,
+        target_session_id: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Application-wide authorship view over the one message store."""
+        if role is not None:
+            if role not in {"all", "inbox", "outbox"}:
+                raise QueueError("invalid_role", "role must be all, inbox, or outbox", status=400)
+            author = {"inbox": "non_human", "outbox": "human"}.get(role, role)
+        if author not in {"all", "human", "non_human"}:
+            raise QueueError(
+                "invalid_author",
+                "author must be all, human, or non_human",
+                status=400,
+            )
+        messages = await self.queue.store.mailbox(
+            author=author,
+            project_id=project_id,
+            target_session_id=target_session_id,
+            limit=limit,
+        )
         for item in messages:
             target = self.sessions.sessions.get(str(item["target_session_id"]))
             item["target_live"] = bool(
@@ -346,4 +367,8 @@ class AgentMessagingService:
             if origin_id:
                 origin = self.sessions.sessions.get(str(origin_id))
                 item["origin_live"] = origin is not None
-        return {"role": role, "messages": messages}
+        return {
+            "author": author,
+            "messages": messages,
+            "targets": await self.queue.store.mailbox_targets(),
+        }

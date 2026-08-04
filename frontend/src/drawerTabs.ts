@@ -18,7 +18,8 @@
 // leaving the session on screen is what the tab is for on a phone. Context follows them as
 // a read-only view of the files agents themselves consume. Git closes the Project-scoped block: it reads the
 // repository behind the Project rather than opening anything, so it is not a navigator,
-// but it acts on the same thing they do. Notifications is neither, and stays last.
+// but it acts on the same thing they do. Mailbox and Notifications are application-wide
+// fleet views and stay last.
 //
 // Queue closes the injection block, which is where it belongs and why it is here rather
 // than in a workspace tab or a modal: deciding whether to send is a judgement about the
@@ -26,7 +27,7 @@
 // the terminal, a modal covers it; the docked column is the one placement that keeps the
 // target and the control on screen together.
 
-export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'queue' | 'transcript' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'notifications'
+export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'queue' | 'transcript' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'mailbox' | 'notifications'
 
 /** What a tab acts on: the focused terminal, the active Project, or the app itself. */
 export type DrawerTabScope = 'session' | 'project' | 'app'
@@ -49,13 +50,14 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'clipboard', label: 'Clipboard', heading: 'Clipboard History', title: 'Clipboard history - insert a recent copy', scope: 'session' },
   { id: 'commands', label: 'Commands', heading: 'Commands', title: 'Commands - keys, skills, and slash commands not on the rail', scope: 'session' },
   { id: 'prompts', label: 'Prompts', heading: 'Prompt Library', title: 'Prompts - insert a saved template into the focused terminal', scope: 'session' },
-  { id: 'queue', label: 'Queue', heading: 'Prompt Queue', title: 'Queue - messages staged for this agent, and the mailbox', scope: 'session' },
+  { id: 'queue', label: 'Queue', heading: 'Prompt Queue', title: 'Queue - messages staged for the focused agent', scope: 'session' },
   { id: 'transcript', label: 'Transcript', heading: 'Transcript', title: 'Transcript - read and copy this session’s conversation', scope: 'session' },
   { id: 'files', label: 'Files', heading: 'File Explorer', title: 'Files - browse or search this Project, then open into a pane', scope: 'project' },
   { id: 'notes', label: 'Notes', heading: 'Notes', title: 'Notes - create and edit Project-owned notes here, or open one in a pane', scope: 'project' },
   { id: 'context', label: 'Context', heading: 'Agent Context', title: 'Context - view agent instructions and learned project memory', scope: 'project' },
   { id: 'git', label: 'Git', heading: 'Git', title: 'Git - worktree map and commit graph for this Project', scope: 'project' },
   { id: 'processes', label: 'Processes', heading: 'Processes', title: 'Processes - what this Project’s sessions are running, and what they are serving', scope: 'project' },
+  { id: 'mailbox', label: 'Mailbox', heading: 'Mailbox', title: 'Mailbox - application-wide queued-message provenance and delivery state', scope: 'app' },
   { id: 'notifications', label: 'Alerts', heading: 'Alerts', title: 'Alerts - notifications and attention records', scope: 'app' },
 ]
 

@@ -104,6 +104,7 @@ from .profiles import profile_payload, resolve_profile
 from .project_actions import ProjectActionService, action_spawn_body
 from .project_card import ProjectCardContext, ProjectCardService
 from .project_files import (
+    GLOBAL_SCRATCHPAD_ID,
     ObservationsUnreadableError,
     ProjectFileRevisionConflict,
     ProjectImageUnavailable,
@@ -119,6 +120,7 @@ from .project_files import (
     project_automations,
     project_note_summaries,
     project_path,
+    read_global_note,
     read_note,
     read_observations,
     read_project_config,
@@ -126,6 +128,7 @@ from .project_files import (
     read_project_image_content,
     search_project_files,
     update_observation_request,
+    write_global_note,
     write_note,
     write_observations,
     write_project_config,
@@ -566,6 +569,8 @@ def create_app(
             web.post("/api/projects/{project_id}/actions/trust", trust_project_actions),
             web.post("/api/projects/{project_id}/actions/run", run_project_action),
             web.post("/api/projects/{project_id}/init-scripts/run", run_project_init_scripts),
+            web.get("/api/global-notes/{note_id}", get_global_note),
+            web.put("/api/global-notes/{note_id}", put_global_note),
             web.get("/api/notes", list_notes),
             web.post("/api/projects/{project_id}/notes", create_project_note),
             web.get("/api/projects/{project_id}/notes/{note_id}", get_note),
@@ -2849,6 +2854,56 @@ def _storage_note_id(project, note_id: str) -> str:  # type: ignore[no-untyped-d
     return "project" if note_id == project.id else note_id
 
 
+def _global_note_id(request: web.Request) -> str:
+    note_id = request.match_info["note_id"]
+    if note_id != GLOBAL_SCRATCHPAD_ID:
+        raise ValueError("unknown global note")
+    return note_id
+
+
+async def get_global_note(request: web.Request) -> web.Response:
+    note_id = _global_note_id(request)
+    note = await read_global_note(
+        request.app["config"].data_dir,
+        note_id,
+        default_title="Scratchpad",
+    )
+    return json_response(note)
+
+
+async def put_global_note(request: web.Request) -> web.Response:
+    note_id = _global_note_id(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise ValueError("note request body must be an object")
+    try:
+        result = await write_global_note(
+            request.app["config"].data_dir,
+            note_id,
+            str(body.get("markdown") or ""),
+            str(body.get("revision") or "missing"),
+            title="Scratchpad",
+        )
+    except ValueError as exc:
+        if "changed externally" in str(exc):
+            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        raise
+    log.info(
+        "global note saved note_id=%s revision=%s bytes=%d",
+        note_id,
+        result["revision"],
+        result["bytes"],
+    )
+    await request.app["events"].emit(
+        "note_changed",
+        source="user",
+        scope="global",
+        note_id=note_id,
+        revision=result["revision"],
+    )
+    return json_response(result)
+
+
 async def _legacy_note_titles(request: web.Request, project) -> dict[str, str]:  # type: ignore[no-untyped-def]
     titles: dict[str, str] = {}
     if "history" in request.app:
@@ -2917,6 +2972,7 @@ async def create_project_note(request: web.Request) -> web.Response:
     await request.app["events"].emit(
         "note_changed",
         source="user",
+        scope="project",
         project_id=project.id,
         note_id=result["id"],
         revision=result["revision"],
@@ -2986,6 +3042,7 @@ async def _write_project_note(request: web.Request, *, title_only: bool = False)
     await request.app["events"].emit(
         "note_changed",
         source="user",
+        scope="project",
         project_id=project.id,
         note_id=note_id,
         revision=result["revision"],
@@ -3028,6 +3085,7 @@ async def delete_project_note(request: web.Request) -> web.Response:
     await request.app["events"].emit(
         "note_changed",
         source="user",
+        scope="project",
         project_id=project.id,
         note_id=note_id,
         revision="missing",
@@ -4484,9 +4542,23 @@ async def queue_auto_report_unsafe(request: web.Request) -> web.Response:
 
 
 async def queue_mailbox(request: web.Request) -> web.Response:
-    role = request.query.get("role", "all").strip() or "all"
-    limit = int(request.query.get("limit", "100") or 100)
-    return json_response(await request.app["agent_messaging"].mailbox(role=role, limit=limit))
+    author = request.query.get("author", "all").strip() or "all"
+    role = request.query.get("role")
+    project_id = request.query.get("project_id", "").strip() or None
+    target_session_id = request.query.get("target_session_id", "").strip() or None
+    try:
+        limit = int(request.query.get("limit", "100") or 100)
+    except ValueError as exc:
+        raise QueueError("invalid_limit", "limit must be an integer", status=400) from exc
+    return json_response(
+        await request.app["agent_messaging"].mailbox(
+            author=author,
+            role=role.strip() if role else None,
+            project_id=project_id,
+            target_session_id=target_session_id,
+            limit=limit,
+        )
+    )
 
 
 _MEDIA_TYPES = {

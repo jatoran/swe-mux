@@ -240,6 +240,11 @@ The historical initial note remains at `.swe-mux/notes/project.md`; additional n
 Non-empty legacy session notes migrate into this collection and their source files move to the
 recoverable `.swe-mux/notes/legacy/` tree.
 
+`GET /global-notes/scratchpad` returns the fixed global Scratchpad.
+Before the first save it returns an editable `missing` payload with empty Markdown and revision `missing` without creating a file.
+`PUT /global-notes/scratchpad {markdown, revision}` writes `<data_dir>/notes/items/scratchpad.md` with the same 1 MiB body limit and optimistic revision contract as Project notes.
+Other global note IDs are rejected; Scratchpad has no create, rename, or delete route.
+
 `GET /search` recursively finds files by name and/or UTF-8 content beneath the canonical root,
 reusing the same ignore rules as the browser and running off the event loop. `mode` selects
 `names`, `contents`, or `both` (invalid values fall back to `names`); content matching skips
@@ -269,8 +274,10 @@ The option does not change Project ownership and is not accepted by browsing, se
 Unknown, removed, nested, or cross-repository roots return a typed `worktree_not_found` or `invalid_worktree` error instead of falling back to the canonical Project root.
 File change events and watch replies include the exact `worktree` root so identical relative paths in sibling worktrees remain isolated.
 
-Successful note creates, writes, renames, and deletes emit
-`note_changed {project_id, note_id, revision}`. Clean open editors refetch on a different
+Successful Project note creates, writes, renames, and deletes emit
+`note_changed {scope: "project", project_id, note_id, revision}`.
+Successful Scratchpad writes emit `note_changed {scope: "global", note_id: "scratchpad", revision}`.
+Clean open editors refetch on a different
 revision and after event-stream reconnect; editors with local pending/in-flight/error/conflict
 state retain their text and continue through optimistic conflict detection. The event contract
 provides live follow, not concurrent-edit merging.
@@ -353,7 +360,9 @@ POST   /queue/auto/pause                            {paused}   emergency disable
 PUT    /queue/auto/sessions/{sid}                   {enabled?, ttl_minutes?, max_sends?,
                                                      accept_agent_messages?}
 POST   /queue/auto/report-unsafe                    {note}     operator review input
-GET    /queue/mailbox?role=all|inbox|outbox         cross-target messages with provenance
+GET    /queue/mailbox?author=all|non_human|human    application-wide authorship view
+                         [&project_id=...]
+                         [&target_session_id=...]    server-side target filters
 ```
 
 The typed daemon operations of the persistent manual prompt queue — the daemon owns
@@ -380,8 +389,8 @@ from an authenticated remote device) and never read from the body; `initiator` (
 `auto`) is recorded on every delivery attempt. The `/queue/auto*` routes carry runtime
 policy, not config: live agent runs receive bounded default-on rows, while explicit opt-outs
 and the pause survive a restart and depend on no provider
-(`features/auto-delivery.md`). `/queue/mailbox` is a view over the same message rows, with
-sender/target labels and delivery state (`features/agent-messaging.md`).
+(`features/auto-delivery.md`).
+`/queue/mailbox` is an application-wide view over the same message rows, partitioned by authorship rather than inbox/outbox direction and optionally filtered by Project or target session before its result limit (`features/agent-messaging.md`).
 
 ## Clipboard history
 

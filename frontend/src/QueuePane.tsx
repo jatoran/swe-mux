@@ -4,14 +4,14 @@ import { sessionDotClass } from './sessionStatus'
 import { agentTargetName, agentTargets } from './agentTargets'
 import {
   armQueueMessage, cancelQueueMessage, editQueueMessage, enqueueMessage, fetchAutoStatus,
-  fetchMailbox, fetchQueue, isPendingQueueState, moveQueueMessage, queueHead, reportUnsafeDelivery,
+  fetchQueue, isPendingQueueState, moveQueueMessage, queueHead,
   retargetQueueMessage, scheduleQueueMessage, scheduleStatus, senderLabel, sendQueueMessage,
-  setAutoPaused, setSessionAutoPolicy,
+  setSessionAutoPolicy,
   type QueueAutoStatus, type QueueMessage, type QueueSendOutcome, type QueueTargetView,
 } from './queueApi'
 import type { Session } from './types'
 
-// The prompt queue's one surface, in two renderings and three scopes.
+// The prompt queue's session-scoped surface, in two renderings.
 //
 // Renderings: normally the Queue tab of the right-edge utility drawer, where it sits
 // *beside* the terminal it acts on. That adjacency is the whole argument for the
@@ -20,12 +20,6 @@ import type { Session } from './types'
 // replaces the terminal; a modal covers it. The `queue:<session>` pane leaf survives as
 // an explicit pop-out (wide review, two queues side by side) and renders this same
 // component with its target pinned instead of following focus.
-//
-// Scopes: `session` is the working view (the ordered queue for one target, plus the
-// composer); `inbox`/`outbox` are the former Mailbox modal, folded in here because
-// "what is queued for this agent" and "what is queued anywhere" were two surfaces over
-// one store with two different action sets. Deliberately not a second transcript in any
-// scope: it shows delivery state and provenance, never a conversation.
 //
 // Every bound is the daemon's — this view shows state and forwards user acts.
 
@@ -36,18 +30,11 @@ type Props = {
   sessions: Session[]
   /** "Show me this terminal" — after a delivery. Closes the drawer on mobile. */
   onSelectSession?: (sessionId: string) => void
-  /** "Make this session the queue's target" — from a mailbox row. Keeps the panel open. */
-  onFocusTarget?: (sessionId: string) => void
   /** Drawer only: pop this target's queue out into a workspace tab. */
   onOpenAsTab?: (sessionId: string) => void
-  /** Set by the caller to mean "you were just opened deliberately": land on this scope,
-   *  and focus the composer if it is the working one. A counter rather than a boolean so
-   *  clicking the same chip twice focuses twice; switching to the tab by hand passes
-   *  nothing and leaves the panel where it was. */
-  openRequest?: { token: number; scope: QueueScope }
+  /** Deliberate-open counter: focus the composer even when Queue was already selected. */
+  openRequestToken?: number
 }
-
-export type QueueScope = 'session' | 'inbox' | 'outbox'
 
 const STATE_LABEL: Record<string, string> = {
   draft: 'draft',
@@ -125,10 +112,8 @@ const isAgentSession = (session: Session | null): boolean =>
 const isDoneState = (state: QueueMessage['state']): boolean =>
   state === 'sent' || state === 'failed' || state === 'cancelled'
 
-export function QueuePane({ sessionId, sessions, onSelectSession, onFocusTarget, onOpenAsTab, openRequest }: Props) {
-  const [scope, setScope] = useState<QueueScope>('session')
+export function QueuePane({ sessionId, sessions, onSelectSession, onOpenAsTab, openRequestToken }: Props) {
   const [view, setView] = useState<QueueTargetView | null>(null)
-  const [mailbox, setMailbox] = useState<QueueMessage[]>([])
   const [error, setError] = useState('')
   const [busyId, setBusyId] = useState('')
   const [confirmId, setConfirmId] = useState('')
@@ -151,27 +136,22 @@ export function QueuePane({ sessionId, sessions, onSelectSession, onFocusTarget,
     try {
       const [policy, next] = await Promise.all([
         fetchAutoStatus(),
-        scope === 'session'
-          ? (targetable ? fetchQueue(sessionId) : Promise.resolve(null))
-          : fetchMailbox(scope),
+        targetable ? fetchQueue(sessionId) : Promise.resolve(null),
       ])
       if (!alive.current) return
       setAuto(policy)
-      if (next === null) setView(null)
-      else if ('target' in next) setView(next)
-      else setMailbox(next.messages)
+      setView(next)
     } catch (cause) {
       if (alive.current) setError(cause instanceof Error ? cause.message : String(cause))
     }
-  }, [sessionId, scope, targetable])
+  }, [sessionId, targetable])
 
   useEffect(() => {
     alive.current = true
     void refresh()
     const onQueueChanged = (event: Event) => {
       const detail = (event as CustomEvent<{ sessionId?: string }>).detail
-      // A mailbox scope reads every target, so any queue event is its event.
-      if (scope !== 'session' || !detail?.sessionId || detail.sessionId === sessionId) void refresh()
+      if (!detail?.sessionId || detail.sessionId === sessionId) void refresh()
     }
     window.addEventListener('mux:queue-changed', onQueueChanged)
     window.addEventListener('mux:events-connected', onQueueChanged)
@@ -180,25 +160,18 @@ export function QueuePane({ sessionId, sessions, onSelectSession, onFocusTarget,
       window.removeEventListener('mux:queue-changed', onQueueChanged)
       window.removeEventListener('mux:events-connected', onQueueChanged)
     }
-  }, [sessionId, scope, refresh])
+  }, [sessionId, refresh])
 
   // Retargeting drops per-message UI that named a message of the previous target: the
   // drawer's target changes under it every time focus moves to another pane.
   useEffect(() => {
     setEditing(null); setConfirmId(''); setMenuId(''); setRetargetFor(''); setError('')
-  }, [sessionId, scope])
+  }, [sessionId])
 
-  // Opened deliberately (the pane chip, a command): land on the scope that act named, and
-  // for the working view put the caret where the next act is. Keyed on the token alone —
-  // an inline object literal from the caller is a new identity every render.
-  const openToken = openRequest?.token
-  const openScope = openRequest?.scope
+  // A chip or command can open an already-selected Queue tab; the token still earns focus.
   useEffect(() => {
-    if (!openToken || !openScope) return
-    setScope(openScope)
-    if (openScope === 'session') composerRef.current?.focus()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openToken])
+    if (openRequestToken) composerRef.current?.focus()
+  }, [openRequestToken])
 
   const messages = view?.messages ?? []
   const head = useMemo(() => queueHead(messages), [messages])
@@ -469,41 +442,6 @@ export function QueuePane({ sessionId, sessions, onSelectSession, onFocusTarget,
     )
   }
 
-  const mailboxRow = (message: QueueMessage) => {
-    const busy = busyId === message.id
-    return (
-      <li key={message.id} class={`queue-item queue-item-${message.state}`}>
-        <div class="queue-item-meta">
-          <span class={`queue-state queue-state-${message.state}`}>{message.state}</span>
-          <span>{senderLabel(message) || 'from you'}</span>
-          <span class="queue-item-target">→ {message.target_label || message.target_session_id}</span>
-          {scheduleStatus(message) === 'scheduled' && message.constraints?.not_before && (
-            <span class="queue-item-schedule">
-              scheduled {new Date(message.constraints.not_before * 1000).toLocaleString()}
-            </span>
-          )}
-          <span class="queue-item-note">{STATE_NOTE[message.state] || ''}</span>
-        </div>
-        <pre class={`queue-item-body${message.state === 'sent' ? ' queue-item-sent' : ''}`}>{message.body}</pre>
-        <div class="queue-item-actions">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => { setScope('session'); onFocusTarget?.(message.target_session_id) }}
-          >
-            Open queue
-          </button>
-          {['draft', 'armed', 'blocked'].includes(message.state) && (
-            <button type="button" disabled={busy} onClick={() => void run(message.id, () => cancelQueueMessage(message.id, 'revoked'))}>
-              Revoke
-            </button>
-          )}
-          <button type="button" disabled={busy} onClick={() => copyBody(message)}>Copy</button>
-        </div>
-      </li>
-    )
-  }
-
   const targetLabel = session ? agentTargetName(session) : view?.target.label || sessionId
   const live = view?.target.live ?? !!session
   const policy = auto?.sessions.find(item => item.session_id === sessionId) ?? null
@@ -512,121 +450,66 @@ export function QueuePane({ sessionId, sessions, onSelectSession, onFocusTarget,
     void run('auto', async () => {
       setAuto(await setSessionAutoPolicy(sessionId, patch))
     })
-  const promotion = auto?.promotion
-
   return (
     <div class="queue-pane">
-      <div class="queue-scope" role="tablist" aria-label="Queue scope">
-        {(['session', 'inbox', 'outbox'] as QueueScope[]).map(item => (
-          <button
-            key={item}
-            type="button"
-            role="tab"
-            aria-selected={scope === item}
-            class={scope === item ? 'active' : ''}
-            title={item === 'session'
-              ? 'Messages staged for the focused agent'
-              : item === 'inbox'
-                ? 'Everything other actors addressed to your sessions'
-                : 'Everything you staged, wherever it is headed'}
-            onClick={() => setScope(item)}
-          >
-            {item === 'session' ? 'this session' : item}
-          </button>
-        ))}
-      </div>
-
-      {scope === 'session' ? (
-        <>
-          <header class="queue-pane-header">
-            <span class={sessionDotClass(session ?? undefined)} />
-            <strong>{targetable ? targetLabel : 'no agent focused'}</strong>
-            {targetable && (
-              <span class="queue-pane-status">
-                {live ? `${view?.pending ?? 0} pending` : 'target ended — pending items are stranded'}
-              </span>
-            )}
-            {targetable && onOpenAsTab && (
-              <button
-                type="button"
-                class="queue-popout"
-                title="Open this queue as a workspace tab"
-                aria-label="Open this queue as a workspace tab"
-                onClick={() => onOpenAsTab(sessionId)}
-              >
-                ↗
-              </button>
-            )}
-          </header>
-          {targetable && live && (
-            <div class="queue-auto-strip">
-              <button
-                type="button"
-                class={`queue-auto-summary${autoOn ? ' queue-auto-on' : ''}`}
-                aria-expanded={autoOpen}
-                title="Bounded, expiring, and never overrides a not-safe target"
-                onClick={() => setAutoOpen(value => !value)}
-              >
-                <span aria-hidden="true">{autoOpen ? '▾' : '▸'}</span> auto: {describeAuto(auto, sessionId)}
-              </button>
-            </div>
-          )}
-          {targetable && live && autoOpen && (
-            <div class="queue-auto-detail">
-              <label class="queue-auto-toggle">
-                <input
-                  type="checkbox"
-                  checked={autoOn}
-                  disabled={busyId === 'auto' || !auto?.master_enabled}
-                  onChange={event => setPolicy({ enabled: event.currentTarget.checked })}
-                />
-                <span>auto-deliver armed messages</span>
-              </label>
-              <label class="queue-auto-toggle" title="Agent messages arrive armed instead of as drafts">
-                <input
-                  type="checkbox"
-                  checked={!!policy?.accept_agent_messages}
-                  disabled={busyId === 'auto'}
-                  onChange={event => setPolicy({ acceptAgentMessages: event.currentTarget.checked })}
-                />
-                <span>accept agent messages armed</span>
-              </label>
-              {auto && !auto.master_enabled && (
-                <p class="queue-auto-note">
-                  Auto-delivery is off for this install. Turn on “Allow auto-delivery for agent
-                  conversations” under Settings → Agents → Prompt queue.
-                </p>
-              )}
-            </div>
-          )}
-        </>
-      ) : (
-        <div class="queue-mailbox-controls">
+      <header class="queue-pane-header">
+        <span class={sessionDotClass(session ?? undefined)} />
+        <strong>{targetable ? targetLabel : 'no agent focused'}</strong>
+        {targetable && (
+          <span class="queue-pane-status">
+            {live ? `${view?.pending ?? 0} pending` : 'target ended — pending items are stranded'}
+          </span>
+        )}
+        {targetable && onOpenAsTab && (
           <button
             type="button"
-            class={auto?.paused ? 'primary' : 'danger'}
-            disabled={busyId === 'auto'}
-            title="Stops every automatic delivery immediately, on every session"
-            onClick={() => void run('auto', async () => setAuto(await setAutoPaused(!auto?.paused)))}
+            class="queue-popout"
+            title="Open this queue as a workspace tab"
+            aria-label="Open this queue as a workspace tab"
+            onClick={() => onOpenAsTab(sessionId)}
           >
-            {auto?.paused ? 'resume auto-delivery' : 'pause all auto-delivery'}
+            ↗
           </button>
+        )}
+      </header>
+      {targetable && live && (
+        <div class="queue-auto-strip">
           <button
             type="button"
-            disabled={busyId === 'auto'}
-            title="Record a delivery that should not have happened"
-            onClick={() => void run('auto', async () => {
-              await reportUnsafeDelivery('reported from the queue panel')
-              setError('Recorded. Auto-delivery is paused and the proving period restarted.')
-            })}
+            class={`queue-auto-summary${autoOn ? ' queue-auto-on' : ''}`}
+            aria-expanded={autoOpen}
+            title="Bounded, expiring, and never overrides a not-safe target"
+            onClick={() => setAutoOpen(value => !value)}
           >
-            report unsafe delivery
+            <span aria-hidden="true">{autoOpen ? '▾' : '▸'}</span> auto: {describeAuto(auto, sessionId)}
           </button>
-          {promotion && (
-            <span class="queue-promotion">
-              auto sends {promotion.auto_sends}/{promotion.required_sends} · proving{' '}
-              {promotion.proving_days}/{promotion.required_days} days · unsafe {promotion.unsafe_reports}
-            </span>
+        </div>
+      )}
+      {targetable && live && autoOpen && (
+        <div class="queue-auto-detail">
+          <label class="queue-auto-toggle">
+            <input
+              type="checkbox"
+              checked={autoOn}
+              disabled={busyId === 'auto' || !auto?.master_enabled}
+              onChange={event => setPolicy({ enabled: event.currentTarget.checked })}
+            />
+            <span>auto-deliver armed messages</span>
+          </label>
+          <label class="queue-auto-toggle" title="Agent messages arrive armed instead of as drafts">
+            <input
+              type="checkbox"
+              checked={!!policy?.accept_agent_messages}
+              disabled={busyId === 'auto'}
+              onChange={event => setPolicy({ acceptAgentMessages: event.currentTarget.checked })}
+            />
+            <span>accept agent messages armed</span>
+          </label>
+          {auto && !auto.master_enabled && (
+            <p class="queue-auto-note">
+              Auto-delivery is off for this install. Turn on “Allow auto-delivery for agent
+              conversations” under Settings → Agents → Prompt queue.
+            </p>
           )}
         </div>
       )}
@@ -637,39 +520,26 @@ export function QueuePane({ sessionId, sessions, onSelectSession, onFocusTarget,
         </p>
       )}
 
-      {scope === 'session' ? (
-        <ul class="queue-list">
-          {active.map(row)}
-          {!active.length && (
-            <li class="queue-empty">
-              {targetable
-                ? 'Nothing queued. Messages staged here wait for your explicit “Send now” — nothing is ever delivered on a timer.'
-                : 'Focus a Claude or Codex session to stage messages for it. Shells are never targets: a paste there would execute.'}
-            </li>
-          )}
-          {done.length > 0 && (
-            <li class="queue-done">
-              <button type="button" aria-expanded={showDone} onClick={() => setShowDone(value => !value)}>
-                <span aria-hidden="true">{showDone ? '▾' : '▸'}</span> {done.length} delivered or closed
-              </button>
-            </li>
-          )}
-          {showDone && done.map(row)}
-        </ul>
-      ) : (
-        <ul class="queue-list">
-          {mailbox.map(mailboxRow)}
-          {!mailbox.length && (
-            <li class="queue-empty">
-              {scope === 'inbox'
-                ? 'No agent, rule, or device has addressed a message to your sessions.'
-                : 'You have not staged any messages.'}
-            </li>
-          )}
-        </ul>
-      )}
+      <ul class="queue-list">
+        {active.map(row)}
+        {!active.length && (
+          <li class="queue-empty">
+            {targetable
+              ? 'Nothing queued. Messages staged here wait for your explicit “Send now” — nothing is ever delivered on a timer.'
+              : 'Focus a Claude or Codex session to stage messages for it. Shells are never targets: a paste there would execute.'}
+          </li>
+        )}
+        {done.length > 0 && (
+          <li class="queue-done">
+            <button type="button" aria-expanded={showDone} onClick={() => setShowDone(value => !value)}>
+              <span aria-hidden="true">{showDone ? '▾' : '▸'}</span> {done.length} delivered or closed
+            </button>
+          </li>
+        )}
+        {showDone && done.map(row)}
+      </ul>
 
-      {scope === 'session' && targetable && live && (
+      {targetable && live && (
         <footer class="queue-composer">
           <textarea
             ref={composerRef}

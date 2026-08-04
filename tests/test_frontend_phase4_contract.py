@@ -181,6 +181,11 @@ def test_notes_tab_manages_the_project_owned_collection() -> None:
     assert "+ New note" in notes
     assert "mode:'rename'" in notes
     assert "onOpenNote" in drawer
+    assert 'class="notes-global"' in notes
+    assert "Available in every Project" in notes
+    assert "onOpenScratchpad" in drawer
+    assert "kind:'global-note',resourceId:'scratchpad'" in app
+    assert "id: 'notes.scratchpad'" in app
 
     # The retired modal is gone, and its three entry points now open the drawer tab.
     assert not (ROOT / "frontend" / "src" / "SessionNotesBrowser.tsx").exists()
@@ -268,8 +273,11 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     # about the header changes. The question a new tab has to pass is therefore no longer
     # "does it fit" but "does this surface belong beside a terminal"; the assertions below are
     # what keep the scroller honest while that stays the actual bar.
+    #
+    # Re-checked at twelve (Mailbox): it is an application-wide narrow review surface and
+    # uses the existing one-row scroller without changing its accessibility contract.
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
-    assert len(ids) == 11, ids
+    assert len(ids) == 12, ids
     tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
     assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
     assert ".drawer-chrome>.drawer-close" in css

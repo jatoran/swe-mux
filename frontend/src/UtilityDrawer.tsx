@@ -5,7 +5,8 @@ import { ClipboardTab } from './ClipboardPanel'
 import { CommandsTab } from './CommandsTab'
 import { PromptsTab } from './PromptsTab'
 import { NotesTab } from './NotesTab'
-import { QueuePane, type QueueScope } from './QueuePane'
+import { QueuePane } from './QueuePane'
+import { MailboxPane } from './MailboxPane'
 import { TranscriptTab } from './TranscriptTab'
 import { GitTab } from './GitTab'
 import { ProjectResource } from './ProjectResource'
@@ -78,6 +79,7 @@ type Props = {
   notesAllProjects: boolean
   onNotesAllProjects: (value: boolean) => void
   onOpenNote: (projectId: string, noteId: string, title: string, place: NotePlacement) => void
+  onOpenScratchpad: (place: NotePlacement) => void
   /** Processes: the fleet sample `App` already polls. Passed in rather than fetched here so an
    *  open panel adds no process enumeration to the daemon's loop — see `ProcessesTab`. */
   processSnapshot: WatchSnapshot
@@ -102,9 +104,8 @@ type Props = {
   draggingTab: DrawerTabId | null
   /** Template handed off by a command-rail prompt button that needs its fields filled. */
   promptPreselect?: { key: string }
-  /** Queue: set when the tab was opened by a deliberate act (the pane chip, a command)
-   *  rather than by tab-switching, which is what earns a scope and the composer's caret. */
-  queueOpenRequest?: { token: number; scope: QueueScope }
+  /** Queue: deliberate-open counter used to focus the composer. */
+  queueOpenToken?: number
   /** Queue: pop the focused target's queue out into a workspace tab. */
   onQueueOpenAsTab: (sessionId: string) => void
   /** Queue: pending items across every target, badged like the alerts count. Fleet-wide
@@ -138,7 +139,7 @@ export function UtilityDrawer(props: Props) {
   const drawerNote = props.drawerNoteId && project && noteIdentity && noteIdentity.kind !== 'file' && noteIdentity.kind !== 'worktree-file'
     ? { resourceId: props.drawerNoteId, identity: noteIdentity }
     : null
-  const drawerNoteLabel = 'Note'
+  const drawerNoteLabel = noteIdentity?.kind === 'global-note' ? 'Scratchpad' : 'Note'
 
   // Where the last Clipboard insert landed. `ClipboardTab` reports its own outcome to
   // `onInsert` and then calls `onDone` with nothing, so the two are joined here rather than by
@@ -208,16 +209,13 @@ export function UtilityDrawer(props: Props) {
       case 'prompts':
         return <PromptsTab project={project} backend={props.backend} onInsert={props.onInsertPrompt} onDone={onDone} onManage={props.onManagePrompts} preselect={props.promptPreselect} sessions={props.sessions} onSend={props.onSendPrompt} />
       case 'queue':
-        // Follows the focused session, like every other session-scoped tab. A delivery is
-        // the one act here that wants the terminal back, so it goes through `onDone`;
-        // opening another target's queue from a mailbox row deliberately does not.
+        // Follows the focused session, like every other session-scoped tab.
         return <QueuePane
           sessionId={session?.id || ''}
           sessions={props.sessions}
           onSelectSession={sessionId => { props.onOpenSession(sessionId); onDone() }}
-          onFocusTarget={props.onOpenSession}
           onOpenAsTab={sessionId => { props.onQueueOpenAsTab(sessionId); onDone() }}
-          openRequest={props.queueOpenRequest}
+          openRequestToken={props.queueOpenToken}
         />
       case 'transcript':
         // No `onDone`. Every other session-scoped tab closes the mobile drawer once
@@ -245,6 +243,7 @@ export function UtilityDrawer(props: Props) {
             allProjects={props.notesAllProjects}
             onAllProjects={props.onNotesAllProjects}
             onOpenNote={props.onOpenNote}
+            onOpenScratchpad={props.onOpenScratchpad}
             onDone={onDone}
           />
       case 'context':
@@ -265,6 +264,11 @@ export function UtilityDrawer(props: Props) {
           onOpenInspector={props.onOpenInspector}
           onRefresh={props.onRefreshProcesses}
           onDone={onDone}
+        />
+      case 'mailbox':
+        return <MailboxPane
+          projects={props.projects}
+          onOpenQueue={sessionId => { props.onOpenSession(sessionId); props.onTab('queue') }}
         />
       case 'notifications':
         return <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} onChanged={props.onNotificationsChanged} />
@@ -330,7 +334,7 @@ export function UtilityDrawer(props: Props) {
       >
         {renderTabMark(id)}
         {id === 'notifications' && props.unread > 0 && <i class="drawer-badge">{props.unread > 99 ? '99+' : props.unread}</i>}
-        {id === 'queue' && props.queuePending > 0 && <i class="drawer-badge queue-badge">{props.queuePending > 99 ? '99+' : props.queuePending}</i>}
+        {id === 'mailbox' && props.queuePending > 0 && <i class="drawer-badge queue-badge">{props.queuePending > 99 ? '99+' : props.queuePending}</i>}
       </button>
     })}
   </OverflowRail>

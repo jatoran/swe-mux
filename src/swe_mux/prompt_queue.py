@@ -927,30 +927,58 @@ class PromptQueueStore:
         return await self._run(op)
 
     async def mailbox(
-        self, *, role: str = "all", limit: int = 100
+        self,
+        *,
+        author: str = "all",
+        role: str | None = None,
+        project_id: str | None = None,
+        target_session_id: str | None = None,
+        limit: int = 100,
     ) -> list[dict[str, Any]]:
-        """Cross-target message list for the mailbox view.
+        """Application-wide message list filtered by authorship and target.
 
-        ``inbox`` is everything a non-human sender addressed to one of this
-        install's sessions; ``outbox`` is what the human (local or remote)
-        authored. One store, one audit trail — deliberately not a second
-        transcript (`ROADMAP.md` Phase 5).
+        ``role`` keeps the old ``inbox``/``outbox`` callers compatible. Those
+        names were misleading because the partition has always been based on
+        authorship, not direction relative to a Project or session.
         """
-        if role == "inbox":
+        if role is not None:
+            author = {"inbox": "non_human", "outbox": "human"}.get(role, role)
+        if author == "non_human":
             kinds = tuple(kind for kind in SENDER_KINDS if kind not in HUMAN_SENDER_KINDS)
-        elif role == "outbox":
+        elif author == "human":
             kinds = tuple(sorted(HUMAN_SENDER_KINDS))
         else:
             kinds = SENDER_KINDS
 
         def op() -> list[dict[str, Any]]:
             placeholders = ",".join("?" for _ in kinds)
+            conditions = [f"sender_kind IN ({placeholders})"]
+            parameters: list[Any] = list(kinds)
+            if project_id:
+                conditions.append("project_id=?")
+                parameters.append(project_id)
+            if target_session_id:
+                conditions.append("target_session_id=?")
+                parameters.append(target_session_id)
             rows = self._db.execute(
-                f"SELECT * FROM queue_messages WHERE sender_kind IN ({placeholders})"
+                f"SELECT * FROM queue_messages WHERE {' AND '.join(conditions)}"
                 " ORDER BY created_at DESC LIMIT ?",
-                (*kinds, max(1, min(limit, 500))),
+                (*parameters, max(1, min(limit, 500))),
             ).fetchall()
             return [_row_to_message(row) for row in rows]
+
+        return await self._run(op)
+
+    async def mailbox_targets(self) -> list[dict[str, Any]]:
+        """Targets represented in retained mailbox rows, including ended sessions."""
+
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT target_session_id, MAX(target_label) label, MAX(project_id) project_id,"
+                " MAX(updated_at) updated_at FROM queue_messages GROUP BY target_session_id"
+                " ORDER BY updated_at DESC"
+            ).fetchall()
+            return [dict(row) for row in rows]
 
         return await self._run(op)
 

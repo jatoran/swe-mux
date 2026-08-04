@@ -85,7 +85,7 @@ Quantitative, machine-checked, and visible rather than asserted:
 These gate *widening* the capability (enabling the install master by default, dropping the TTL
 or the consecutive cap) — they do not gate a conversation grant itself, which is bounded by
 construction. Current values
-are on `GET /api/queue/auto` and in the mailbox scopes' status line.
+are on `GET /api/queue/auto` and in the application-scoped Mailbox status line.
 
 ## UI
 
@@ -129,8 +129,9 @@ SQLite, not config, so the emergency pause never waits on a config write.
 - `src/swe_mux/prompt_queue.py` — `queue_auto_policy` / `queue_auto_counters` tables,
   constraint enforcement in `send_next`, `normalize_constraints`, `schedule_status`.
 - `src/swe_mux/server.py` — the `/api/queue/auto*` handlers and lifecycle wiring.
-- `frontend/src/QueuePane.tsx` (the `auto:` strip, the schedule presets, and the emergency
-  controls in the mailbox scopes), `frontend/src/queueApi.ts` (typed client).
+- `frontend/src/QueuePane.tsx` - per-session `auto:` strip and schedule presets.
+- `frontend/src/MailboxPane.tsx` - application-wide emergency controls and proving-period status.
+- `frontend/src/queueApi.ts` - typed client.
 - Tests: `tests/test_auto_delivery.py`, `tests/test_delivery_readiness_promotion.py`,
   `tests/test_frontend_phase5_contract.py`.
 

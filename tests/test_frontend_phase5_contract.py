@@ -49,19 +49,33 @@ def test_scheduling_is_a_property_of_the_queued_item() -> None:
 
 
 def test_the_mailbox_carries_the_emergency_controls() -> None:
-    # The mailbox is the Queue panel's inbox/outbox scopes, not a modal of its own; what
-    # matters for the safety story is that these controls exist and stay one gesture away,
-    # not which surface hosts them.
-    pane = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
+    pane = (ROOT / "MailboxPane.tsx").read_text(encoding="utf-8")
 
-    assert "'session' | 'inbox' | 'outbox'" in pane
     assert "pause all auto-delivery" in pane
     assert "report unsafe delivery" in pane
     assert "Stops every automatic delivery immediately, on every session" in pane
     # Proving-period numbers are visible where the operator reviews deliveries.
     assert "{promotion.proving_days}/{promotion.required_days} days" in pane
     assert "Revoke" in pane
-    assert "Deliberately not a second transcript" in pane
+
+
+def test_queue_and_mailbox_have_explicit_non_overlapping_scopes() -> None:
+    queue = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
+    mailbox = (ROOT / "MailboxPane.tsx").read_text(encoding="utf-8")
+    api = (ROOT / "queueApi.ts").read_text(encoding="utf-8")
+    tabs = (ROOT / "drawerTabs.ts").read_text(encoding="utf-8")
+
+    assert "fetchMailbox" not in queue
+    assert "inbox" not in queue
+    assert "outbox" not in queue
+    assert "agents + automation" in mailbox
+    assert "human" in mailbox
+    assert "Project" in mailbox
+    assert "Session" in mailbox
+    assert "project_id" in api
+    assert "target_session_id" in api
+    assert "id: 'queue'" in tabs and "scope: 'session'" in tabs
+    assert "id: 'mailbox'" in tabs and "scope: 'app'" in tabs
 
 
 def test_a_drafted_spawn_request_is_approved_by_a_human_in_the_inbox() -> None:
@@ -81,10 +95,7 @@ def test_the_app_menu_reaches_the_mailbox_from_any_device() -> None:
 
     assert "mailbox.open" in app
     assert "Mailbox…" in app
-    # It lands on the inbox scope of the Queue panel. The drawer is the one surface on
-    # both desktop and mobile, which is what keeps the emergency controls one gesture away
-    # from a phone — the modal it replaced was reached the same way and is gone.
-    assert "scope:'inbox'" in app
+    assert "openDrawerTab('mailbox')" in app
 
 
 def test_the_queue_is_a_drawer_tab_and_the_pane_leaf_is_only_a_pop_out() -> None:
@@ -100,7 +111,7 @@ def test_the_queue_is_a_drawer_tab_and_the_pane_leaf_is_only_a_pop_out() -> None
     # The chip focuses its session before opening the panel: the tab follows focus, so a
     # chip clicked on an unfocused pane would otherwise show another agent's queue.
     assert "if (session) await selectSession(session)" in app
-    assert "openDrawerTab('queue')" in app
+    assert "openDrawerTab('queue',session?.project_id||projectId)" in app
     # Exactly one place still builds the leaf, and it is the explicit pop-out.
     assert app.count("resourceLeaf('queue'") == 1
     assert "onQueueOpenAsTab" in app

@@ -786,12 +786,14 @@ responsive controls.
   additionally answer right-click / long-press with a target menu (a live agent session in this
   Project, or a new Claude/Codex one) — see `prompt-library.md`. Text meant for an agent must not
   be able to edit whichever note or file the user happened to open last.
-- **Queue** is the odd one of the four: it does not inject, it *stages* — text held for the
+- **Queue** is the odd one of the four: it does not inject, it *stages* - text held for the
   focused agent until a delivery is explicitly asked for (`features/prompt-queue.md`). It is
   here rather than in a workspace tab or a modal because the decision it exists for ("is now a
   safe moment to interrupt this agent") is read off the terminal, and only the docked column
-  leaves the terminal on screen. It also absorbs the former Mailbox modal as two extra scopes,
-  so one message store has one surface. Its rail icon badges the fleet-wide pending count.
+  leaves the terminal on screen.
+  Queue remains strictly session-scoped.
+- **Mailbox** is an application-scoped provenance and delivery-state view over queued messages from every Project and session.
+  It filters by explicit authorship, Project, and target session; owns the fleet-wide pending badge and emergency auto-delivery controls; and opens a target's Queue without pretending the global list is session-scoped.
 - **Transcript** is the drawer's one *inert* session surface: the focused session's conversation
   as prose you can scroll and copy, without touching the live terminal or scrolling it back.
   Deliberately no composer, no insert, no send. Every neighbouring tab exists to put text into an
@@ -852,6 +854,8 @@ responsive controls.
   dragged onto any pane.
   Files can remain visible beside Clipboard or another utility body when the user places them in separate drawer panes.
 - **Notes** is a flat Project-owned collection *and* an editor, and a note is open in exactly one of the two hosts at a time.
+  A fixed `GLOBAL` section pins Scratchpad before the filters, so Project scope and search never hide it.
+  Scratchpad is global, has no rename/delete controls, and uses the same drawer and workspace-tab placements as Project notes.
   The tab lists explicit notes, including empty notes, searchable over title, Project, and excerpt and scoped to this Project or to all Projects.
   It creates and renames notes through title prompts.
   Selecting a row opens that note **in the drawer**; the `⇥` on each row opens it as a workspace tab instead.
@@ -862,7 +866,7 @@ responsive controls.
   From inside the drawer editor, `‹ Notes` returns to the index and `⇥ tab` moves the note into a pane.
   Terminals and History do not create or own notes.
 - **Why one host at a time is a rule and not a preference.** `noteSaveQueue` keys one entry per
-  `(Project, resource)` at module scope, so two mounted editors on one note share it: each submits
+  `(scope, resource)` at module scope, so two mounted editors on one note share it: each submits
   its whole document, newest wins, and the loser's text is dropped with no conflict for the daemon
   to detect, since the revision each holds is correct. Mounting the second is worse — its load
   calls `reset`, which discards whatever the first had pending. Two *devices* are safe by

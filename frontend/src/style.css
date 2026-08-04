@@ -1483,20 +1483,22 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .notes-body{flex:1;min-height:0;overflow:auto}
 .notes-state{padding:18px 12px;color:var(--muted);text-align:center}
 .notes-state.error{color:var(--error,#f07178)}
-.notes-group>h3{display:flex;justify-content:space-between;align-items:center;gap:8px;position:sticky;top:0;margin:0;padding:6px 9px;background:var(--panel2);color:var(--muted);font-size:11px;font-weight:600;letter-spacing:.04em}
+.notes-group>h3,.notes-global>h3{display:flex;justify-content:space-between;align-items:center;gap:8px;position:sticky;top:0;margin:0;padding:6px 9px;background:var(--panel2);color:var(--muted);font-size:11px;font-weight:600;letter-spacing:.04em}
 .project-note-row>button:first-child{width:100%;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:3px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--text);padding:8px 9px;text-align:left;cursor:pointer}
 .project-note-row>button:first-child:hover,.project-note-row>button:first-child:focus-visible{background:var(--panel2)}
 .project-note-row strong{display:flex;align-items:center;gap:6px;min-width:0}
 .project-note-row span{color:var(--muted);font-size:11px}
 .project-note-row small{color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .notes-tab{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.notes-global{flex:none;border-bottom:1px solid var(--line)}
+.global-note-row{grid-template-columns:minmax(0,1fr) auto;background:color-mix(in srgb,var(--accent) 7%,transparent);box-shadow:inset 3px 0 color-mix(in srgb,var(--accent) 72%,transparent)}
 .notes-tab .notes-filters{flex:none;grid-template-columns:minmax(0,1fr) minmax(0,116px) auto}
 .notes-tab .notes-filters input,.notes-tab .notes-filters select{min-width:0;height:calc(30px*var(--ui-scale));padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
 .notes-tab .notes-filters input:focus,.notes-tab .notes-filters select:focus{outline:0;border-color:var(--green)}
 .notes-tab .notes-new{min-height:calc(30px*var(--ui-scale));padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;white-space:nowrap;cursor:pointer}
 .notes-tab .notes-new:disabled{opacity:.45;cursor:not-allowed}
 .notes-tab .notes-state{padding:14px 10px;font-size:9px;line-height:1.45}
-.notes-tab .notes-group>h3,.notes-tab .project-note-row span,.notes-tab .project-note-row small{font-size:8px}
+.notes-tab .notes-group>h3,.notes-tab .notes-global>h3,.notes-tab .project-note-row span,.notes-tab .project-note-row small{font-size:8px}
 .notes-tab .project-note-row strong{font-size:10px}
 /* Every note row selects into the panel; this is the escape hatch to a pane. Kept to a glyph
    so the row's own text keeps the width — the label lives in the title and the aria-label. */
@@ -2042,8 +2044,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    One stylesheet for both renderings. Everything here has to survive the drawer's
    300px minimum, which is narrower than the pop-out pane. */
 .queue-pane{display:flex;flex-direction:column;min-width:0;min-height:0;flex:1 1 auto;height:100%;background:var(--bg);color:var(--text)}
-/* Three scopes, three words: a segmented control rather than the icon strip the drawer's
-   own tabs use, because "this session" has no mark that would read at 17px. */
+/* Compact segmented filters inside Queue-adjacent surfaces. */
 .queue-scope{display:flex;gap:4px;padding:5px 10px;border-bottom:1px solid var(--line)}
 .queue-scope button{flex:1 1 0;min-width:0;min-height:26px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .queue-scope button.active{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
@@ -2087,7 +2088,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-composer-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .pane-tools .queue-chip.has-pending{color:var(--accent)}
 
-/* ---- Auto-delivery, schedules, the mailbox scopes, spawn requests ---- */
+/* ---- Auto-delivery, schedules, mailbox, spawn requests ---- */
 /* One status line, disclosed. Two labelled checkboxes and a sentence cost three wrapped
    lines of a 380px column, permanently, above the thing the panel was opened for. */
 .queue-auto-strip{display:flex;align-items:center;border-bottom:1px solid var(--line)}
@@ -2101,8 +2102,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-item-target{color:var(--text)}
 .queue-item-note{margin-left:auto}
 .queue-item-actions .queue-schedule-preset{color:var(--muted)}
-/* The two install-wide controls, which the mailbox scopes carry because they must stay
+/* The two install-wide controls, which the Mailbox carries because they must stay
    one gesture from any device. */
+.mailbox-author-scope button{font-size:8px}
+.mailbox-filters{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:6px 10px;border-bottom:1px solid var(--line)}
+.mailbox-filters label{display:grid;gap:3px;min-width:0;color:var(--muted);font-size:8px}
+.mailbox-filters select{min-width:0;min-height:28px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit}
+.mailbox-project{color:var(--muted)}
 .queue-mailbox-controls{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line)}
 .queue-mailbox-controls button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .queue-mailbox-controls button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
@@ -2120,7 +2126,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .observation-request-actions{display:flex;gap:6px;align-items:center}
 .observation-request-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .observation-request-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
-@media(max-width:760px){.queue-item-actions button,.queue-item-actions select{min-height:38px}.queue-scope button,.queue-done button{min-height:38px}.queue-composer-actions button{min-height:40px}.queue-mailbox-controls button,.observation-request-actions button{min-height:40px}}
+@media(max-width:760px){.queue-item-actions button,.queue-item-actions select{min-height:38px}.queue-scope button,.queue-done button{min-height:38px}.queue-composer-actions button{min-height:40px}.mailbox-filters select,.queue-mailbox-controls button,.observation-request-actions button{min-height:40px}}
 
 /* ---- Project-scoped Git review ---- */
 .git-review-tab{height:100%;min-height:0;overflow:auto;background:var(--bg)}

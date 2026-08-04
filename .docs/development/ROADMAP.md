@@ -858,7 +858,7 @@ before Phase 5.
 - [x] Deliver human/device messages through the same queue and readiness contract; remote
   origin never weakens target selection, confirmation, expiry, or input-owner checks. Remote
   origin is recorded and changes nothing downstream.
-- [x] Add inbox/outbox, delivery status, sender/target labels, retry-safe correlation, and
+- [x] Add application-wide authorship views, delivery status, sender/target labels, retry-safe correlation, and
   revocation. Avoid creating a second transcript or conversation archive.
   `GET /api/queue/mailbox` + `Mailbox.tsx` project the existing `queue_messages` rows;
   `correlation_id` is partial-unique per sender (a retry returns the original message);

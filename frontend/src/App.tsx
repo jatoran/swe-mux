@@ -8,7 +8,7 @@ import { windowsPtyCompatibility, type TerminalRendererPreference, type WindowsP
 import { ProjectResource } from './ProjectResource'
 import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentResult, type SendToAgentTarget } from './SendToAgentPicker'
 import { pastePayload } from './noteSelection'
-import { QueuePane, type QueueScope } from './QueuePane'
+import { QueuePane } from './QueuePane'
 import { editQueueMessage, enqueueMessage, fetchQueueSummary, sendQueueMessage, type QueueTargetSummary } from './queueApi'
 import { ContinuityBanner } from './ContinuityBanner'
 import { DirectoryPicker } from './DirectoryPicker'
@@ -178,7 +178,7 @@ type SidebarContext = { x:number;y:number } | null
 type NoteContext = { resourceId:string;projectId:string;x:number;y:number } | null
 type TabContext = { leaf:PaneLeaf;label:string;projectId:string;x:number;y:number;source:'tab'|'mobile' } | null
 type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; project: Project }
-type NoteTarget={projectId:string;kind:'note'|'file'|'worktree-file';resourceId:string;worktree?:string}
+type NoteTarget={projectId:string;kind:'note'|'global-note'|'file'|'worktree-file';resourceId:string;worktree?:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
 type PendingSpawnPlacement = {
@@ -406,10 +406,9 @@ export function App() {
   // The inbox is per-Project, so it carries its Project rather than following the
   // active one — it opens from a Project's own context menu.
   const [observationsProject,setObservationsProject]=useState<Project|null>(null)
-  // The Queue drawer tab's "you were opened deliberately" signal: a counter (so clicking
-  // the same chip twice focuses the composer twice) plus the scope to land on. Switching
-  // to the tab by hand leaves the panel wherever it was.
-  const [queueOpen,setQueueOpen]=useState<{token:number;scope:QueueScope}>({token:0,scope:'session'})
+  // The Queue drawer tab's deliberate-open counter focuses the composer even when the
+  // same chip is clicked twice.
+  const [queueOpenToken,setQueueOpenToken]=useState(0)
   // The utility workspace has one device-local split tree shared by every Project. Selection
   // and desktop expansion remain device-local per Project. Mobile visibility is transient.
   const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
@@ -1275,7 +1274,7 @@ export function App() {
           // The drawer's Git tab refetches its worktree list off this. Branch/dirty/upstream
           // already ride the session snapshots, so `git_changed` needs no payload here.
           if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed')window.dispatchEvent(new CustomEvent('mux:git-changed'))
-          if(event.type==='note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{projectId:String(event.payload?.project_id||''),kind:'note',noteId:String(event.payload?.note_id||''),revision:String(event.payload?.revision||'')}}))
+          if(event.type==='note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{scope:event.payload?.scope==='global'?'global':'project',projectId:String(event.payload?.project_id||''),kind:event.payload?.scope==='global'?'global-note':'note',noteId:String(event.payload?.note_id||''),revision:String(event.payload?.revision||'')}}))
         } catch { /* malformed events are ignored */ }
       }
       next.onclose = () => { if (socket !== next) return; socket = null; scheduleRetry() }
@@ -1474,6 +1473,12 @@ export function App() {
   }
   const openBrowsedNote=(targetProject:string,noteId:string,place:NotePlacement='tab')=>{
     const target:NoteTarget={projectId:targetProject,kind:'note',resourceId:noteId}
+    if(place==='drawer')openTargetInDrawer(target);else void showResourceForTarget(target)
+  }
+  const openScratchpad=(place:NotePlacement='drawer')=>{
+    const targetProject=projectId||activeProject?.id||projects[0]?.id
+    if(!targetProject){setError('Create a Project before opening the Scratchpad in a workspace.');return}
+    const target:NoteTarget={projectId:targetProject,kind:'global-note',resourceId:'scratchpad'}
     if(place==='drawer')openTargetInDrawer(target);else void showResourceForTarget(target)
   }
   // Files is a drawer tab, not a pane tab: it is a navigator that opens documents into
@@ -2268,7 +2273,7 @@ export function App() {
     const session = sessionsRef.current.find(item => item.id === sessionId)
     if (session) await selectSession(session)
     openDrawerTab('queue',session?.project_id||projectId)
-    setQueueOpen(current => ({ token: current.token + 1, scope: 'session' }))
+    setQueueOpenToken(current => current + 1)
   }
 
   /** Pop one target's queue out into a workspace tab: the wide-review escape hatch, and
@@ -2666,10 +2671,7 @@ export function App() {
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
     { id:'observations.open',label:'Open selected project’s observation inbox',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setObservationsProject(commandProject||null);setMainMenuOpen(false);setProjectMenu(null)} },
-    // The mailbox is a scope of the Queue panel, not a modal of its own: "what is queued
-    // for this agent" and "what is queued anywhere" are one store, and were two surfaces
-    // with two different action sets over it.
-    { id:'mailbox.open',label:'Open mailbox (queued messages, auto-delivery)',category:'input',available:true,run:()=>{openDrawerTab('queue');setQueueOpen(current=>({token:current.token+1,scope:'inbox'}));setMainMenuOpen(false);setProjectMenu(null)} },
+    { id:'mailbox.open',label:'Open mailbox (queued messages, auto-delivery)',category:'input',available:true,run:()=>{openDrawerTab('mailbox');setMainMenuOpen(false);setProjectMenu(null)} },
     { id:'queue.open',label:'Open the prompt queue for the focused session',category:'input',available:!!active&&isAgent(active),disabledReason:'Focus a Claude or Codex session',run:()=>{if(active)void openQueueForSession(active.id)} },
     { id: 'session.spawnShell', label: 'New terminal in current project', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => void spawnTerminal() },
     { id: 'session.quickLaunch', label: 'New terminal custom…', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => openLauncher() },
@@ -2684,6 +2686,7 @@ export function App() {
     { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => {setUsageOpen(true);setMainMenuOpen(false)} },
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {setAutomationOpen(true);setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
+    { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: !!activeProject, disabledReason: 'No project workspace available', run: () => openScratchpad('drawer') },
     { id: 'notes.open', label: 'Open current project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
     { id: 'notes.browse', label: 'Browse all notes', category: 'view', available: true, run: () => openNotesBrowser(null) },
     { id: 'notes.browseProject', label: 'Browse this project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
@@ -3234,7 +3237,7 @@ export function App() {
       if(!targetSessionId)return <section class="workspace-leaf-placeholder"><strong>queue unavailable</strong><span>{node.id}</span></section>
       // The pop-out rendering: target pinned to the leaf rather than following focus, and
       // no pop-out button of its own. Everything else is the same panel the drawer shows.
-      return <QueuePane key={node.id} sessionId={targetSessionId} sessions={sessions} onSelectSession={sid=>{const owner=sessions.find(item=>item.id===sid);if(owner)void selectSession(owner)}} onFocusTarget={sid=>void openQueueForSession(sid)}/>
+      return <QueuePane key={node.id} sessionId={targetSessionId} sessions={sessions} onSelectSession={sid=>{const owner=sessions.find(item=>item.id===sid);if(owner)void selectSession(owner)}}/>
     }
     if (node.kind === 'preview') {
       const preview = previews[node.id]
@@ -3420,6 +3423,7 @@ export function App() {
 
   const noteTabLabel=(resourceId:string)=>{
     const identity=parseNoteResourceId(resourceId)
+    if(identity?.kind==='global-note')return 'Scratchpad'
     if(identity?.kind==='note')return noteTitles[`${projectId}:${identity.id}`]||'Note'
     return identity?.id.split('/').pop()||'File'
   }
@@ -3658,7 +3662,7 @@ export function App() {
         // onto a visible pane. On mobile it is an overlay with nothing to drop onto.
         onFileDragStart={mobileWorkspace?undefined:(path,event)=>beginFileTabDrag(event,path)}
         onSendToAgent={request=>{if(mobileWorkspace)setClipboardOpen(false);setSendToAgent(request)}}
-        queueOpenRequest={queueOpen.token?queueOpen:undefined}
+        queueOpenToken={queueOpenToken || undefined}
         onQueueOpenAsTab={sessionId=>void openQueueTab(sessionId)}
         processSnapshot={processFleet}
         projects={projects}
@@ -3680,6 +3684,7 @@ export function App() {
           setNoteTitles(current=>({...current,[`${targetProject}:${noteId}`]:title}))
           openBrowsedNote(targetProject,noteId,place)
         }}
+        onOpenScratchpad={openScratchpad}
         drawerNoteId={drawerNoteId}
         onCloseDrawerNote={()=>closeDrawerNote(projectId)}
         onPopDrawerNoteToTab={resourceId=>popDrawerNoteToTab(resourceId,projectId)}
@@ -3726,7 +3731,7 @@ export function App() {
             aria-label={`${tab.title}${tab.scope==='session'?'. Session scoped.':''}`}
             title={`${tab.title}${tab.scope==='session'?' - session scoped':''}`}
             onClick={()=>showDrawerTab(tab.id)}
-          >{drawerTabDisplay==='title'?<span class="drawer-tab-title">{tab.label}</span>:<Icon/>}{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}{tab.id==='queue'&&queuePendingTotal>0&&<i class="drawer-badge queue-badge">{queuePendingTotal>99?'99+':queuePendingTotal}</i>}</button>
+          >{drawerTabDisplay==='title'?<span class="drawer-tab-title">{tab.label}</span>:<Icon/>}{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}{tab.id==='mailbox'&&queuePendingTotal>0&&<i class="drawer-badge queue-badge">{queuePendingTotal>99?'99+':queuePendingTotal}</i>}</button>
         })}
       </nav>}
 
