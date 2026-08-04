@@ -306,9 +306,17 @@ def test_drawer_tabs_are_icon_only_from_one_shared_icon_set() -> None:
     assert ">{item.label}" not in drawer and "{item.label}<" not in drawer
     assert "<Icon />" in drawer and "<Icon/>" in app
 
-    # Icon-only means the accessible name can no longer come from visible text.
-    assert "aria-label={item.label}" in drawer
-    assert "aria-label={tab.title}" in app
+    # Icon-only means the accessible name can no longer come from visible text. Session tabs
+    # also name the scope represented by their lower-right dot; Project/app tabs stay unchanged.
+    assert (
+        "aria-label={`${item.label}${item.scope === 'session' ? ', session scoped' : ''}`}"
+        in drawer
+    )
+    assert "aria-label={`${tab.title}${tab.scope==='session'?'. Session scoped.':''}`}" in app
+    assert '.drawer-tabs button[data-scope="session"]:before' in css
+    assert '.utility-rail button[data-scope="session"]:before' in css
+    assert "width:3px;height:3px" in css
+    assert "background:color-mix(in srgb,var(--muted) 52%,var(--panel2));box-shadow:none" in css
 
     # Sized in CSS on both surfaces: these run a 9-12px font, so `1em` would be unreadable.
     assert ".drawer-tabs button svg{width:17px" in css
@@ -517,6 +525,20 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     # speaks is what makes a live log unreadable.
     assert "isPinnedToBottom" in tab
     assert "transcript-jump" in tab and ".transcript-jump{" in source("style.css")
+
+    # Search is a local lens over the already loaded conversation. Copy-all remains the
+    # complete conversation, while each message's copy control sticks only within that row.
+    assert 'type="search"' in tab and "transcriptMatchesQuery" in tab
+    assert "transcriptSearchParts" in tab
+    assert "transcript-copy-anchor" in tab
+    assert ".transcript-copy-anchor{position:sticky" in source("style.css")
+
+    # Show-more is an explicit reading preference. It follows the session and run
+    # across drawer unmounts, but the bounded registry contains no transcript text.
+    assert "TRANSCRIPT_EXPANSION_KEY" in tab
+    assert "setTranscriptMessageExpanded" in tab
+    assert "TRANSCRIPT_EXPANSION_MAX_ENTRIES = 500" in view
+    assert "sessionId: string" in view and "runId: string" in view and "messageId: string" in view
 
 
 def test_history_filters_fit_narrow_split_panes() -> None:

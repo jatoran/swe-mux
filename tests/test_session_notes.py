@@ -14,10 +14,12 @@ from swe_mux.project_files import (
     note_has_content,
     note_header,
     read_note,
+    revision,
     session_note_summaries,
     write_note,
 )
 from swe_mux.server import (
+    delete_session_note,
     error_middleware,
     get_project_note,
     get_session_note,
@@ -48,6 +50,8 @@ def test_session_note_summaries_lists_only_notes_holding_text(tmp_path) -> None:
     # The excerpt collapses whitespace so a listing row stays one readable line.
     assert summaries[0]["excerpt"] == "deployment steps second line"
     assert summaries[0]["bytes"] > 0
+    note_path = root / ".swe-mux" / "notes" / "sessions" / "written-one.md"
+    assert summaries[0]["revision"] == revision(note_path.read_bytes())
 
 
 def test_session_note_summaries_tolerates_a_project_without_notes(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -163,12 +167,14 @@ async def test_project_note_change_event_carries_saved_revision(tmp_path) -> Non
     async with TestClient(TestServer(app)) as client:
         loaded = await client.get("/projects/project-one/note")
         loaded_payload = await loaded.json()
+        assert loaded_payload["bytes"] == 0
         event_queue = events.subscribe()
         saved = await client.put(
             "/projects/project-one/note",
             json={"markdown": "Shared project context\n", "revision": loaded_payload["revision"]},
         )
         saved_payload = await saved.json()
+        assert saved_payload["bytes"] > 0
         changed = await event_queue.get()
 
     assert saved.status == 200
@@ -226,6 +232,61 @@ async def test_live_terminal_note_is_initialized_saved_and_revision_safe(tmp_pat
         .read_text(encoding="utf-8")
         .endswith("Useful terminal context\n")
     )
+    history.close()
+
+
+async def test_session_note_delete_is_revision_checked_and_emits_change(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    root = tmp_path / "project"
+    root.mkdir()
+    project = SimpleNamespace(id="project-one", root=str(root), name="Project One")
+    live = SimpleNamespace(record=SimpleNamespace(id="terminal-one", project_id=project.id))
+    history = HistoryIndex(tmp_path / "mux.db")
+    events = EventBus()
+    app = web.Application(middlewares=[error_middleware])
+    app["projects"] = SimpleNamespace(projects={project.id: project})
+    app["sessions"] = SimpleNamespace(sessions={"terminal-one": live})
+    app["history"] = history
+    app["events"] = events
+    app.router.add_post("/projects/{project_id}/session-notes/{note_id}", initialize_session_note)
+    app.router.add_put("/projects/{project_id}/session-notes/{note_id}", put_session_note)
+    app.router.add_delete("/projects/{project_id}/session-notes/{note_id}", delete_session_note)
+
+    async with TestClient(TestServer(app)) as client:
+        created = await client.post("/projects/project-one/session-notes/terminal-one")
+        created_payload = await created.json()
+        saved = await client.put(
+            "/projects/project-one/session-notes/terminal-one",
+            json={"markdown": "Delete this note\n", "revision": created_payload["revision"]},
+        )
+        saved_payload = await saved.json()
+        event_queue = events.subscribe()
+        stale = await client.delete(
+            "/projects/project-one/session-notes/terminal-one",
+            json={"revision": created_payload["revision"]},
+        )
+        deleted = await client.delete(
+            "/projects/project-one/session-notes/terminal-one",
+            json={"revision": saved_payload["revision"]},
+        )
+        stale_payload = await stale.json()
+        deleted_payload = await deleted.json()
+        changed = await event_queue.get()
+
+    assert stale.status == 409
+    assert stale_payload["code"] == "revision_conflict"
+    assert deleted.status == 200
+    assert deleted_payload == {
+        "deleted": True,
+        "project_id": project.id,
+        "note_id": "terminal-one",
+    }
+    assert not note_exists(root, "sessions", "terminal-one")
+    assert changed.type == "session_note_changed"
+    assert changed.payload == {
+        "project_id": project.id,
+        "note_id": "terminal-one",
+        "revision": "missing",
+    }
     history.close()
 
 

@@ -107,7 +107,7 @@ separately opt-in.
   with the head marked `next`, per-state actions, and the composer. `inbox`/`outbox` are the
   former Mailbox modal, folded in (`agent-messaging.md`) — one store had grown two surfaces
   with two different action sets.
-- **Built for a 300–620px column.** Rows carry only `Send now` (head) and the arm toggle
+- **Built for the drawer's 300 px minimum as well as its viewport-derived maximum.** Rows carry only `Send now` (head) and the arm toggle
   inline; edit, move, cancel/skip, the schedule presets and copy live behind a per-row `⋯`
   that opens a tray under the row rather than a floating menu. Terminal-state items
   (sent/failed/cancelled) collapse behind a `N delivered or closed` disclosure instead of

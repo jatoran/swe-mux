@@ -268,7 +268,7 @@ export function QueuePane({ sessionId, sessions, onSelectSession, onFocusTarget,
   }
 
   /** The secondary acts, in a row that opens under the message rather than a floating
-   *  menu: this column scrolls and is 300–620px wide, where a popover would need
+   *  menu: this column scrolls and can be as narrow as 300px, where a popover would need
    *  positioning, portalling, and an outside-click contract to do the same job.
    *
    *  Splitting them out is what makes the row fit at all: eleven buttons (send, arm,

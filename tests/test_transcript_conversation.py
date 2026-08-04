@@ -218,6 +218,15 @@ def test_only_the_newest_messages_are_returned_and_the_cut_is_reported(tmp_path:
     # position of a message in the conversation.
     assert [item["ordinal"] for item in view["messages"]] == [0, 1]
 
+    previous_last = view["messages"][-1]["message_id"]
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(claude_user("turn 6", **HUMAN)) + "\n")
+    moved = conversation_view(path, "claude", limit=2)
+    assert [item["text"] for item in moved["messages"]] == ["turn 5", "turn 6"]
+    assert moved["messages"][0]["ordinal"] == 0
+    assert moved["messages"][0]["message_id"] == previous_last
+    assert len({item["message_id"] for item in moved["messages"]}) == 2
+
 
 def test_an_unchanged_transcript_is_parsed_once(tmp_path: Path, monkeypatch: Any) -> None:
     path = write_jsonl(tmp_path / "claude.jsonl", [claude_user("hello", **HUMAN)])

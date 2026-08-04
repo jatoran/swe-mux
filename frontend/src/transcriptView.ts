@@ -7,7 +7,13 @@
 // under the plain node runner precisely because none of it renders.
 
 /** One side of the conversation, already merged and filtered by the daemon. */
-export type TranscriptMessage = { ordinal: number; role: 'user' | 'assistant'; ts?: string; text: string }
+export type TranscriptMessage = {
+  message_id: string
+  ordinal: number
+  role: 'user' | 'assistant'
+  ts?: string
+  text: string
+}
 
 /** Why there is nothing to read. `null` means the transcript loaded. */
 export type TranscriptReason = 'not_agent' | 'no_transcript' | 'unreadable' | null
@@ -34,14 +40,116 @@ export const TRANSCRIPT_BOTTOM_SLACK = 48
 
 /** Above this many characters a message is folded behind "Show more".
  *
- * A character count rather than a measured height: the drawer is a 300–620px
- * column whose body is unmounted and remounted on every tab switch, so measuring
+ * A character count rather than a measured height: the drawer can be as narrow as
+ * 300px and its body is unmounted and remounted on every tab switch, so measuring
  * would mean a layout pass per message per mount to answer a question a threshold
  * answers well enough. Set where a long-but-ordinary reply still shows whole and a
  * dumped file listing does not eat the scrollbar. */
 export const TRANSCRIPT_CLAMP_CHARS = 1200
 
+/** Device-local registry of messages the reader explicitly unfolded. */
+export const TRANSCRIPT_EXPANSION_KEY = 'mux.transcript.expanded.v1'
+export const TRANSCRIPT_EXPANSION_MAX_ENTRIES = 500
+
+export type TranscriptExpansionEntry = Readonly<{
+  sessionId: string
+  runId: string
+  messageId: string
+  touchedAt: number
+}>
+
+const transcriptExpansionIdentity = (entry: Pick<TranscriptExpansionEntry, 'sessionId' | 'runId' | 'messageId'>): string =>
+  JSON.stringify([entry.sessionId, entry.runId, entry.messageId])
+
+function normalizeTranscriptExpansions(value: unknown): TranscriptExpansionEntry[] {
+  if (!Array.isArray(value)) return []
+  const latest = new Map<string, TranscriptExpansionEntry>()
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== 'object') continue
+    const entry = candidate as Partial<TranscriptExpansionEntry>
+    if (typeof entry.sessionId !== 'string' || !entry.sessionId) continue
+    if (typeof entry.runId !== 'string' || !entry.runId) continue
+    if (typeof entry.messageId !== 'string' || !entry.messageId) continue
+    if (typeof entry.touchedAt !== 'number' || !Number.isFinite(entry.touchedAt) || entry.touchedAt < 0) continue
+    const valid = entry as TranscriptExpansionEntry
+    const identity = transcriptExpansionIdentity(valid)
+    const previous = latest.get(identity)
+    if (!previous || valid.touchedAt > previous.touchedAt) latest.set(identity, valid)
+  }
+  return [...latest.values()]
+    .sort((left, right) => right.touchedAt - left.touchedAt || transcriptExpansionIdentity(left).localeCompare(transcriptExpansionIdentity(right)))
+    .slice(0, TRANSCRIPT_EXPANSION_MAX_ENTRIES)
+}
+
+/** Parse untrusted browser storage, pruning malformed, duplicate, and excess entries. */
+export function parseTranscriptExpansions(raw: string | null): TranscriptExpansionEntry[] {
+  if (!raw) return []
+  try {
+    return normalizeTranscriptExpansions(JSON.parse(raw))
+  } catch {
+    return []
+  }
+}
+
+export function serializeTranscriptExpansions(entries: readonly TranscriptExpansionEntry[]): string {
+  return JSON.stringify(normalizeTranscriptExpansions(entries))
+}
+
+export function expandedTranscriptMessageIds(
+  entries: readonly TranscriptExpansionEntry[],
+  sessionId: string,
+  runId: string,
+): string[] {
+  return entries
+    .filter(entry => entry.sessionId === sessionId && entry.runId === runId)
+    .map(entry => entry.messageId)
+}
+
+/** Add or remove one explicit fold preference without ever storing message text. */
+export function setTranscriptMessageExpanded(
+  entries: readonly TranscriptExpansionEntry[],
+  sessionId: string,
+  runId: string,
+  messageId: string,
+  expanded: boolean,
+  touchedAt = Date.now(),
+): TranscriptExpansionEntry[] {
+  const retained = entries.filter(entry =>
+    entry.sessionId !== sessionId || entry.runId !== runId || entry.messageId !== messageId,
+  )
+  return normalizeTranscriptExpansions(expanded
+    ? [{ sessionId, runId, messageId, touchedAt }, ...retained]
+    : retained)
+}
+
 export const transcriptClamped = (text: string): boolean => text.length > TRANSCRIPT_CLAMP_CHARS
+
+export type TranscriptSearchPart = Readonly<{ text: string; match: boolean }>
+
+const transcriptSearchPattern = (query: string, global: boolean): RegExp =>
+  new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), global ? 'giu' : 'iu')
+
+/** Literal, case-insensitive message filtering for the drawer's local search. */
+export function transcriptMatchesQuery(message: TranscriptMessage, rawQuery: string): boolean {
+  const query = rawQuery.trim()
+  return !query || transcriptSearchPattern(query, false).test(message.text)
+}
+
+/** Split text for safe JSX highlighting without interpreting the query as a regexp. */
+export function transcriptSearchParts(text: string, rawQuery: string): TranscriptSearchPart[] {
+  const query = rawQuery.trim()
+  if (!query) return [{ text, match: false }]
+  const parts: TranscriptSearchPart[] = []
+  let start = 0
+  for (const match of text.matchAll(transcriptSearchPattern(query, true))) {
+    const found = match.index
+    if (found > start) parts.push({ text: text.slice(start, found), match: false })
+    parts.push({ text: match[0], match: true })
+    start = found + match[0].length
+  }
+  if (start < text.length) parts.push({ text: text.slice(start), match: false })
+  return parts.length ? parts : [{ text, match: false }]
+}
 
 /**
  * Whether the view is close enough to the bottom to keep following new messages.

@@ -109,6 +109,7 @@ from .project_files import (
     ProjectResourceExists,
     append_observation,
     create_project_resource,
+    delete_note,
     effective_project_ignores,
     ignored_project_path,
     initialize_note,
@@ -596,6 +597,7 @@ def create_app(
             web.get("/api/projects/{project_id}/session-notes/{note_id}", get_session_note),
             web.post("/api/projects/{project_id}/session-notes/{note_id}", initialize_session_note),
             web.put("/api/projects/{project_id}/session-notes/{note_id}", put_session_note),
+            web.delete("/api/projects/{project_id}/session-notes/{note_id}", delete_session_note),
             web.get("/api/projects/{project_id}/files/tree", list_project_files_tree),
             web.get("/api/projects/{project_id}/files", list_project_files),
             web.post("/api/projects/{project_id}/resources", post_project_resource),
@@ -3197,6 +3199,39 @@ async def put_session_note(request: web.Request) -> web.Response:
     )
     result.update({"project_id": project.id, "project_name": project.name})
     return json_response(result)
+
+
+async def delete_session_note(request: web.Request) -> web.Response:
+    project, note_id = await _session_note_owner(request)
+    body = await request.json()
+    try:
+        result = await delete_note(
+            project.root,
+            "sessions",
+            note_id,
+            str(body.get("revision") or "missing"),
+            project=_registered_identity(project),
+        )
+    except ValueError as exc:
+        if "changed externally" in str(exc):
+            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        raise
+    log.info(
+        "session note deleted project_id=%s note_id=%s bytes=%d",
+        project.id,
+        note_id,
+        result["bytes"],
+    )
+    await request.app["events"].emit(
+        "session_note_changed",
+        source="user",
+        project_id=project.id,
+        note_id=note_id,
+        revision="missing",
+    )
+    return json_response(
+        {"deleted": True, "project_id": project.id, "note_id": note_id}
+    )
 
 
 async def resolve_project_scope(request: web.Request) -> web.Response:

@@ -1,21 +1,28 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  expandedTranscriptMessageIds,
   forgetTranscriptScroll,
   isPinnedToBottom,
   recallTranscriptScroll,
   rememberTranscriptScroll,
+  parseTranscriptExpansions,
+  serializeTranscriptExpansions,
+  setTranscriptMessageExpanded,
   TRANSCRIPT_BOTTOM_SLACK,
   transcriptClamped,
   TRANSCRIPT_CLAMP_CHARS,
+  TRANSCRIPT_EXPANSION_MAX_ENTRIES,
   transcriptConversationText,
   transcriptEmptyMessage,
+  transcriptMatchesQuery,
+  transcriptSearchParts,
   transcriptSpeaker,
   type TranscriptMessage,
 } from '../src/transcriptView.ts'
 
 const message = (over: Partial<TranscriptMessage> = {}): TranscriptMessage =>
-  ({ ordinal: 0, role: 'assistant', text: 'built it', ...over })
+  ({ message_id: 'offset:0', ordinal: 0, role: 'assistant', text: 'built it', ...over })
 
 test('following the bottom survives fractional scroll metrics', () => {
   // Pinned: a browser reports `scrollTop + clientHeight` a pixel or two short of
@@ -62,6 +69,66 @@ test('long messages fold, ordinary ones do not', () => {
   assert.equal(transcriptClamped('short'), false)
   assert.equal(transcriptClamped('x'.repeat(TRANSCRIPT_CLAMP_CHARS)), false)
   assert.equal(transcriptClamped('x'.repeat(TRANSCRIPT_CLAMP_CHARS + 1)), true)
+})
+
+test('explicitly expanded messages persist by session, run, and stable message id', () => {
+  let entries = setTranscriptMessageExpanded([], 'session-1', 'run-1', 'offset:7', true, 100)
+  entries = setTranscriptMessageExpanded(entries, 'session-1', 'run-1', 'offset:9', true, 200)
+
+  assert.deepEqual(expandedTranscriptMessageIds(entries, 'session-1', 'run-1'), ['offset:9', 'offset:7'])
+  assert.deepEqual(expandedTranscriptMessageIds(entries, 'session-1', 'run-2'), [])
+  assert.deepEqual(expandedTranscriptMessageIds(entries, 'session-2', 'run-1'), [])
+
+  entries = setTranscriptMessageExpanded(entries, 'session-1', 'run-1', 'offset:7', false, 300)
+  assert.deepEqual(expandedTranscriptMessageIds(entries, 'session-1', 'run-1'), ['offset:9'])
+  assert.deepEqual(JSON.parse(serializeTranscriptExpansions(entries)), [
+    { sessionId: 'session-1', runId: 'run-1', messageId: 'offset:9', touchedAt: 200 },
+  ])
+})
+
+test('the expansion registry validates, deduplicates, and caps browser storage', () => {
+  assert.deepEqual(parseTranscriptExpansions(null), [])
+  assert.deepEqual(parseTranscriptExpansions('{bad json'), [])
+  assert.deepEqual(parseTranscriptExpansions(JSON.stringify({ entries: [] })), [])
+
+  const candidates = Array.from({ length: TRANSCRIPT_EXPANSION_MAX_ENTRIES + 5 }, (_, index) => ({
+    sessionId: 'session-1', runId: 'run-1', messageId: `offset:${index}`, touchedAt: index,
+  }))
+  candidates.push({ sessionId: 'session-1', runId: 'run-1', messageId: 'offset:4', touchedAt: 10_000 })
+  const parsed = parseTranscriptExpansions(JSON.stringify([
+    ...candidates,
+    null,
+    { sessionId: 'session-1', runId: 'run-1', messageId: '', touchedAt: 20_000 },
+    { sessionId: 'session-1', runId: '', messageId: 'offset:1', touchedAt: 20_000 },
+    { sessionId: 'session-1', runId: 'run-1', messageId: 'offset:1', touchedAt: 'later' },
+  ]))
+
+  assert.equal(parsed.length, TRANSCRIPT_EXPANSION_MAX_ENTRIES)
+  assert.deepEqual(parsed[0], { sessionId: 'session-1', runId: 'run-1', messageId: 'offset:4', touchedAt: 10_000 })
+  assert.equal(parsed.filter(entry => entry.messageId === 'offset:4').length, 1)
+  assert.deepEqual(Object.keys(parsed[0]).sort(), ['messageId', 'runId', 'sessionId', 'touchedAt'])
+})
+
+test('drawer search is literal, case-insensitive, and highlights every occurrence', () => {
+  assert.equal(transcriptMatchesQuery(message({ text: 'Built the Search Bar' }), ' search '), true)
+  assert.equal(transcriptMatchesQuery(message({ text: 'Built the Search Bar' }), 'missing'), false)
+  assert.equal(transcriptMatchesQuery(message({ text: 'anything' }), '   '), true)
+  assert.deepEqual(transcriptSearchParts('Banana BAN', 'ban'), [
+    { text: 'Ban', match: true },
+    { text: 'ana ', match: false },
+    { text: 'BAN', match: true },
+  ])
+  assert.deepEqual(transcriptSearchParts('a+b+a', '+'), [
+    { text: 'a', match: false },
+    { text: '+', match: true },
+    { text: 'b', match: false },
+    { text: '+', match: true },
+    { text: 'a', match: false },
+  ])
+  assert.deepEqual(transcriptSearchParts('İA', 'a'), [
+    { text: 'İ', match: false },
+    { text: 'A', match: true },
+  ])
 })
 
 test('every empty state says which kind of nothing it is', () => {

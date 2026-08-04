@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 TRANSCRIPT_PARSER_VERSION = 2
+_SOURCE_OFFSET_KEY = "__swe_mux_source_offset"
 
 
 def _blocks(content: Any) -> list[dict[str, Any]]:
@@ -137,32 +138,26 @@ def read_transcript_events(path: Path, max_bytes: int | None = None) -> list[dic
     two can never disagree about which bytes a transcript is made of.
     """
     events: list[dict[str, Any]] = []
-    if max_bytes is None:
-        # Stream: a months-long conversation is hundreds of MB, and reading it
-        # into one string plus a split list held several multiples of the file
-        # in RAM at once on the indexing path.
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(event, dict):
-                    events.append(event)
-        return events
     with path.open("rb") as handle:
         size = handle.seek(0, 2)
-        handle.seek(max(0, size - max_bytes))
-        raw = handle.read(max_bytes)
-    if size > max_bytes:
-        _, _, raw = raw.partition(b"\n")
-    for line in raw.decode("utf-8", "replace").splitlines():
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(event, dict):
-            events.append(event)
+        start = 0 if max_bytes is None else max(0, size - max_bytes)
+        handle.seek(start)
+        if start:
+            # The bounded tail normally begins inside a record. Discard it, as
+            # before, then retain the absolute byte offset of each complete line.
+            handle.readline()
+        while line := handle.readline():
+            offset = handle.tell() - len(line)
+            try:
+                event = json.loads(line.decode("utf-8", "replace"))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                # Native ids are not guaranteed on every provider/version. A
+                # byte offset is unique and stable for an append-only run, and
+                # never leaves this module except as the opaque reader id below.
+                event[_SOURCE_OFFSET_KEY] = offset
+                events.append(event)
     return events
 
 
@@ -382,7 +377,14 @@ def _conversation_records(
             if machinery:
                 hidden += 1
                 continue
-        kept.append({"role": message["role"], "ts": message.get("ts"), "text": text})
+        kept.append(
+            {
+                "message_id": f"offset:{event[_SOURCE_OFFSET_KEY]}",
+                "role": message["role"],
+                "ts": message.get("ts"),
+                "text": text,
+            }
+        )
     return kept, hidden
 
 
@@ -413,8 +415,8 @@ def conversation_view(
     ``truncated`` covers both bounds that can drop older messages: the message
     limit, and the byte cap that keeps one pathological transcript (a 550 MB
     Codex rollout exists in the wild) from stalling a request. Ordinals number
-    the returned messages, so they are stable for one response and not across a
-    truncation boundary; they are display keys, never persistent identity.
+    the returned window for display. ``message_id`` is the stable identity for
+    state that must survive appends which move that window.
     """
     size = path.stat().st_size
     max_bytes = CONVERSATION_MAX_BYTES if size > CONVERSATION_MAX_BYTES else None

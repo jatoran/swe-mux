@@ -11,8 +11,10 @@ responsive controls.
 - A persistent top rail places `swe_mux`, sidebar collapse, and daemon activity above the
   sidebar column. Workspace tabs are not global top-rail state; every pane renders its own tab
   strip beside that rail.
-- The sidebar is pointer/keyboard resizable from 190–480 px and collapsible. Width and collapse
-  state are device-local browser preferences, not Project layout state.
+- The sidebar is pointer/keyboard resizable from 190-480 px and collapsible.
+  Dragging its divider below 150 px previews collapse, and reversing the same drag past 170 px reopens it before release.
+  The separate thresholds prevent state chatter near the boundary.
+  Width and collapse state are device-local browser preferences, not Project layout state.
 - On mobile, selecting either a Project row or a session row closes the navigation overlay. Project
   selection closes it before restoring that Project's remembered active view, including when no
   valid remembered view exists.
@@ -805,7 +807,14 @@ responsive controls.
   Deliberately no composer, no insert, no send. Every neighbouring tab exists to put text into an
   agent, and mixing that into the surface for reviewing what already happened is how a stray tap
   becomes a message nobody wrote. Copy is the only verb: per message, or the whole conversation
-  with speakers. It is a drawer tab and not a pane because the point is to read *beside* the
+  with speakers.
+  The top-bar search filters the already loaded messages with literal, case-insensitive matching, highlights every occurrence, and leaves whole-conversation copy unchanged.
+  Search owns a temporary scroll position and clearing it restores the reader's prior place.
+  A message's copy control sticks to the body's top-right edge while that message is being read, then yields when the message leaves the viewport.
+  An explicit Show more or Show less choice is device-local and keyed by session, agent run, and stable message identity, so appending messages, a moving transcript window, or navigating away does not reset it or apply it to a different message.
+  Search temporarily showing a full matching message does not change that saved choice.
+  Only expanded identifiers and recency timestamps are stored, and a 500-entry cap bounds stale state without storing transcript text.
+  It is a drawer tab and not a pane because the point is to read *beside* the
   terminal rather than in place of it; the cost is that the drawer unmounts a tab body on every
   switch, which is why the scroll place is kept outside the component.
 - **What the reader shows is a filtered conversation, not the transcript.** Tool calls are gone
@@ -853,14 +862,15 @@ responsive controls.
   outside the layout, and on desktop the drawer is an in-flow column, so a file row can still be
   dragged onto any pane. The one real cost is that Files and Clipboard can no longer be visible
   at once — the drawer shows one tab at a time — which is the trade the tab model makes.
-- **Notes** is an index *and* an editor, and a note is open in exactly one of the two hosts at a
-  time. The tab pins the Project note first and unconditionally, pins the focused terminal's note
-  second when that note holds text, then lists every other session note with content, searchable
-  and scoped to this Project or to all of them. Selecting a row opens that note **in the drawer**;
-  the `⇥` on each row opens it as a workspace tab instead. From inside the drawer editor, `‹ Notes`
-  returns to the index and `⇥ tab` moves the note into a pane. This replaced the session-notes
-  modal and its three scattered entry points (project context menu, app menu, `notes.browse`), all
-  of which now open this tab.
+- **Notes** is an index *and* an editor, and a note is open in exactly one of the two hosts at a time.
+  The tab pins a visually prominent Project note first and unconditionally, reports its stored size, pins the focused terminal's note second when that note holds text, then lists every other session note with content, searchable and scoped to this Project or to all of them.
+  Selecting a row opens that note **in the drawer**; the `⇥` on each row opens it as a workspace tab instead.
+  Each session-note row places a two-click inline delete control immediately before `⇥`.
+  Desktop right-click and guarded mobile long-press open the same two-action menu: open in a workspace tab or delete with the same second confirmation.
+  Deletion submits the revision carried by the listing, refuses a concurrent edit with `409 revision_conflict`, logs the user action, and emits the normal note-change event with revision `missing`.
+  An open clean editor follows that event to an empty missing note; an editor with unsaved local work keeps its text and reaches the existing revision-conflict path instead of being silently cleared.
+  From inside the drawer editor, `‹ Notes` returns to the index and `⇥ tab` moves the note into a pane.
+  The former session-notes modal entry points now open this tab.
 - **Why one host at a time is a rule and not a preference.** `noteSaveQueue` keys one entry per
   `(Project, resource)` at module scope, so two mounted editors on one note share it: each submits
   its whole document, newest wins, and the loser's text is dropped with no conflict for the daemon
@@ -948,12 +958,15 @@ responsive controls.
   an in-flow column of the workspace grid: the pane tree shrinks rather than being covered, because
   covering a terminal in a tiling workspace is exactly backwards for a panel you opened to work
   *with* that terminal. The mobile overlay is an uncapped `90vw`, leaving a narrow strip of context
-  and scrim on every phone and small tablet. Desktop width is pointer-resizable and device-local,
-  like the sidebar's.
+  and scrim on every phone and small tablet.
+  Desktop width is pointer-resizable and device-local, like the sidebar's.
+  It has no fixed maximum; its live maximum is the available viewport width after reserving the navigation chrome, utility rail, and a 150 px main workspace.
+  Dragging its divider below 260 px previews collapse, and reversing the same drag past 280 px reopens it before release.
 - Every width change reflows the pane tree and refits its terminals, which sends a resize to each
   PTY and makes agent TUIs redraw. Width persists globally for the device and the drag commits on
-  pointer-up rather than per-frame. Restoring a Project whose desktop drawer was expanded performs
-  one deliberate reflow as part of restoring that Project's workspace presentation.
+  pointer-up rather than per-frame.
+  Collapse preview is transient during the drag; only the final open or collapsed state is written on release.
+  Restoring a Project whose desktop drawer was expanded performs one deliberate reflow as part of restoring that Project's workspace presentation.
 - **Which tab a reopen lands on is a property of the entry point, not of the drawer.** The last
   tab and desktop expanded/collapsed state are device-local **per Project** state
   (`mux.drawer.projects.v1`). Switching Projects or relaunching restores each Project's pair;
@@ -1000,9 +1013,13 @@ responsive controls.
   fork is deliberately close kin to the command rail's Branch mark: they never appear together
   (one is a terminal action, one a drawer tab), and the fork is the one mark that says
   "branches".
-- Nothing is drawn with a word any more, so the `title` is the only place a tab is named and
-  every title leads with its label; the label itself becomes the button's `aria-label`, since
-  an icon button has no text to take an accessible name from and `title` is not a name on touch.
+- The rail and tab strip stay icon-only, so every icon button uses the short label as its accessible name and leads its descriptive `title` with that label.
+  Each active drawer body separately identifies itself with a compact bordered heading badge integrated into its existing top chrome rather than a new full-width title bar.
+  Hovering the heading badge shows the exact descriptive `title` used by the corresponding rail icon.
+  `DRAWER_TABS` owns the short label, visible content heading, and shared description so those identities cannot drift.
+  Session-scoped tabs use a three-pixel neutral-muted scope dot in the lower-right icon corner on both tab surfaces.
+  The scope dot has no glow or count, uses the opposite corner from notification badges, and stays deliberately lower-contrast because scope is passive metadata rather than attention state.
+  The icon tooltip and accessible name identify its meaning.
 - Tabs are **user-arrangeable** by dragging one, from the strip or the rail. Both surfaces
   render one order and share one drag handler (`beginDrawerTabDrag`), because they are two
   renderings of one control: a per-surface order would let them disagree about what "third" is.

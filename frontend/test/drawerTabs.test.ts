@@ -4,11 +4,13 @@ import { join } from 'node:path'
 import test from 'node:test'
 import {
   DEFAULT_DRAWER_PROJECT_STATE,
+  DRAWER_COLLAPSE_WIDTH,
   DRAWER_DEFAULT_WIDTH,
-  DRAWER_MAX_WIDTH,
   DRAWER_MIN_WIDTH,
+  DRAWER_REOPEN_WIDTH,
   DRAWER_TABS,
   clampDrawerWidth,
+  drawerMaximumWidth,
   drawerProjectStateFor,
   drawerTab,
   isNavigatorTab,
@@ -21,6 +23,15 @@ import {
   storedDrawerWidth,
   updateDrawerProjectState,
 } from '../src/drawerTabs.ts'
+import {
+  SIDEBAR_COLLAPSE_WIDTH,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_REOPEN_WIDTH,
+  clampSidebarWidth,
+  dragCollapsedAtWidth,
+} from '../src/sidebarResize.ts'
 
 test('injection surfaces lead, then navigators, then attention surfaces', () => {
   // Order is the argument for the drawer existing: clipboard, session commands, prompts
@@ -45,8 +56,13 @@ test('injection surfaces lead, then navigators, then attention surfaces', () => 
   // to be short and distinct: it is what a screen reader announces for the tab.
   const labels = DRAWER_TABS.map(tab => tab.label)
   assert.equal(new Set(labels).size, labels.length, 'tab labels must be distinct')
+  assert.deepEqual(DRAWER_TABS.map(tab => tab.heading), [
+    'Clipboard History', 'Commands', 'Prompt Library', 'Prompt Queue', 'Transcript',
+    'File Explorer', 'Notes', 'Agent Context', 'Git', 'Processes', 'Alerts',
+  ])
   for (const tab of DRAWER_TABS) {
     assert.ok(tab.label.length <= 10, `${tab.id} label is too long to also serve as a name`)
+    assert.ok(tab.heading.length > 0, `${tab.id} needs a visible content heading`)
     assert.ok(tab.title.startsWith(tab.label), `${tab.id} title should lead with its label`)
   }
   // The icons live in `railIcons.tsx`, which this module must not import: it stays JSX-free so
@@ -115,7 +131,7 @@ test('deleted Projects are pruned from drawer persistence', () => {
 test('App restores desktop state per Project without persisting mobile visibility', () => {
   const app = readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8')
   assert.match(app, /const activeDrawerState=projectId\?drawerProjectStateFor\(drawerProjectStates,projectId\):unscopedDrawerState/)
-  assert.match(app, /const clipboardOpen=mobileWorkspace\?mobileDrawerOpen:activeDrawerState\.desktopExpanded/)
+  assert.match(app, /const clipboardOpen=mobileWorkspace\?mobileDrawerOpen:\(drawerResizeOpen\?\?activeDrawerState\.desktopExpanded\)/)
   assert.match(app, /if\(mobileWorkspace\)\{\s*const open=.*?setMobileDrawerOpen\(open\).*?return\s*\}/s)
   assert.doesNotMatch(app, /setClipboardOpenState/)
   assert.ok(app.includes("openDrawerTab('files',project.id)"), 'cross-Project Files actions must name their target')
@@ -123,15 +139,79 @@ test('App restores desktop state per Project without persisting mobile visibilit
   assert.ok(app.includes("openDrawerTab('queue',session?.project_id||projectId)"), 'cross-Project Queue actions must name their target')
 })
 
-test('dock width is bounded and survives junk in localStorage', () => {
+test('each drawer body shows a compact heading with the rail tooltip description', () => {
+  const host = readFileSync(join(import.meta.dirname, '..', 'src', 'UtilityDrawer.tsx'), 'utf8')
+  const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
+  assert.ok(host.includes('class={`drawer-body drawer-body-${tab}`}'))
+  assert.ok(host.includes('<h2 class="drawer-panel-title" title={active.title}>{active.heading}</h2>'))
+  assert.match(css, /\.drawer-panel-title\{[^}]*border:[^}]*background:/)
+  assert.ok(css.includes('padding-left:calc(var(--drawer-panel-title-width) + 13px)'), 'existing top chrome must make room for the heading')
+})
+
+test('both tab-icon surfaces mark session scope without using notification badges', () => {
+  const host = readFileSync(join(import.meta.dirname, '..', 'src', 'UtilityDrawer.tsx'), 'utf8')
+  const app = readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8')
+  const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
+  assert.ok(host.includes('data-scope={item.scope}'))
+  assert.ok(app.includes('data-scope={tab.scope}'))
+  assert.match(css, /button\[data-scope="session"\]:before[^}]*width:3px[^}]*height:3px[^}]*border-radius:50%/)
+  assert.doesNotMatch(css, /button\[data-scope="session"\]:before[^}]*\.drawer-badge/)
+})
+
+test('Notes exposes one revision-safe action model through inline and pointer menus', () => {
+  const notes = readFileSync(join(import.meta.dirname, '..', 'src', 'NotesTab.tsx'), 'utf8')
+  const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
+  assert.ok(notes.includes("await api('DELETE',`/api/projects/${note.project_id}/session-notes/"))
+  assert.ok(notes.includes('{revision:note.revision}'))
+  assert.ok(notes.includes("confirming?'delete?':'×'"), 'inline delete must expose its second step')
+  assert.ok(notes.includes('onContextMenu={event=>openContextMenu(note,event)}'))
+  assert.ok(notes.includes('const LONG_PRESS_MS=550'))
+  assert.ok(notes.includes("'Confirm delete':'Delete session note'"), 'context delete must expose the same second step')
+  assert.ok(notes.includes("projectNoteBytes===null?'size …':sizeLabel(projectNoteBytes)"))
+  assert.match(css, /\.project-note-shell\{[^}]*border:[^}]*box-shadow:/)
+})
+
+test('dock width has no fixed maximum and preserves a minimum workspace', () => {
   assert.equal(clampDrawerWidth(120), DRAWER_MIN_WIDTH)
-  assert.equal(clampDrawerWidth(9000), DRAWER_MAX_WIDTH)
+  assert.equal(clampDrawerWidth(9000), 9000)
+  assert.equal(clampDrawerWidth(9000, 1468), 1468)
+  assert.equal(clampDrawerWidth(420, Number.NaN), 420)
   assert.equal(clampDrawerWidth(420), 420)
   assert.equal(clampDrawerWidth(Number.NaN), DRAWER_DEFAULT_WIDTH)
+  assert.equal(drawerMaximumWidth(1920, 258), 1468)
+  assert.equal(drawerMaximumWidth(761, 484), DRAWER_MIN_WIDTH, 'drawer minimum wins when fixed chrome exhausts the viewport')
   assert.equal(storedDrawerWidth('440'), 440)
+  assert.equal(storedDrawerWidth('9000'), 9000)
   assert.equal(storedDrawerWidth(null), DRAWER_DEFAULT_WIDTH)
   assert.equal(storedDrawerWidth('not-a-number'), DRAWER_DEFAULT_WIDTH)
   assert.equal(storedDrawerWidth('0'), DRAWER_DEFAULT_WIDTH)
+})
+
+test('desktop sidebar drags collapse reversibly beyond their minimum widths', () => {
+  assert.equal(clampSidebarWidth(100), SIDEBAR_MIN_WIDTH)
+  assert.equal(clampSidebarWidth(900), SIDEBAR_MAX_WIDTH)
+  assert.equal(clampSidebarWidth(Number.NaN), SIDEBAR_DEFAULT_WIDTH)
+
+  assert.equal(dragCollapsedAtWidth(SIDEBAR_COLLAPSE_WIDTH + 1, false, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_REOPEN_WIDTH), false)
+  assert.equal(dragCollapsedAtWidth(SIDEBAR_COLLAPSE_WIDTH, false, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_REOPEN_WIDTH), true)
+  assert.equal(dragCollapsedAtWidth(SIDEBAR_REOPEN_WIDTH - 1, true, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_REOPEN_WIDTH), true)
+  assert.equal(dragCollapsedAtWidth(SIDEBAR_REOPEN_WIDTH, true, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_REOPEN_WIDTH), false)
+  assert.equal(dragCollapsedAtWidth(Number.NaN, true, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_REOPEN_WIDTH), true)
+
+  assert.equal(dragCollapsedAtWidth(DRAWER_COLLAPSE_WIDTH, false, DRAWER_COLLAPSE_WIDTH, DRAWER_REOPEN_WIDTH), true)
+  assert.equal(dragCollapsedAtWidth(DRAWER_REOPEN_WIDTH - 1, true, DRAWER_COLLAPSE_WIDTH, DRAWER_REOPEN_WIDTH), true)
+  assert.equal(dragCollapsedAtWidth(DRAWER_REOPEN_WIDTH, true, DRAWER_COLLAPSE_WIDTH, DRAWER_REOPEN_WIDTH), false)
+})
+
+test('App previews drag-collapse but persists only the final state', () => {
+  const app = readFileSync(join(import.meta.dirname, '..', 'src', 'App.tsx'), 'utf8')
+  const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
+  assert.ok(app.includes('drawerResizeOpen??activeDrawerState.desktopExpanded'))
+  assert.ok(app.includes('setDrawerResizeOpen(dragOpen)'))
+  assert.ok(app.includes('setClipboardOpen(dragOpen)'))
+  assert.ok(app.includes("localStorage.setItem('mux.sidebar.collapsed.v1',String(dragCollapsed))"))
+  assert.match(css, /workspace\.drawer-open\{[^}]*minmax\(150px,1fr\)/)
+  assert.match(css, /workspace\.sidebar-collapsed\.drawer-open\{[^}]*minmax\(150px,1fr\)/)
 })
 
 test('tab cycling wraps in both directions', () => {

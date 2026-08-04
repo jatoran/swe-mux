@@ -4,14 +4,21 @@ import { api } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
 import { copyPreparedText } from './terminalClipboard'
 import {
+  expandedTranscriptMessageIds,
   isPinnedToBottom,
+  parseTranscriptExpansions,
   recallTranscriptScroll,
   rememberTranscriptScroll,
+  serializeTranscriptExpansions,
+  setTranscriptMessageExpanded,
   transcriptClamped,
   transcriptConversationText,
   transcriptEmptyMessage,
+  transcriptMatchesQuery,
+  transcriptSearchParts,
   transcriptSpeaker,
   TRANSCRIPT_CHANGED_EVENT,
+  TRANSCRIPT_EXPANSION_KEY,
   TURN_ENDED_EVENT,
   type SessionTranscript,
   type TranscriptMessage,
@@ -30,6 +37,23 @@ const COPIED_FLASH_MS = 1200
 /** Copy-all's key in the flash state, where per-message keys are ordinals. */
 const COPY_ALL = -1
 
+const readTranscriptExpansions = () => {
+  try {
+    return parseTranscriptExpansions(window.localStorage.getItem(TRANSCRIPT_EXPANSION_KEY))
+  } catch {
+    return []
+  }
+}
+
+const writeTranscriptExpansions = (entries: ReturnType<typeof readTranscriptExpansions>) => {
+  try {
+    window.localStorage.setItem(TRANSCRIPT_EXPANSION_KEY, serializeTranscriptExpansions(entries))
+  } catch {
+    // Storage can be unavailable in private or locked-down browser contexts.
+    // The component state still preserves the choice for this mount.
+  }
+}
+
 const timeLabel = (value?: string): string => {
   if (!value) return ''
   const numeric = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : null
@@ -37,27 +61,35 @@ const timeLabel = (value?: string): string => {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
-function Message({ message, copied, expanded, onCopy, onExpand }: {
+function Message({ message, copied, expanded, query, onCopy, onExpand }: {
   message: TranscriptMessage
   copied: boolean
   expanded: boolean
+  query: string
   onCopy: (message: TranscriptMessage) => void
-  onExpand: (ordinal: number) => void
+  onExpand: (messageId: string) => void
 }) {
-  const clamped = transcriptClamped(message.text) && !expanded
+  const clamped = transcriptClamped(message.text) && !expanded && !query
   const stamp = timeLabel(message.ts)
   return <article class={`transcript-message ${message.role}`} data-message-ordinal={message.ordinal}>
-    <header>
-      <span class="transcript-speaker">{transcriptSpeaker(message.role)}</span>
-      {stamp && <time>{stamp}</time>}
+    <div class="transcript-copy-anchor">
       <button
         class={copied ? 'transcript-copy copied' : 'transcript-copy'}
+        aria-label={`Copy this ${transcriptSpeaker(message.role) === 'you' ? 'message' : 'reply'}`}
         title={`Copy this ${transcriptSpeaker(message.role) === 'you' ? 'message' : 'reply'}`}
         onClick={() => onCopy(message)}
       >{copied ? 'Copied' : 'Copy'}</button>
+    </div>
+    <header>
+      <span class="transcript-speaker">{transcriptSpeaker(message.role)}</span>
+      {stamp && <time>{stamp}</time>}
     </header>
-    <p class={clamped ? 'clamped' : ''}>{message.text}</p>
-    {transcriptClamped(message.text) && <button class="transcript-expand" onClick={() => onExpand(message.ordinal)}>
+    <p class={clamped ? 'clamped' : ''}>{query
+      ? transcriptSearchParts(message.text, query).map((part, index) =>
+        part.match ? <mark key={index}>{part.text}</mark> : part.text,
+      )
+      : message.text}</p>
+    {transcriptClamped(message.text) && !query && <button class="transcript-expand" onClick={() => onExpand(message.message_id)}>
       {expanded ? 'Show less' : 'Show more'}
     </button>}
   </article>
@@ -71,15 +103,22 @@ export function TranscriptTab({ session }: { session: Session | null }) {
   const [loading, setLoading] = useState(false)
   const [unseen, setUnseen] = useState(0)
   const [copied, setCopied] = useState<number | null>(null)
-  const [expanded, setExpanded] = useState<number[]>([])
+  const [expansion, setExpansion] = useState<{ scope: string; messageIds: string[] }>({ scope: '', messageIds: [] })
+  const [search, setSearch] = useState<{ sessionId: string; value: string }>({ sessionId: '', value: '' })
   const body = useRef<HTMLDivElement>(null)
   const manualArea = useRef<HTMLTextAreaElement>(null)
+  const searchOrigin = useRef<{ sessionId: string; scrollTop: number } | null>(null)
   // Refs rather than state: the scroll placement below runs in a layout effect and
   // must read the value this render was laid out with, not a queued update.
   const pinned = useRef(true)
   const placedFor = useRef('')
   const shown = useRef(0)
   const requestSequence = useRef(0)
+  const query = search.sessionId === sessionId ? search.value : ''
+  const normalizedQuery = query.trim()
+  const transcriptRunId = runId || (data?.session_id === sessionId ? data.agent_run_id : '') || 'legacy'
+  const expansionScope = JSON.stringify([sessionId, transcriptRunId])
+  const expanded = expansion.scope === expansionScope ? expansion.messageIds : []
 
   const load = async (id: string) => {
     const sequence = ++requestSequence.current
@@ -101,11 +140,22 @@ export function TranscriptTab({ session }: { session: Session | null }) {
   // run id belongs in here beside the session id: without it the tab would keep
   // showing the retired conversation until something else forced a reload.
   useEffect(() => {
-    setData(null); setUnseen(0); setExpanded([]); setError('')
+    setData(null); setUnseen(0); setError('')
     placedFor.current = ''
     shown.current = 0
     if (sessionId) void load(sessionId)
   }, [sessionId, runId])
+
+  // Explicitly unfolded messages follow their session and agent run across drawer
+  // unmounts and navigation. Search showing a full message never enters this path.
+  useEffect(() => {
+    if (!sessionId) { setExpansion({ scope: '', messageIds: [] }); return }
+    const entries = readTranscriptExpansions()
+    setExpansion({
+      scope: expansionScope,
+      messageIds: expandedTranscriptMessageIds(entries, sessionId, transcriptRunId),
+    })
+  }, [expansionScope])
 
   // The observer signals after it has consumed a user record, avoiding both timer
   // polling and the race where UserPromptSubmit arrives before the transcript write.
@@ -146,6 +196,10 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     }
     const arrived = data.messages.length - shown.current
     shown.current = data.messages.length
+    if (normalizedQuery) {
+      if (arrived > 0) setUnseen(current => current + arrived)
+      return
+    }
     if (pinned.current) {
       element.scrollTop = element.scrollHeight
       setUnseen(0)
@@ -154,9 +208,28 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     }
   }, [data])
 
+  // Search is an ephemeral lens over the conversation, not a new reading place.
+  // Start each query at its first match and restore the normal scroll offset when
+  // the query clears, without replacing the one-slot transcript scroll memory.
+  useLayoutEffect(() => {
+    const element = body.current
+    if (!element) return
+    if (searchOrigin.current && searchOrigin.current.sessionId !== sessionId) searchOrigin.current = null
+    if (normalizedQuery) {
+      if (!searchOrigin.current) searchOrigin.current = { sessionId, scrollTop: element.scrollTop }
+      element.scrollTop = 0
+      return
+    }
+    if (searchOrigin.current?.sessionId === sessionId) {
+      element.scrollTop = searchOrigin.current.scrollTop
+      searchOrigin.current = null
+    }
+  }, [normalizedQuery, sessionId])
+
   const onScroll = () => {
     const element = body.current
     if (!element || !sessionId) return
+    if (normalizedQuery) return
     pinned.current = isPinnedToBottom(element.scrollTop, element.scrollHeight, element.clientHeight)
     rememberTranscriptScroll(sessionId, element.scrollTop)
     if (pinned.current) setUnseen(0)
@@ -187,19 +260,48 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     window.setTimeout(() => setCopied(current => (current === key ? null : current)), COPIED_FLASH_MS)
   }
 
-  const toggleExpand = (ordinal: number) =>
-    setExpanded(current => current.includes(ordinal) ? current.filter(item => item !== ordinal) : [...current, ordinal])
+  const toggleExpand = (messageId: string) => {
+    const shouldExpand = !expanded.includes(messageId)
+    const entries = setTranscriptMessageExpanded(
+      readTranscriptExpansions(),
+      sessionId,
+      transcriptRunId,
+      messageId,
+      shouldExpand,
+    )
+    writeTranscriptExpansions(entries)
+    setExpansion({
+      scope: expansionScope,
+      messageIds: expandedTranscriptMessageIds(entries, sessionId, transcriptRunId),
+    })
+  }
+
+  const updateSearch = (value: string) => {
+    // Capture before filtering shortens the DOM and the browser clamps scrollTop.
+    // A layout effect is already too late to recover the original offset.
+    if (!normalizedQuery && value.trim() && body.current) {
+      searchOrigin.current = { sessionId, scrollTop: body.current.scrollTop }
+    }
+    setSearch({ sessionId, value })
+  }
 
   if (!session) return <p class="drawer-empty">Focus a session to read its conversation.</p>
 
   const messages = data?.messages || []
+  const visibleMessages = normalizedQuery
+    ? messages.filter(message => transcriptMatchesQuery(message, normalizedQuery))
+    : messages
   const stale = data?.observation_stale_since
   return <div class="transcript-tab">
     <div class="transcript-tab-head">
-      <div>
+      <div class="transcript-tab-meta">
         <strong>{agentTargetName(session)}</strong>
-        <span>
-          {loading && !data ? 'Reading transcript…' : `${messages.length} message${messages.length === 1 ? '' : 's'}`}
+        <span aria-live="polite">
+          {loading && !data
+            ? 'Reading transcript…'
+            : normalizedQuery
+              ? `${visibleMessages.length} of ${messages.length} messages`
+              : `${messages.length} message${messages.length === 1 ? '' : 's'}`}
           {data && data.hidden > 0 ? ` · ${data.hidden} CLI record${data.hidden === 1 ? '' : 's'} hidden` : ''}
         </span>
       </div>
@@ -209,6 +311,29 @@ export function TranscriptTab({ session }: { session: Session | null }) {
         title="Copy the whole conversation, with speakers"
         onClick={() => void copy(transcriptConversationText(messages), COPY_ALL)}
       >{copied === COPY_ALL ? 'Copied' : 'Copy all'}</button>
+      <div class="transcript-search">
+        <input
+          type="search"
+          aria-label="Search transcript"
+          placeholder="Search transcript"
+          autocomplete="off"
+          spellcheck={false}
+          value={query}
+          disabled={!messages.length}
+          onInput={event => updateSearch(event.currentTarget.value)}
+          onKeyDown={event => {
+            if (event.key !== 'Escape' || !query) return
+            event.stopPropagation()
+            updateSearch('')
+          }}
+        />
+        {query && <button
+          type="button"
+          aria-label="Clear transcript search"
+          title="Clear search"
+          onClick={() => updateSearch('')}
+        >×</button>}
+      </div>
     </div>
     {/* The observer can end up following a conversation that is no longer this
         PTY's. Everywhere else that shows up as odd telemetry; here it would be a
@@ -220,17 +345,20 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     {data?.truncated && <p class="transcript-note">Older messages are not loaded. The full conversation is in History.</p>}
     <div class="transcript-tab-body" ref={body} onScroll={onScroll}>
       {messages.length
-        ? messages.map(message => <Message
-          key={message.ordinal}
-          message={message}
-          copied={copied === message.ordinal}
-          expanded={expanded.includes(message.ordinal)}
-          onCopy={item => void copy(item.text, item.ordinal)}
-          onExpand={toggleExpand}
-        />)
+        ? visibleMessages.length
+          ? visibleMessages.map(message => <Message
+            key={message.message_id}
+            message={message}
+            copied={copied === message.ordinal}
+            expanded={expanded.includes(message.message_id)}
+            query={normalizedQuery}
+            onCopy={item => void copy(item.text, item.ordinal)}
+            onExpand={toggleExpand}
+          />)
+          : <p class="drawer-empty">No messages match “{normalizedQuery}”.</p>
         : !loading && <p class="drawer-empty">{transcriptEmptyMessage(data?.reason ?? null, session.backend)}</p>}
     </div>
-    {unseen > 0 && <button class="transcript-jump" onClick={jumpToLatest}>
+    {!normalizedQuery && unseen > 0 && <button class="transcript-jump" onClick={jumpToLatest}>
       {unseen} new ↓
     </button>}
     <textarea ref={manualArea} class="transcript-manual" readOnly aria-hidden="true" tabIndex={-1} />

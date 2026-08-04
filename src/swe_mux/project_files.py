@@ -298,7 +298,8 @@ def session_note_summaries(root: str | Path) -> list[dict[str, Any]]:
     for path in entries[:MAX_SESSION_NOTE_SUMMARIES]:
         try:
             stat = path.stat()
-            body = _note_body(path.read_text(encoding="utf-8", errors="replace")).strip()
+            data = path.read_bytes()
+            body = _note_body(data.decode("utf-8", errors="replace")).strip()
         except OSError:
             continue
         if not body:
@@ -309,6 +310,7 @@ def session_note_summaries(root: str | Path) -> list[dict[str, Any]]:
                 "note_id": path.stem,
                 "updated_at": stat.st_mtime,
                 "bytes": stat.st_size,
+                "revision": revision(data),
                 "excerpt": excerpt[:SESSION_NOTE_EXCERPT_CHARS],
             }
         )
@@ -1170,6 +1172,7 @@ async def read_note(
             "id": identity,
             "path": str(path),
             "exists": False,
+            "bytes": 0,
             "revision": "missing",
             "markdown": "",
             "status": "missing",
@@ -1184,17 +1187,23 @@ async def read_note(
             "id": identity,
             "path": str(path),
             "exists": True,
+            "bytes": len(data),
             "revision": revision(data),
             "markdown": markdown,
             "status": status,
         }
     except (OSError, UnicodeDecodeError) as exc:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
         return {
             "project": asdict(project),
             "kind": kind,
             "id": identity,
             "path": str(path),
             "exists": True,
+            "bytes": size,
             "revision": "unreadable",
             "markdown": "",
             "status": "malformed",
@@ -1236,3 +1245,31 @@ async def initialize_note(
     path = Path(current["path"])
     _create_note_file(path, note_header(kind, identity))
     return await read_note(cwd, kind, identity, project=project)
+
+
+async def delete_note(
+    cwd: str | Path,
+    kind: str,
+    identity: str,
+    expected_revision: str,
+    *,
+    project: ProjectIdentity | None = None,
+) -> dict[str, Any]:
+    """Delete one note only if the caller observed its current revision."""
+    current = await read_note(cwd, kind, identity, project=project)
+    if current["revision"] != expected_revision:
+        raise ValueError("note changed externally; reload before deleting")
+    if not current["exists"]:
+        raise ValueError("note does not exist")
+    path = Path(current["path"])
+    try:
+        path.unlink()
+    except FileNotFoundError as exc:
+        raise ValueError("note changed externally; reload before deleting") from exc
+    _NOTE_CONTENT_CACHE.pop(str(path), None)
+    return {
+        "deleted": True,
+        "path": str(path),
+        "bytes": int(current.get("bytes") or 0),
+        "revision": expected_revision,
+    }

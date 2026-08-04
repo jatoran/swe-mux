@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import type { JSX } from 'preact'
 import { api } from './api'
+import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import type { Project } from './types'
 
 // The drawer's Notes tab: the index half of the Notes surface.
@@ -21,7 +23,7 @@ import type { Project } from './types'
 
 export type SessionNoteSummary = {
   note_id:string;project_id:string;project_name:string
-  updated_at:number;bytes:number;excerpt:string
+  updated_at:number;bytes:number;revision:string;excerpt:string
   owner_label:string;owner_backend?:string|null;owner_live:boolean;owner_known:boolean
 }
 
@@ -41,15 +43,29 @@ type Props={
 }
 
 const sizeLabel=(bytes:number)=>bytes>=1024?`${Math.round(bytes/1024)} KiB`:`${bytes} B`
+const LONG_PRESS_MS=550
+const noteKey=(note:Pick<SessionNoteSummary,'project_id'|'note_id'>)=>`${note.project_id}:${note.note_id}`
+type NoteMenu={note:SessionNoteSummary;x:number;y:number}
+type ProjectNoteMeta={bytes:number}
 
 export function NotesTab({project,allProjects,onAllProjects,focusedNote,onOpenProjectNote,onOpenSessionNote,onDone}:Props){
   const [items,setItems]=useState<SessionNoteSummary[]|null>(null)
   const [query,setQuery]=useState('')
   const [error,setError]=useState('')
+  const [projectNoteBytes,setProjectNoteBytes]=useState<number|null>(null)
+  const [deleteConfirm,setDeleteConfirm]=useState('')
+  const [deleting,setDeleting]=useState('')
+  const [menu,setMenu]=useState<NoteMenu|null>(null)
   const scopeId=allProjects?'':project?.id||''
   // A generation guard rather than a cancel flag: a refresh fired by a note-changed
   // event can land after a scope change, and the newest request must win.
   const generation=useRef(0)
+  const menuPanel=useRef<HTMLDivElement>(null)
+  const longPress=useRef<number|null>(null)
+  const pressOrigin=useRef<{x:number;y:number}|null>(null)
+  const touchPress=useRef(false)
+  const suppressClick=useRef(false)
+  const menuOpenedAt=useRef(0)
 
   const load=async()=>{
     const mine=++generation.current
@@ -71,6 +87,59 @@ export function NotesTab({project,allProjects,onAllProjects,focusedNote,onOpenPr
     window.addEventListener('mux:note-changed',changed)
     return()=>window.removeEventListener('mux:note-changed',changed)
   },[scopeId])
+
+  useEffect(()=>{
+    const projectId=project?.id||''
+    if(!projectId){setProjectNoteBytes(null);return}
+    let current=true
+    const loadProjectNote=()=>void api<ProjectNoteMeta>('GET',`/api/projects/${projectId}/note`)
+      .then(note=>{if(current)setProjectNoteBytes(note.bytes)})
+      .catch(()=>{if(current)setProjectNoteBytes(null)})
+    const changed=(event:Event)=>{
+      const detail=(event as CustomEvent<{projectId:string;kind:string}>).detail
+      if(detail.projectId===projectId&&detail.kind==='note')loadProjectNote()
+    }
+    setProjectNoteBytes(null)
+    loadProjectNote()
+    window.addEventListener('mux:note-changed',changed)
+    return()=>{current=false;window.removeEventListener('mux:note-changed',changed)}
+  },[project?.id])
+
+  useEffect(()=>()=>{if(longPress.current!==null)window.clearTimeout(longPress.current)},[])
+
+  useEffect(()=>{
+    if(!menu)return
+    const previous=document.activeElement instanceof HTMLElement?document.activeElement:null
+    const frame=requestAnimationFrame(()=>menuPanel.current?.querySelector<HTMLButtonElement>('button')?.focus())
+    const dismiss=(event:Event)=>{
+      const target=event.target
+      if(target instanceof Element&&target.closest('.note-row-menu'))return
+      setMenu(null);setDeleteConfirm('')
+    }
+    const key=(event:KeyboardEvent)=>{
+      if(event.key==='Escape'){
+        event.preventDefault();event.stopImmediatePropagation();setMenu(null);setDeleteConfirm('');return
+      }
+      if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return
+      const buttons=[...menuPanel.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')||[]]
+      if(!buttons.length)return
+      event.preventDefault()
+      const current=buttons.indexOf(document.activeElement as HTMLButtonElement)
+      const next=event.key==='Home'?0:event.key==='End'?buttons.length-1
+        :(Math.max(current,0)+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length
+      buttons[next].focus()
+    }
+    document.addEventListener('pointerdown',dismiss)
+    window.addEventListener('blur',dismiss)
+    window.addEventListener('keydown',key,true)
+    return()=>{
+      cancelAnimationFrame(frame)
+      document.removeEventListener('pointerdown',dismiss)
+      window.removeEventListener('blur',dismiss)
+      window.removeEventListener('keydown',key,true)
+      previous?.focus()
+    }
+  },[menu])
 
   const needle=query.trim().toLowerCase()
   const shown=useMemo(()=>{
@@ -94,6 +163,9 @@ export function NotesTab({project,allProjects,onAllProjects,focusedNote,onOpenPr
     }
     return [...buckets.entries()]
   },[shown,allProjects])
+  const focusedSummary=useMemo(()=>focusedNote
+    ?(items||[]).find(item=>item.project_id===focusedNote.projectId&&item.note_id===focusedNote.noteId)||null
+    :null,[items,focusedNote?.projectId,focusedNote?.noteId])
 
   // Opening into the drawer replaces this index in place, so `onDone` (which closes the whole
   // panel on mobile) would hide the note it was just asked to show. Only a pane placement
@@ -106,8 +178,82 @@ export function NotesTab({project,allProjects,onAllProjects,focusedNote,onOpenPr
     onOpenProjectNote(projectId,place)
     if(place==='tab')onDone()
   }
-  const noteRow=(note:SessionNoteSummary)=><article class="session-note-row" key={`${note.project_id}:${note.note_id}`}>
-    <button onClick={()=>openSession(note.project_id,note.note_id,'drawer')} title={`Open the session note for ${note.owner_label} in this panel`}>
+
+  const cancelLongPress=()=>{
+    if(longPress.current!==null)window.clearTimeout(longPress.current)
+    longPress.current=null;pressOrigin.current=null
+  }
+  const openMenu=(note:SessionNoteSummary,x:number,y:number)=>{
+    setDeleteConfirm('')
+    menuOpenedAt.current=performance.now()
+    setMenu({note,x,y})
+  }
+  const beginLongPress=(note:SessionNoteSummary,event:JSX.TargetedPointerEvent<HTMLElement>)=>{
+    touchPress.current=event.pointerType==='touch'
+    if(!touchPress.current)return
+    cancelLongPress()
+    const {clientX,clientY}=event
+    pressOrigin.current={x:clientX,y:clientY}
+    longPress.current=window.setTimeout(()=>{
+      longPress.current=null;suppressClick.current=true
+      navigator.vibrate?.(20)
+      openMenu(note,clientX,clientY)
+    },LONG_PRESS_MS)
+  }
+  const trackLongPress=(event:JSX.TargetedPointerEvent<HTMLElement>)=>{
+    const origin=pressOrigin.current
+    if(origin&&(Math.abs(event.clientX-origin.x)>10||Math.abs(event.clientY-origin.y)>10))cancelLongPress()
+  }
+  const openContextMenu=(note:SessionNoteSummary,event:JSX.TargetedMouseEvent<HTMLElement>)=>{
+    event.preventDefault();event.stopPropagation();cancelLongPress()
+    if(touchPress.current)suppressClick.current=true
+    openMenu(note,event.clientX,event.clientY)
+  }
+  const suppressLongPressClick=(event:JSX.TargetedMouseEvent<HTMLElement>)=>{
+    if(!suppressClick.current)return
+    suppressClick.current=false;event.preventDefault();event.stopPropagation()
+  }
+  const deleteSession=async(note:SessionNoteSummary)=>{
+    const key=noteKey(note)
+    if(deleteConfirm!==key){setDeleteConfirm(key);return}
+    setDeleting(key)
+    try{
+      await api('DELETE',`/api/projects/${note.project_id}/session-notes/${encodeURIComponent(note.note_id)}`,{revision:note.revision})
+      setItems(current=>current?.filter(item=>noteKey(item)!==key)||current)
+      setDeleteConfirm('');setMenu(null);setError('')
+      window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{projectId:note.project_id,kind:'session-note',noteId:note.note_id,revision:'missing'}}))
+    }catch(cause){
+      setDeleteConfirm('');setError(cause instanceof Error?cause.message:String(cause));void load()
+    }finally{setDeleting('')}
+  }
+  const noteActions=(note:SessionNoteSummary)=>{
+    const key=noteKey(note)
+    const confirming=deleteConfirm===key
+    const busy=deleting===key
+    return <>
+      <button
+        class={`note-delete ${confirming?'confirming':''}`}
+        aria-label={confirming?`Confirm deletion of the session note for ${note.owner_label}`:`Delete the session note for ${note.owner_label}`}
+        title={confirming?'Click again to permanently delete this session note':'Delete session note'}
+        disabled={busy}
+        onBlur={()=>setDeleteConfirm(current=>current===key?'':current)}
+        onClick={()=>void deleteSession(note)}
+      >{busy?'…':confirming?'delete?':'×'}</button>
+      <button class="note-open-as-tab" aria-label={`Open the session note for ${note.owner_label} as a workspace tab`} title="Open as a workspace tab instead" onClick={()=>openSession(note.project_id,note.note_id,'tab')}>⇥</button>
+    </>
+  }
+  const noteRow=(note:SessionNoteSummary)=><article
+    class="session-note-row"
+    key={noteKey(note)}
+    onContextMenu={event=>openContextMenu(note,event)}
+    onPointerDown={event=>beginLongPress(note,event)}
+    onPointerMove={trackLongPress}
+    onPointerUp={cancelLongPress}
+    onPointerCancel={cancelLongPress}
+    onPointerLeave={cancelLongPress}
+    onClickCapture={suppressLongPressClick}
+  >
+    <button onClick={()=>openSession(note.project_id,note.note_id,'drawer')} title={`Open the session note for ${note.owner_label} in this panel · right-click or hold for actions`}>
       <strong>
         {note.owner_backend&&<span class={`agent-prefix ${note.owner_backend}`}>[{note.owner_backend}]</span>}
         {note.owner_label}
@@ -116,7 +262,7 @@ export function NotesTab({project,allProjects,onAllProjects,focusedNote,onOpenPr
       <span>{new Date(note.updated_at*1000).toLocaleString()} · {sizeLabel(note.bytes)}</span>
       <small>{note.excerpt}</small>
     </button>
-    <button class="note-open-as-tab" aria-label={`Open the session note for ${note.owner_label} as a workspace tab`} title="Open as a workspace tab instead" onClick={()=>openSession(note.project_id,note.note_id,'tab')}>⇥</button>
+    {noteActions(note)}
   </article>
 
   return <div class="notes-tab">
@@ -139,19 +285,29 @@ export function NotesTab({project,allProjects,onAllProjects,focusedNote,onOpenPr
           where you are right now, and hiding them behind a query would be a trap. */}
       <div class="notes-pinned">
         {project
-          ?<div class="note-pin-shell">
-            <button class="note-pin-row" title={`Open the Project note for ${project.name} in this panel`} onClick={()=>openProject(project.id,'drawer')}>
+          ?<div class="note-pin-shell project-note-shell">
+            <button class="note-pin-row project-note-pin" title={`Open the Project note for ${project.name} in this panel`} onClick={()=>openProject(project.id,'drawer')}>
               <span class="note-pin-kind">Project note</span><strong>{project.name}</strong>
+              <span class="note-pin-size">{projectNoteBytes===null?'size …':sizeLabel(projectNoteBytes)}</span>
             </button>
             <button class="note-open-as-tab" aria-label={`Open the Project note for ${project.name} as a workspace tab`} title="Open as a workspace tab instead" onClick={()=>openProject(project.id,'tab')}>⇥</button>
           </div>
           :<p class="session-notes-state">Select a Project to see its note.</p>}
-        {focusedNote&&<div class="note-pin-shell">
-          <button class="note-pin-row" title={`Open the session note for ${focusedNote.label} in this panel`} onClick={()=>openSession(focusedNote.projectId,focusedNote.noteId,'drawer')}>
-            <span class="note-pin-kind">Session note</span><strong>{focusedNote.label}</strong>
+        {focusedNote&&focusedSummary&&<article
+          class="note-pin-shell session-note-pin-shell"
+          onContextMenu={event=>openContextMenu(focusedSummary,event)}
+          onPointerDown={event=>beginLongPress(focusedSummary,event)}
+          onPointerMove={trackLongPress}
+          onPointerUp={cancelLongPress}
+          onPointerCancel={cancelLongPress}
+          onPointerLeave={cancelLongPress}
+          onClickCapture={suppressLongPressClick}
+        >
+          <button class="note-pin-row" title={`Open the session note for ${focusedNote.label} in this panel · right-click or hold for actions`} onClick={()=>openSession(focusedNote.projectId,focusedNote.noteId,'drawer')}>
+            <span class="note-pin-kind">Session note</span><strong>{focusedNote.label}</strong><span class="note-pin-size">{sizeLabel(focusedSummary.bytes)}</span>
           </button>
-          <button class="note-open-as-tab" aria-label={`Open the session note for ${focusedNote.label} as a workspace tab`} title="Open as a workspace tab instead" onClick={()=>openSession(focusedNote.projectId,focusedNote.noteId,'tab')}>⇥</button>
-        </div>}
+          {noteActions(focusedSummary)}
+        </article>}
       </div>
       {!items&&!error&&<p class="session-notes-state">Reading session notes…</p>}
       {items&&!error&&!shown.length&&<p class="session-notes-state">
@@ -171,6 +327,24 @@ export function NotesTab({project,allProjects,onAllProjects,focusedNote,onOpenPr
           </section>}
       </div>}
     </div>
-    <p class="notes-footnote">Notes outlive their terminals. Selecting one opens it here; <b>⇥</b> puts it in a pane instead.</p>
+    <p class="notes-footnote">Notes outlive their terminals. Select to open here; <b>⇥</b> opens a pane. Right-click or hold for actions.</p>
+    {menu&&<div
+      class="context-menu note-row-menu"
+      ref={el=>{menuPanel.current=el;fitMenuInViewport(el)}}
+      role="menu"
+      aria-label={`Actions for the session note owned by ${menu.note.owner_label}`}
+      style={{left:clampContextMenuLeft(menu.x,window.innerWidth),top:Math.max(4,menu.y)}}
+      onClickCapture={event=>{if(performance.now()-menuOpenedAt.current<250){event.preventDefault();event.stopPropagation()}}}
+    >
+      <div class="context-title"><strong>{menu.note.owner_label}</strong></div>
+      <button role="menuitem" onClick={()=>{const note=menu.note;setMenu(null);openSession(note.project_id,note.note_id,'tab')}}>Open in workspace tab</button>
+      <div class="context-rule" />
+      <button
+        role="menuitem"
+        class={`danger ${deleteConfirm===noteKey(menu.note)?'confirming':''}`}
+        disabled={deleting===noteKey(menu.note)}
+        onClick={()=>void deleteSession(menu.note)}
+      >{deleting===noteKey(menu.note)?'Deleting…':deleteConfirm===noteKey(menu.note)?'Confirm delete':'Delete session note'}</button>
+    </div>}
   </div>
 }

@@ -36,26 +36,28 @@ export type DrawerTab = {
   id: DrawerTabId
   /** Short accessible name. Both surfaces render an icon, so this is never drawn. */
   label: string
+  /** Visible identity inside the content surface. Kept separate from the compact rail label. */
+  heading: string
   title: string
   scope: DrawerTabScope
 }
 
 // The tab's mark lives in `railIcons.tsx` (`DRAWER_TAB_ICONS`), not here, so this module stays
 // JSX-free and unit-testable under plain `node --experimental-strip-types`.
-// Every title leads with its tab's label. Nothing on either surface is drawn with a word any
-// more, so the tooltip is the only place the tab is named and has to say the name first.
+// Every title leads with its tab's compact label so the icon controls announce and tooltip the
+// same identity. The longer heading is drawn once inside the active content surface.
 export const DRAWER_TABS: DrawerTab[] = [
-  { id: 'clipboard', label: 'Clipboard', title: 'Clipboard history — insert a recent copy', scope: 'session' },
-  { id: 'commands', label: 'Commands', title: 'Commands — keys, skills, and slash commands not on the rail', scope: 'session' },
-  { id: 'prompts', label: 'Prompts', title: 'Prompts — insert a saved template into the focused terminal', scope: 'session' },
-  { id: 'queue', label: 'Queue', title: 'Queue — messages staged for this agent, and the mailbox', scope: 'session' },
-  { id: 'transcript', label: 'Transcript', title: 'Transcript — read and copy this session’s conversation', scope: 'session' },
-  { id: 'files', label: 'Files', title: 'Files — browse or search this Project, then open into a pane', scope: 'project' },
-  { id: 'notes', label: 'Notes', title: 'Notes — read and write Project and session notes here, or open one in a pane', scope: 'project' },
-  { id: 'context', label: 'Context', title: 'Context — view agent instructions and learned project memory', scope: 'project' },
-  { id: 'git', label: 'Git', title: 'Git — worktree map and commit graph for this Project', scope: 'project' },
-  { id: 'processes', label: 'Processes', title: 'Processes — what this Project’s sessions are running, and what they are serving', scope: 'project' },
-  { id: 'notifications', label: 'Alerts', title: 'Alerts — notifications and attention records', scope: 'app' },
+  { id: 'clipboard', label: 'Clipboard', heading: 'Clipboard History', title: 'Clipboard history - insert a recent copy', scope: 'session' },
+  { id: 'commands', label: 'Commands', heading: 'Commands', title: 'Commands - keys, skills, and slash commands not on the rail', scope: 'session' },
+  { id: 'prompts', label: 'Prompts', heading: 'Prompt Library', title: 'Prompts - insert a saved template into the focused terminal', scope: 'session' },
+  { id: 'queue', label: 'Queue', heading: 'Prompt Queue', title: 'Queue - messages staged for this agent, and the mailbox', scope: 'session' },
+  { id: 'transcript', label: 'Transcript', heading: 'Transcript', title: 'Transcript - read and copy this session’s conversation', scope: 'session' },
+  { id: 'files', label: 'Files', heading: 'File Explorer', title: 'Files - browse or search this Project, then open into a pane', scope: 'project' },
+  { id: 'notes', label: 'Notes', heading: 'Notes', title: 'Notes - read and write Project and session notes here, or open one in a pane', scope: 'project' },
+  { id: 'context', label: 'Context', heading: 'Agent Context', title: 'Context - view agent instructions and learned project memory', scope: 'project' },
+  { id: 'git', label: 'Git', heading: 'Git', title: 'Git - worktree map and commit graph for this Project', scope: 'project' },
+  { id: 'processes', label: 'Processes', heading: 'Processes', title: 'Processes - what this Project’s sessions are running, and what they are serving', scope: 'project' },
+  { id: 'notifications', label: 'Alerts', heading: 'Alerts', title: 'Alerts - notifications and attention records', scope: 'app' },
 ]
 
 /** Tabs that open a document into the workspace instead of typing into it.
@@ -68,8 +70,12 @@ export const DRAWER_TAB_KEY = 'mux.drawer.tab.v1'
 export const DRAWER_PROJECT_STATE_KEY = 'mux.drawer.projects.v1'
 export const DRAWER_WIDTH_KEY = 'mux.drawer.width.v1'
 export const DRAWER_MIN_WIDTH = 300
-export const DRAWER_MAX_WIDTH = 620
 export const DRAWER_DEFAULT_WIDTH = 380
+export const DRAWER_COLLAPSE_WIDTH = 260
+export const DRAWER_REOPEN_WIDTH = 280
+export const DRAWER_RESIZER_WIDTH = 4
+export const DRAWER_RAIL_WIDTH = 40
+export const MAIN_WORKSPACE_MIN_WIDTH = 150
 
 export type DrawerProjectState = Readonly<{
   tab: DrawerTabId
@@ -86,9 +92,17 @@ export const DEFAULT_DRAWER_PROJECT_STATE: DrawerProjectState = {
 
 export const EMPTY_DRAWER_PROJECT_STATES: DrawerProjectStateMap = {}
 
-export function clampDrawerWidth(value: number): number {
+export function clampDrawerWidth(value: number, maximum = Number.POSITIVE_INFINITY): number {
   if (!Number.isFinite(value)) return DRAWER_DEFAULT_WIDTH
-  return Math.max(DRAWER_MIN_WIDTH, Math.min(DRAWER_MAX_WIDTH, value))
+  const ceiling = Number.isFinite(maximum) ? Math.max(DRAWER_MIN_WIDTH, maximum) : Number.POSITIVE_INFINITY
+  return Math.max(DRAWER_MIN_WIDTH, Math.min(ceiling, value))
+}
+
+/** Largest dock width that preserves the main workspace's usable desktop strip. */
+export function drawerMaximumWidth(viewportWidth: number, leftChromeWidth: number): number {
+  if (!Number.isFinite(viewportWidth) || !Number.isFinite(leftChromeWidth)) return DRAWER_DEFAULT_WIDTH
+  const available = viewportWidth - leftChromeWidth - DRAWER_RESIZER_WIDTH - DRAWER_RAIL_WIDTH - MAIN_WORKSPACE_MIN_WIDTH
+  return Math.max(DRAWER_MIN_WIDTH, Math.floor(available))
 }
 
 export function storedDrawerWidth(raw: string | null): number {

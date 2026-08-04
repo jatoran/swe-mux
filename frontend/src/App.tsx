@@ -34,11 +34,17 @@ import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
 import { UtilityDrawer } from './UtilityDrawer'
 import {
-  DEFAULT_DRAWER_PROJECT_STATE, DRAWER_PROJECT_STATE_KEY, DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY,
-  clampDrawerWidth, drawerProjectStateFor, drawerTab, migrateLegacyDrawerTab, parseDrawerProjectStates,
+  DEFAULT_DRAWER_PROJECT_STATE, DRAWER_COLLAPSE_WIDTH, DRAWER_PROJECT_STATE_KEY, DRAWER_REOPEN_WIDTH,
+  DRAWER_TABS, DRAWER_TAB_KEY, DRAWER_WIDTH_KEY, clampDrawerWidth, drawerMaximumWidth,
+  drawerProjectStateFor, drawerTab, migrateLegacyDrawerTab, parseDrawerProjectStates,
   pruneDrawerProjectStates, serializeDrawerProjectStates, storedDrawerWidth, updateDrawerProjectState,
   type DrawerProjectState, type DrawerProjectStateMap, type DrawerTabId,
 } from './drawerTabs'
+import {
+  SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH, SIDEBAR_REOPEN_WIDTH, SIDEBAR_RESIZER_WIDTH, clampSidebarWidth,
+  dragCollapsedAtWidth,
+} from './sidebarResize'
 import {
   isDefaultDrawerTabOrder, normalizeDrawerTabOrder, orderedDrawerTabs as orderedTabsFor,
   sameDrawerTabOrder, DEFAULT_DRAWER_TAB_ORDER,
@@ -335,7 +341,7 @@ export function App() {
   const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>localStorage.getItem('mux.sidebar.collapsed.v1')==='true')
   const [sidebarWidth,setSidebarWidth]=useState(()=>{
     const stored=Number(localStorage.getItem('mux.sidebar.width.v1'))
-    return Number.isFinite(stored)&&stored>=190&&stored<=480?stored:254
+    return Number.isFinite(stored)&&stored>=SIDEBAR_MIN_WIDTH&&stored<=SIDEBAR_MAX_WIDTH?stored:SIDEBAR_DEFAULT_WIDTH
   })
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const renameInput = useRef<HTMLInputElement>(null)
@@ -414,7 +420,11 @@ export function App() {
   // Project. Mobile visibility is deliberately separate and transient: closing an overlay on
   // a phone must not collapse this Project's docked desktop drawer.
   const [mobileWorkspace,setMobileWorkspace]=useState(()=>window.matchMedia('(max-width:760px)').matches)
+  const [viewportWidth,setViewportWidth]=useState(()=>window.innerWidth)
   const [mobileDrawerOpen,setMobileDrawerOpen]=useState(false)
+  // A desktop resize previews collapse without writing per-Project persistence on every
+  // threshold crossing. Null means the Project's durable presentation owns visibility.
+  const [drawerResizeOpen,setDrawerResizeOpen]=useState<boolean|null>(null)
   const legacyDrawerTab=useRef<{pending:boolean;raw:string|null}>({pending:false,raw:null})
   const [drawerProjectStates,setDrawerProjectStates]=useState<DrawerProjectStateMap>(()=>{
     const raw=localStorage.getItem(DRAWER_PROJECT_STATE_KEY)
@@ -426,11 +436,14 @@ export function App() {
   const [unscopedDrawerState,setUnscopedDrawerState]=useState<DrawerProjectState>(DEFAULT_DRAWER_PROJECT_STATE)
   const activeDrawerState=projectId?drawerProjectStateFor(drawerProjectStates,projectId):unscopedDrawerState
   const drawerTabId=activeDrawerState.tab
-  const clipboardOpen=mobileWorkspace?mobileDrawerOpen:activeDrawerState.desktopExpanded
+  const clipboardOpen=mobileWorkspace?mobileDrawerOpen:(drawerResizeOpen??activeDrawerState.desktopExpanded)
   // A command-rail prompt button whose template has {{placeholders}} has nothing to
   // inject yet, so it hands the template to the Prompts tab to be filled in.
   const [promptPreselect,setPromptPreselect]=useState<{key:string}|undefined>()
   const [drawerWidth,setDrawerWidth]=useState(()=>storedDrawerWidth(localStorage.getItem(DRAWER_WIDTH_KEY)))
+  const leftChromeWidth=sidebarCollapsed?SIDEBAR_COLLAPSED_WIDTH:sidebarWidth+SIDEBAR_RESIZER_WIDTH
+  const drawerWidthLimit=drawerMaximumWidth(viewportWidth,leftChromeWidth)
+  const renderedDrawerWidth=clampDrawerWidth(drawerWidth,drawerWidthLimit)
   // The drawer's tab arrangement. Unlike width and per-Project presentation (localStorage,
   // genuinely per-device) this is server-persisted, so a phone inherits what a desktop arranged.
   const [drawerOrder,setDrawerOrder]=useState<DrawerTabId[]>(()=>normalizeDrawerTabOrder(loadDrawerTabOrder()))
@@ -552,8 +565,8 @@ export function App() {
       return updated
     })
   },[projects])
-  const persistDrawerWidth=(value:number)=>{
-    const next=clampDrawerWidth(value)
+  const persistDrawerWidth=(value:number,maximum=Number.POSITIVE_INFINITY)=>{
+    const next=clampDrawerWidth(value,maximum)
     setDrawerWidth(next);localStorage.setItem(DRAWER_WIDTH_KEY,String(Math.round(next)))
   }
   // Optimistic like every other settings write: `saveDrawerTabOrder` updates the shared cache
@@ -599,18 +612,34 @@ export function App() {
       ()=>{dragDrawerOrderRef.current=null;setDragDrawerTab(null)},
     )
   }
-  // Mirrors the sidebar resizer, mirrored: dragging left widens the dock. Every width change
-  // reflows the pane tree and refits its terminals, so the drag commits only on pointer-up.
+  // Mirrors the sidebar resizer: dragging left widens the dock, while crossing its collapse
+  // threshold closes it. The transient override keeps that reversible within the same drag
+  // without writing each threshold crossing to the active Project's stored presentation.
   const beginDrawerResize=(event:PointerEvent)=>{
     event.preventDefault()
-    const startX=event.clientX,startWidth=drawerWidth
+    const startX=event.clientX,startWidth=renderedDrawerWidth,storedWidth=drawerWidth
+    let dragOpen=true,lastRawWidth=startWidth
+    const maximum=()=>drawerMaximumWidth(
+      window.innerWidth,
+      sidebarCollapsed?SIDEBAR_COLLAPSED_WIDTH:sidebarWidth+SIDEBAR_RESIZER_WIDTH,
+    )
+    const preview=(rawWidth:number)=>{
+      lastRawWidth=rawWidth
+      dragOpen=!dragCollapsedAtWidth(rawWidth,!dragOpen,DRAWER_COLLAPSE_WIDTH,DRAWER_REOPEN_WIDTH)
+      setDrawerResizeOpen(dragOpen)
+      if(dragOpen)setDrawerWidth(clampDrawerWidth(rawWidth,maximum()))
+    }
     document.body.classList.add('sidebar-resizing')
-    const move=(pointer:PointerEvent)=>setDrawerWidth(clampDrawerWidth(startWidth-(pointer.clientX-startX)))
+    const move=(pointer:PointerEvent)=>preview(startWidth-(pointer.clientX-startX))
     // pointercancel too: on touch, a cancelled drag fires only that, and without
     // it the pointermove listener and the `sidebar-resizing` body class both
     // survive until some unrelated pointerup happens elsewhere.
     const stop=(pointer:PointerEvent)=>{
-      persistDrawerWidth(startWidth-(pointer.clientX-startX))
+      if(pointer.type!=='pointercancel')preview(startWidth-(pointer.clientX-startX))
+      if(dragOpen)persistDrawerWidth(lastRawWidth,maximum())
+      else setDrawerWidth(storedWidth)
+      setDrawerResizeOpen(null)
+      setClipboardOpen(dragOpen)
       document.body.classList.remove('sidebar-resizing')
       window.removeEventListener('pointermove',move)
       window.removeEventListener('pointerup',stop)
@@ -750,7 +779,7 @@ export function App() {
     return next
   })
   const persistSidebarWidth=(value:number)=>{
-    const next=Math.max(190,Math.min(480,value))
+    const next=clampSidebarWidth(value)
     setSidebarWidth(next);localStorage.setItem('mux.sidebar.width.v1',String(Math.round(next)))
   }
 
@@ -758,10 +787,19 @@ export function App() {
     if(sidebarCollapsed)return
     event.preventDefault()
     const startX=event.clientX,startWidth=sidebarWidth
+    let dragCollapsed=false,lastRawWidth=startWidth
+    const preview=(rawWidth:number)=>{
+      lastRawWidth=rawWidth
+      dragCollapsed=dragCollapsedAtWidth(rawWidth,dragCollapsed,SIDEBAR_COLLAPSE_WIDTH,SIDEBAR_REOPEN_WIDTH)
+      setSidebarCollapsed(dragCollapsed)
+      if(!dragCollapsed)setSidebarWidth(clampSidebarWidth(rawWidth))
+    }
     document.body.classList.add('sidebar-resizing')
-    const move=(pointer:PointerEvent)=>setSidebarWidth(Math.max(190,Math.min(480,startWidth+pointer.clientX-startX)))
+    const move=(pointer:PointerEvent)=>preview(startWidth+pointer.clientX-startX)
     const stop=(pointer:PointerEvent)=>{
-      persistSidebarWidth(startWidth+pointer.clientX-startX)
+      if(pointer.type!=='pointercancel')preview(startWidth+pointer.clientX-startX)
+      if(dragCollapsed)setSidebarWidth(startWidth);else persistSidebarWidth(lastRawWidth)
+      localStorage.setItem('mux.sidebar.collapsed.v1',String(dragCollapsed))
       document.body.classList.remove('sidebar-resizing')
       window.removeEventListener('pointermove',move)
       window.removeEventListener('pointerup',stop)
@@ -986,6 +1024,7 @@ export function App() {
     const updateAppHeight = () => {
       const height = Math.round(viewport?.height ?? window.innerHeight)
       document.documentElement.style.setProperty('--app-height', `${height}px`)
+      setViewportWidth(window.innerWidth)
     }
     updateAppHeight()
     window.addEventListener('resize', updateAppHeight)
@@ -3423,7 +3462,7 @@ export function App() {
     <ContinuityBanner />
     {broadcast && <div class="broadcast-banner"><strong>Broadcast input is on</strong><span>Keystrokes mirror to sessions in the broadcast set.</span><button onClick={() => setBroadcast(false)}>Stop broadcasting</button></div>}
 
-    <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${drawerWidth}px`} as JSX.CSSProperties}>
+    <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
         <div class="app-identity"><strong>swe_mux</strong><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span>{activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
@@ -3516,7 +3555,7 @@ export function App() {
         <button class="rail-button" aria-label="Open swe-mux menu" title="Menu" onClick={()=>setMainMenuOpen(value=>!value)}>:</button>
         <button class="rail-button" aria-label="Manage projects" title="Projects" onClick={()=>openProjectsManager()}>◇</button>
       </nav>}
-      <div class="sidebar-resizer" role="separator" tabindex={0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={190} aria-valuemax={480} aria-valuenow={Math.round(sidebarWidth)} title="Drag to resize · arrow keys adjust · double-click to reset" onPointerDown={beginSidebarResize} onDblClick={()=>persistSidebarWidth(254)} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();persistSidebarWidth(event.key==='Home'?190:event.key==='End'?480:sidebarWidth+(event.key==='ArrowLeft'?-10:10))}} />
+      <div class="sidebar-resizer" role="separator" tabindex={0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={Math.round(sidebarWidth)} title="Drag to resize or collapse · arrow keys adjust · double-click to reset" onPointerDown={beginSidebarResize} onDblClick={()=>persistSidebarWidth(SIDEBAR_DEFAULT_WIDTH)} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();persistSidebarWidth(event.key==='Home'?SIDEBAR_MIN_WIDTH:event.key==='End'?SIDEBAR_MAX_WIDTH:sidebarWidth+(event.key==='ArrowLeft'?-10:10))}} />
 
       {/* The utility drawer is a workspace grid child so the desktop rendering can
           be an in-flow column: the pane tree shrinks rather than being covered.
@@ -3607,10 +3646,11 @@ export function App() {
           return <button
             key={tab.id}
             data-reorder-id={tab.id}
+            data-scope={tab.scope}
             class={`${clipboardOpen&&drawerTabId===tab.id?'active':''} ${dragDrawerTab===tab.id?'dragging':''}`}
             aria-pressed={clipboardOpen&&drawerTabId===tab.id}
-            aria-label={tab.title}
-            title={`${tab.title} · drag to rearrange`}
+            aria-label={`${tab.title}${tab.scope==='session'?'. Session scoped.':''}`}
+            title={`${tab.title}${tab.scope==='session'?' · session-scoped':''} · drag to rearrange`}
             onPointerDown={event=>beginDrawerTabDrag(event,tab.id)}
             onClick={()=>{
               if(suppressDragClickRef.current===`drawer-tab:${tab.id}`){suppressDragClickRef.current=null;return}

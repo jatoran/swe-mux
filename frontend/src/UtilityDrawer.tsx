@@ -275,7 +275,7 @@ export function UtilityDrawer(props: Props) {
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize panel"
-      title="Drag to resize"
+      title="Drag to resize or collapse"
       onPointerDown={props.onResize}
     />}
     <aside
@@ -304,10 +304,11 @@ export function UtilityDrawer(props: Props) {
               key={item.id}
               role="tab"
               data-reorder-id={item.id}
+              data-scope={item.scope}
               aria-selected={item.id === tab}
-              aria-label={item.label}
+              aria-label={`${item.label}${item.scope === 'session' ? ', session scoped' : ''}`}
               class={`${item.id === tab ? 'active' : ''} ${props.draggingTab === item.id ? 'dragging' : ''}`}
-              title={`${item.title} · drag to rearrange`}
+              title={`${item.title}${item.scope === 'session' ? ' · session-scoped' : ''} · drag to rearrange`}
               onPointerDown={event => props.onTabDragStart(event, item.id)}
               onClick={() => onTab(item.id)}
             >
@@ -319,7 +320,13 @@ export function UtilityDrawer(props: Props) {
         </div>
         <button class="drawer-close" aria-label="Close panel" title="Close panel" onClick={onClose}>×</button>
       </div>
-      <div class="drawer-body">{noteHost}{body}</div>
+      <div
+        class={`drawer-body drawer-body-${tab}`}
+        style={{ '--drawer-panel-title-width': `${Math.min(22, active.heading.length + 2.5)}ch` } as JSX.CSSProperties}
+      >
+        <h2 class="drawer-panel-title" title={active.title}>{active.heading}</h2>
+        {noteHost}{body}
+      </div>
     </aside>
   </>
 }

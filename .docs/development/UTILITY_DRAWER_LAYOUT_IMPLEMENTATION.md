@@ -257,9 +257,9 @@ type DrawerProjectPresentation = {
 - [ ] Expose `role="separator"`, orientation, value minimum, value maximum, and current value.
 - [ ] Keep internal split resizing independent from the outer drawer width resizer.
 - [ ] Make the outer drawer resizer keyboard focusable and give it arrow-key adjustment, Home and End bounds, and double-click reset to the default width.
-- [ ] Replace the fixed 620 px drawer maximum with a viewport-aware maximum that lets the user allocate most of a desktop window to the drawer while preserving the launcher rail and a small usable Project workspace.
+- [x] Replace the fixed 620 px drawer maximum with a viewport-aware maximum that lets the user allocate most of a desktop window to the drawer while preserving the launcher rail and a small usable Project workspace.
 - [ ] Recalculate the legal outer width when the viewport, sidebar width, sidebar collapsed state, UI scale, or launcher-rail width changes.
-- [ ] Clamp a restored width only for the current viewport and do not overwrite the user's stored larger width merely because one window is temporarily narrow.
+- [x] Clamp a restored width only for the current viewport and do not overwrite the user's stored larger width merely because one window is temporarily narrow.
 - [ ] Keep the drawer in flow on desktop so widening it shrinks rather than covers the Project workspace.
 - [ ] Do not prohibit side-by-side panes or a 3x3 grid at a particular width.
 - [ ] Let content become compact and independently scroll rather than silently rewriting the user's valid layout.

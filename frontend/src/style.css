@@ -1007,13 +1007,13 @@ body {
 .workspace{grid-template-columns:var(--sidebar-width,254px) 4px minmax(0,1fr) 40px;grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)}
 /* The docked utility drawer adds its own resizer + column ahead of the icon
    rail. Negative column lines keep the rail last whatever the sidebar does. */
-.workspace.drawer-open{grid-template-columns:var(--sidebar-width,254px) 4px minmax(0,1fr) 4px var(--drawer-width,380px) 40px}
+.workspace.drawer-open{grid-template-columns:var(--sidebar-width,254px) 4px minmax(150px,1fr) 4px var(--drawer-width,380px) 40px}
 .app-topbar{position:relative;z-index:48;grid-column:1;grid-row:1;min-width:0;display:flex;align-items:stretch;border-right:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--panel);box-shadow:0 1px #000}
 .app-identity{min-width:0;flex:1 1 0;display:flex;align-items:center;gap:5px;padding:0 7px 0 11px;white-space:nowrap}.app-identity strong{margin-right:4px;color:var(--text);text-transform:lowercase}.app-identity button{width:25px;height:calc(25px*var(--ui-scale));border:0;background:transparent;color:var(--muted);cursor:pointer}.app-identity button:hover{background:var(--panel2);color:var(--accent)}.app-identity .daemon-ok{width:20px;height:calc(25px*var(--ui-scale));margin:0;justify-content:center}.app-identity .daemon-ok i{width:6px;height:8px}
 .pane-stack{grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)}.pane-stack>.stack-tabs{display:flex}.pane-stack>.stack-tabs button{height:calc(33px*var(--ui-scale))}.pane-stack.focused-pane{outline:1px solid color-mix(in srgb,var(--accent) 32%,transparent);outline-offset:-1px}
 
 /* Desktop sidebar sizing is device-local UI state. */
-.sidebar{grid-column:1;grid-row:2;min-width:0;overflow:hidden}.sidebar-resizer{grid-column:2;grid-row:1/3;position:relative;z-index:8;cursor:col-resize;background:var(--line);touch-action:none}.sidebar-resizer:after{content:"";position:absolute;inset:0 -3px}.sidebar-resizer:hover,.sidebar-resizing .sidebar-resizer{background:var(--accent)}.main-stage{grid-column:3;grid-row:1/3}.workspace.sidebar-collapsed{grid-template-columns:40px 0 minmax(0,1fr) 40px}.workspace.sidebar-collapsed.drawer-open{grid-template-columns:40px 0 minmax(0,1fr) 4px var(--drawer-width,380px) 40px}
+.sidebar{grid-column:1;grid-row:2;min-width:0;overflow:hidden}.sidebar-resizer{grid-column:2;grid-row:1/3;position:relative;z-index:8;cursor:col-resize;background:var(--line);touch-action:none}.sidebar-resizer:after{content:"";position:absolute;inset:0 -3px}.sidebar-resizer:hover,.sidebar-resizing .sidebar-resizer{background:var(--accent)}.main-stage{grid-column:3;grid-row:1/3}.workspace.sidebar-collapsed{grid-template-columns:40px 0 minmax(0,1fr) 40px}.workspace.sidebar-collapsed.drawer-open{grid-template-columns:40px 0 minmax(150px,1fr) 4px var(--drawer-width,380px) 40px}
 /* The rail shares the collapsed sidebar's cell; the sidebar itself is only
    visibility-hidden, so it still reserves the column but paints nothing. */
 .sidebar-rail{grid-column:1;grid-row:2;display:flex;flex-direction:column;align-items:center;gap:4px;min-height:0;padding:6px 0;border-right:1px solid var(--line);background:var(--panel);overflow:hidden}
@@ -1461,15 +1461,15 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .note-conflict{position:absolute;left:0;right:0;top:calc(42px*var(--ui-scale));z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 18px #0009}.note-conflict-actions{display:flex;gap:6px}.note-conflict-actions button{min-height:26px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;padding:0 8px;cursor:pointer}
 /* The session-notes listing lives in the drawer's Notes tab. It kept its own class
    names through the move: the row, group heading, and empty states are unchanged,
-   only the host is (a 300-620px column instead of a 760px modal). */
+   only the host is (a drawer that can narrow to 300px instead of a 760px modal). */
 .session-notes-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,220px);gap:6px;padding:8px 9px;border-bottom:1px solid var(--line)}
 .session-notes-filters>*{min-width:0}
 .session-notes-body{flex:1;min-height:0;overflow:auto}
 .session-notes-state{padding:18px 12px;color:var(--muted);text-align:center}
 .session-notes-state.error{color:var(--error,#f07178)}
 .session-notes-group>h3{display:flex;justify-content:space-between;align-items:center;gap:8px;position:sticky;top:0;margin:0;padding:6px 9px;background:var(--panel2);color:var(--muted);font-size:11px;font-weight:600;letter-spacing:.04em}
-.session-note-row>button{width:100%;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:3px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--text);padding:8px 9px;text-align:left;cursor:pointer}
-.session-note-row>button:hover,.session-note-row>button:focus-visible{background:var(--panel2)}
+.session-note-row>button:first-child{width:100%;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:3px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--text);padding:8px 9px;text-align:left;cursor:pointer}
+.session-note-row>button:first-child:hover,.session-note-row>button:first-child:focus-visible{background:var(--panel2)}
 .session-note-row strong{display:flex;align-items:center;gap:6px;min-width:0}
 .session-note-row span{color:var(--muted);font-size:11px}
 .session-note-row small{color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
@@ -1487,17 +1487,28 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .notes-tab .session-note-row strong{font-size:10px}
 .notes-pinned{display:grid;border-bottom:1px solid var(--line)}
 .note-pin-shell{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;background:var(--panel2)}
+.session-note-pin-shell{grid-template-columns:minmax(0,1fr) auto auto}
 .note-pin-row{min-width:0;display:flex;align-items:baseline;gap:7px;min-height:32px;padding:6px 9px;border:0;border-left:2px solid var(--accent);background:var(--panel2);color:var(--text);font:inherit;text-align:left;cursor:pointer}
 .note-pin-row:hover,.note-pin-row:focus-visible{background:var(--panel)}
 .note-pin-shell+.note-pin-shell{border-top:1px solid var(--line)}
 .note-pin-kind{flex:none;color:var(--muted);font-size:8px}
 .note-pin-row strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}
+.note-pin-size{flex:none;margin-left:auto;color:var(--muted);font-size:8px;white-space:nowrap}
+.project-note-shell{margin:8px;border:1px solid color-mix(in srgb,var(--accent) 58%,var(--line));background:color-mix(in srgb,var(--accent) 8%,var(--panel2));box-shadow:inset 3px 0 color-mix(in srgb,var(--accent) 75%,transparent)}
+.project-note-shell .project-note-pin{min-height:48px;border-left:0;background:transparent}
+.project-note-shell>.note-open-as-tab{background:color-mix(in srgb,var(--accent) 7%,transparent)}
+.project-note-shell+.session-note-pin-shell{border-top:1px solid var(--line)}
 /* Every note row selects into the panel; this is the escape hatch to a pane. Kept to a glyph
    so the row's own text keeps the width — the label lives in the title and the aria-label. */
 .note-open-as-tab{flex:none;align-self:stretch;min-width:26px;padding:0 7px;border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;cursor:pointer}
 .note-open-as-tab:hover,.note-open-as-tab:focus-visible{background:var(--panel);color:var(--text)}
-.session-note-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch}
-.session-note-row>.note-open-as-tab{border-bottom:1px solid var(--line)}
+.note-delete{flex:none;align-self:stretch;min-width:26px;padding:0 7px;border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;cursor:pointer}
+.note-delete:hover,.note-delete:focus-visible{background:color-mix(in srgb,var(--red) 10%,var(--panel));color:var(--red)}
+.note-delete.confirming{min-width:54px;padding:0 6px;background:color-mix(in srgb,var(--red) 18%,var(--panel));color:var(--red)}
+.note-delete:disabled{opacity:.55;cursor:progress}
+.session-note-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:stretch}
+.session-note-row>.note-delete,.session-note-row>.note-open-as-tab{border-bottom:1px solid var(--line)}
+.note-row-menu button.confirming{width:100%}
 .notes-footnote{flex:none;margin:0;padding:6px 9px;border-top:1px solid var(--line);color:var(--muted);font-size:8px;line-height:1.4}
 /* The drawer's note editor. Kept mounted while another tab is showing (cursor, undo, and the
    insert-routing handle all die with it), so `hidden` has to beat this rule's own display. */
@@ -1560,8 +1571,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .notes-tab .session-notes-filters{grid-template-columns:minmax(0,1fr)}
   .notes-tab .session-notes-filters input,.notes-tab .session-notes-filters select{height:calc(38px*var(--ui-scale));font-size:16px}
   .note-pin-row{min-height:44px}
+  .project-note-shell .project-note-pin{min-height:56px}
   /* Touch targets: the glyph is narrow by design on desktop, but it is a real destination. */
-  .note-open-as-tab{min-width:44px}
+  .note-open-as-tab,.note-delete{min-width:44px}
   .drawer-note-bar button{min-height:40px}
 }
 .history-layer{z-index:85}
@@ -1597,6 +1609,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    strip, a horizontal one between buttons in the vertical rail. `touch-action:none` keeps the
    drag deterministic on a phone, where the strip is the only tab control. */
 .drawer-tabs button,.utility-rail button{touch-action:none}
+.drawer-tabs button[data-scope="session"]:before,.utility-rail button[data-scope="session"]:before{content:"";position:absolute;z-index:2;right:5px;bottom:5px;width:3px;height:3px;border-radius:50%;background:color-mix(in srgb,var(--muted) 52%,var(--panel2));box-shadow:none;opacity:.8;pointer-events:none}
 .drawer-tabs button[data-pointer-drop-indicator]:after,.utility-rail button[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:30;pointer-events:none;background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 75%,transparent)}
 .drawer-tabs button[data-pointer-drop-indicator="insert-before"]:after{left:-1px;top:4px;bottom:4px;width:3px}
 .drawer-tabs button[data-pointer-drop-indicator="insert-after"]:after{right:-1px;top:4px;bottom:4px;width:3px}
@@ -1678,7 +1691,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-tabs{flex:1 1 auto;min-width:0;display:flex;flex-wrap:nowrap;align-items:stretch;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain}
 .drawer-tabs::-webkit-scrollbar{display:none}
 /* Icon-only tabs. They share the strip evenly but are capped, because a 17px mark centred in
-   a 100px cell at the drawer's 620px maximum reads as an accident rather than a control. The
+   a very wide cell reads as an accident rather than a control. The
    cap leaves slack, which the close button takes by sitting at the far end. */
 /* Nine tabs do not fit the 300px minimum drawer at a legible width. The tablist therefore
    scrolls on one row while the close control stays fixed; selection auto-scrolls into view. */
@@ -1695,18 +1708,33 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-actions button{flex:1;min-height:30px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .drawer-actions button.danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red)}
 .drawer-actions button:disabled{opacity:.45;cursor:not-allowed}
+.drawer-body{position:relative}
+.drawer-panel-title{position:absolute;z-index:8;top:3px;left:7px;width:var(--drawer-panel-title-width);max-width:calc(100% - 14px);height:18px;margin:0;padding:0 6px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid color-mix(in srgb,var(--accent) 58%,var(--line));background:color-mix(in srgb,var(--accent) 13%,var(--panel2));box-shadow:inset 2px 0 color-mix(in srgb,var(--accent) 82%,transparent);color:var(--text);font:600 8px/16px 'Cascadia Mono',Consolas,monospace;letter-spacing:.035em;cursor:help}
+.drawer-panel-title:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 20%,var(--panel2))}
+.drawer-body-clipboard>.drawer-status,.drawer-body-commands>.drawer-status,.drawer-body-prompts>.drawer-status,.drawer-body-git>.drawer-status,.drawer-body-notifications>.drawer-status,.drawer-body-context>.drawer-status{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
+.drawer-body-files>.project-resource.file-browser>header,.drawer-body-context .agent-context-header,.drawer-body-processes .processes-filters,.drawer-body-notes .session-notes-filters,.drawer-body-notes .drawer-note-bar,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
+.drawer-body-transcript .transcript-tab-meta{padding-left:calc(var(--drawer-panel-title-width) + 4px)}
+.drawer-body-context .agent-context-header>div>strong{display:none}
+.drawer-body-files>.drawer-empty:first-of-type,.drawer-body-transcript>.drawer-empty:first-of-type{padding-top:38px}
 /* Transcript: a reading column. Text sets larger than the rest of the drawer because this
    is the one surface whose whole job is prose a human reads at length, and the drawer's 8-9px
    dense-index type is unreadable for that. `position:relative` on the host anchors the
    jump-to-latest pill over the body. */
 .transcript-tab{position:relative;flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
-.transcript-tab-head{flex:none;display:flex;align-items:center;gap:8px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
-.transcript-tab-head>div{flex:1;min-width:0;display:grid;gap:2px}
+.transcript-tab-head{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px 8px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
+.transcript-tab-meta{min-width:0;display:grid;gap:2px}
 .transcript-tab-head strong{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .transcript-tab-head span{color:var(--muted);font-size:8px}
 .transcript-tab-head>button{flex:none;min-height:26px;padding:0 9px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:9px;cursor:pointer}
 .transcript-tab-head>button:disabled{opacity:.45;cursor:not-allowed}
 .transcript-tab-head>button.copied{border-color:var(--accent);color:var(--accent)}
+.transcript-search{grid-column:1/-1;min-width:0;display:grid;grid-template-columns:minmax(0,1fr);position:relative}
+.transcript-search input{width:100%;height:28px;min-width:0;padding:0 29px 0 8px;border:1px solid var(--line);border-radius:0;background:var(--bg);color:var(--text);font:inherit;font-size:9px;outline:0}
+.transcript-search input:focus{border-color:var(--accent);box-shadow:inset 2px 0 var(--accent)}
+.transcript-search input:disabled{opacity:.5}
+.transcript-search input::-webkit-search-cancel-button{display:none}
+.transcript-search>button{position:absolute;right:1px;top:1px;width:27px;height:26px;padding:0;border:0;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
+.transcript-search>button:hover,.transcript-search>button:focus-visible{background:var(--panel2);color:var(--text)}
 .transcript-note{flex:none;margin:0;padding:6px 9px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px;line-height:1.45}
 .transcript-note.warn{color:var(--amber);background:color-mix(in srgb,var(--amber) 12%,transparent)}
 .transcript-note.error{color:var(--red);background:color-mix(in srgb,var(--red) 12%,transparent)}
@@ -1715,17 +1743,19 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* The user's turns carry the tint. An agent's replies are the bulk of the column, so
    tinting those would tint everything and distinguish nothing. */
 .transcript-message.user{background:color-mix(in srgb,var(--accent) 7%,transparent)}
-.transcript-message>header{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.transcript-copy-anchor{position:sticky;top:8px;z-index:3;height:20px;margin-bottom:-20px;display:flex;justify-content:flex-end;pointer-events:none}
+.transcript-message>header{display:flex;align-items:center;gap:6px;margin-bottom:4px;padding-right:52px}
 .transcript-speaker{flex:1;min-width:0;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}
 .transcript-message.user .transcript-speaker{color:var(--accent)}
 .transcript-message>header time{flex:none;color:var(--muted);font-size:8px}
-.transcript-copy{flex:none;min-height:20px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
+.transcript-copy{pointer-events:auto;flex:none;min-height:20px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;font-size:8px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3)}
 .transcript-copy:hover{color:var(--text)}
 .transcript-copy.copied{border-color:var(--accent);color:var(--accent)}
 /* `pre-wrap` keeps the agent's own line breaks and indentation, which is as close to
    rendering its markdown as this column goes; `anywhere` stops one long path or URL from
    forcing the whole drawer to scroll sideways. */
 .transcript-message p{margin:0;font-size:10px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.transcript-message mark{padding:0 1px;background:color-mix(in srgb,var(--amber) 45%,transparent);color:inherit}
 .transcript-message p.clamped{max-height:220px;overflow:hidden;mask-image:linear-gradient(180deg,#000 70%,transparent)}
 .transcript-expand{margin-top:4px;padding:0;border:0;background:none;color:var(--accent);font:inherit;font-size:8px;cursor:pointer}
 .transcript-jump{position:absolute;right:12px;bottom:12px;z-index:4;min-height:26px;padding:0 10px;border:1px solid var(--accent);border-radius:13px;background:var(--panel);color:var(--accent);font:inherit;font-size:9px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35)}
@@ -1733,8 +1763,12 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    and select it, which a hidden element cannot be. */
 .transcript-manual{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
 @media (max-width:760px){
+  .transcript-copy-anchor{height:28px;margin-bottom:-28px}
+  .transcript-message>header{padding-right:62px}
   .transcript-copy{min-height:28px;padding:0 10px}
   .transcript-tab-head>button{min-height:32px}
+  .transcript-search input{height:36px;font-size:16px}
+  .transcript-search>button{width:35px;height:34px}
 }
 
 /* Agent Context: an inventory and viewer, never an editor. Mutations are isolated to the
@@ -1980,7 +2014,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 
 /* ---- Prompt queue: the drawer's Queue tab, its pop-out pane, and the pane chip ----
    One stylesheet for both renderings. Everything here has to survive the drawer's
-   300–620px column, which is the narrower of the two and the one it is normally in. */
+   300px minimum, which is narrower than the pop-out pane. */
 .queue-pane{display:flex;flex-direction:column;min-width:0;min-height:0;flex:1 1 auto;height:100%;background:var(--bg);color:var(--text)}
 /* Three scopes, three words: a segmented control rather than the icon strip the drawer's
    own tabs use, because "this session" has no mark that would read at 17px. */
