@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import { reflowVisibleTerminalRenderer } from '../../src/terminalViewport'
+import { dispatchTerminalMouseTap } from '../../src/terminalCaretPlacement'
 
 type DomDimensionRepairResult = {
   before: { width: string; height: string }
@@ -19,11 +20,17 @@ type MobileCursorInitializationResult = {
   mobileInputFocused: boolean
 }
 
+type SyntheticMouseTapResult = {
+  tracking: string
+  reports: string[]
+}
+
 declare global {
   interface Window {
     runTerminalRendererStress: () => Promise<{ renderer: 'dom' | 'webgl'; cols: number; rows: number }>
     runTerminalDomDimensionRepair: () => Promise<DomDimensionRepairResult>
     runTerminalMobileCursorInitialization: () => Promise<MobileCursorInitializationResult>
+    runTerminalSyntheticMouseTap: () => Promise<SyntheticMouseTapResult>
   }
 }
 
@@ -151,6 +158,27 @@ window.runTerminalMobileCursorInitialization = async () => {
     inactiveBar: cursor?.classList.contains('xterm-cursor-bar') ?? false,
     mobileInputFocused: document.activeElement === mobileInput,
   }
+  domTerm.dispose()
+  return result
+}
+
+window.runTerminalSyntheticMouseTap = async () => {
+  host.style.display = 'none'
+  const domHost = document.querySelector<HTMLDivElement>('#dom-terminal')!
+  domHost.style.display = 'block'
+  const domTerm = new Terminal({fontFamily:'Consolas, monospace',fontSize:12})
+  const domFit = new FitAddon()
+  domTerm.loadAddon(domFit)
+  domTerm.open(domHost)
+  domFit.fit()
+  const reports:string[]=[]
+  const input=domTerm.onData(data=>reports.push(data))
+  await writeTo(domTerm,'\x1b[?1000h\x1b[?1006h')
+  const screen=domHost.querySelector<HTMLElement>('.xterm-screen')!
+  const rect=screen.getBoundingClientRect()
+  dispatchTerminalMouseTap(screen,rect.left+rect.width/2,rect.top+rect.height/2)
+  const result={tracking:domTerm.modes.mouseTrackingMode,reports}
+  input.dispose()
   domTerm.dispose()
   return result
 }

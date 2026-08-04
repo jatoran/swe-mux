@@ -558,9 +558,8 @@ responsive controls.
   every scroll gesture — the wheel on a desktop, and the drag a phone forwards as one via
   `mobileDragTarget` — and scrolls its own viewport, leaving xterm's pinned to its tail. So
   `offTail` never fires there, and for as long as the chip depended on it alone the chip
-  simply never existed in a Claude session: the only jump-to-bottom on offer was Claude's own,
-  which a desktop can click and a phone cannot, because a tap's synthesized `mousedown` is
-  swallowed before xterm can forward it. The pane therefore also remembers forwarding a
+  simply never existed in a Claude session: the only jump-to-bottom on offer was Claude's own.
+  The pane therefore also remembers forwarding a
   scroll *back* through the history, and raises the chip on that. Only on a drag back:
   arriving at the newest line again is something only the application knows, so the chip
   stays up until the jump is taken rather than guessing and vanishing early.
@@ -596,6 +595,11 @@ responsive controls.
   selection. Touch-originated synthetic context-menu events never open the desktop terminal
   menu. Selection release automatically attempts to copy by default; the preference is
   hot-reloadable from Settings.
+- A still primary tap or click inside the currently editable agent composer moves its caret.
+  Claude's desktop path remains xterm's native mouse handling; on touch the pane synthesizes the mouse pair xterm expects, and xterm encodes the coordinates using Claude's negotiated mode.
+  Codex has no mouse mode, so the pane recognizes its live `›`/`!` composer and converges on the tapped terminal cell with redraw-verified, unicast Left/Right input.
+  It refuses selections, drags, modifiers, read/select mode, scrollback, stale geometry, and anything outside the detected composer.
+  New input or any loss of a stable target cancels the move rather than letting delayed arrows mutate a different screen.
 - Narrow and coarse-pointer terminals focus a dedicated native IME bridge. Android composition
   replacements are converted to incremental terminal text and DEL input as they happen, so Gboard
   and other composing keyboards provide live PTY input without xterm's temporary composition box.

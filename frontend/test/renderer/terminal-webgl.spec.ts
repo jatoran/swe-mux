@@ -72,3 +72,13 @@ test('mobile IME focus initializes a visible Codex DOM cursor', async ({ page })
   expect(result.inactiveBar, 'the externally-focused mobile terminal uses its inactive bar cursor').toBe(true)
   expect(result.mobileInputFocused, 'the native mobile IME bridge keeps input focus').toBe(true)
 })
+
+test('a synthetic touch tap reaches xterm mouse tracking as press and release reports',async({page})=>{
+  await page.goto('/renderer-harness.html')
+  const result=await page.evaluate(()=>window.runTerminalSyntheticMouseTap())
+
+  expect(result.tracking).toBe('vt200')
+  expect(result.reports).toHaveLength(2)
+  expect(result.reports[0]).toMatch(/^\x1b\[<0;\d+;\d+M$/)
+  expect(result.reports[1]).toMatch(/^\x1b\[<0;\d+;\d+m$/)
+})

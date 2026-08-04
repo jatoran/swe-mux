@@ -69,6 +69,17 @@ import {
   recordTerminalRenderDiagnostic,
   terminalRenderDiagnosticsEnabled,
 } from './terminalRenderDiagnostics'
+import {
+  caretSteerCommand,
+  dispatchTerminalMouseTap,
+  resolveAnchoredCodexCaretTarget,
+  resolveCodexCaretTarget,
+  terminalCaretAtPoint,
+  terminalTapAction,
+  type CaretPointerType,
+  type TerminalCaretPosition,
+  type TerminalCaretSnapshot,
+} from './terminalCaretPlacement'
 
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 
@@ -172,6 +183,36 @@ function pasteIntoTerminal(term: Terminal, session: Session, text: string) {
     return
   }
   term.paste(text)
+}
+
+function terminalCaretSnapshot(term: Terminal): TerminalCaretSnapshot {
+  const buffer = term.buffer.active
+  const lines = []
+  for (let row = buffer.viewportY; row < buffer.viewportY + term.rows; row += 1) {
+    const line = buffer.getLine(row)
+    const cells = []
+    for (let column = 0; column < term.cols; column += 1) {
+      const cell = line?.getCell(column)
+      cells.push({
+        chars: cell?.getChars() ?? '',
+        code: cell?.getCode() ?? 0,
+        width: cell?.getWidth() ?? 1,
+        bgMode: cell?.getBgColorMode() ?? 0,
+        bg: cell?.getBgColor() ?? 0,
+        dim: cell?.isDim() === 1,
+      })
+    }
+    lines.push({ row, cells })
+  }
+  return {
+    cols: term.cols,
+    rows: term.rows,
+    viewportY: buffer.viewportY,
+    baseY: buffer.baseY,
+    cursorX: buffer.cursorX,
+    cursorY: buffer.cursorY,
+    lines,
+  }
 }
 
 function mobileClipboardFallback(): boolean {
@@ -550,6 +591,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // paste/input, so this depth marker reaches the ordinary input path without
     // bypassing its replay guard or bracketed-paste handling.
     let attachmentPasteDepth=0
+    // Cursor steering and synthesized touch mouse reports also stay on xterm's normal
+    // onData path. Their depth markers make them unicast and distinguish them from a
+    // real keystroke, which cancels an in-flight placement immediately.
+    let caretPlacementInputDepth=0
+    let syntheticMouseInputDepth=0
+    let cancelCaretPlacement=()=>{}
     pasteAttachmentRef.current=(text,nativeImage)=>{
       attachmentPasteDepth+=1
       try{
@@ -666,7 +713,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (socket?.readyState !== WebSocket.OPEN) return
       socket.send(JSON.stringify({ type: 'terminal_state', mode: term.buffer.active.type }))
     }
-    const bufferChange = term.buffer.onBufferChange(reportTerminalState)
+    const bufferChange = term.buffer.onBufferChange(() => {
+      cancelCaretPlacement()
+      reportTerminalState()
+    })
     // Jump-to-latest state. Scrolling up on a phone leaves no cheap way back to
     // the tail, and output arriving while scrolled up moves `baseY` without
     // moving the viewport, so this is checked on render (not only on scroll) —
@@ -884,6 +934,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     paneVisibilityRef.current = (nowVisible: boolean) => {
       window.cancelAnimationFrame(visibilityFrame)
       if (!nowVisible) {
+        cancelCaretPlacement()
         // Hidden by `display:none`, so the host measures zero and the scheduled fit
         // would return before deregistering. Send the deregistration directly.
         // Unconditional in the dimensions: `sendViewport` reads `hidden` itself, so what
@@ -1110,6 +1161,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           onState(frame.snapshot)
         }
         if (frame.type === 'replay_start') {
+          cancelCaretPlacement()
           if (frame.reason === 'resync' || reconnectReplay) term.reset()
           reconnectReplay=false
           replaying = true
@@ -1130,6 +1182,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           // survives minimizing the window, and reading that as intent is what let a
           // background desktop pane take the keyboard back from the phone forever.
           noteOwnership(applyOwnerFrame(ownership, frame))
+          if(!ownsInput)cancelCaretPlacement()
           if (!ownsInput && shouldReclaimAfterDisplacement({
             reason: typeof frame.reason === 'string' ? frame.reason : null,
             focusInHost: !!document.activeElement && host.current?.contains(document.activeElement) === true,
@@ -1145,6 +1198,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if (frame.type === 'input_owner_released') noteOwnership(applyOwnerReleased(ownership, frame.epoch))
         if (frame.type === 'input_rejected') replayRejectedInput(frame)
         if (frame.type === 'geometry') {
+          cancelCaretPlacement()
           const cols = Number(frame.cols)
           const rows = Number(frame.rows)
           if (Number.isFinite(cols) && Number.isFinite(rows)) {
@@ -1262,7 +1316,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if (!replaying || replayAllowsTerminalResponses) sendInput(data, true, false)
         return
       }
-      const shouldBroadcast=attachmentSafeBroadcast(broadcastRef.current,attachmentPasteDepth)
+      if(caretPlacementInputDepth===0)cancelCaretPlacement()
+      const shouldBroadcast=attachmentSafeBroadcast(
+        broadcastRef.current,
+        attachmentPasteDepth+caretPlacementInputDepth+syntheticMouseInputDepth,
+      )
       if (replaying) {
         if (pendingInputDecision(pendingUserInputLength, data.length) === 'overflow') {
           // Losing input without saying so is what made this look like the terminal
@@ -1298,6 +1356,130 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const resetMobileInput=()=>{
       mobileInputValue=''
       if(mobileLiveInput)mobileLiveInput.value=''
+    }
+    type CaretPlacement = {
+      targetColumn: number
+      targetRowOffset: number
+      lastDirection: -1 | 1 | null
+      precision: boolean
+      keysSent: number
+      startedAt: number
+      pendingFrom: TerminalCaretPosition | null
+      settleTimer: number | undefined
+      watchdogTimer: number | undefined
+    }
+    let caretPlacement:CaretPlacement|null=null
+    const sameCaretPosition=(a:TerminalCaretPosition,b:TerminalCaretPosition)=>a.column===b.column&&a.row===b.row
+    const clearCaretTimers=(placement:CaretPlacement)=>{
+      if(placement.settleTimer!==undefined)window.clearTimeout(placement.settleTimer)
+      if(placement.watchdogTimer!==undefined)window.clearTimeout(placement.watchdogTimer)
+      placement.settleTimer=undefined
+      placement.watchdogTimer=undefined
+    }
+    const finishCaretPlacement=(outcome:string)=>{
+      const placement=caretPlacement
+      if(!placement)return
+      clearCaretTimers(placement)
+      caretPlacement=null
+      diagnoseRender?.('caret_placement_finished',{
+        outcome,
+        keysSent:placement.keysSent,
+        elapsedMs:Math.round(performance.now()-placement.startedAt),
+      })
+    }
+    cancelCaretPlacement=()=>finishCaretPlacement('cancelled')
+    const currentCaretPosition=():TerminalCaretPosition=>({
+      column:term.buffer.active.cursorX,
+      row:term.buffer.active.baseY+term.buffer.active.cursorY,
+    })
+    const runCaretPlacement=()=>{
+      const placement=caretPlacement
+      if(!placement||placement.pendingFrom)return
+      if(replaying||paneIsHidden()||backendRef.current!=='codex'){
+        finishCaretPlacement('unavailable')
+        return
+      }
+      if(performance.now()-placement.startedAt>6500||placement.keysSent>=2048){
+        finishCaretPlacement('limit')
+        return
+      }
+      const snapshot=terminalCaretSnapshot(term)
+      const resolved=resolveAnchoredCodexCaretTarget(snapshot,{
+        column:placement.targetColumn,
+        rowOffset:placement.targetRowOffset,
+      })
+      if(!resolved){
+        finishCaretPlacement('composer_changed')
+        return
+      }
+      if(sameCaretPosition(resolved.current,resolved.target)){
+        finishCaretPlacement('placed')
+        return
+      }
+      const command=caretSteerCommand(resolved.current,resolved.target,term.cols,placement.lastDirection)
+      if(!command){finishCaretPlacement('placed');return}
+      if(placement.lastDirection!==null&&command.direction!==placement.lastDirection)placement.precision=true
+      const count=placement.precision?1:Math.min(command.count,2048-placement.keysSent)
+      placement.lastDirection=command.direction
+      placement.keysSent+=count
+      placement.pendingFrom=resolved.current
+      caretPlacementInputDepth+=1
+      try{term.input(command.sequence.repeat(count),true)}finally{caretPlacementInputDepth-=1}
+      placement.watchdogTimer=window.setTimeout(()=>{
+        if(caretPlacement===placement&&placement.pendingFrom)finishCaretPlacement('no_progress')
+      },1000)
+    }
+    const checkCaretPlacement=()=>{
+      const placement=caretPlacement
+      if(!placement||!placement.pendingFrom)return
+      const current=currentCaretPosition()
+      if(sameCaretPosition(current,placement.pendingFrom))return
+      if(placement.watchdogTimer!==undefined)window.clearTimeout(placement.watchdogTimer)
+      placement.watchdogTimer=undefined
+      placement.pendingFrom=null
+      runCaretPlacement()
+    }
+    const scheduleCaretPlacementCheck=()=>{
+      const placement=caretPlacement
+      if(!placement?.pendingFrom)return
+      if(placement.settleTimer!==undefined)window.clearTimeout(placement.settleTimer)
+      placement.settleTimer=window.setTimeout(()=>{
+        if(caretPlacement!==placement)return
+        placement.settleTimer=undefined
+        checkCaretPlacement()
+      },24)
+    }
+    const caretCursorMove=term.onCursorMove(scheduleCaretPlacementCheck)
+    const caretWriteParsed=term.onWriteParsed(scheduleCaretPlacementCheck)
+    const caretResize=term.onResize(()=>finishCaretPlacement('resized'))
+    const startCodexCaretPlacement=(requested:TerminalCaretPosition)=>{
+      finishCaretPlacement('replaced')
+      if(replaying||paneIsHidden()||backendRef.current!=='codex')return false
+      const resolved=resolveCodexCaretTarget(terminalCaretSnapshot(term),requested)
+      if(!resolved)return false
+      if(sameCaretPosition(resolved.current,resolved.target))return true
+      // Like an explicit mobile Arrow key, placement invalidates the IME's textual
+      // baseline: a later autocorrect replacement must not be computed across a cursor
+      // jump in a draft the hidden bridge does not mirror.
+      resetMobileInput()
+      caretPlacement={
+        targetColumn:resolved.target.column,
+        targetRowOffset:resolved.target.row-resolved.promptRow,
+        lastDirection:null,
+        precision:false,
+        keysSent:0,
+        startedAt:performance.now(),
+        pendingFrom:null,
+        settleTimer:undefined,
+        watchdogTimer:undefined,
+      }
+      diagnoseRender?.('caret_placement_started',{
+        from:resolved.current,
+        target:resolved.target,
+        pointer:'terminal',
+      })
+      runCaretPlacement()
+      return true
     }
     const keepMobileCaretAtEnd=()=>{
       if(!mobileLiveInput)return
@@ -1358,6 +1540,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const selectionChange = term.onSelectionChange(() => {
       const text=term.getSelection()
       setSelectionText(text)
+      if(text)cancelCaretPlacement()
       if(!text)lastAutoCopiedSelectionRef.current=''
     })
     const autoCopySelection=()=>{
@@ -1374,6 +1557,17 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let longPress: number | null = null
     let lastTouchAt = 0
     let activePointerId:number|null=null
+    let tap:{
+      pointerId:number
+      pointerType:CaretPointerType
+      startX:number
+      startY:number
+      px:number
+      py:number
+      moved:boolean
+      primary:boolean
+      modified:boolean
+    }|null=null
     let touch:{
       pointerId:number
       lastY:number
@@ -1387,6 +1581,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // Focus (and the soft keyboard) is deferred to release: only a still tap sets this,
     // so a scroll or selection drag never raises the keyboard mid-gesture.
     let focusOnMouseClaim=false
+    let forwardingTerminalMouse=false
     let selectionScrollTimer:number|undefined
     let selectionScrollDir=0
     const stopSelectionScroll=()=>{if(selectionScrollTimer!==undefined){window.clearInterval(selectionScrollTimer);selectionScrollTimer=undefined}selectionScrollDir=0}
@@ -1434,7 +1629,20 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // that always wins: it is the one signal no heuristic should be able to override.
       lastInteractionAt = Date.now()
       claimInput('gesture')
+      cancelCaretPlacement()
       activePointerId=event.pointerId
+      const pointerType:CaretPointerType=event.pointerType==='touch'||event.pointerType==='pen'?event.pointerType:'mouse'
+      tap={
+        pointerId:event.pointerId,
+        pointerType,
+        startX:event.clientX,
+        startY:event.clientY,
+        px:event.clientX,
+        py:event.clientY,
+        moved:false,
+        primary:event.isPrimary&&event.button===0&&event.detail<=1,
+        modified:event.altKey||event.ctrlKey||event.metaKey||event.shiftKey,
+      }
       if (event.pointerType === 'touch') {
         lastTouchAt = Date.now()
         touch={pointerId:event.pointerId,lastY:event.clientY,startX:event.clientX,startY:event.clientY,px:event.clientX,py:event.clientY,moved:false,selecting:null}
@@ -1455,6 +1663,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
     }
     const mobileMouseClaim=(event:MouseEvent)=>{
+      if(forwardingTerminalMouse)return
       if(Date.now()-lastTouchAt>=1500)return
       // The synthesized tap after a drag (scroll/selection) is swallowed without
       // focusing, so only a genuine tap raises the soft keyboard.
@@ -1462,6 +1671,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if(focusOnMouseClaim)focusTerminalInput()
     }
     const pointerMove=(event:PointerEvent)=>{
+      if(tap&&event.pointerId===tap.pointerId){
+        tap.px=event.clientX;tap.py=event.clientY
+        const threshold=tap.pointerType==='touch'?10:5
+        if(!tap.moved&&Math.hypot(event.clientX-tap.startX,event.clientY-tap.startY)>threshold)tap.moved=true
+      }
       if(event.pointerType!=='touch'||!touch||event.pointerId!==touch.pointerId)return
       if(!touch.moved&&Math.hypot(event.clientX-touch.startX,event.clientY-touch.startY)>10)touch.moved=true
       if(touch.selecting){
@@ -1495,19 +1709,56 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         deltaY:delta,deltaMode:WheelEvent.DOM_DELTA_PIXEL,
       }))
     }
+    const forwardTerminalMouseTap=(clientX:number,clientY:number)=>{
+      const screen=term.element?.querySelector<HTMLElement>('.xterm-screen')
+      if(!screen)return false
+      forwardingTerminalMouse=true
+      syntheticMouseInputDepth+=1
+      try{
+        dispatchTerminalMouseTap(screen,clientX,clientY)
+      }finally{
+        syntheticMouseInputDepth-=1
+        forwardingTerminalMouse=false
+      }
+      return true
+    }
     const pointerEnd=(event:PointerEvent)=>{
       if(activePointerId!==event.pointerId)return
       activePointerId=null
+      const endedTap=tap&&tap.pointerId===event.pointerId?tap:null
+      tap=null
       // A quick, still tap means "type here" and raises the keyboard; a drag (scroll or
       // selection) does not. keyboardOff mode ignores the focus regardless.
       focusOnMouseClaim=event.pointerType==='touch'&&!!touch&&!touch.selecting&&!touch.moved
+      if(endedTap){
+        const action=terminalTapAction({
+          backend:backendRef.current,
+          pointerType:endedTap.pointerType,
+          still:!endedTap.moved,
+          primary:endedTap.primary,
+          modified:endedTap.modified,
+          readMode:keyboardOffRef.current,
+          hasSelection:!!touch?.selecting||term.hasSelection(),
+          mouseTracking:term.modes.mouseTrackingMode!=='none',
+        })
+        if(action==='forward-mouse')forwardTerminalMouseTap(endedTap.px,endedTap.py)
+        if(action==='steer-codex-caret'){
+          const screen=term.element?.querySelector<HTMLElement>('.xterm-screen')
+          if(screen){
+            const requested=terminalCaretAtPoint(
+              endedTap.px,endedTap.py,screen.getBoundingClientRect(),term.cols,term.rows,term.buffer.active.viewportY,
+            )
+            startCodexCaretPlacement(requested)
+          }
+        }
+      }
       if(focusOnMouseClaim)focusTerminalInput()
       stopSelectionScroll();cancelLongPress();touch=null
       requestAnimationFrame(autoCopySelection)
     }
     const pointerCancel=(event:PointerEvent)=>{
       if(activePointerId!==event.pointerId)return
-      activePointerId=null;focusOnMouseClaim=false;stopSelectionScroll();cancelLongPress();touch=null
+      activePointerId=null;tap=null;focusOnMouseClaim=false;stopSelectionScroll();cancelLongPress();touch=null
     }
     const openMenu = (event: MouseEvent) => {
       // The terminal body has no context menu: right-click stays out of the
@@ -1560,8 +1811,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       void attachFilesRef.current(files)
     }
     host.current.addEventListener('pointerdown', pointerClaim)
-    host.current.addEventListener('pointermove', pointerMove)
     host.current.addEventListener('mousedown',mobileMouseClaim,true)
+    window.addEventListener('pointermove', pointerMove)
     window.addEventListener('pointerup', pointerEnd)
     window.addEventListener('pointercancel', pointerCancel)
     // Focus alone is ambiguous: the pane focuses its own terminal on attach and on tab
@@ -1584,7 +1835,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // owns the attempt bookkeeping and can also recover from a stalled handshake.
     // Scheduled in both directions: becoming hidden is what deregisters this pane's
     // viewport, so the PTY stops being sized for a window nobody is looking at.
-    const onVisibility=()=>{paneIsHidden()?scheduleFit():scheduleFullRedraw()}
+    const onVisibility=()=>{if(paneIsHidden()){cancelCaretPlacement();scheduleFit()}else scheduleFullRedraw()}
     const onPageShow=()=>scheduleFullRedraw()
     const onWindowFocus=()=>scheduleFullRedraw()
     document.addEventListener('visibilitychange',onVisibility)
@@ -1602,7 +1853,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('pointermove',pointerMove);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput])
 
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so
