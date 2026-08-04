@@ -6,9 +6,17 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux.event_bus import EventBus
+from swe_mux.git_projects import ProjectIdentity
 from swe_mux.history import HistoryIndex
 from swe_mux.models import SessionRecord
-from swe_mux.project_files import note_exists, note_has_content, session_note_summaries
+from swe_mux.project_files import (
+    note_exists,
+    note_has_content,
+    note_header,
+    read_note,
+    session_note_summaries,
+    write_note,
+)
 from swe_mux.server import (
     error_middleware,
     get_project_note,
@@ -250,3 +258,98 @@ async def test_history_owned_session_can_initialize_its_note(tmp_path) -> None: 
 
     assert (root / ".swe-mux" / "notes" / "sessions" / "terminal-history-id.md").is_file()
     history.close()
+
+
+def _identity(root) -> ProjectIdentity:  # type: ignore[no-untyped-def]
+    return ProjectIdentity(id="project-one", label="Project One", root=str(root), source="test")
+
+
+def _seed_note(root, note_id: str, text: str):  # type: ignore[no-untyped-def]
+    """Write a note file verbatim, so a test can choose its exact bytes."""
+    path = root / ".swe-mux" / "notes" / "sessions" / f"{note_id}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(text.encode("utf-8"))
+    return path
+
+
+async def test_note_read_strips_a_header_written_with_crlf(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """A note rewritten with Windows line endings must not expose its header.
+
+    `read_note` decodes raw bytes to hash the file, so it is the one reader that
+    gets no universal-newline translation from `read_text`. Git checking a
+    committed note out under `core.autocrlf=true` is how this happens in practice.
+    """
+    root = tmp_path / "project"
+    root.mkdir()
+    body = "deployment steps\nsecond line\n"
+    stored = (note_header("sessions", "terminal-one") + body).replace("\n", "\r\n")
+    _seed_note(root, "terminal-one", stored)
+
+    loaded = await read_note(root, "sessions", "terminal-one", project=_identity(root))
+
+    assert loaded["markdown"] == body
+
+
+async def test_note_read_heals_a_file_that_already_stacked_headers(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Notes corrupted before the write path was fixed must still open cleanly.
+
+    A leaked CRLF header used to be submitted back by the editor and go
+    unrecognized on save, so the file grew a second header on top of the first.
+    """
+    root = tmp_path / "project"
+    root.mkdir()
+    header = note_header("sessions", "terminal-one")
+    _seed_note(root, "terminal-one", header + (header + "real content\n").replace("\n", "\r\n"))
+
+    loaded = await read_note(root, "sessions", "terminal-one", project=_identity(root))
+
+    assert loaded["markdown"] == "real content\n"
+
+
+async def test_note_save_rebuilds_one_canonical_header(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Saving a body that still carries a header replaces it instead of stacking."""
+    root = tmp_path / "project"
+    root.mkdir()
+    header = note_header("sessions", "terminal-one")
+    path = _seed_note(root, "terminal-one", (header + "first draft\n").replace("\n", "\r\n"))
+    project = _identity(root)
+    loaded = await read_note(root, "sessions", "terminal-one", project=project)
+
+    saved = await write_note(
+        root,
+        "sessions",
+        "terminal-one",
+        header + "second draft\r\n",
+        loaded["revision"],
+        project=project,
+    )
+
+    assert saved["markdown"] == "second draft\n"
+    # The stored file is canonically LF with exactly one header, whatever arrived.
+    assert path.read_bytes() == (header + "second draft\n").encode("utf-8")
+
+
+async def test_note_save_normalizes_client_line_endings(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """A client sending CRLF text still leaves an LF note on disk."""
+    root = tmp_path / "project"
+    root.mkdir()
+    header = note_header("sessions", "terminal-one")
+    path = _seed_note(root, "terminal-one", header)
+    project = _identity(root)
+    loaded = await read_note(root, "sessions", "terminal-one", project=project)
+
+    await write_note(
+        root, "sessions", "terminal-one", "one\r\ntwo\r\n", loaded["revision"], project=project
+    )
+
+    assert path.read_bytes() == (header + "one\ntwo\n").encode("utf-8")
+
+
+def test_crlf_header_only_note_still_counts_as_empty(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """A CRLF header must not read as user text and pin a sidebar row."""
+    root = tmp_path / "project"
+    root.mkdir()
+    _seed_note(root, "crlf-blank", note_header("sessions", "crlf-blank").replace("\n", "\r\n"))
+
+    assert session_note_summaries(root) == []
+    assert note_has_content(root, "sessions", "crlf-blank") is False

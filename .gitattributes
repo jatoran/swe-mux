@@ -1,0 +1,6 @@
+# Note files carry an identity header that the daemon matches byte-exactly, and
+# `read_note` decodes raw bytes so it gets no universal-newline translation. A
+# checkout under `core.autocrlf=true` would otherwise rewrite a committed note
+# with CRLF and hide its header inside the editor. The parser tolerates CRLF, but
+# keeping the working copy LF stops the file churning on every checkout.
+.swe-mux/notes/**/*.md text eol=lf

@@ -167,6 +167,9 @@
 - `<project>/.swe-mux/notes/sessions/<safe-session-id>.md`: lazily initialized notes owned by
   individual terminal sessions. Unsafe or external identities map to a stable hashed filename;
   note contents remain ordinary Project files and are not stored in SQLite.
+  Both note files open with a `swe_mux_note = 1` TOML identity header carrying the note's kind
+  and id. It is stripped on read and rebuilt on save, is matched byte-exactly, and is therefore
+  written LF-only and pinned to `eol=lf` in `.gitattributes`; see `features/project-resources.md`.
 - `<project>/.swe-mux/prompts/<uuid>.md`: Project prompt templates with TOML frontmatter and
   inert Markdown-like text bodies. `<data_dir>/prompts/` holds global templates;
   `<data_dir>/prompt-library-state.json` holds bounded device-independent favorites/recents.

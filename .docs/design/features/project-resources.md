@@ -21,6 +21,16 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
 - Every shell, Claude, or Codex terminal can lazily initialize a distinct note at
   `.swe-mux/notes/sessions/<safe-session-id>.md`. Unsafe/external identities use a stable hashed
   filename. Opening an existing note never overwrites it.
+- **Every note file opens with a TOML identity header, and the editor never sees it.** The header
+  records `swe_mux_note = 1` plus the note's kind and id; `_note_body` strips it on read and
+  `write_note` rebuilds it on save, so the pair the file path was derived from is the only pair
+  that can ever be stored. Reading normalizes newlines first and saving writes LF, because the
+  header is matched byte-exactly: `read_note` decodes raw bytes to hash the file, so unlike the
+  `read_text` callers it gets no universal-newline translation, and a note rewritten with CRLF
+  would render its header as body text. That failure used to compound — the leaked header was
+  submitted back on save and went unrecognized, stacking a second one — so the strip now peels
+  every header it finds and heals an already-corrupted file. A repository `.gitattributes` pins
+  these files to `eol=lf` so a checkout under `core.autocrlf=true` cannot reintroduce it.
 - Each terminal's pane bar carries a one-click `note` chip that starts, opens, or focuses that
   terminal's note. It reports three states: empty, written (the note holds text), and open (the
   note is the focused tab). `session.note` is the same action from the command palette and its

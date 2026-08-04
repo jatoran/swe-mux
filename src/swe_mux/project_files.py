@@ -315,11 +315,36 @@ def session_note_summaries(root: str | Path) -> list[dict[str, Any]]:
     return result
 
 
+NOTE_HEADER_PREFIX = "---\nswe_mux_note = 1\n"
+
+
+def note_header(kind: str, identity: str) -> str:
+    """Build a note's identity header. This is the only place it is spelled out."""
+    return f"---\nswe_mux_note = 1\nkind = {json.dumps(kind)}\nid = {json.dumps(identity)}\n---\n"
+
+
 def _note_body(text: str) -> str:
-    if not text.startswith("---\nswe_mux_note = 1\n"):
-        return text
-    boundary = text.find("\n---\n", 4)
-    return text[boundary + 5 :] if boundary >= 0 else text
+    """Return a note's text with its identity header removed.
+
+    Newlines are normalized first because the header is matched byte-exactly.
+    `read_note` decodes raw bytes to hash the file, so unlike the `read_text`
+    callers it gets no universal-newline translation, and a note rewritten with
+    CRLF — by Git checking it out under `core.autocrlf`, or by any external
+    editor — would otherwise fail the match and render its header as body text.
+
+    The strip loops because that failure used to compound: a CRLF header the
+    editor could see was round-tripped back into `write_note`, which did not
+    recognize it either and prepended a second one. Peeling every header heals
+    a file that already accumulated more than one.
+    """
+    body = text.replace("\r\n", "\n").replace("\r", "\n")
+    while body.startswith(NOTE_HEADER_PREFIX):
+        boundary = body.find("\n---\n", 4)
+        if boundary < 0:
+            # A header with no closing fence is the whole file; it has no body.
+            return ""
+        body = body[boundary + 5 :]
+    return body
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -1191,10 +1216,12 @@ async def write_note(
     current = await read_note(cwd, kind, identity, project=project)
     if current["revision"] != expected_revision:
         raise ValueError("note changed externally; reload before saving")
-    header = f"---\nswe_mux_note = 1\nkind = {json.dumps(kind)}\nid = {json.dumps(identity)}\n---\n"
-    body = markdown
-    if not markdown.startswith("---\nswe_mux_note = 1\n"):
-        body = header + markdown
+    # Rebuild the header rather than trusting an incoming one. The file's path is
+    # derived from (kind, identity), so that pair is the only correct header, and
+    # peeling first means a submitted body that still carries one cannot stack a
+    # second. `_note_body` also normalizes newlines, which keeps the note on disk
+    # canonically LF no matter what the client sent.
+    body = note_header(kind, identity) + _note_body(markdown)
     _atomic_write(Path(current["path"]), body.encode("utf-8"))
     return await read_note(cwd, kind, identity, project=project)
 
@@ -1207,6 +1234,5 @@ async def initialize_note(
     if current["exists"]:
         return current
     path = Path(current["path"])
-    header = f"---\nswe_mux_note = 1\nkind = {json.dumps(kind)}\nid = {json.dumps(identity)}\n---\n"
-    _create_note_file(path, header)
+    _create_note_file(path, note_header(kind, identity))
     return await read_note(cwd, kind, identity, project=project)
