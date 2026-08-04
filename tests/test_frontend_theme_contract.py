@@ -51,3 +51,18 @@ def test_every_builtin_theme_defines_readable_xterm_ansi_and_ui_states() -> None
         "selectionBackground",
     ):
         assert selector in css or selector in source
+
+
+def test_scrollbars_use_compact_theme_aware_shared_chrome() -> None:
+    css = (
+        Path(__file__).parents[1] / "frontend" / "src" / "style.css"
+    ).read_text(encoding="utf-8")
+
+    assert "scrollbar-color:color-mix(in srgb,var(--muted) 48%,transparent) transparent" in css
+    assert "scrollbar-width:thin" in css
+    assert "*::-webkit-scrollbar { width:7px;height:7px }" in css
+    assert "*::-webkit-scrollbar-track { background:transparent }" in css
+    assert "border:2px solid transparent" in css
+    assert "background-clip:content-box" in css
+    assert "*::-webkit-scrollbar-thumb:hover" in css
+    assert "*::-webkit-scrollbar-thumb:active" in css

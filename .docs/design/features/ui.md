@@ -8,6 +8,10 @@ responsive controls.
 
 ## Desktop chrome and sidebar
 
+- Scrollable surfaces share one compact scrollbar treatment: a 7 px interaction gutter with
+  an inset rounded thumb, transparent track, theme-derived muted colour, and stronger hover /
+  active feedback. Compact horizontal rails may hide their scrollbar when another overflow
+  affordance is present.
 - A persistent top rail places `swe_mux`, sidebar collapse, and daemon activity above the
   sidebar column. Workspace tabs are not global top-rail state; every pane renders its own tab
   strip beside that rail.
