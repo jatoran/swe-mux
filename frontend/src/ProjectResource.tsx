@@ -22,7 +22,9 @@ import { isFocusTraversalKey } from './keys'
 import { REQUEST_TIMEOUT_MS, retryDelay, watchResume } from './liveness'
 import type { Project } from './types'
 
-export type ProjectResourceIdentity={kind:'note'|'session-note'|'files'|'file';id:string}
+export type ProjectResourceIdentity=
+  | {kind:'note'|'session-note'|'files'|'file';id:string}
+  | {kind:'worktree-file';id:string;worktree:string}
 
 type NotePayload={revision:string;markdown:string;status:string;path:string}
 type FilePresentation=
@@ -33,7 +35,7 @@ type FilePresentation=
 type FilePayload={revision:string;status:string;path:string;size:number;text?:string;presentation?:FilePresentation}
 type DirectoryItem={name:string;path:string;kind:'directory'|'file';size:number|null}
 type DirectoryPayload={path:string;parent:string|null;items:DirectoryItem[];truncated:boolean}
-type ResourceEvent={projectId:string;paths:string[]}
+type ResourceEvent={projectId:string;paths:string[];worktree?:string}
 type NoteResourceEvent={projectId:string;kind:'note'|'session-note';noteId:string|null;revision:string}
 type TreeMenu={item:DirectoryItem;x:number;y:number}
 type SearchMode='names'|'contents'|'both'
@@ -81,19 +83,26 @@ function scheduleTreeSave(projectId:string,paths:string[]){
 
 export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onSendToAgent}:Props){
   const isNote=resource.kind==='note'||resource.kind==='session-note'
+  const isFile=resource.kind==='file'||resource.kind==='worktree-file'
+  const worktree=resource.kind==='worktree-file'?resource.worktree:undefined
+  const fileQuery=(path=resource.id)=>{
+    const params=new URLSearchParams({path})
+    if(worktree)params.set('worktree',worktree)
+    return params.toString()
+  }
   // Markdown files opened from the browser render in Continuity and autosave through the same
   // resource-scoped queue as notes; only their save target (endpoint/body) differs.
-  const isMarkdownFile=resource.kind==='file'&&/\.(md|markdown|mdx)$/i.test(resource.id)
+  const isMarkdownFile=isFile&&/\.(md|markdown|mdx)$/i.test(resource.id)
   const autosaved=isNote||isMarkdownFile
   const saveTarget=():ResourceSaveTarget=>isNote
     ?noteSaveTarget(project.id,resource.kind==='session-note'?resource.id:null)
-    :fileSaveTarget(project.id,resource.id)
+    :fileSaveTarget(project.id,resource.id,worktree)
   const noteEndpoint=resource.kind==='session-note'
     ?`/api/projects/${project.id}/session-notes/${encodeURIComponent(resource.id)}`
     :`/api/projects/${project.id}/note`
   const noteLabel=resource.kind==='session-note'?'Session note':'Project note'
-  const resourceKey=`${project.id}\0${resource.kind}\0${resource.id}`
-  const cachedFile=resource.kind==='file'?fileDrafts.get(resourceKey):undefined
+  const resourceKey=`${project.id}\0${resource.kind}\0${worktree||''}\0${resource.id}`
+  const cachedFile=isFile?fileDrafts.get(resourceKey):undefined
   const cachedBrowser=resource.kind==='files'?browserStates.get(resourceKey):undefined
   const [revision,setRevision]=useState(cachedFile?.revision||'missing')
   const [text,setText]=useState(cachedFile?.text||'')
@@ -206,7 +215,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     setStatus('loading');setError('')
     const path=isNote
       ?noteEndpoint
-      :`/api/projects/${project.id}/file?path=${encodeURIComponent(resource.id)}`
+      :`/api/projects/${project.id}/file?${fileQuery()}`
     try{
       const payload=await api<NotePayload|FilePayload>('GET',path,undefined,{timeoutMs:REQUEST_TIMEOUT_MS})
       // A newer request owns the outcome; this one is neither a success nor a failure.
@@ -326,7 +335,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     recoveryEpoch.current+=1
     clearRetry();retryAttempt.current=0;pendingRetryRef.current=false;setPendingRetry(false)
     loadedOnce.current=false
-    if(resource.kind==='file'&&cachedFile&&cachedFile.text!==cachedFile.baseline){
+    if(isFile&&cachedFile&&cachedFile.text!==cachedFile.baseline){
       setError(cachedFile.error)
       loadedOnce.current=true
       return
@@ -344,7 +353,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   },[])
 
   useEffect(()=>{
-    if(resource.kind!=='file')return
+    if(!isFile)return
     // Retained so reparenting a tab between panes never discards an unsaved
     // edit — but *only* while there is something to protect. A clean draft is
     // identical to what a refetch would produce, and keeping every file ever
@@ -437,12 +446,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
 
   const watchedPaths=resource.kind==='files'
     ?['',...expanded]
-    :resource.kind==='file'?[parentPath(resource.id)]:[]
+    :isFile?[parentPath(resource.id)]:[]
   const watchKey=watchedPaths.sort().join('\n')
   useEffect(()=>{
     if(!watchedPaths.length)return
     const leaseId=`${watchId.current}-${Math.random().toString(36).slice(2)}`
-    const renew=()=>void api('PUT',`/api/projects/${project.id}/watch`,{watch_id:leaseId,paths:watchedPaths}).catch(()=>{})
+    const renew=()=>void api('PUT',`/api/projects/${project.id}/watch`,{watch_id:leaseId,paths:watchedPaths,worktree}).catch(()=>{})
     renew()
     const timer=window.setInterval(renew,30000)
     return()=>{clearInterval(timer);void api('DELETE',`/api/projects/${project.id}/watch/${encodeURIComponent(leaseId)}`).catch(()=>{})}
@@ -455,7 +464,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       if(resource.kind==='files'){
         const affected=new Set(detail.paths.map(parentPath))
         for(const folder of Object.keys(directories))if(affected.has(folder))void loadDirectory(folder)
-      }else if(resource.kind==='file'&&detail.paths.includes(resource.id)){
+      }else if(isFile&&detail.paths.includes(resource.id)&&(!worktree||detail.worktree===worktree)){
         // A markdown file autosaves through the queue, whose own event carries no revision to
         // distinguish our own echoed write. Rather than reload (and disrupt an active editor)
         // on every file-changed event, leave the local editor authoritative; a genuine
@@ -494,7 +503,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const save=async(content=text,expectedRevision=revision)=>{
     setSaveState('saving')
     try{
-      const payload=await api<FilePayload>('PUT',`/api/projects/${project.id}/file`,{path:resource.id,text:content,revision:expectedRevision})
+      const payload=await api<FilePayload>('PUT',`/api/projects/${project.id}/file`,{path:resource.id,text:content,revision:expectedRevision,worktree})
       setRevision(payload.revision);setBaseline(content);setStatus(payload.status);setFileSize(payload.size);setPresentation(payload.presentation||{kind:'text'});setError('');setSaveState('saved')
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause));setSaveState('error')}
   }
@@ -700,10 +709,10 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   },[!!onSendToAgent])
 
   const editable=status==='ready'||status==='missing'
-  const isDelimitedFile=resource.kind==='file'&&presentation?.kind==='delimited'
+  const isDelimitedFile=isFile&&presentation?.kind==='delimited'
   const imagePresentation=presentation?.kind==='image'?presentation:null
-  const isImageFile=resource.kind==='file'&&!!imagePresentation
-  const readableFile=resource.kind==='file'
+  const isImageFile=isFile&&!!imagePresentation
+  const readableFile=isFile
     &&(presentation?.kind==='text'||presentation?.kind==='delimited')
     &&(status==='ready'||status==='read-only')
   const canSendText=!!onSendToAgent&&(isNote?editable:readableFile)
@@ -724,7 +733,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
 
   const resolveKeepMine=async()=>{
     try{
-      const endpoint=isNote?noteEndpoint:`/api/projects/${project.id}/file?path=${encodeURIComponent(resource.id)}`
+      const endpoint=isNote?noteEndpoint:`/api/projects/${project.id}/file?${fileQuery()}`
       const payload=await api<{revision:string}>('GET',endpoint,undefined,{timeoutMs:REQUEST_TIMEOUT_MS})
       noteSaveQueue.overwrite(noteKey,payload.revision)
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
@@ -1009,13 +1018,13 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     :status==='error'?null
     :'This resource is read-only.'
   return <section class="project-resource file-editor" onKeyDown={handleFindKey}>
-    <header><div>{!isNote&&<strong>{resource.id}</strong>}<span>{project.name} · {stateLabel}</span></div>{autosaved||onSendToAgent||isDelimitedFile||(resource.kind==='file'&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
+    <header><div>{!isNote&&<strong>{resource.id}</strong>}<span>{project.name} · {stateLabel}</span></div>{autosaved||onSendToAgent||isDelimitedFile||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
       {/* Continuity-backed views send the live selection (or the document); a plain-text
           editor owns no selection engine, so its send is always the whole document. */}
       {canSendText&&<button class="resource-send" title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}
       {autosaved&&<button disabled={!editable} title="Find in this note" aria-label="Find in this note" onClick={openFind}>⌕</button>}
       {isDelimitedFile&&<><button class={fileViewMode==='preview'?'active':''} onClick={()=>setFileViewMode('preview')}>Table</button><button class={fileViewMode==='raw'?'active':''} onClick={()=>setFileViewMode('raw')}>Raw</button></>}
-      {resource.kind==='file'&&!isMarkdownFile&&presentation?.kind!=='image'&&presentation?.kind!=='unsupported'&&(!isDelimitedFile||fileViewMode==='raw')&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}
+      {isFile&&!isMarkdownFile&&presentation?.kind!=='image'&&presentation?.kind!=='unsupported'&&(!isDelimitedFile||fileViewMode==='raw')&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}
     </div>:null}</header>
     {errorLine}
     {findOpen&&<div class="note-find" role="search">
@@ -1035,7 +1044,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       <button title="Close find" aria-label="Close find" onClick={closeFind}>×</button>
     </div>}
     {autosaved&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
-    {imageReady?<ImageViewer key={revision} projectId={project.id} path={resource.id} revision={revision} mime={imagePresentation!.mime!} width={imagePresentation!.width!} height={imagePresentation!.height!} frames={imagePresentation!.frames!} size={fileSize}/>
+    {imageReady?<ImageViewer key={revision} projectId={project.id} path={resource.id} revision={revision} mime={imagePresentation!.mime!} width={imagePresentation!.width!} height={imagePresentation!.height!} frames={imagePresentation!.frames!} size={fileSize} worktree={worktree}/>
       :isDelimitedFile&&readableFile&&fileViewMode==='preview'?<DelimitedTextViewer text={text} delimiter={presentation.delimiter}/>
       :editable?(autosaved?<ProjectNoteEditor key={`${project.id}:${resource.kind}:${resource.id}:${loadGeneration}`} projectId={project.id} resourceId={`${resource.kind}:${resource.id}`} initialText={text} label={isNote?noteLabel:resource.id} railActions={railActions} elementRef={editorElement}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>)
       :isDelimitedFile&&readableFile&&fileViewMode==='raw'?<textarea readOnly value={text} spellcheck={false}/>

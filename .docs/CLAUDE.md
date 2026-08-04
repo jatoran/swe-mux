@@ -63,7 +63,10 @@
   `design/features/provider-accounts.md`, `design/features/backends.md`
 - Changing history, transcripts, or cross-vendor review: `design/features/history.md`,
   `design/interfaces.md`
-- Changing Git status or worktree tooling: `design/features/git.md`
+- Changing Git status, comparison, diff review, or worktree tooling:
+  `design/features/git.md`, `design/features/project-resources.md`, `design/interfaces.md`,
+  `technical/backend/packages.md`, `technical/frontend/packages.md`,
+  `technical/frontend/workspace-state.md`
 - Changing automation, observers, attention, or legacy hooks:
   `design/features/automation.md`, `design/features/fleet-intelligence.md`,
   `design/features/meta-hooks.md`, `design/features/delivery-readiness.md`

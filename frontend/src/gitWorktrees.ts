@@ -332,3 +332,170 @@ export function divergenceLabel(state: { ahead: number; behind: number } | null)
   if (state.behind) parts.push(`↓${state.behind}`)
   return parts.join(' ')
 }
+
+export type GitComparisonSource = 'project_override' | 'origin_head' | 'single_remote_head' | 'local_fallback' | 'none'
+
+export type ReviewFileChange = {
+  path: string
+  oldPath: string | null
+  status: string
+  additions: number | null
+  deletions: number | null
+  binary: boolean
+  submodule: boolean
+  currentExists: boolean | null
+}
+
+export type ReviewChangeSummary = {
+  total: number
+  additions: number
+  deletions: number
+  binaryFiles: number
+  files: ReviewFileChange[]
+  truncated: boolean
+}
+
+export type GitComparison = {
+  ref: string | null
+  display: string | null
+  source: GitComparisonSource
+  available: boolean
+  reason: string | null
+  candidates: string[]
+}
+
+export type GitOverviewWorktree = {
+  path: string
+  head: string | null
+  branch: string | null
+  detached: boolean
+  bare: boolean
+  locked: string | null
+  prunable: string | null
+  main: boolean
+  comparisonCounts: { ahead: number; behind: number } | null
+  unstaged: ReviewChangeSummary | null
+  staged: ReviewChangeSummary | null
+  conflicted: ReviewChangeSummary | null
+  branchDelta: ReviewChangeSummary | null
+}
+
+export type GitWorktreeOverview = {
+  repository: { root: string; commonDir: string }
+  comparison: GitComparison
+  worktrees: GitOverviewWorktree[]
+}
+
+export type GitCommitChanges = {
+  commit: string
+  parent: string | null
+  parents: string[]
+  parentLabel: string
+  summary: ReviewChangeSummary
+}
+
+export type GitPatchSnapshot = {
+  scope: 'unstaged' | 'staged' | 'conflicted' | 'branch' | 'commit'
+  path: string
+  oldPath: string | null
+  worktree: string | null
+  commit: string | null
+  parent: string | null
+  comparisonRef: string | null
+  headOid: string | null
+  patchSha256: string
+  patch: string | null
+  binary: boolean
+  tooLarge: boolean
+  unavailableReason: string | null
+  additions: number | null
+  deletions: number | null
+}
+
+const record=(value:unknown):Record<string,unknown>|null=>value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:null
+const textOrNull=(value:unknown):string|null=>typeof value==='string'?value:null
+const finiteNonnegative=(value:unknown):number|null=>typeof value==='number'&&Number.isFinite(value)&&value>=0?value:null
+
+export function parseReviewSummary(value:unknown):ReviewChangeSummary|null {
+  const raw=record(value)
+  if(!raw)return null
+  const total=finiteNonnegative(raw.total),additions=finiteNonnegative(raw.additions),deletions=finiteNonnegative(raw.deletions),binaryFiles=finiteNonnegative(raw.binary_files)
+  if(total===null||additions===null||deletions===null||binaryFiles===null||!Array.isArray(raw.files))return null
+  const files:ReviewFileChange[]=[]
+  for(const value of raw.files){
+    const item=record(value)
+    if(!item||typeof item.path!=='string'||!item.path||typeof item.status!=='string')continue
+    const binary=item.binary===true
+    const fileAdditions=finiteNonnegative(item.additions),fileDeletions=finiteNonnegative(item.deletions)
+    files.push({
+      path:item.path,
+      oldPath:textOrNull(item.old_path),
+      status:item.status,
+      additions:binary?null:fileAdditions,
+      deletions:binary?null:fileDeletions,
+      binary,
+      submodule:item.submodule===true,
+      currentExists:typeof item.current_exists==='boolean'?item.current_exists:null,
+    })
+  }
+  return {total,additions,deletions,binaryFiles,files,truncated:raw.truncated===true}
+}
+
+export function parseGitOverview(value:unknown):GitWorktreeOverview|null {
+  const raw=record(value),repository=record(raw?.repository),comparison=record(raw?.comparison)
+  if(!raw||!repository||typeof repository.root!=='string'||typeof repository.common_dir!=='string'||!comparison||!Array.isArray(raw.worktrees))return null
+  const source=comparison.source
+  if(!['project_override','origin_head','single_remote_head','local_fallback','none'].includes(String(source)))return null
+  const parsedComparison:GitComparison={
+    ref:textOrNull(comparison.ref),display:textOrNull(comparison.display),source:source as GitComparisonSource,
+    available:comparison.available===true,reason:textOrNull(comparison.reason),
+    candidates:Array.isArray(comparison.candidates)?comparison.candidates.filter((item):item is string=>typeof item==='string'):[],
+  }
+  const worktrees:GitOverviewWorktree[]=[]
+  for(const value of raw.worktrees){
+    const item=record(value)
+    if(!item||typeof item.worktree!=='string'||!item.worktree)continue
+    const counts=record(item.comparison_counts)
+    const ahead=finiteNonnegative(counts?.ahead),behind=finiteNonnegative(counts?.behind)
+    worktrees.push({
+      path:item.worktree,head:textOrNull(item.HEAD),branch:textOrNull(item.branch)?.replace(/^refs\/heads\//,'')||null,
+      detached:item.detached===true,bare:item.bare===true,locked:reason(item.locked),prunable:reason(item.prunable),main:item.main===true,
+      comparisonCounts:ahead===null||behind===null?null:{ahead,behind},
+      unstaged:parseReviewSummary(item.unstaged),staged:parseReviewSummary(item.staged),conflicted:parseReviewSummary(item.conflicted),branchDelta:parseReviewSummary(item.branch_delta),
+    })
+  }
+  return {repository:{root:repository.root,commonDir:repository.common_dir},comparison:parsedComparison,worktrees}
+}
+
+export function parseCommitChanges(value:unknown):GitCommitChanges|null {
+  const raw=record(value),summary=parseReviewSummary(raw?.summary)
+  if(!raw||typeof raw.commit!=='string'||!Array.isArray(raw.parents)||typeof raw.parent_label!=='string'||!summary)return null
+  const parents=raw.parents.filter((item):item is string=>typeof item==='string')
+  const parent=textOrNull(raw.parent)
+  if(parent&&!parents.includes(parent))return null
+  return {commit:raw.commit,parent,parents,parentLabel:raw.parent_label,summary}
+}
+
+export function parsePatchSnapshot(value:unknown):GitPatchSnapshot|null {
+  const raw=record(value)
+  if(!raw||!['unstaged','staged','conflicted','branch','commit'].includes(String(raw.scope))||typeof raw.path!=='string'||typeof raw.patch_sha256!=='string')return null
+  return {
+    scope:raw.scope as GitPatchSnapshot['scope'],path:raw.path,oldPath:textOrNull(raw.old_path),worktree:textOrNull(raw.worktree),
+    commit:textOrNull(raw.commit),parent:textOrNull(raw.parent),comparisonRef:textOrNull(raw.comparison_ref),headOid:textOrNull(raw.head_oid),
+    patchSha256:raw.patch_sha256,patch:textOrNull(raw.patch),binary:raw.binary===true,tooLarge:raw.too_large===true,
+    unavailableReason:textOrNull(raw.unavailable_reason),additions:finiteNonnegative(raw.additions),deletions:finiteNonnegative(raw.deletions),
+  }
+}
+
+export function comparisonSourceLabel(comparison:GitComparison):string {
+  if(!comparison.available)return comparison.reason||'No comparison ref could be inferred.'
+  const source={project_override:'Project override',origin_head:'origin default',single_remote_head:'remote default',local_fallback:'local fallback',none:'Auto'}[comparison.source]
+  return `${source}: ${comparison.display||comparison.ref}`
+}
+
+export function fileStatLabel(file:Pick<ReviewFileChange,'binary'|'submodule'|'additions'|'deletions'>):string {
+  if(file.submodule)return 'submodule'
+  if(file.binary)return 'binary'
+  if(file.additions===null||file.deletions===null)return 'unmeasured'
+  return `+${file.additions} -${file.deletions}`
+}

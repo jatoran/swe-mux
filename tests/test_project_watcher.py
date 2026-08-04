@@ -32,6 +32,30 @@ def test_project_watches_are_leased_bounded_and_ignore_heavy_directories(tmp_pat
         watcher.register(project.id, [""] * (MAX_WATCHED_DIRECTORIES + 1))
 
 
+async def test_equal_relative_paths_in_two_worktrees_have_distinct_watch_identities(
+    tmp_path: Path,
+) -> None:
+    canonical = tmp_path / "main"
+    sibling = tmp_path / "sibling"
+    (canonical / "src").mkdir(parents=True)
+    (sibling / "src").mkdir(parents=True)
+    project = ProjectRecord("project", "Project", str(canonical), 0)
+    projects = cast(ProjectManager, SimpleNamespace(projects={project.id: project}))
+    watcher = ProjectFileWatcher(projects, EventBus(), Config(data_dir=tmp_path / "data"))
+
+    main = watcher.register(project.id, ["src"], "main-tab")
+    other = watcher.register(project.id, ["src"], "sibling-tab", root=str(sibling))
+    watcher._reconcile_watchers()
+
+    assert main.root == str(canonical.resolve())
+    assert other.root == str(sibling.resolve())
+    roots = {key[1] for key in watcher._watchers}
+    assert roots == {main.root, other.root}
+    for task in watcher._watchers.values():
+        task.cancel()
+    await asyncio.gather(*watcher._watchers.values(), return_exceptions=True)
+
+
 async def test_project_watcher_emits_changes_only_for_an_open_directory(tmp_path: Path) -> None:
     source = tmp_path / "src"
     source.mkdir()

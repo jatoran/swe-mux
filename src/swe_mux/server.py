@@ -35,6 +35,7 @@ from uuid import uuid4
 from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
+from . import git_review
 from .adapters import BackendAdapter, ClaudeAdapter, CodexAdapter, ShellAdapter
 from .agent_context import AgentContextConflict, AgentContextService
 from .agent_messaging import AgentMessagingService
@@ -329,6 +330,15 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         # Typed queue-operation failures carry their own status and a machine
         # code the queue UI branches on (head-of-line, revision, readiness).
         return json_response({"error": str(exc), "code": exc.code, **exc.payload}, exc.status)
+    except git_review.GitReviewError as exc:
+        log.warning(
+            "git_review_request method=%s path=%s code=%s status=%s result=error",
+            request.method,
+            request.path,
+            exc.code,
+            exc.status,
+        )
+        return json_response({"error": str(exc), "code": exc.code}, exc.status)
     except ProjectFileRevisionConflict as exc:
         return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
     except ProjectImageUnavailable as exc:
@@ -715,6 +725,8 @@ def create_app(
             web.post("/mcp", mcp_endpoint),
             web.get("/api/git/worktrees", list_worktrees),
             web.get("/api/git/graph", git_graph),
+            web.get("/api/git/commits/{oid}/changes", git_commit_changes),
+            web.get("/api/git/diff", git_diff),
             web.post("/api/git/worktrees", create_worktree),
             web.delete("/api/git/worktrees", remove_worktree),
             web.post("/api/reveal", reveal_path),
@@ -789,9 +801,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             "quarantined %d historical provider collision(s)",
             len(historical_identity_repairs),
         )
-    tier0 = Tier0Store(
-        config.database_path, retention_days=config.process_evidence_retention_days
-    )
+    tier0 = Tier0Store(config.database_path, retention_days=config.process_evidence_retention_days)
     await tier0.prune()
     # Durable per-session detection timeline: every ledger entry survives
     # daemon restarts and session ends so status incidents stay investigable
@@ -3155,9 +3165,7 @@ async def _session_note_owner(request: web.Request):  # type: ignore[no-untyped-
 
 async def get_session_note(request: web.Request) -> web.Response:
     project, note_id = await _session_note_owner(request)
-    note = await read_note(
-        project.root, "sessions", note_id, project=_registered_identity(project)
-    )
+    note = await read_note(project.root, "sessions", note_id, project=_registered_identity(project))
     note.update({"project_id": project.id, "project_name": project.name})
     return json_response(note)
 
@@ -3229,9 +3237,7 @@ async def delete_session_note(request: web.Request) -> web.Response:
         note_id=note_id,
         revision="missing",
     )
-    return json_response(
-        {"deleted": True, "project_id": project.id, "note_id": note_id}
-    )
+    return json_response({"deleted": True, "project_id": project.id, "note_id": note_id})
 
 
 async def resolve_project_scope(request: web.Request) -> web.Response:
@@ -3585,9 +3591,7 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
             # the project's own repository — parallel agent worktrees are the same
             # codebase on another branch and a session belongs in them. The git query
             # only runs on this failure path, so ordinary spawns pay nothing for it.
-            cwd = resolve_listed_cwd(
-                spec.cwd, await _listed_worktree_paths(owning_project.root)
-            )
+            cwd = resolve_listed_cwd(spec.cwd, await _listed_worktree_paths(owning_project.root))
     executable = spec.executable
     argv = list(spec.argv)
     profile_id: str | None = None
@@ -3701,9 +3705,7 @@ def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any
         "native_session_id": session.record.native_session_id,
         "agent_lifecycle_id": session.agent_lifecycle_id,
         "awaiting_reason": session.record.awaiting_reason,
-        "standing_activity": [
-            activity.snapshot() for activity in session.record.standing_activity
-        ],
+        "standing_activity": [activity.snapshot() for activity in session.record.standing_activity],
         # The CLI's own published state for this conversation
         # (~/.claude/sessions/<pid>.json) — corroboration only, never a
         # transition source. None until the poller matches a file.
@@ -3788,9 +3790,7 @@ async def get_session_state_log(request: web.Request) -> web.Response:
     store: StatusTimelineStore = request.app["status_timeline"]
     if from_ts is not None or to_ts is not None:
         await store.flush_session(session)
-        timeline, truncated = await store.timeline(
-            session.record.id, from_ts=from_ts, to_ts=to_ts
-        )
+        timeline, truncated = await store.timeline(session.record.id, from_ts=from_ts, to_ts=to_ts)
         payload["from"] = from_ts
         payload["to"] = to_ts
         payload["timeline"] = timeline
@@ -3828,18 +3828,14 @@ async def _bundle_transcript_slices(
             continue
         transcript = row.get("transcript_path")
         if not transcript or not Path(transcript).is_file():
-            slices.append(
-                {"agent_run_id": run_id, "error": "native transcript is unavailable"}
-            )
+            slices.append({"agent_run_id": run_id, "error": "native transcript is unavailable"})
             continue
         try:
             messages, _mtime_ns, _size = await asyncio.to_thread(
                 parse_transcript_with_watermark, Path(transcript), str(row["backend"])
             )
         except (OSError, ValueError):
-            slices.append(
-                {"agent_run_id": run_id, "error": "native transcript is unreadable"}
-            )
+            slices.append({"agent_run_id": run_id, "error": "native transcript is unreadable"})
             continue
         in_window: list[dict[str, Any]] = []
         for message in messages:
@@ -3902,9 +3898,7 @@ async def get_session_diagnostic_bundle(request: web.Request) -> web.Response:
     if history_row:
         run_ids.append(str(history_row["id"]))
     ordered_runs = list(dict.fromkeys(run_ids))
-    transcripts = await _bundle_transcript_slices(
-        request.app, ordered_runs, from_ts, to_ts
-    )
+    transcripts = await _bundle_transcript_slices(request.app, ordered_runs, from_ts, to_ts)
     return json_response(
         {
             "id": identity,
@@ -3918,9 +3912,7 @@ async def get_session_diagnostic_bundle(request: web.Request) -> web.Response:
             "timeline": timeline,
             "timeline_truncated": truncated,
             "timeline_sink": store.stats(),
-            "fleet_status_health": fleet_status_health(
-                request.app["sessions"].sessions.values()
-            ),
+            "fleet_status_health": fleet_status_health(request.app["sessions"].sessions.values()),
             "transcripts": transcripts,
         }
     )
@@ -4359,9 +4351,7 @@ async def queue_patch_message(request: web.Request) -> web.Response:
     body = await request.json()
     if body.get("retarget_session_id"):
         return json_response(
-            await queue.retarget(
-                message_id, target_session_id=str(body["retarget_session_id"])
-            )
+            await queue.retarget(message_id, target_session_id=str(body["retarget_session_id"]))
         )
     if "body" in body:
         revision = body.get("revision")
@@ -4374,14 +4364,10 @@ async def queue_patch_message(request: web.Request) -> web.Response:
         return json_response(await queue.set_armed(message_id, bool(body["armed"])))
     if "after" in body:
         after = body.get("after")
-        return json_response(
-            await queue.move(message_id, after=str(after) if after else None)
-        )
+        return json_response(await queue.move(message_id, after=str(after) if after else None))
     if "constraints" in body:
         # Scheduling is a property of the queued item, not of a sender's UI.
-        return json_response(
-            await queue.set_constraints(message_id, body.get("constraints"))
-        )
+        return json_response(await queue.set_constraints(message_id, body.get("constraints")))
     raise ValueError("nothing to change")
 
 
@@ -4488,9 +4474,7 @@ async def queue_auto_report_unsafe(request: web.Request) -> web.Response:
 async def queue_mailbox(request: web.Request) -> web.Response:
     role = request.query.get("role", "all").strip() or "all"
     limit = int(request.query.get("limit", "100") or 100)
-    return json_response(
-        await request.app["agent_messaging"].mailbox(role=role, limit=limit)
-    )
+    return json_response(await request.app["agent_messaging"].mailbox(role=role, limit=limit))
 
 
 _MEDIA_TYPES = {
@@ -4738,9 +4722,7 @@ async def _upload_session_attachment(
             data,
             image_only=image_only,
         )
-    reference = (
-        adapter.media_reference(stored.path) if stored.kind == "image" else str(stored.path)
-    )
+    reference = adapter.media_reference(stored.path) if stored.kind == "image" else str(stored.path)
     await request.app["events"].emit(
         "session_media_uploaded" if image_only else "session_attachment_uploaded",
         session_id=session.record.id,
@@ -5135,9 +5117,7 @@ async def get_agent_context(request: web.Request) -> web.Response:
 
     project = _request_project(request)
     service: AgentContextService = request.app["agent_context"]
-    payload = await asyncio.to_thread(
-        service.inventory, project.id, project.name, project.root
-    )
+    payload = await asyncio.to_thread(service.inventory, project.id, project.name, project.root)
     return json_response(payload)
 
 
@@ -5165,9 +5145,7 @@ async def preview_agent_context_sync(request: web.Request) -> web.Response:
     body = await request.json()
     direction = str(body.get("direction") or "")
     service: AgentContextService = request.app["agent_context"]
-    return json_response(
-        await asyncio.to_thread(service.preview_sync, project.root, direction)
-    )
+    return json_response(await asyncio.to_thread(service.preview_sync, project.root, direction))
 
 
 async def sync_agent_context(request: web.Request) -> web.Response:
@@ -5310,18 +5288,27 @@ async def search_project_files_route(request: web.Request) -> web.Response:
     # The recursive walk (and any content reads) is blocking, so keep it off the event loop.
     result = await asyncio.get_running_loop().run_in_executor(
         None,
-        lambda: search_project_files(
-            project.root, query, mode=mode, ignore_patterns=patterns
-        ),
+        lambda: search_project_files(project.root, query, mode=mode, ignore_patterns=patterns),
     )
     return json_response(result)
 
 
+async def _project_file_root(project_root: str, requested: object) -> str:
+    """Resolve an optional exact worktree root without widening Project ownership."""
+    if requested is None or requested == "":
+        return project_root
+    if not isinstance(requested, str):
+        raise git_review.GitReviewError("invalid_worktree", "worktree must be a string")
+    repository, _common = await git_review.repository_identity(project_root)
+    return await git_review.validate_worktree_root(repository, requested)
+
+
 async def get_project_file(request: web.Request) -> web.Response:
     project = _request_project(request)
-    result = await asyncio.to_thread(
-        read_project_file, project.root, request.query.get("path", "")
-    )
+    root = await _project_file_root(project.root, request.query.get("worktree"))
+    result = await asyncio.to_thread(read_project_file, root, request.query.get("path", ""))
+    if root != project.root:
+        result["worktree"] = root
     return json_response(result)
 
 
@@ -5329,11 +5316,12 @@ async def get_project_file_content(request: web.Request) -> web.Response:
     """Serve only a revision-pinned image that passed the Project viewer allowlist."""
 
     project = _request_project(request)
+    root = await _project_file_root(project.root, request.query.get("worktree"))
     relative_path = request.query.get("path", "")
     expected_revision = request.query.get("revision", "")
     data, payload = await asyncio.to_thread(
         read_project_image_content,
-        project.root,
+        root,
         relative_path,
         expected_revision,
     )
@@ -5359,10 +5347,11 @@ async def get_project_file_content(request: web.Request) -> web.Response:
 async def put_project_file(request: web.Request) -> web.Response:
     project = _request_project(request)
     body = await request.json()
+    root = await _project_file_root(project.root, body.get("worktree"))
     try:
         result = await asyncio.to_thread(
             write_project_file,
-            project.root,
+            root,
             str(body.get("path") or ""),
             str(body.get("text") or ""),
             str(body.get("revision") or "missing"),
@@ -5377,7 +5366,8 @@ async def put_project_file(request: web.Request) -> web.Response:
 async def reveal_project_resource(request: web.Request) -> web.Response:
     project = _request_project(request)
     body = await request.json()
-    target = project_path(project.root, str(body.get("path") or ""))
+    root = await _project_file_root(project.root, body.get("worktree"))
+    target = project_path(root, str(body.get("path") or ""))
     if not target.exists():
         raise ValueError("project resource does not exist")
     await asyncio.to_thread(open_in_file_manager, target)
@@ -5433,13 +5423,14 @@ async def put_project_watch(request: web.Request) -> web.Response:
     watch_id = body.get("watch_id")
     if watch_id is not None and (not isinstance(watch_id, str) or len(watch_id) > 100):
         raise ValueError("watch_id must be a string of 100 characters or fewer")
-    lease = request.app["project_watcher"].register(
-        request.match_info["project_id"], raw_paths, watch_id
-    )
+    project = _request_project(request)
+    root = await _project_file_root(project.root, body.get("worktree"))
+    lease = request.app["project_watcher"].register(project.id, raw_paths, watch_id, root=root)
     return json_response(
         {
             "watch_id": lease.watch_id,
             "paths": list(lease.paths),
+            "worktree": lease.root,
             "lease_seconds": 45,
         }
     )
@@ -6207,9 +6198,7 @@ async def list_processes(request: web.Request) -> web.Response:
     return json_response(
         await inspector.snapshot(session_id, include_ended=include_ended)
         if session_id
-        else await inspector.snapshot_all(
-            include_ended=include_ended, unique_memory=unique_memory
-        )
+        else await inspector.snapshot_all(include_ended=include_ended, unique_memory=unique_memory)
     )
 
 
@@ -7054,320 +7043,102 @@ async def hook_ingress(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
-# The shared development branch used to measure worktree-only commits and files.
-# It is overridable per request for repositories with another designated trunk.
-DEFAULT_SHARED_TRUNK = "master"
-GIT_CHANGE_FILE_LIMIT = 200
 GIT_GRAPH_DEFAULT_LIMIT = 80
 GIT_GRAPH_MAX_LIMIT = 200
 
-# Git accepts far more than this in a ref name, but this is what we are willing to
-# interpolate into an argument vector from a query string.
-_SAFE_REF = re.compile(r"[A-Za-z0-9._/-]{1,200}")
-
 
 async def list_worktrees(request: web.Request) -> web.Response:
-    cwd = request.query.get("cwd") or str(Path.cwd())
-    code, output = await _git(cwd, "worktree", "list", "--porcelain")
-    if code:
-        return json_response(
-            {
-                "error": output or "unable to list Git worktrees",
-                "code": "git_timeout" if code == 124 else "git_error",
-            },
-            504 if code == 124 else 400,
+    extras = set(request.query) - {"project_id"}
+    if extras:
+        raise git_review.GitReviewError(
+            "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
         )
-    items = _parse_worktrees(output)
-    trunk = request.query.get("trunk") or DEFAULT_SHARED_TRUNK
-    await asyncio.gather(
-        _annotate_unlanded(cwd, trunk, items),
-        _annotate_worktree_changes(cwd, trunk, items),
+    project_id = request.query.get("project_id", "")
+    project = request.app["projects"].projects.get(project_id)
+    if project is None:
+        raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
+    return json_response(
+        await git_review.worktree_overview(project.id, project.root, project.git_compare_ref)
     )
-    return json_response(items)
-
-
-def _bounded_change_summary(files: list[dict[str, str]]) -> dict[str, Any]:
-    return {
-        "total": len(files),
-        "files": files[:GIT_CHANGE_FILE_LIMIT],
-        "truncated": len(files) > GIT_CHANGE_FILE_LIMIT,
-    }
-
-
-def _parse_working_tree_changes(output: str) -> list[dict[str, str]]:
-    """Parse `git status --porcelain=v2 -z` without losing unusual path characters."""
-    tokens = output.split("\0")
-    files: list[dict[str, str]] = []
-    index = 0
-    while index < len(tokens):
-        record = tokens[index]
-        index += 1
-        if not record:
-            continue
-        kind = record[:1]
-        if kind == "?":
-            status, path = "??", record[2:]
-        elif kind == "1":
-            fields = record.split(" ", 8)
-            if len(fields) != 9:
-                continue
-            status, path = fields[1], fields[8]
-        elif kind == "2":
-            fields = record.split(" ", 9)
-            if len(fields) != 10:
-                continue
-            status, path = fields[1], fields[9]
-        elif kind == "u":
-            fields = record.split(" ", 10)
-            if len(fields) != 11:
-                continue
-            status, path = fields[1], fields[10]
-        else:
-            continue
-        if not path:
-            continue
-        item = {"status": status, "path": path}
-        # A v2 type-2 record puts the destination in the record and the source in a
-        # second NUL-delimited field.
-        if kind == "2" and index < len(tokens) and tokens[index]:
-            item["old_path"] = tokens[index]
-            index += 1
-        files.append(item)
-    return files
-
-
-def _parse_branch_changes(output: str) -> list[dict[str, str]]:
-    """Parse `git diff --name-status -z`, retaining rename/copy source paths."""
-    tokens = output.split("\0")
-    files: list[dict[str, str]] = []
-    index = 0
-    while index < len(tokens):
-        status = tokens[index]
-        index += 1
-        if not status or index >= len(tokens):
-            continue
-        path = tokens[index]
-        index += 1
-        if not path:
-            continue
-        item = {"status": status, "path": path}
-        if status[:1] in {"R", "C"} and index < len(tokens) and tokens[index]:
-            item["old_path"] = path
-            item["path"] = tokens[index]
-            index += 1
-        files.append(item)
-    return files
-
-
-async def _annotate_worktree_changes(
-    cwd: str, trunk: str, items: list[dict[str, Any]]
-) -> None:
-    """Measure local and trunk-relative files for every listed working tree.
-
-    This runs only on the explicit Git-drawer request, never in the five-second session
-    monitor. Results remain absent when Git could not measure them; an absent summary must
-    not be rendered as a clean/landed claim.
-    """
-    trunk_exists = False
-    if _SAFE_REF.fullmatch(trunk):
-        trunk_exists = not (
-            await _git(cwd, "show-ref", "--verify", "--quiet", f"refs/heads/{trunk}")
-        )[0]
-    semaphore = asyncio.Semaphore(4)
-
-    async def run_git(path: str, *args: str) -> tuple[int, str]:
-        async with semaphore:
-            return await _git(path, *args)
-
-    async def measure(item: dict[str, Any]) -> None:
-        path = item.get("worktree")
-        if not isinstance(path, str) or not path or item.get("bare"):
-            return
-        status_task = run_git(
-            path, "status", "--porcelain=v2", "-z", "--untracked-files=all"
-        )
-        branch = item.get("branch")
-        diff_task: Awaitable[tuple[int, str]] | None = None
-        if trunk_exists and isinstance(branch, str):
-            diff_task = run_git(
-                cwd,
-                "diff",
-                "--name-status",
-                "-z",
-                "--find-renames",
-                f"refs/heads/{trunk}...{branch}",
-            )
-        if diff_task is None:
-            status_code, status_output = await status_task
-            diff_result: tuple[int, str] | None = None
-        else:
-            (status_code, status_output), diff_result = await asyncio.gather(
-                status_task, diff_task
-            )
-        if not status_code:
-            item["working_tree"] = _bounded_change_summary(
-                _parse_working_tree_changes(status_output)
-            )
-        if diff_result is not None and not diff_result[0]:
-            item["branch_delta"] = _bounded_change_summary(
-                _parse_branch_changes(diff_result[1])
-            )
-
-    await asyncio.gather(*(measure(item) for item in items))
-
-
-async def unlanded_branch_counts(cwd: str, trunk: str = DEFAULT_SHARED_TRUNK) -> dict[str, int]:
-    """Commits each local branch holds that `trunk` does not, keyed by full refname.
-
-    One `for-each-ref` call using the `ahead-behind` atom rather than a rev-list per
-    branch. Returns an empty mapping — never zeros — when the trunk is missing or the
-    call fails: "0 unlanded commits" reads as "nothing at risk", which is the one wrong
-    answer to give when we could not actually measure.
-    """
-    if not _SAFE_REF.fullmatch(trunk):
-        return {}
-    if (await _git(cwd, "show-ref", "--verify", "--quiet", f"refs/heads/{trunk}"))[0]:
-        return {}
-    code, output = await _git(
-        cwd,
-        "for-each-ref",
-        f"--format=%(refname) %(ahead-behind:refs/heads/{trunk})",
-        "refs/heads/",
-    )
-    if code:
-        return {}
-    counts: dict[str, int] = {}
-    for line in output.splitlines():
-        parts = line.split()
-        # "<refname> <ahead> <behind>"; anything else means the atom did not resolve.
-        if len(parts) == 3 and parts[1].isdigit():
-            counts[parts[0]] = int(parts[1])
-    return counts
-
-
-async def _annotate_unlanded(cwd: str, trunk: str, items: list[dict[str, Any]]) -> None:
-    """Add `unlanded` to each worktree row whose branch we could measure."""
-    if not any(item.get("branch") for item in items):
-        return
-    counts = await unlanded_branch_counts(cwd, trunk)
-    if not counts:
-        return
-    for item in items:
-        branch = item.get("branch")
-        if isinstance(branch, str) and branch in counts:
-            item["unlanded"] = counts[branch]
-
-
-def _parse_worktrees(output: str) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    current: dict[str, Any] = {}
-    for line in [*output.splitlines(), ""]:
-        if not line:
-            if current:
-                items.append(current)
-                current = {}
-        elif " " in line:
-            key, value = line.split(" ", 1)
-            current[key] = value
-        else:
-            current[line] = True
-    return items
-
-
-def _graph_ref_labels(decorations: str) -> list[str]:
-    labels: list[str] = []
-    for raw in decorations.split(", "):
-        label = raw.strip()
-        if not label:
-            continue
-        if label.startswith("HEAD -> "):
-            labels.extend(["HEAD", label.removeprefix("HEAD -> ")])
-        else:
-            labels.append(label)
-    return labels
-
-
-def _parse_graph_lines(output: str, limit: int) -> tuple[list[dict[str, Any]], bool]:
-    """Turn Git's graph-prefixed log into typed commit and connector rows."""
-    parsed: list[dict[str, Any]] = []
-    commit_count = 0
-    has_more = False
-    for raw_line in output.splitlines():
-        if "\0" not in raw_line:
-            if commit_count <= limit and raw_line:
-                parsed.append({"kind": "connector", "graph": raw_line})
-            continue
-        fields = raw_line.split("\0")
-        if len(fields) != 7:
-            continue
-        if commit_count >= limit:
-            has_more = True
-            break
-        graph, oid, parents, decorations, author, timestamp, subject = fields
-        try:
-            committed_at = int(timestamp)
-        except ValueError:
-            committed_at = 0
-        parsed.append(
-            {
-                "kind": "commit",
-                "graph": graph,
-                "oid": oid,
-                "parents": parents.split(),
-                "refs": _graph_ref_labels(decorations),
-                "author": author,
-                "committed_at": committed_at,
-                "subject": subject,
-            }
-        )
-        commit_count += 1
-    return parsed, has_more
 
 
 async def git_graph(request: web.Request) -> web.Response:
     """Return a bounded, read-only commit graph with Git's own lane layout."""
-    cwd = request.query.get("cwd") or str(Path.cwd())
+    extras = set(request.query) - {"project_id", "limit"}
+    if extras:
+        raise git_review.GitReviewError(
+            "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
+        )
+    project_id = request.query.get("project_id", "")
+    project = request.app["projects"].projects.get(project_id)
+    if project is None:
+        raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
     raw_limit = request.query.get("limit") or str(GIT_GRAPH_DEFAULT_LIMIT)
     try:
         limit = int(raw_limit)
     except ValueError:
         return json_response({"error": "limit must be an integer"}, 400)
     if not 1 <= limit <= GIT_GRAPH_MAX_LIMIT:
-        return json_response(
-            {"error": f"limit must be between 1 and {GIT_GRAPH_MAX_LIMIT}"}, 400
+        return json_response({"error": f"limit must be between 1 and {GIT_GRAPH_MAX_LIMIT}"}, 400)
+    return json_response(await git_review.git_graph(project.id, project.root, limit))
+
+
+async def git_commit_changes(request: web.Request) -> web.Response:
+    allowed = {"project_id", "parent"}
+    extras = set(request.query) - allowed
+    if extras:
+        raise git_review.GitReviewError(
+            "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
         )
-    probe_code, probe_output = await _git(cwd, "rev-list", "--all", "--max-count=1")
-    if probe_code:
-        return json_response(
-            {
-                "error": probe_output or "unable to read Git graph",
-                "code": "git_timeout" if probe_code == 124 else "git_error",
-            },
-            504 if probe_code == 124 else 400,
+    project = request.app["projects"].projects.get(request.query.get("project_id", ""))
+    if project is None:
+        raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
+    return json_response(
+        await git_review.commit_changes(
+            project.id,
+            project.root,
+            request.match_info["oid"],
+            request.query.get("parent") or None,
         )
-    if not probe_output:
-        return json_response({"lines": [], "limit": limit, "has_more": False})
-    marker_format = "%x00%H%x00%P%x00%D%x00%an%x00%at%x00%s"
-    code, output = await _git(
-        cwd,
-        "log",
-        "--graph",
-        "--date-order",
-        "--decorate=short",
-        "--all",
-        f"--max-count={limit + 1}",
-        f"--format={marker_format}",
     )
-    if code:
-        return json_response(
-            {
-                "error": output or "unable to read Git graph",
-                "code": "git_timeout" if code == 124 else "git_error",
-            },
-            504 if code == 124 else 400,
+
+
+async def git_diff(request: web.Request) -> web.Response:
+    allowed = {
+        "project_id",
+        "scope",
+        "worktree",
+        "path",
+        "commit",
+        "parent",
+        "expected_head",
+        "patch_hash",
+    }
+    extras = set(request.query) - allowed
+    if extras:
+        raise git_review.GitReviewError(
+            "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
         )
-    lines, has_more = _parse_graph_lines(output, limit)
-    return json_response({"lines": lines, "limit": limit, "has_more": has_more})
+    project = request.app["projects"].projects.get(request.query.get("project_id", ""))
+    if project is None:
+        raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
+    scope = request.query.get("scope", "")
+    if scope not in {"unstaged", "staged", "conflicted", "branch", "commit"}:
+        raise git_review.GitReviewError("invalid_scope", "unsupported Git diff scope")
+    return json_response(
+        await git_review.patch_snapshot(
+            project_id=project.id,
+            project_root=project.root,
+            compare_override=project.git_compare_ref,
+            scope=scope,  # type: ignore[arg-type]
+            path=request.query.get("path", ""),
+            worktree=request.query.get("worktree") or None,
+            commit=request.query.get("commit") or None,
+            requested_parent=request.query.get("parent") or None,
+            expected_head=request.query.get("expected_head") or None,
+            expected_patch_hash=request.query.get("patch_hash") or None,
+        )
+    )
 
 
 async def _listed_worktree_paths(cwd: str) -> dict[str, str]:
@@ -7376,14 +7147,12 @@ async def _listed_worktree_paths(cwd: str) -> dict[str, str]:
         raise ValueError(output or "unable to inspect repository worktrees")
     return {
         str(Path(str(item["worktree"])).resolve()).casefold(): str(item["worktree"])
-        for item in _parse_worktrees(output)
+        for item in git_review.parse_worktrees(output)
         if item.get("worktree")
     }
 
 
-async def _spawn_into_worktree(
-    app: web.Application, spawn_body: Any, path: str
-) -> dict[str, Any]:
+async def _spawn_into_worktree(app: web.Application, spawn_body: Any, path: str) -> dict[str, Any]:
     """Start a session whose cwd is a worktree that was just created.
 
     Reports failure rather than raising: the worktree already exists and is the durable
@@ -7596,9 +7365,7 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
-async def _pty_sender(
-    ws: web.WebSocketResponse, session: Session, subscriber: Any
-) -> None:
+async def _pty_sender(ws: web.WebSocketResponse, session: Session, subscriber: Any) -> None:
     # unsupervised-loop-ok: lives for one PTY websocket, not the daemon.
     while True:
         message = await subscriber.queue.get()

@@ -99,6 +99,8 @@ export interface Project {
    *  epoch seconds, 0 if it has never run one. */
   last_activity?:number
   default_backend?:ProjectBackend;default_profile_id?:string
+  /** Machine-local comparison override. Null/absent means automatic Git ref inference. */
+  git_compare_ref?:string|null
   portable_options?:{default_shell_profile?:string;preferred_backend?:ProjectBackend;prompt_library_scope?:PromptLibraryScope;notification_sounds_enabled?:boolean;ignore_patterns?:string[]}
   effective_options?:{backend:ProjectBackend;profile_id:string;prompt_library_scope:PromptLibraryScope;notification_sounds_enabled:boolean}
   option_sources?:Record<string,'global'|'project_record'|'project_file'>;project_config_status?:string

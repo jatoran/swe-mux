@@ -176,6 +176,18 @@ class ProjectManager:
             raise ValueError("resource_open_mode must be dock, popout, or null")
         if changes.get("default_backend") not in {None, "shell", "claude", "codex"}:
             raise ValueError("default_backend must be shell, claude, codex, or null")
+        if "git_compare_ref" in changes:
+            compare_ref = changes["git_compare_ref"]
+            if compare_ref is not None and (
+                not isinstance(compare_ref, str)
+                or not compare_ref.strip()
+                or compare_ref != compare_ref.strip()
+                or len(compare_ref) > 200
+                or any(ord(character) < 32 or ord(character) == 127 for character in compare_ref)
+            ):
+                raise ValueError(
+                    "git_compare_ref must be null or a non-empty Git ref of at most 200 characters"
+                )
         if "name" in changes and not str(changes["name"]).strip():
             raise ValueError("project name is required")
         if "layout" in changes:
@@ -189,6 +201,7 @@ class ProjectManager:
             "layout",
             "default_backend",
             "default_profile_id",
+            "git_compare_ref",
             "resource_open_mode",
             "sidebar_visible",
         ):

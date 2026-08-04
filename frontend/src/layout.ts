@@ -13,7 +13,9 @@ export type PaneSplit = {
 export type PaneNode = PaneStack | PaneSplit
 export type PaneLayout = { version: 7; root: PaneNode | null }
 
-export type NoteLeafIdentity = { kind: 'note' | 'session-note' | 'file'; id: string }
+export type NoteLeafIdentity =
+  | { kind: 'note' | 'session-note' | 'file'; id: string }
+  | { kind: 'worktree-file'; id: string; worktree: string }
 
 type BrowserCrypto = Pick<Crypto, 'getRandomValues'> & Partial<Pick<Crypto, 'randomUUID'>>
 
@@ -39,7 +41,13 @@ export const resourceLeaf = (kind: PaneLeafKind, id: string): PaneLeaf => ({ typ
 export const paneStack=(children:PaneLeaf[],activeId=children[0]?.id||'',id=groupId()):PaneStack=>({type:'stack',id,children,active_child_id:children.some(child=>child.id===activeId)?activeId:children[0]?.id||''})
 
 export function noteResourceId(kind: NoteLeafIdentity['kind'], id: string): string {
+  if (kind === 'worktree-file') throw new Error('use worktreeFileResourceId')
   return `${kind === 'session-note' ? 'sessions' : kind}:${encodeURIComponent(id)}`
+}
+
+/** Persist an exact Git worktree root and its repository-relative path without delimiter ambiguity. */
+export function worktreeFileResourceId(worktree: string, path: string): string {
+  return `worktree-file:${encodeURIComponent(worktree)}:${encodeURIComponent(path)}`
 }
 
 /** A queue leaf's id is prefixed so it can never collide with the terminal leaf
@@ -60,6 +68,18 @@ export function parseNoteResourceId(resourceId: string): NoteLeafIdentity | null
   const separator = resourceId.indexOf(':')
   if (separator < 1) return null
   const kind = resourceId.slice(0, separator)
+  if (kind === 'worktree-file') {
+    const remainder = resourceId.slice(separator + 1)
+    const worktreeSeparator = remainder.indexOf(':')
+    if (worktreeSeparator < 1) return null
+    try {
+      const worktree = decodeURIComponent(remainder.slice(0, worktreeSeparator))
+      const id = decodeURIComponent(remainder.slice(worktreeSeparator + 1))
+      return worktree && id ? { kind: 'worktree-file', id, worktree } : null
+    } catch {
+      return null
+    }
+  }
   if (kind !== 'note' && kind !== 'sessions' && kind !== 'file') return null
   try {
     const id = decodeURIComponent(resourceId.slice(separator + 1))

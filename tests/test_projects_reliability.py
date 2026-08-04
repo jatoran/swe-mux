@@ -52,6 +52,58 @@ async def test_project_creation_initializes_resources_and_persists_layout(
     reopened_history.close()
 
 
+async def test_git_comparison_override_round_trips_resets_and_survives_other_updates(
+    tmp_path: Path,
+) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    root = tmp_path / "repo"
+    root.mkdir()
+    project = await projects.create("Main", str(root))
+
+    configured = await projects.update(project.id, git_compare_ref="origin/main")
+    assert configured.git_compare_ref == "origin/main"
+    renamed = await projects.update(project.id, name="Renamed")
+    assert renamed.git_compare_ref == "origin/main"
+    history.close()
+
+    reopened_history = HistoryIndex(tmp_path / "mux.db")
+    reopened = ProjectManager(reopened_history)
+    await reopened.start()
+    assert reopened.projects[project.id].git_compare_ref == "origin/main"
+    reset = await reopened.update(project.id, git_compare_ref=None)
+    assert reset.git_compare_ref is None
+    for invalid in ("", " main", "main\n", "x" * 201, 42):
+        with pytest.raises(ValueError, match="git_compare_ref"):
+            await reopened.update(project.id, git_compare_ref=invalid)
+    reopened_history.close()
+
+
+async def test_git_comparison_override_column_migrates_existing_project_database(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mux.db"
+    history = HistoryIndex(path)
+    projects = ProjectManager(history)
+    await projects.start()
+    root = tmp_path / "repo"
+    root.mkdir()
+    project = await projects.create("Main", str(root))
+    history._db.execute("ALTER TABLE projects DROP COLUMN git_compare_ref")
+    history._db.commit()
+    history.close()
+
+    migrated = HistoryIndex(path)
+    columns = {
+        row["name"] for row in migrated._db.execute("PRAGMA table_info(projects)").fetchall()
+    }
+    assert "git_compare_ref" in columns
+    records = {item.id: item for item in await migrated.list_projects()}
+    assert records[project.id].git_compare_ref is None
+    migrated.close()
+
+
 async def test_project_note_seeding_never_overwrites_existing_text(tmp_path: Path) -> None:
     history = HistoryIndex(tmp_path / "mux.db")
     projects = ProjectManager(history)

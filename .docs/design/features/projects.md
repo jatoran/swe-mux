@@ -130,6 +130,11 @@ bindings, automatic actions, credentials, or secrets. Separately, `.vscode/tasks
 Project Action and locally approves the exact current task-file fingerprint. They never execute
 on discovery, Project open, or daemon startup.
 
+`git_compare_ref` is a nullable machine-local Project-record field.
+It controls Git review display comparisons and never belongs in `.swe-mux/config.toml`, because changing a review base must not dirty the repository.
+`null` means Auto inference; a non-empty bounded string is an explicit ref that the Git review domain validates and resolves before use.
+Resetting the Git selector to Auto persists `null` through the ordinary Project PATCH path.
+
 ## API shape
 
 ```text
@@ -142,8 +147,8 @@ PATCH|DELETE /api/project-groups/{group_id}
 GET|PUT /api/project/config?cwd=<root>
 ```
 
-The registry reads and writes both layers directly: `PATCH /api/projects/{id}` for the database
-override (`default_backend`, `default_profile_id`, sent as `null` to clear) and revision-checked
+The registry reads and writes both layers directly: `PATCH /api/projects/{id}` for database
+overrides (`default_backend`, `default_profile_id`, `git_compare_ref`, sent as `null` to clear) and revision-checked
 `PUT /api/project/config` for the portable file.
 
 Project layout writes are revision checked. Whole-order reorder writes are validated as a

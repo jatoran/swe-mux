@@ -102,7 +102,7 @@ import {
 import { reconcileSeen, isUnread, projectRailStatus, projectSetRailStatus, type ProjectRailActivity, type SeenMap } from './sessionAttention'
 import { activityBadges, sessionDotClass, sessionStatus, stateDotClass } from './sessionStatus'
 import {
-  browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf,
+  browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
   activateContainingStack, activateStackChild, addLeafToStack, addToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, openAnchorId, openTab, paneNeighborIds, paneStacks, queueLeafId, queueLeafSessionId, reorderStack, resolveLayout, spawnAnchorId, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
   type PaneDirection, type PaneLeaf, type PaneLeafKind, type PaneNode, type SplitDirection,
@@ -186,7 +186,7 @@ type SidebarContext = { x:number;y:number } | null
 type NoteContext = { resourceId:string;projectId:string;x:number;y:number } | null
 type TabContext = { leaf:PaneLeaf;label:string;projectId:string;x:number;y:number;source:'tab'|'mobile' } | null
 type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; project: Project }
-type NoteTarget={projectId:string;terminalSessionId:string|null;kind:'note'|'session-note'|'file';ownerLabel:string}
+type NoteTarget={projectId:string;terminalSessionId:string|null;kind:'note'|'session-note'|'file'|'worktree-file';ownerLabel:string;worktree?:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
 type PendingSpawnPlacement = {
@@ -1379,11 +1379,13 @@ export function App() {
     return {projectId:project?.id||value.id,terminalSessionId:'backend' in value&&!isEndedSession(value)?value.id:null,kind:'note',ownerLabel:project?.name||'Project note'}
   }
   const sessionNoteTarget=(session:Session):NoteTarget=>({projectId:session.project_id,terminalSessionId:isEndedSession(session)?null:session.id,kind:'session-note',ownerLabel:session.note_id||session.id})
-  const noteIdForTarget=(target:NoteTarget)=>noteResourceId(target.kind,target.kind==='file'||target.kind==='session-note'?target.ownerLabel:target.projectId)
+  const noteIdForTarget=(target:NoteTarget)=>target.kind==='worktree-file'
+    ? target.worktree?worktreeFileResourceId(target.worktree,target.ownerLabel):''
+    : noteResourceId(target.kind,target.kind==='file'||target.kind==='session-note'?target.ownerLabel:target.projectId)
   const noteTargetForResource=(resourceId:string,targetProject=projectId):NoteTarget|null=>{
     const identity=parseNoteResourceId(resourceId)
     if(!identity)return null
-    return {projectId:targetProject,terminalSessionId:null,kind:identity.kind,ownerLabel:identity.id}
+    return {projectId:targetProject,terminalSessionId:null,kind:identity.kind,ownerLabel:identity.id,worktree:identity.kind==='worktree-file'?identity.worktree:undefined}
   }
   const openNoteDefault=(target:NoteTarget)=>void showResourceForTarget(target)
   const openProjectNotes=(value:Project|Session)=>openNoteDefault(projectNoteTarget(value))
@@ -1423,6 +1425,7 @@ export function App() {
     openDrawerTab('notes',scope?.id||projectId)
   }
   const openProjectFile=(project:Project,path:string,targetViewId?:string)=>void showResourceForTarget({projectId:project.id,terminalSessionId:null,kind:'file',ownerLabel:path},targetViewId)
+  const openWorktreeFile=(project:Project,worktree:string,path:string,targetViewId?:string)=>void showResourceForTarget({projectId:project.id,terminalSessionId:null,kind:'worktree-file',ownerLabel:path,worktree},targetViewId)
   // Notifications are a drawer tab, not a modal: checking what fired should not be
   // a full-screen interruption. Opening the tab is what marks them read.
   const openNotifications = () => { showDrawerTab('notifications');setNotificationUnread(0);void loadNotifications() }
@@ -3139,7 +3142,7 @@ export function App() {
         <span>This note is being edited in the side panel. It stays in one place at a time so an edit cannot be lost to the other copy.</span>
         <button onClick={()=>popDrawerNoteToTab(node.id,activeProject.id)}>Move it back here</button>
       </section>
-      return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>{if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}openProjectFile(activeProject,path)}} onFileDragStart={(path,event)=>beginFileTabDrag(event,path)} onSendToAgent={setSendToAgent}/>
+      return <ProjectResource key={`${activeProject.id}:${node.id}`} project={activeProject} resource={identity} onOpenFile={path=>{if(identity.kind==='worktree-file'){openWorktreeFile(activeProject,identity.worktree,path);return}if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}openProjectFile(activeProject,path)}} onFileDragStart={identity.kind==='worktree-file'?undefined:(path,event)=>beginFileTabDrag(event,path)} onSendToAgent={setSendToAgent}/>
     }
     if(node.kind==='history')return <section class="workspace-leaf-placeholder"><strong>History moved</strong><span>Session history is now a full-screen overlay.</span><button onClick={()=>{setHistoryOpen(true);void updateLayout(projectId,removeLeaf(layoutValues.current[projectId]||emptyLayout(),'history',node.id))}}>Open History</button></section>
     if(node.kind==='queue'){
@@ -3225,9 +3228,9 @@ export function App() {
   // worth copying, so the menu's copy group is gated on this resolving.
   const fileMenuTarget=(menu:{resourceId:string;projectId:string})=>{
     const identity=parseNoteResourceId(menu.resourceId)
-    if(identity?.kind!=='file')return null
-    const root=projects.find(item=>item.id===menu.projectId)?.root||''
-    return { relative:identity.id, absolute:absoluteProjectPath(root,identity.id) }
+    if(identity?.kind!=='file'&&identity?.kind!=='worktree-file')return null
+    const root=identity.kind==='worktree-file'?identity.worktree:projects.find(item=>item.id===menu.projectId)?.root||''
+    return { relative:identity.id, absolute:absoluteProjectPath(root,identity.id), worktree:identity.kind==='worktree-file'?identity.worktree:undefined }
   }
   // The tab menu has no recovery panel of its own, so a refused write says where the payload
   // still is (the Files tree offers the manual copy) rather than failing silently.
@@ -3238,7 +3241,9 @@ export function App() {
     try{
       let payload=form==='absolute'?target.absolute:target.relative
       if(form==='contents'){
-        const file=await api<{status:string;text?:string}>('GET',`/api/projects/${menu.projectId}/file?path=${encodeURIComponent(target.relative)}`)
+        const query=new URLSearchParams({path:target.relative})
+        if(target.worktree)query.set('worktree',target.worktree)
+        const file=await api<{status:string;text?:string}>('GET',`/api/projects/${menu.projectId}/file?${query}`)
         if(file.status==='too-large'){setError(`${target.relative} is above the 2 MiB read limit and cannot be copied.`);return}
         if(file.status==='binary'||file.text===undefined){setError(`${target.relative} is not text, so there is nothing to copy.`);return}
         payload=truncateForClipboard(file.text,target.relative).text
@@ -3585,6 +3590,8 @@ export function App() {
           if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}
           if(activeProject)openProjectFile(activeProject,path)
         }}
+        onOpenWorktreeFile={(worktree,path)=>{if(activeProject)openWorktreeFile(activeProject,worktree,path)}}
+        onProjectUpdated={updated=>setProjects(items=>items.map(item=>item.id===updated.id?updated:item))}
         // Desktop only: the drawer is an in-flow column there, so a file row can be dragged
         // onto a visible pane. On mobile it is an overlay with nothing to drop onto.
         onFileDragStart={mobileWorkspace?undefined:(path,event)=>beginFileTabDrag(event,path)}
@@ -3826,7 +3833,7 @@ export function App() {
           have to be found again in the browser just to get its path. */}
       {fileMenuTarget(noteMenu)&&<><div class="context-rule"/>
         <button title={fileMenuTarget(noteMenu)!.absolute} onClick={()=>void copyFileClipboard(noteMenu,'absolute')}>Copy full path</button>
-        <button title={fileMenuTarget(noteMenu)!.relative} onClick={()=>void copyFileClipboard(noteMenu,'relative')}>Copy path from project root</button>
+        <button title={fileMenuTarget(noteMenu)!.relative} onClick={()=>void copyFileClipboard(noteMenu,'relative')}>Copy path from {fileMenuTarget(noteMenu)!.worktree?'worktree':'project'} root</button>
         <button title={`Copy the file's text, capped at ${FILE_COPY_MAX_LINES.toLocaleString()} lines`} onClick={()=>void copyFileClipboard(noteMenu,'contents')}>Copy file contents</button>
       </>}
       {workspaceNoteIds(noteMenu.projectId).includes(noteMenu.resourceId)&&<><div class="context-rule"/><button onClick={()=>{const target=noteMenu;setNoteMenu(null);void removeWorkspaceNote(target.projectId,target.resourceId)}}>Close resource tab</button></>}

@@ -5,9 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from swe_mux import git_monitor
+from swe_mux import git_monitor, git_review
 from swe_mux.git_monitor import read_git_reading, read_git_state, read_unique_git_states
-from swe_mux.server import _parse_worktrees
 
 _FULL_SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
 
@@ -128,7 +127,7 @@ async def test_git_timeout_kills_and_reaps(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_worktree_porcelain_parser_preserves_registration_metadata() -> None:
-    items = _parse_worktrees(
+    items = git_review.parse_worktrees(
         "worktree C:/repo\nHEAD abc123\nbranch refs/heads/main\n\n"
         "worktree C:/repo-feature\nHEAD def456\ndetached\n\n"
     )

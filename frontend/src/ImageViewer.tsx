@@ -9,6 +9,7 @@ type Props = {
   height: number
   frames: number
   size: number
+  worktree?: string
 }
 
 const fileSize = (bytes: number) => bytes < 1024
@@ -17,11 +18,15 @@ const fileSize = (bytes: number) => bytes < 1024
     ? `${(bytes / 1024).toFixed(1)} KiB`
     : `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
 
-export function ImageViewer({ projectId, path, revision, mime, width, height, frames, size }: Props) {
+export function ImageViewer({ projectId, path, revision, mime, width, height, frames, size, worktree }: Props) {
   const [fit, setFit] = useState(true)
   const [zoom, setZoom] = useState(1)
   const [failed, setFailed] = useState(false)
-  const source = useMemo(() => `/api/projects/${encodeURIComponent(projectId)}/file/content?path=${encodeURIComponent(path)}&revision=${encodeURIComponent(revision)}`, [projectId, path, revision])
+  const source = useMemo(() => {
+    const params = new URLSearchParams({ path, revision })
+    if (worktree) params.set('worktree', worktree)
+    return `/api/projects/${encodeURIComponent(projectId)}/file/content?${params}`
+  }, [projectId, path, revision, worktree])
 
   useEffect(() => {
     setFailed(false)

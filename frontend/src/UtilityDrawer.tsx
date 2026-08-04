@@ -58,6 +58,9 @@ type Props = {
   onManagePrompts: () => void
   /** Files: open a Project-relative path as a pane tab. */
   onOpenFile: (path: string) => void
+  /** Git: open a file from an exact repository worktree as a durable pane tab. */
+  onOpenWorktreeFile: (worktree: string, path: string) => void
+  onProjectUpdated: (project: Project) => void
   /** Files: open the send-to-agent dialog with a tree file's contents. */
   onSendToAgent?: (request: SendToAgentRequest) => void
   /** Files: desktop-only drag of a file row onto a pane. Omitted on mobile, where
@@ -129,7 +132,7 @@ export function UtilityDrawer(props: Props) {
   const noteIdentity = props.drawerNoteId ? parseNoteResourceId(props.drawerNoteId) : null
   // `file` is a legal parse but never a drawer note: files are the Files tab's business, and
   // the claim is only ever written from the Notes index.
-  const drawerNote = props.drawerNoteId && project && noteIdentity && noteIdentity.kind !== 'file'
+  const drawerNote = props.drawerNoteId && project && noteIdentity && noteIdentity.kind !== 'file' && noteIdentity.kind !== 'worktree-file'
     ? { resourceId: props.drawerNoteId, identity: noteIdentity }
     : null
   const drawerNoteLabel = drawerNote?.identity.kind === 'session-note' ? 'Session note' : 'Project note'
@@ -246,7 +249,7 @@ export function UtilityDrawer(props: Props) {
       case 'context':
         return <AgentContextTab project={project} session={session} />
       case 'git':
-        return <GitTab project={project} sessions={props.sessions} />
+        return <GitTab project={project} sessions={props.sessions} onOpenFile={props.onOpenFile} onOpenWorktreeFile={props.onOpenWorktreeFile} onSendToAgent={props.onSendToAgent} onProjectUpdated={props.onProjectUpdated} />
       case 'processes':
         return <ProcessesTab
           snapshot={props.processSnapshot}

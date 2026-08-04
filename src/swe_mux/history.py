@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS projects (
   position INTEGER NOT NULL, group_id TEXT, layout_json TEXT,
   default_backend TEXT, layout_revision INTEGER NOT NULL DEFAULT 0,
   default_profile_id TEXT, resource_open_mode TEXT,
+  git_compare_ref TEXT,
   sidebar_visible INTEGER NOT NULL DEFAULT 1,
   created_at REAL NOT NULL DEFAULT 0
 );
@@ -324,6 +325,8 @@ class HistoryIndex:
                 "UPDATE projects SET created_at=COALESCE("
                 "(SELECT MIN(h.spawned_at) FROM history h WHERE h.project_id=projects.id),0)"
             )
+        if "git_compare_ref" not in project_columns:
+            self._db.execute("ALTER TABLE projects ADD COLUMN git_compare_ref TEXT")
         self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_history_agent_project "
             "ON history(agent_visible,project_id,spawned_at DESC)"
@@ -359,6 +362,7 @@ class HistoryIndex:
                     default_backend=row["default_backend"],
                     layout_revision=row["layout_revision"],
                     default_profile_id=row["default_profile_id"],
+                    git_compare_ref=row["git_compare_ref"],
                     resource_open_mode=row["resource_open_mode"],
                     sidebar_visible=bool(row["sidebar_visible"]),
                     created_at=float(row["created_at"] or 0.0),
@@ -394,14 +398,15 @@ class HistoryIndex:
             self._db.execute(
                 "INSERT INTO projects(id,name,root,position,group_id,layout_json,default_backend,"
                 "layout_revision,default_profile_id,resource_open_mode,sidebar_visible,"
-                "created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+                "created_at,git_compare_ref) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET name=excluded.name,root=excluded.root,"
                 "position=excluded.position,group_id=excluded.group_id,"
                 "layout_json=excluded.layout_json,default_backend=excluded.default_backend,"
                 "layout_revision=excluded.layout_revision,"
                 "default_profile_id=excluded.default_profile_id,"
                 "resource_open_mode=excluded.resource_open_mode,"
-                "sidebar_visible=excluded.sidebar_visible,created_at=excluded.created_at",
+                "sidebar_visible=excluded.sidebar_visible,created_at=excluded.created_at,"
+                "git_compare_ref=excluded.git_compare_ref",
                 (
                     project.id,
                     project.name,
@@ -415,6 +420,7 @@ class HistoryIndex:
                     project.resource_open_mode,
                     int(project.sidebar_visible),
                     project.created_at,
+                    project.git_compare_ref,
                 ),
             )
             self._db.commit()

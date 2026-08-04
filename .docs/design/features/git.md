@@ -27,71 +27,60 @@
 
 ## Git drawer tab
 
-- The drawer's **Git** tab is the only place either half of this feature is drawn as more
-  than a chip. It is Project-scoped, sitting after Notes: it reports on the repository
-  behind the Project rather than opening a document into a pane, so it closes the
-  Project-scoped block without being a navigator (`ui.md`).
-- It has two readings of one repository. **Map** is the default operational projection:
-  one compact row per worktree, ordered as Git's porcelain inventory, with branch/detached
-  identity, directory tail, local file count, unlanded commit count, trunk-relative file
-  count, upstream divergence where a session supplies it, and live-session count. **Log**
-  is the actual commit DAG: Git's own `--graph` lane prefixes plus structured commit,
-  parent, ref-decoration, author, timestamp, and subject fields.
-- A Map row expands in place. Full path, bounded local filenames, bounded trunk-relative
-  filenames, flags, and remove controls stay out of the compact reading until requested.
-  Local means not committed; branch files means the diff from the trunk merge base; unlanded
-  means commits the trunk does not have. These three counts never collapse into "dirty."
-- The join is by **path, never by branch name**. A detached HEAD reports its short commit
-  SHA in the branch field, which can never match the worktree's own detached marker. Path
-  comparison unifies separators and case (Git reports forward slashes on Windows; a session
-  cwd carries backslashes) and matches on a segment boundary, longest match first, so a
-  sibling `repo-old` is never read as inside `repo` and a nested worktree is not attributed
-  to the repository root containing it.
-- Each worktree row reports **unlanded commits**: how many commits its branch holds that the
-  shared trunk (`master`, overridable with `?trunk=`) does not. This answers whether a
-  worktree branch still contains work absent from the shared trunk. Measured with one
-  `for-each-ref` call using the `ahead-behind` atom,
-  gated behind a cheap `show-ref` so a repo with no trunk pays nothing.
-- Opening/refreshing Map explicitly measures every listed non-bare worktree, including one
-  with no attached session. `git status --porcelain=v2 -z --untracked-files=all` supplies
-  local files. `git diff --name-status -z --find-renames
-  master...<checked-out-branch>` supplies the branch delta. Each list carries the exact
-  total and at most 200 file records; `truncated` says the list is a prefix. These calls are
-  drawer-request work behind concurrency four, not additions to the five-second monitor.
-- **Unmeasured is `null`, never `0`.** A missing trunk, a failed call, or a timeout omits the
-  affected field entirely. Map reports a clean/landed claim only from measured zeroes.
-  Reporting zero on failure would claim there is nothing waiting, which is the one wrong
-  answer this measurement can give.
-- Log asks for the newest 80 commits and can grow to 200. The backend preserves Git's
-  connector-only rows and returns typed commit rows; the frontend colors the lane characters
-  without recomputing topology. One extra commit is requested only to decide `has_more`.
-- Removing a worktree deletes the directory, never the branch, so committed-but-unlanded work
-  is not at risk. The expanded confirmation says so explicitly. A forced removal can discard
-  local files and therefore names that risk separately.
-- Upstream divergence still exists only for cwd values the session monitor polls. The
-  drawer-request inventory makes local/trunk-relative file state independent of attachment;
-  it does not add repository-wide remote/upstream polling.
-- A live session whose cwd is in none of the listed worktrees still earns a row, marked as
-  another repository: a nested or sibling checkout under the same Project root is worth
-  seeing, but it is not one of this repository's trees.
-- The tab performs exactly the two mutations the API wraps. It does not commit, switch
-  branches, stage, fetch, or prune, and it adds no endpoint. Enumerating every *local*
-  branch (as opposed to the checked-out ones) would need a new read-only route and does not
-  exist yet.
-- Creation refuses a relative path outright. `POST /api/git/worktrees` resolves one against
-  the **daemon's** working directory rather than the repository, so accepting it would put
-  the worktree somewhere nobody asked for.
-- Removal arms a confirm and is refused up front on the main tree (Git refuses it too), on a
-  locked tree, and on a tree a live session is working in — Git would happily remove a clean
-  worktree out from under a running terminal. Git's own refusal is shown on the row along
-  with the `--force` override it implies, rather than being retried silently.
-- Every Git call the daemon makes is bounded at four seconds. That is right for a status
-  poll and short for `worktree add`, so a timeout is reported as "may still have completed",
-  never as a failure.
-- Live updates add no browser timer. Branch/divergence ride session snapshots; Map refetches
-  its inventory/summaries on `worktree_created`/`worktree_removed`/`git_changed`; an open Log
-  refetches on the same events. A worktree created by hand in a terminal emits no event at
-  all, which is what the explicit Refresh is for.
+- The Project-scoped Git tab has Map and Log readings of one repository.
+- Map reports every registered worktree, its exact root, checked-out branch or detached commit, locks, prune warnings, live-session attribution, local changes, and comparison-ref changes.
+- Local changes are separate `CONFLICTS`, `UNSTAGED`, and `STAGED` groups.
+- Unstaged means working tree versus index, staged means index versus `HEAD`, and conflicted means unresolved index state.
+- A path changed on both sides of the index appears independently in staged and unstaged groups.
+- Branch changes compare the worktree `HEAD` with the merge base of the effective comparison ref.
+- Comparison ahead and behind counts are distinct from the session monitor's upstream ahead and behind values.
+- Every group reports exact file count, text additions, text deletions, binary count, and at most 200 typed file rows.
+- Unmeasured values remain `null`; a failed or unavailable comparison never becomes a zero or a clean claim.
+
+### Comparison ref
+
+- Each Project has a nullable machine-local `git_compare_ref` database override.
+- `null` means Auto and never writes repository configuration.
+- Auto prefers `origin/HEAD`, then the symbolic default of exactly one non-origin remote, then local `main`, then local `master`.
+- Auto returns unavailable when none resolves; local staged, unstaged, and conflicted information remains usable.
+- The backend returns the effective ref, display value, inference source, reason, and a bounded selector candidate list.
+- An explicit override is bounded, validated by Git, and must resolve to a commit.
+- A stale explicit override remains visibly unavailable and never silently falls back.
+- Comparison reads are local-only and never fetch.
+
+### Commit log
+
+- Log preserves Git's `--graph` topology and loads 80 commits initially, bounded at 200.
+- Connector-only rows are inert.
+- Expanding a commit lazily loads its typed file summary and reuses the shared file rows.
+- An ordinary or merge commit defaults to its first parent.
+- A merge commit permits selecting another actual parent and caches immutable summaries by full commit and parent OID.
+- A root commit uses Git's initial-commit comparison support and has no hardcoded empty-tree object ID.
+
+### Patch review
+
+- File-name actions open a full review session; caret actions toggle one bounded unified inline preview per change group.
+- Patches are fetched one file at a time and capped at 1 MiB and 10,000 lines before browser parsing.
+- Patch commands disable external diffs, text conversion, and color, and place `--` before browser-derived paths.
+- Binary, submodule, deleted, renamed, untracked, oversized, and unavailable states remain explicit.
+- The full modal defaults to split at a measured content width of 900 CSS pixels and unified below it.
+- A manual unified or split choice survives modal resizing, and narrow manual split remains horizontally scrollable.
+- Line-number gutters anchor ephemeral old-side or new-side single-line and same-side range annotations.
+- Annotations, selected file, loaded patch snapshots, layout override, and wrapping choice live only in the mounted modal.
+- Local Git events mark an open local review stale without replacing frozen patches or moving annotations.
+- Commit reviews are immutable by full commit and parent OID.
+- Review packets include Project and repository identity, scope, comparison or commit identity, local `HEAD`, patch hashes, ordered annotations, and bounded hunk excerpts.
+- Copying review packets or raw patches bypasses clipboard-history capture.
+- Sending opens the existing explicit agent picker and never writes directly to a PTY.
+
+### Refresh and mutation boundary
+
+- Overview measurement is explicit drawer work with concurrency four and does not expand the five-second session monitor.
+- Map refreshes on Git and worktree events; an open Log refreshes its graph while retaining immutable commit caches.
+- Explicit Refresh covers Git changes created outside swe-mux event paths.
+- The Git surface mutates only through the existing worktree create and remove operations.
+- It does not stage, unstage, commit, reset, switch, fetch, merge, rebase, prune, or discard files.
+- Removal validates the exact current worktree root, refuses the main tree and live-session roots in the UI, and requires explicit force before Git may discard uncommitted files.
 
 ## Spawning a session into a worktree
 
@@ -129,7 +118,8 @@ and provider-managed worktrees may live outside that root.
 ## Key files
 
 - Monitor and git runner: `src/swe_mux/git_monitor.py`
+- Project-scoped review domain and bounded patch runner: `src/swe_mux/git_review.py`
 - Routes: `src/swe_mux/server.py`
-- Drawer tab and its pure joining/parsing helpers: `frontend/src/GitTab.tsx`,
-  `frontend/src/gitWorktrees.ts`
+- Drawer tab and defensive response parsing: `frontend/src/GitTab.tsx`, `frontend/src/gitWorktrees.ts`
+- Shared file rows, lazy renderer, modal, and pure review state: `frontend/src/GitFileRow.tsx`, `frontend/src/LazyGitDiff.tsx`, `frontend/src/GitDiffView.tsx`, `frontend/src/GitReviewModal.tsx`, `frontend/src/gitReview.ts`
 - Pane-header chip and the `mux:git-changed` re-dispatch: `frontend/src/App.tsx`

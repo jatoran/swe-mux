@@ -156,6 +156,7 @@ interface Project {
   group_id: string | null
   layout: PaneLayout
   layout_revision: number
+  git_compare_ref: string | null
   default_backend?: 'shell' | 'claude' | 'codex'
   default_profile_id?: string
   portable_options: ProjectPortableOptions
@@ -192,12 +193,12 @@ PUT      /projects/{project_id}/session-notes/{note_id}
 GET     /projects/{project_id}/files?path=RELATIVE
 POST    /projects/{project_id}/resources   {parent, name, kind: file|directory}
 GET     /projects/{project_id}/search?q=&mode=names|contents|both
-GET     /projects/{project_id}/file?path=RELATIVE
-GET     /projects/{project_id}/file/content?path=RELATIVE&revision=REVISION
-PUT     /projects/{project_id}/file   {path, text, revision}
-POST    /projects/{project_id}/reveal {path: RELATIVE}
+GET     /projects/{project_id}/file?path=RELATIVE[&worktree=ABSOLUTE]
+GET     /projects/{project_id}/file/content?path=RELATIVE&revision=REVISION[&worktree=ABSOLUTE]
+PUT     /projects/{project_id}/file   {path, text, revision, worktree?}
+POST    /projects/{project_id}/reveal {path: RELATIVE, worktree?}
 POST    /projects/{project_id}/ignore {path: RELATIVE, scope: global|project}
-PUT     /projects/{project_id}/watch  {watch_id?, paths: RELATIVE_DIRECTORY[]}
+PUT     /projects/{project_id}/watch  {watch_id?, paths: RELATIVE_DIRECTORY[], worktree?}
 DELETE  /projects/{project_id}/watch/{watch_id}
 GET|PUT /project/config               typed portable Project options
 GET     /projects/{project_id}/observations
@@ -258,6 +259,12 @@ already owned by that Project. Reveal opens the host file manager; Windows selec
 raises the resulting Explorer window. Global ignore actions persist the resource basename;
 Project ignore actions persist the Project-relative path. Watch leases last 45 seconds, accept
 at most 64 directories, and are non-recursive; open resource tabs renew them every 30 seconds.
+
+The file, file-content, write, reveal, and watch routes accept an optional exact absolute `worktree` root.
+The daemon verifies that root against `git worktree list` for the Project repository on every request, then applies the existing relative-path containment checks beneath that root.
+The option does not change Project ownership and is not accepted by browsing, search, create, or ignore routes.
+Unknown, removed, nested, or cross-repository roots return a typed `worktree_not_found` or `invalid_worktree` error instead of falling back to the canonical Project root.
+File change events and watch replies include the exact `worktree` root so identical relative paths in sibling worktrees remain isolated.
 
 Successful note writes emit `project_note_changed {project_id, revision}` or
 `session_note_changed {project_id, note_id, revision}`. Clean open editors refetch on a different
@@ -776,6 +783,8 @@ POST   /git/projects/resolve
 GET    /git/projects/{scope_id}
 GET    /git/worktrees
 GET    /git/graph
+GET    /git/commits/{oid}/changes
+GET    /git/diff
 POST   /git/worktrees
 DELETE /git/worktrees
 GET    /processes
@@ -793,35 +802,32 @@ pixels, from the top of the page) captures a region. Missing the optional Playwr
 returns `{available: false, reason, install}`; a render error returns `{available: true,
 error}` (502). It never writes a PTY. See `features/processes-and-previews.md`.
 
-Git scopes/worktrees are derived tooling APIs, not canonical Project/session ownership and
-not first-class frontend navigation.
+Git review routes are derived, read-only tooling APIs except for the existing worktree create and remove mutations.
+Every review read is Project-scoped and rejects unlisted parameters instead of accepting caller-supplied repositories or arbitrary refs.
 
-`GET /git/worktrees[?cwd=][&trunk=]` returns the porcelain worktree list. Each row that has
-a branch also carries `unlanded`: commits on that branch which `trunk` (default
-`master`) does not have. The field is **absent** rather than `0` when it could not be
-measured — no such trunk, a Git failure, or a timeout — because zero would read as "nothing
-waiting to be landed". Each non-bare row also carries measured `working_tree` and, when the
-trunk/branch comparison succeeds, `branch_delta`:
+`GET /git/worktrees?project_id=ID` returns repository identity, comparison metadata, and a bounded overview for every listed worktree.
+Comparison inference tries the Project override, `origin/HEAD`, the single non-origin remote default, local `main`, then local `master`.
+It performs no fetch and returns no comparison ref when none resolves.
+The comparison object names the exact effective ref, source, candidates, and any unavailable reason.
+Each non-bare worktree separates `conflicted`, `unstaged`, `staged`, and merge-base `branch_delta` summaries, with comparison ahead and behind counts omitted when unavailable.
+Each summary reports totals, additions, deletions, binary and submodule counts, the first 200 files, and a truncation flag.
 
-```ts
-type GitChangeFile = {status: string; path: string; old_path?: string}
-type GitChangeSummary = {
-  total: number
-  files: GitChangeFile[]        // first 200
-  truncated: boolean
-}
-```
+`GET /git/graph?project_id=ID&limit=N` returns `{lines, limit, has_more}` for all local refs.
+`limit` is 1 to 200 with a default of 80.
+Lines are either `{kind:"connector", graph}` or typed commit rows carrying `graph`, `oid`, `parents`, `refs`, `author`, `committed_at`, and `subject`.
+Git supplies the graph prefixes and the browser renders them without reconstructing topology.
 
-`working_tree` is uncommitted porcelain-v2 status for that exact worktree, including
-individual untracked files. `branch_delta` is name-status from the trunk merge base to the
-checked-out branch. Absence means unmeasured; measured zero means clean/no branch files.
-`trunk` must match `[A-Za-z0-9._/-]{1,200}`.
+`GET /git/commits/{full_oid}/changes?project_id=ID[&parent=FULL_OID]` validates the commit and selected direct parent, then returns the complete parent list and a bounded file summary.
+Root commits use Git's initial-commit comparison, and merge commits default to their first parent while allowing another direct parent.
 
-`GET /git/graph?cwd=&limit=` returns `{lines, limit, has_more}`. `limit` is 1–200 (default
-80). Lines are either `{kind:"connector", graph}` or typed commit rows carrying `graph`,
-`oid`, `parents`, `refs`, `author`, `committed_at`, and `subject`. `graph` is Git's own
-`git log --graph` prefix; connector rows preserve merge topology between commits. The route
-is read-only and queries all local refs.
+`GET /git/diff` requires `project_id`, `scope`, and `path` plus the locator fields for `unstaged`, `staged`, `conflicted`, `branch`, or `commit` scope.
+Local scopes require an exact listed `worktree`; commit scope requires a full commit OID and optional validated parent.
+Responses contain one bounded patch snapshot with identities, effective comparison fields, HEAD for local scopes, SHA-256, truncation metadata, and explicit binary or too-large state.
+`expected_head` and `patch_hash` implement stale checks without returning a newly changed body.
+Patch output is capped at 1 MiB and 10,000 lines and subprocess timeouts are four seconds.
+
+Git review failures use typed JSON `{error, code}` with status 400, 404, 409, 413, or 504 as appropriate.
+Success and error logs contain metadata only and never patch bodies or file contents.
 
 `POST /git/worktrees` takes `{cwd, path, branch?, start_point?, spawn?}`. With `spawn`
 present (an ordinary spawn body; `project_id` required) it creates the worktree and then

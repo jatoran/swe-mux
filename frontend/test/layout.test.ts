@@ -6,6 +6,7 @@ import {
   reconcilePreviews, removeLeaf, reorderStack, resourceLeaf, setSplitRatio,
   openAnchorId,
   spawnAnchorId, splitTerminal, splitView, swapPanes, swapTerminals, terminalIds, terminalLeaf, visibleTerminalIds,
+  worktreeFileResourceId,
 } from '../src/layout.ts'
 
 const noteLeaf=(id='sessions:one')=>resourceLeaf('note',noteResourceId('session-note',id))
@@ -157,6 +158,18 @@ test('terminals, previews, notes, file editors, and History share one pane',()=>
   assert.deepEqual(leaves(layout).map(leaf=>leaf.kind),['terminal','preview','note','note','note','history'])
   assert.deepEqual(parseNoteResourceId(sessionNote),{kind:'session-note',id:'terminal-a'})
   assert.deepEqual(parseNoteResourceId(file),{kind:'file',id:'src/app.ts'})
+})
+
+test('canonical and worktree files have distinct durable unambiguous identities',()=>{
+  const canonical=noteResourceId('file','src/example.ts')
+  const first=worktreeFileResourceId('D:\\worktrees\\one','src/example.ts')
+  const second=worktreeFileResourceId('D:\\worktrees\\two:colon','src/example.ts')
+  assert.deepEqual(parseNoteResourceId(canonical),{kind:'file',id:'src/example.ts'})
+  assert.deepEqual(parseNoteResourceId(first),{kind:'worktree-file',worktree:'D:\\worktrees\\one',id:'src/example.ts'})
+  assert.deepEqual(parseNoteResourceId(second),{kind:'worktree-file',worktree:'D:\\worktrees\\two:colon',id:'src/example.ts'})
+  assert.notEqual(first,second)
+  assert.equal(parseNoteResourceId('worktree-file::src%2Fexample.ts'),null)
+  assert.equal(parseNoteResourceId('worktree-file:%E0%A4%A:src'),null)
 })
 
 test('view ids remain globally unique across mixed leaf kinds',()=>{

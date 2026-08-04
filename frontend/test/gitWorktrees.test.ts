@@ -6,7 +6,12 @@ import {
   divergenceLabel,
   isAbsolutePath,
   normalizePath,
+  comparisonSourceLabel,
+  fileStatLabel,
+  parseCommitChanges,
   parseGitGraph,
+  parseGitOverview,
+  parsePatchSnapshot,
   parseWorktrees,
   pathTail,
   repoSessions,
@@ -249,4 +254,29 @@ test('file status labels fit the narrow change list', () => {
   assert.equal(changeStatusLabel(' M'), 'M')
   assert.equal(changeStatusLabel('R100'), 'R')
   assert.equal(changeStatusLabel('C75'), 'C')
+})
+
+test('the project-scoped overview parser keeps null measurements distinct from clean',()=>{
+  const overview=parseGitOverview({
+    repository:{root:'/repo',common_dir:'/repo/.git'},
+    comparison:{ref:'origin/main',display:'origin/main',source:'origin_head',available:true,reason:null,candidates:['main','origin/main']},
+    worktrees:[{worktree:'/repo',HEAD:'a'.repeat(40),branch:'refs/heads/feature',main:true,comparison_counts:{ahead:2,behind:1},unstaged:{total:2,additions:3,deletions:1,binary_files:1,truncated:false,files:[{path:'a.ts',status:'M',additions:3,deletions:1,binary:false,submodule:false},{path:'image.png',status:'M',additions:null,deletions:null,binary:true,submodule:false}]},staged:null,conflicted:null,branch_delta:null}],
+  })
+  assert.equal(overview?.comparison.ref,'origin/main')
+  assert.deepEqual(overview?.worktrees[0].comparisonCounts,{ahead:2,behind:1})
+  assert.equal(overview?.worktrees[0].staged,null)
+  assert.equal(fileStatLabel(overview!.worktrees[0].unstaged!.files[1]),'binary')
+  assert.equal(comparisonSourceLabel(overview!.comparison),'origin default: origin/main')
+  assert.equal(parseGitOverview({repository:{}}),null)
+})
+
+test('commit and patch responses are defensively parsed',()=>{
+  const summary={total:1,additions:1,deletions:0,binary_files:0,truncated:false,files:[{path:'new.ts',status:'A',additions:1,deletions:0,binary:false,submodule:false,current_exists:false}]}
+  const commit=parseCommitChanges({commit:'a'.repeat(40),parent:'b'.repeat(40),parents:['b'.repeat(40)],parent_label:'vs bbbbbbbb',summary})
+  assert.equal(commit?.summary.files[0].path,'new.ts')
+  assert.equal(commit?.summary.files[0].currentExists,false)
+  assert.equal(parseCommitChanges({...commit,parent:'c'.repeat(40),summary}),null)
+  const patch=parsePatchSnapshot({scope:'commit',path:'new.ts',patch_sha256:'hash',patch:'diff',binary:false,too_large:false,commit:'a'.repeat(40),parent:'b'.repeat(40),additions:1,deletions:0})
+  assert.equal(patch?.patch,'diff')
+  assert.equal(parsePatchSnapshot({scope:'unknown',path:'x',patch_sha256:'hash'}),null)
 })

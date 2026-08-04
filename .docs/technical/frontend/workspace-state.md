@@ -21,6 +21,9 @@
 | Project Action catalog/trust prompt | `ProjectRunMenu` fetched snapshot | one open menu |
 | Preview registration and actual listener owner | daemon `PreviewRegistry` | daemon lifetime |
 | open/active Preview tabs | Project layout v7 | durable, multi-client |
+| canonical file tab identity | `file:<project_id>:<relative_path>` layout leaf | durable, multi-client |
+| worktree file tab identity | `worktree-file:<project_id>:<encoded_root>:<encoded_relative_path>` layout leaf | durable, multi-client |
+| open Git review snapshot and annotations | `GitReviewModal` component memory | one modal |
 
 ## Warm terminal panes
 
@@ -109,6 +112,16 @@ void updateLayout(projectId, moveLeafToStack(activeLayout, kind, id, targetStack
 
 Never persist pending client terminal IDs. Insert them into optimistic state for launch feedback,
 then replace/remove them when the spawn request resolves.
+
+## Worktree file leaves
+
+Canonical `file:` resource IDs are unchanged.
+Git Map file actions use a separate `worktree-file:` identity that encodes the exact absolute worktree root and repository-relative path independently, so sibling trees can keep the same relative path open at once.
+`layout.ts` is the only parser and formatter for both identities, and malformed worktree identities never fall back to a canonical file.
+`ProjectResource` carries the worktree root through reads, image content, revision-checked writes, reveal, and watcher renewal.
+Closing or reopening a tab does not require the worktree to be the Project root, but every daemon operation revalidates membership in the Project repository.
+A removed worktree leaves the durable tab in a recoverable unavailable state instead of reading another filesystem location.
+Git Log actions are explicitly labeled `Open current file` because the durable leaf opens the current Project working copy, not the historical commit blob.
 
 Project Action sessions are already daemon identities when returned. Insert each with `openTab`
 against the latest `layoutValues` state, advance the target to the inserted terminal, and persist

@@ -1132,6 +1132,24 @@ responsive controls.
   and resource error both carry a "retry" that skips the remaining backoff. The shared policy is
   `liveness.ts` — see `../../technical/frontend/packages.md`.
 
+## Git review modal
+
+- The Git review modal is rendered above the utility drawer without unmounting the Git tab.
+- Closing returns to the same Map or Log scroll position, expanded row, and inline preview.
+- Desktop bounds the modal to the viewport and provides a file navigator beside the diff.
+- Mobile uses the full viewport and replaces the navigator with a compact file selector plus previous and next controls.
+- A `ResizeObserver` measures the diff content region.
+- Automatic layout is split at 900 CSS pixels and unified below 900 CSS pixels.
+- A manual unified or split choice lasts until modal close; narrow manual split scrolls horizontally.
+- Wrapping is off by default and is an explicit modal-lifetime toggle.
+- Old and new line-number gutters are buttons with visible keyboard focus and accessible labels.
+- Click starts a single-line annotation; Shift-click extends only within the same file, side, and frozen patch.
+- The annotation composer renders below the selected diff row and supports Save, Cancel, Edit, and Delete.
+- Escape closes the modal, focus is trapped while open, and focus returns to the invoking control on close.
+- Copy/send results use a compact live region and never cause the entire diff to be announced.
+- A local Git event produces a stale banner and retains the frozen patch and annotations.
+- Reduced-motion preferences disable review-surface transitions and animations.
+
 ## Feature-owned UI
 
 Detailed UI behavior belongs with the owning feature:

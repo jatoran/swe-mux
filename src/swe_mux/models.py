@@ -242,6 +242,8 @@ class ProjectRecord:
     default_backend: str | None = None
     layout_revision: int = 0
     default_profile_id: str | None = None
+    #: Optional machine-local Git comparison ref. None means automatic inference.
+    git_compare_ref: str | None = None
     resource_open_mode: Literal["dock", "popout"] | None = None
     sidebar_visible: bool = True
     #: Registration time, epoch seconds. 0 means unknown: databases that predate the

@@ -317,6 +317,21 @@ include a registered Project nested below another Git root.
 - `Tab` inserts a literal tab in the plain-textarea file editor. Continuity Markdown surfaces
   handle their own indentation and list behavior.
 
+## Worktree file tabs
+
+- A Map file in the canonical Project worktree keeps the existing `file:<encoded-path>` identity.
+- A Map file in another registered worktree uses `worktree-file:<encoded-root>:<encoded-path>`.
+- The root and path are encoded independently so delimiters, drive letters, Unicode, and separators round-trip without ambiguity.
+- A worktree-file identity expands only file read, image content, revision-checked write, reveal, copy, and leased-watch operations.
+- Every expanded operation validates the requested absolute root against the exact current `git worktree list --porcelain` roots for the Project repository.
+- A worktree subdirectory, unrelated checkout, removed worktree, traversal path, or symlink escape is rejected rather than falling back to the canonical Project root.
+- Equal relative paths in sibling worktrees have distinct resource keys, save queues, cache entries, watch leases, and `project_files_changed.worktree` identities.
+- Worktree tabs reuse bounded inspection, image allowlists, Markdown autosave, revision conflicts, and context-menu copy behavior.
+- Project notes, Project config, ignore configuration, browsing, Project Actions, and session ownership remain anchored to the canonical Project root.
+- A removed worktree leaves its persisted tab in a recoverable unavailable state; it never reads the same relative path from another checkout.
+- Commit Log paths are historical locators.
+- `Open current file` from Log targets the canonical Project worktree and does not claim to open the historical blob.
+
 ## Terminal attachments
 
 - An open Claude or Codex terminal accepts files from OS drag/drop, a copied-file paste, or the

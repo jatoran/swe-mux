@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ WATCH_FAILURE_COOLDOWN_SECONDS = 30.0
 class WatchLease:
     project_id: str
     watch_id: str
+    root: str
     paths: tuple[str, ...]
     expires_at: float
 
@@ -73,27 +75,36 @@ class ProjectFileWatcher:
         self.leases.clear()
 
     def register(
-        self, project_id: str, paths: list[str], watch_id: str | None = None
+        self,
+        project_id: str,
+        paths: list[str],
+        watch_id: str | None = None,
+        *,
+        root: str | None = None,
     ) -> WatchLease:
         project = self.projects.projects.get(project_id)
         if project is None:
             raise ValueError("unknown project")
         if len(paths) > MAX_WATCHED_DIRECTORIES:
             raise ValueError(f"at most {MAX_WATCHED_DIRECTORIES} directories may be watched")
-        patterns = effective_project_ignores(
-            project.root, self.config.project_ignore_patterns
+        resource_root = str(Path(root or project.root).resolve())
+        canonical_root = str(Path(project.root).resolve())
+        patterns = (
+            effective_project_ignores(project.root, self.config.project_ignore_patterns)
+            if os.path.normcase(resource_root) == os.path.normcase(canonical_root)
+            else []
         )
         normalized: list[str] = []
         for value in paths:
-            target = project_path(project.root, value)
+            target = project_path(resource_root, value)
             if not target.is_dir():
                 # Skipped, not rejected: a renewal that happens to include a
                 # folder the user just deleted would otherwise fail as a whole
                 # and silently drop that client's entire watch set.
                 continue
             relative = (
-                target.relative_to(Path(project.root).resolve()).as_posix()
-                if target != Path(project.root).resolve()
+                target.relative_to(Path(resource_root).resolve()).as_posix()
+                if target != Path(resource_root).resolve()
                 else ""
             )
             if relative and ignored_project_path(relative, patterns):
@@ -103,6 +114,7 @@ class ProjectFileWatcher:
         lease = WatchLease(
             project_id,
             identity,
+            resource_root,
             tuple(dict.fromkeys(normalized)),
             time.monotonic() + WATCH_LEASE_SECONDS,
         )
@@ -135,13 +147,14 @@ class ProjectFileWatcher:
             project = self.projects.projects.get(lease.project_id)
             if project is None:
                 continue
-            patterns = tuple(
-                effective_project_ignores(
-                    project.root, self.config.project_ignore_patterns
-                )
+            patterns = (
+                tuple(effective_project_ignores(project.root, self.config.project_ignore_patterns))
+                if os.path.normcase(lease.root)
+                == os.path.normcase(str(Path(project.root).resolve()))
+                else ()
             )
             desired.update(
-                (lease.project_id, project.root, path, patterns) for path in lease.paths
+                (lease.project_id, lease.root, path, patterns) for path in lease.paths
             )
         for key, task in tuple(self._watchers.items()):
             if key not in desired or task.done():
@@ -206,6 +219,7 @@ class ProjectFileWatcher:
                         "project_files_changed",
                         source="project_watcher",
                         project_id=project_id,
+                        worktree=project_root,
                         paths=unique[:200],
                         overflow=len(unique) > 200,
                     )

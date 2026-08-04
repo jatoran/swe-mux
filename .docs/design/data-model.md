@@ -3,7 +3,7 @@
 ## Ownership
 
 - `ProjectRecord`: stable ID, name, canonical root, optional Group, position, layout,
-  layout revision, and default backend/profile. A deprecated resource-presentation field may
+  layout revision, nullable Project-local `git_compare_ref`, and default backend/profile. A deprecated resource-presentation field may
   still be loaded from older records but has no browser behavior.
 - `ProjectGroupRecord`: stable ID, name, and position. It has no behavioral ownership.
 - `SessionRecord.project_id`: immutable canonical Project ownership. `cwd`/`spawn_cwd` default
@@ -41,6 +41,8 @@
   written before the column are backfilled from the earliest session ever spawned in the
   Project, and one that never ran a session keeps `0` rather than being dated at upgrade time.
   There is no stored "last active": it is derived per request from `history`.
+  `projects.git_compare_ref` is a nullable exact ref override for Git review display, migrated additively for existing databases and preserved by unrelated Project patches.
+  It is intentionally outside `.swe-mux/config.toml`, so changing the display comparison does not dirty the repository.
 - `history`: durable agent-run lifecycle, canonical `project_id`, owning terminal `note_id`,
   native identity, transcript pointer, derived Git metadata, context/model telemetry, explicit
   compaction summary, exit state, materialized chronological native start/final conversational message
@@ -117,6 +119,8 @@
   place, because `CREATE TABLE IF NOT EXISTS` would otherwise reach only fresh databases.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
+- Git review patches and line annotations are not SQLite records.
+  Patch snapshots, selected files, display choices, and annotation anchors live only in one open browser modal and disappear when it closes.
 - `automation_annotations`: observer/rule/detector output. Anchored to `agent_run_id` **or**
   `project_id` — both nullable, at least one required — because a project-scoped detector
   (doc debt) has no run to attach to. Alongside the single `source_event_seq` it carries
