@@ -49,9 +49,9 @@ export const defaultMobileGestureSettings: MobileGestureSettings = {
   two_finger_swipe_right: 'sidebar.toggle',
   // Vertical two-finger swipes were dead input before these slots existed. Down
   // = push the on-screen keyboard away (read/select mode), which is the control
-  // touch users reach for most; up = the focused session's note. Both are
+  // touch users reach for most; up = the current Project's notes. Both are
   // rebindable to any command from Settings like every other slot.
-  two_finger_swipe_up: 'session.note',
+  two_finger_swipe_up: 'notes.open',
   two_finger_swipe_down: 'terminal.keyboardToggle',
   two_finger_tap: 'palette.open',
 }

@@ -174,7 +174,7 @@ type PaneLayout = {version: 7; root: PaneNode | null}
 ```
 
 Every split branch terminates in a stack, including a one-tab pane. `note` leaf IDs encode
-Project note, session note, and individual file resources; `history` is the searchable
+Project-owned notes and individual file resources; `history` is the searchable
 session archive; `queue` is the per-target prompt-queue tab, its id `queue:<session_id>`
 (prefixed so it can never collide with the target's own terminal leaf). Versions 1–6 are
 migrated when read. Visible legacy resource docks become
@@ -185,11 +185,12 @@ emptied and the split above it.
 ## Project resources
 
 ```text
-GET     /session-notes[?project_id=]
-GET|PUT /projects/{project_id}/note
-GET      /projects/{project_id}/session-notes/{note_id}
-POST     /projects/{project_id}/session-notes/{note_id}   initialize if absent
-PUT      /projects/{project_id}/session-notes/{note_id}
+GET     /notes[?project_id=]
+POST    /projects/{project_id}/notes                      {title}
+GET     /projects/{project_id}/notes/{note_id}
+PUT     /projects/{project_id}/notes/{note_id}            {markdown, revision}
+PATCH   /projects/{project_id}/notes/{note_id}            {title, revision}
+DELETE  /projects/{project_id}/notes/{note_id}            {revision}
 GET     /projects/{project_id}/files?path=RELATIVE
 POST    /projects/{project_id}/resources   {parent, name, kind: file|directory}
 GET     /projects/{project_id}/search?q=&mode=names|contents|both
@@ -228,12 +229,16 @@ registered Project's root authoritative for paths; without it the daemon re-reso
 supplied `cwd` through Git, which retargets a Project registered inside a larger worktree to
 the enclosing one.
 
-`GET /session-notes` lists session notes that hold text, newest first, optionally scoped to one
-Project; an unknown `project_id` is rejected. Each row carries `note_id`, Project identity,
-`updated_at`, `bytes`, a bounded excerpt, and best-effort `owner_label`/`owner_backend`/
-`owner_live`/`owner_known` resolved from live sessions then history. The listing is derived from
-the filesystem, so it outlives sessions, history rows, and daemon restarts; per-Project scans are
-capped and empty notes are omitted.
+`GET /notes` lists the flat Project-owned note collection newest first, optionally scoped to one
+Project; an unknown `project_id` is rejected.
+Each row carries `note_id`, Project identity, title, creation/update times, bytes, revision, a
+bounded excerpt, and optional `origin_session_id` migration provenance.
+The listing is derived from the filesystem and includes explicitly created empty notes.
+Per-Project scans are capped at 500 notes.
+The historical initial note remains at `.swe-mux/notes/project.md`; additional notes live under
+`.swe-mux/notes/items/`.
+Non-empty legacy session notes migrate into this collection and their source files move to the
+recoverable `.swe-mux/notes/legacy/` tree.
 
 `GET /search` recursively finds files by name and/or UTF-8 content beneath the canonical root,
 reusing the same ignore rules as the browser and running off the event loop. `mode` selects
@@ -242,7 +247,7 @@ binary and oversized files. It returns `{items: [{path, name, match: name|conten
 truncated}`, name matches sorted before content matches, bounded on files visited, bytes read,
 per-file size, and result count.
 
-Paths are relative to the canonical root and may not escape it. Project and session-note writes
+Paths are relative to the canonical root and may not escape it. Note writes, renames, and deletes
 are revision checked. `POST /resources` creates exactly one empty file or directory in an
 existing contained parent. `name` is a leaf, not a path; Windows-invalid/reserved names and the
 Project control directories `.git`/`.swe-mux` are refused. Creation is exclusive and returns
@@ -253,9 +258,7 @@ or unsupported. Text and delimited-text reads are capped at 2 MiB. Allowlisted P
 and WebP reads are capped at 16 MiB and carry verified dimensions, frame count, MIME type, and
 revision. `GET /file/content` requires that revision and serves only an image that passes the
 format, extension, dimension, pixel, and frame checks; stale revisions return
-`409 revision_conflict`, and refused content returns `415 image_unavailable`. A session note can
-be initialized only for a live terminal, a History row owned by the Project, or a note file
-already owned by that Project. Reveal opens the host file manager; Windows selects files and
+`409 revision_conflict`, and refused content returns `415 image_unavailable`. Reveal opens the host file manager; Windows selects files and
 raises the resulting Explorer window. Global ignore actions persist the resource basename;
 Project ignore actions persist the Project-relative path. Watch leases last 45 seconds, accept
 at most 64 directories, and are non-recursive; open resource tabs renew them every 30 seconds.
@@ -266,8 +269,8 @@ The option does not change Project ownership and is not accepted by browsing, se
 Unknown, removed, nested, or cross-repository roots return a typed `worktree_not_found` or `invalid_worktree` error instead of falling back to the canonical Project root.
 File change events and watch replies include the exact `worktree` root so identical relative paths in sibling worktrees remain isolated.
 
-Successful note writes emit `project_note_changed {project_id, revision}` or
-`session_note_changed {project_id, note_id, revision}`. Clean open editors refetch on a different
+Successful note creates, writes, renames, and deletes emit
+`note_changed {project_id, note_id, revision}`. Clean open editors refetch on a different
 revision and after event-stream reconnect; editors with local pending/in-flight/error/conflict
 state retain their text and continue through optimistic conflict detection. The event contract
 provides live follow, not concurrent-edit merging.
@@ -506,8 +509,7 @@ either self-expires (`expires_at`) or is positively cleared. The same list appea
 `GET /sessions/{sid}/state-log` alongside the transition ledger, whose non-transition
 entries (`kind: "standing_activity"`, action `added|updated|removed|expired`) record every
 mutation (`features/status-detection.md`).
-Each row also exposes its stable terminal `note_id` and whether its lazily created note file
-currently exists. `spawn_backend` and `spawn_native_session_id` identify the immutable root
+Session rows do not expose or own notes. `spawn_backend` and `spawn_native_session_id` identify the immutable root
 process; `backend` and `native_session_id` may instead describe the active promoted run only
 when that root is a shell.
 PTY WebSocket owners may send `{type:"terminal_state", mode:"normal|alternate"}`. Input

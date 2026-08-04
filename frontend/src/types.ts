@@ -55,7 +55,6 @@ export interface Session {
   observation_stale_since?:number
   delivery_readiness?:{state:'safe'|'blocked'|'unknown';reason:string;authorized:false}
   auto_named?:boolean;generated_title?:string
-  note_id?:string;note_exists?:boolean
   generated_title_annotation?:{id:string;provenance:string;resolved_model?:string;confidence?:number;cost_usd?:number;created_at:number}
   voice_mode?: VoiceMode | null
   voice_content?: VoiceContent | null

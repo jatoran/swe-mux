@@ -67,7 +67,7 @@ if (mobile) updateLayout(projectId, flattenIntoOneStack(layout))
 - Utility-drawer width is one device-local value, with a viewport-derived live cap that preserves 150 px for the main workspace.
   Selected tab and desktop expansion are device-local values keyed by Project; mobile overlay visibility and in-progress resize collapse previews are transient and cannot mutate the desktop expansion map.
 - A never-arranged Project opens on the empty stage. There is no first-open seeding: the two
-  things worth seeding a pane with (Files, the Project note) are now one drawer tab and one
+  things worth seeding a pane with (Files, Notes) are now one drawer tab and one
   click away, so seeding would only cost pixels and a layout write.
 - `layouts.py` stores `note:`/`file:` resource IDs opaquely — they are a browser encoding — with
   one exception it must know about: a `files:` leaf from layout v6 is pruned rather than stored,

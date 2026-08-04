@@ -4,6 +4,8 @@ import fnmatch
 import hashlib
 import io
 import json
+import logging
+import math
 import os
 import re
 import stat
@@ -40,8 +42,15 @@ FORBIDDEN_PROJECT_FIELDS = {
     "executable",
     "command",
 }
-NOTE_KINDS = {"projects", "sessions"}
 _SAFE_NOTE_ID = re.compile(r"[A-Za-z0-9._-]{1,120}\Z")
+DEFAULT_NOTE_STORAGE_ID = "project"
+MAX_NOTE_TITLE_CHARS = 160
+MAX_NOTE_SUMMARIES = 500
+NOTE_EXCERPT_CHARS = 240
+MAX_NOTE_MARKDOWN_BYTES = 1024 * 1024
+MAX_NOTE_FILE_BYTES = MAX_NOTE_MARKDOWN_BYTES + 8192
+
+log = logging.getLogger(__name__)
 
 PROJECT_TEXT_FILE_MAX_BYTES = 2 * 1024 * 1024
 PROJECT_IMAGE_FILE_MAX_BYTES = 16 * 1024 * 1024
@@ -226,103 +235,64 @@ def safe_note_filename(identity: str) -> str:
     return f"id-{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]}"
 
 
-def note_path(root: str | Path, kind: str, identity: str) -> Path:
-    if kind not in NOTE_KINDS:
-        raise ValueError("note kind must be projects or sessions")
+def note_path(root: str | Path, identity: str) -> Path:
     mux_dir = Path(root).resolve() / ".swe-mux" / "notes"
-    if kind == "projects":
+    if identity == DEFAULT_NOTE_STORAGE_ID:
         return mux_dir / "project.md"
-    return mux_dir / "sessions" / f"{safe_note_filename(identity)}.md"
+    return mux_dir / "items" / f"{safe_note_filename(identity)}.md"
 
 
-def note_exists(root: str | Path, kind: str, identity: str) -> bool:
-    return note_path(root, kind, identity).is_file()
-
-
-_NOTE_CONTENT_CACHE: dict[str, tuple[int, int, bool]] = {}
-
-
-def note_has_content(root: str | Path, kind: str, identity: str) -> bool:
-    """Report whether a note holds text the user actually wrote.
-
-    A one-click note affordance creates files on stray clicks. Presence alone
-    would then pin a permanent sidebar row per terminal, so the browser signal
-    is content, not existence. Authorization still uses `note_exists`: an empty
-    note must remain readable and writable.
-
-    Session listing is a polled path, so the answer is memoized against the
-    note's mtime and size and only re-read when the file actually changes.
-    """
-    path = note_path(root, kind, identity)
-    try:
-        stat = path.stat()
-    except OSError:
-        _NOTE_CONTENT_CACHE.pop(str(path), None)
-        return False
-    key = str(path)
-    signature = (stat.st_mtime_ns, stat.st_size)
-    cached = _NOTE_CONTENT_CACHE.get(key)
-    if cached and cached[:2] == signature:
-        return cached[2]
-    try:
-        body = _note_body(path.read_text(encoding="utf-8", errors="replace"))
-    except OSError:
-        return False
-    result = bool(body.strip())
-    if len(_NOTE_CONTENT_CACHE) > 4096:
-        _NOTE_CONTENT_CACHE.clear()
-    _NOTE_CONTENT_CACHE[key] = (*signature, result)
-    return result
-
-
-MAX_SESSION_NOTE_SUMMARIES = 500
-SESSION_NOTE_EXCERPT_CHARS = 240
-
-
-def session_note_summaries(root: str | Path) -> list[dict[str, Any]]:
-    """Summarize every session note in a Project that holds real text.
-
-    The browser lists notes from the filesystem rather than from history, so a
-    note survives its owning session, its history row, and daemon restarts. The
-    file stem is the note identity: `safe_note_filename` is idempotent over the
-    names it produces, so a hashed stem round-trips back to the same file.
-    """
-    directory = Path(root).resolve() / ".swe-mux" / "notes" / "sessions"
-    result: list[dict[str, Any]] = []
-    try:
-        entries = sorted(
-            directory.glob("*.md"), key=lambda item: item.stat().st_mtime, reverse=True
-        )
-    except OSError:
-        return []
-    for path in entries[:MAX_SESSION_NOTE_SUMMARIES]:
-        try:
-            stat = path.stat()
-            data = path.read_bytes()
-            body = _note_body(data.decode("utf-8", errors="replace")).strip()
-        except OSError:
-            continue
-        if not body:
-            continue
-        excerpt = " ".join(body.split())
-        result.append(
-            {
-                "note_id": path.stem,
-                "updated_at": stat.st_mtime,
-                "bytes": stat.st_size,
-                "revision": revision(data),
-                "excerpt": excerpt[:SESSION_NOTE_EXCERPT_CHARS],
-            }
-        )
-    return result
+def note_exists(root: str | Path, identity: str) -> bool:
+    return note_path(root, identity).is_file()
 
 
 NOTE_HEADER_PREFIX = "---\nswe_mux_note = 1\n"
 
 
-def note_header(kind: str, identity: str) -> str:
-    """Build a note's identity header. This is the only place it is spelled out."""
-    return f"---\nswe_mux_note = 1\nkind = {json.dumps(kind)}\nid = {json.dumps(identity)}\n---\n"
+def normalize_note_title(value: str, *, default: str | None = None) -> str:
+    title = " ".join(value.split())
+    if not title:
+        if default is None:
+            raise ValueError("note title must not be empty")
+        title = default
+    if len(title) > MAX_NOTE_TITLE_CHARS:
+        raise ValueError(f"note title must be {MAX_NOTE_TITLE_CHARS} characters or fewer")
+    return title
+
+
+def note_header(
+    identity: str,
+    title: str,
+    *,
+    created_at: float | None = None,
+    origin_session_id: str | None = None,
+) -> str:
+    """Build the hidden metadata header for one Project-owned note."""
+    lines = [
+        "---",
+        "swe_mux_note = 1",
+        'kind = "notes"',
+        f"id = {json.dumps(identity)}",
+        f"title = {json.dumps(normalize_note_title(title, default='Untitled note'))}",
+        f"created_at = {float(created_at if created_at is not None else time.time())}",
+    ]
+    if origin_session_id:
+        lines.append(f"origin_session_id = {json.dumps(origin_session_id)}")
+    return "\n".join([*lines, "---", ""])
+
+
+def _note_metadata(text: str) -> dict[str, Any]:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized.startswith(NOTE_HEADER_PREFIX):
+        return {}
+    boundary = normalized.find("\n---\n", 4)
+    if boundary < 0:
+        return {}
+    try:
+        value = tomllib.loads(normalized[4:boundary])
+    except tomllib.TOMLDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _note_body(text: str) -> str:
@@ -363,6 +333,190 @@ def _create_note_file(path: Path, header: str) -> None:
             handle.write(header)
     except FileExistsError:
         pass
+
+
+def _note_title_from_body(body: str, fallback: str) -> str:
+    for line in body.splitlines():
+        candidate = line.strip().lstrip("#").strip()
+        if candidate:
+            return normalize_note_title(candidate[:MAX_NOTE_TITLE_CHARS], default=fallback)
+    return normalize_note_title(fallback, default="Untitled note")
+
+
+def _stored_note_title(metadata: dict[str, Any], body: str, fallback: str) -> str:
+    title = " ".join(str(metadata.get("title") or "").split())
+    return title[:MAX_NOTE_TITLE_CHARS] if title else _note_title_from_body(body, fallback)
+
+
+def _stored_note_created_at(value: object, fallback: float) -> float:
+    candidate: str | float = value if isinstance(value, (str, int, float)) else fallback
+    try:
+        created_at = float(candidate or fallback)
+    except (TypeError, ValueError):
+        return fallback
+    return created_at if math.isfinite(created_at) else fallback
+
+
+def _note_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime if path.is_file() else 0
+    except OSError:
+        return 0
+
+
+def _archive_legacy_note(root: Path, path: Path, category: str) -> None:
+    archive = root / ".swe-mux" / "notes" / "legacy" / category / path.name
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    if archive.exists():
+        archive = archive.with_name(f"{archive.stem}-{uuid.uuid4().hex[:8]}{archive.suffix}")
+    os.replace(path, archive)
+
+
+def migrate_legacy_notes(
+    root: str | Path,
+    *,
+    legacy_titles: dict[str, str] | None = None,
+) -> dict[str, int]:
+    """Convert terminal-owned notes into the flat Project note collection.
+
+    Non-empty notes keep their stable IDs and record the former terminal ID only
+    as provenance. Empty notes were artifacts of the old one-click terminal chip;
+    they are archived without creating empty collection entries. Originals are
+    moved into the recoverable ``notes/legacy`` tree after the new file is durable.
+    """
+    project_root = Path(root).resolve()
+    legacy_dir = project_root / ".swe-mux" / "notes" / "sessions"
+    titles = legacy_titles or {}
+    migrated = 0
+    archived_empty = 0
+    try:
+        paths = list(legacy_dir.glob("*.md"))
+    except OSError:
+        return {"migrated": 0, "archived_empty": 0}
+    for path in paths:
+        try:
+            stat_result = path.stat()
+            data, size = _read_regular_file_bounded(path, MAX_NOTE_FILE_BYTES)
+            if data is None:
+                log.warning("legacy note exceeds migration limit path=%s bytes=%d", path, size)
+                continue
+            text = data.decode("utf-8", errors="replace")
+            metadata = _note_metadata(text)
+            body = _note_body(text)
+            legacy_id = str(metadata.get("id") or path.stem)
+            if not body.strip():
+                _archive_legacy_note(project_root, path, "empty-session-notes")
+                archived_empty += 1
+                continue
+            owner_title = titles.get(legacy_id)
+            date = time.strftime("%Y-%m-%d", time.localtime(stat_result.st_mtime))
+            title = (
+                normalize_note_title(f"{owner_title} - {date}"[:MAX_NOTE_TITLE_CHARS])
+                if owner_title
+                else _note_title_from_body(body, f"Imported note - {date}")
+            )
+            destination_id = legacy_id
+            destination = note_path(project_root, destination_id)
+            already_migrated = False
+            if destination.exists():
+                existing = destination.read_text(encoding="utf-8", errors="replace")
+                existing_metadata = _note_metadata(existing)
+                already_migrated = (
+                    existing_metadata.get("origin_session_id") == legacy_id
+                    and _note_body(existing) == body
+                )
+                if not already_migrated:
+                    destination_id = str(uuid.uuid4())
+                    destination = note_path(project_root, destination_id)
+            if not already_migrated:
+                stored = note_header(
+                    destination_id,
+                    title,
+                    created_at=stat_result.st_ctime,
+                    origin_session_id=legacy_id,
+                ) + body
+                _atomic_write(destination, stored.encode("utf-8"))
+            _archive_legacy_note(project_root, path, "session-notes")
+            migrated += 1
+        except (OSError, ValueError):
+            log.exception("legacy note migration failed path=%s", path)
+    if migrated or archived_empty:
+        log.info(
+            "legacy project notes migrated root=%s migrated=%d archived_empty=%d",
+            project_root,
+            migrated,
+            archived_empty,
+        )
+    return {"migrated": migrated, "archived_empty": archived_empty}
+
+
+def project_note_summaries(
+    root: str | Path,
+    *,
+    default_note_id: str,
+    default_title: str,
+    legacy_titles: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """List every Project-owned note, newest first, including empty explicit notes."""
+    project_root = Path(root).resolve()
+    migrate_legacy_notes(project_root, legacy_titles=legacy_titles)
+    notes_root = project_root / ".swe-mux" / "notes"
+    entries: list[tuple[Path, str, str]] = []
+    default_path = notes_root / "project.md"
+    if default_path.is_file():
+        entries.append((default_path, default_note_id, default_title))
+    try:
+        item_paths = list((notes_root / "items").glob("*.md"))
+        item_paths.sort(key=_note_mtime, reverse=True)
+        entries.extend(
+            (path, path.stem, "Untitled note")
+            for path in item_paths[: MAX_NOTE_SUMMARIES - len(entries)]
+        )
+    except OSError:
+        pass
+    result: list[dict[str, Any]] = []
+    for path, path_id, fallback_title in entries:
+        try:
+            stat_result = path.stat()
+            data, size = _read_regular_file_bounded(path, MAX_NOTE_FILE_BYTES)
+            if data is None:
+                result.append(
+                    {
+                        "note_id": default_note_id if path == default_path else path_id,
+                        "title": fallback_title,
+                        "created_at": stat_result.st_ctime,
+                        "updated_at": stat_result.st_mtime,
+                        "bytes": size,
+                        "revision": _unread_revision(),
+                        "excerpt": "",
+                        "origin_session_id": None,
+                    }
+                )
+                continue
+            text = data.decode("utf-8", errors="replace")
+            metadata = _note_metadata(text)
+            body = _note_body(text)
+        except (OSError, ValueError):
+            continue
+        identity = str(metadata.get("id") or path_id)
+        title = _stored_note_title(metadata, body, fallback_title)
+        excerpt = " ".join(body.split())
+        result.append(
+            {
+                "note_id": default_note_id if path == default_path else identity,
+                "title": title,
+                "created_at": _stored_note_created_at(
+                    metadata.get("created_at"), stat_result.st_ctime
+                ),
+                "updated_at": stat_result.st_mtime,
+                "bytes": stat_result.st_size,
+                "revision": revision(data),
+                "excerpt": excerpt[:NOTE_EXCERPT_CHARS],
+                "origin_session_id": metadata.get("origin_session_id"),
+            }
+        )
+    result.sort(key=lambda item: float(item["updated_at"]), reverse=True)
+    return result[:MAX_NOTE_SUMMARIES]
 
 
 def project_path(root: str | Path, relative_path: str = "") -> Path:
@@ -1152,25 +1306,33 @@ async def write_observations(
 
 
 async def read_note(
-    cwd: str | Path, kind: str, identity: str, *, project: ProjectIdentity | None = None
+    cwd: str | Path,
+    identity: str,
+    *,
+    default_title: str = "Untitled note",
+    project: ProjectIdentity | None = None,
 ) -> dict[str, Any]:
-    if kind not in NOTE_KINDS:
-        raise ValueError("note kind must be projects or sessions")
     if project is None:
         project, mux_dir = await project_status(cwd)
     else:
         mux_dir = Path(project.root) / ".swe-mux"
     path = (
         mux_dir / "notes" / "project.md"
-        if kind == "projects"
-        else mux_dir / "notes" / "sessions" / f"{safe_note_filename(identity)}.md"
+        if identity == DEFAULT_NOTE_STORAGE_ID
+        else mux_dir / "notes" / "items" / f"{safe_note_filename(identity)}.md"
     )
+    base = {
+        "project": asdict(project),
+        "kind": "note",
+        "id": identity,
+        "title": normalize_note_title(default_title, default="Untitled note"),
+        "created_at": None,
+        "origin_session_id": None,
+        "path": str(path),
+    }
     if not path.exists():
         return {
-            "project": asdict(project),
-            "kind": kind,
-            "id": identity,
-            "path": str(path),
+            **base,
             "exists": False,
             "bytes": 0,
             "revision": "missing",
@@ -1178,30 +1340,42 @@ async def read_note(
             "status": "missing",
         }
     try:
-        data = path.read_bytes()
-        markdown = _note_body(data.decode("utf-8"))
+        data, size = _read_regular_file_bounded(path, MAX_NOTE_FILE_BYTES)
+        if data is None:
+            return {
+                **base,
+                "exists": True,
+                "bytes": size,
+                "revision": _unread_revision(),
+                "markdown": "",
+                "status": "too-large",
+                "error": "note exceeds the 1 MiB editor limit",
+            }
+        text = data.decode("utf-8")
+        metadata = _note_metadata(text)
+        markdown = _note_body(text)
+        stat_result = path.stat()
         status = "ready" if os.access(path, os.W_OK) else "read-only"
         return {
-            "project": asdict(project),
-            "kind": kind,
-            "id": identity,
-            "path": str(path),
+            **base,
+            "title": _stored_note_title(metadata, markdown, default_title),
+            "created_at": _stored_note_created_at(
+                metadata.get("created_at"), stat_result.st_ctime
+            ),
+            "origin_session_id": metadata.get("origin_session_id"),
             "exists": True,
             "bytes": len(data),
             "revision": revision(data),
             "markdown": markdown,
             "status": status,
         }
-    except (OSError, UnicodeDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         try:
             size = path.stat().st_size
         except OSError:
             size = 0
         return {
-            "project": asdict(project),
-            "kind": kind,
-            "id": identity,
-            "path": str(path),
+            **base,
             "exists": True,
             "bytes": size,
             "revision": "unreadable",
@@ -1213,50 +1387,66 @@ async def read_note(
 
 async def write_note(
     cwd: str | Path,
-    kind: str,
     identity: str,
     markdown: str,
     expected_revision: str,
     *,
+    title: str | None = None,
+    default_title: str = "Untitled note",
     project: ProjectIdentity | None = None,
 ) -> dict[str, Any]:
-    if len(markdown.encode("utf-8")) > 1024 * 1024:
+    if len(markdown.encode("utf-8")) > MAX_NOTE_MARKDOWN_BYTES:
         raise ValueError("note exceeds the 1 MiB limit")
-    current = await read_note(cwd, kind, identity, project=project)
+    current = await read_note(cwd, identity, default_title=default_title, project=project)
     if current["revision"] != expected_revision:
         raise ValueError("note changed externally; reload before saving")
-    # Rebuild the header rather than trusting an incoming one. The file's path is
-    # derived from (kind, identity), so that pair is the only correct header, and
-    # peeling first means a submitted body that still carries one cannot stack a
-    # second. `_note_body` also normalizes newlines, which keeps the note on disk
-    # canonically LF no matter what the client sent.
-    body = note_header(kind, identity) + _note_body(markdown)
+    body = note_header(
+        identity,
+        normalize_note_title(title or str(current["title"]), default=default_title),
+        created_at=float(current.get("created_at") or time.time()),
+        origin_session_id=(
+            str(current["origin_session_id"]) if current.get("origin_session_id") else None
+        ),
+    ) + _note_body(markdown)
     _atomic_write(Path(current["path"]), body.encode("utf-8"))
-    return await read_note(cwd, kind, identity, project=project)
+    return await read_note(cwd, identity, default_title=default_title, project=project)
 
 
 async def initialize_note(
-    cwd: str | Path, kind: str, identity: str, *, project: ProjectIdentity | None = None
+    cwd: str | Path,
+    identity: str,
+    title: str,
+    *,
+    project: ProjectIdentity | None = None,
 ) -> dict[str, Any]:
     """Create an empty durable note without overwriting an existing note."""
-    current = await read_note(cwd, kind, identity, project=project)
+    current = await read_note(cwd, identity, default_title=title, project=project)
     if current["exists"]:
         return current
     path = Path(current["path"])
-    _create_note_file(path, note_header(kind, identity))
-    return await read_note(cwd, kind, identity, project=project)
+    _create_note_file(path, note_header(identity, title))
+    return await read_note(cwd, identity, default_title=title, project=project)
+
+
+async def create_note(
+    cwd: str | Path,
+    title: str,
+    *,
+    project: ProjectIdentity | None = None,
+) -> dict[str, Any]:
+    identity = str(uuid.uuid4())
+    return await initialize_note(cwd, identity, normalize_note_title(title), project=project)
 
 
 async def delete_note(
     cwd: str | Path,
-    kind: str,
     identity: str,
     expected_revision: str,
     *,
     project: ProjectIdentity | None = None,
 ) -> dict[str, Any]:
     """Delete one note only if the caller observed its current revision."""
-    current = await read_note(cwd, kind, identity, project=project)
+    current = await read_note(cwd, identity, project=project)
     if current["revision"] != expected_revision:
         raise ValueError("note changed externally; reload before deleting")
     if not current["exists"]:
@@ -1266,7 +1456,6 @@ async def delete_note(
         path.unlink()
     except FileNotFoundError as exc:
         raise ValueError("note changed externally; reload before deleting") from exc
-    _NOTE_CONTENT_CACHE.pop(str(path), None)
     return {
         "deleted": True,
         "path": str(path),

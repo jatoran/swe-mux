@@ -14,7 +14,7 @@ export type PaneNode = PaneStack | PaneSplit
 export type PaneLayout = { version: 7; root: PaneNode | null }
 
 export type NoteLeafIdentity =
-  | { kind: 'note' | 'session-note' | 'file'; id: string }
+  | { kind: 'note' | 'file'; id: string }
   | { kind: 'worktree-file'; id: string; worktree: string }
 
 type BrowserCrypto = Pick<Crypto, 'getRandomValues'> & Partial<Pick<Crypto, 'randomUUID'>>
@@ -42,7 +42,7 @@ export const paneStack=(children:PaneLeaf[],activeId=children[0]?.id||'',id=grou
 
 export function noteResourceId(kind: NoteLeafIdentity['kind'], id: string): string {
   if (kind === 'worktree-file') throw new Error('use worktreeFileResourceId')
-  return `${kind === 'session-note' ? 'sessions' : kind}:${encodeURIComponent(id)}`
+  return `${kind}:${encodeURIComponent(id)}`
 }
 
 /** Persist an exact Git worktree root and its repository-relative path without delimiter ambiguity. */
@@ -83,7 +83,9 @@ export function parseNoteResourceId(resourceId: string): NoteLeafIdentity | null
   if (kind !== 'note' && kind !== 'sessions' && kind !== 'file') return null
   try {
     const id = decodeURIComponent(resourceId.slice(separator + 1))
-    return id ? { kind: kind === 'sessions' ? 'session-note' : kind, id } as NoteLeafIdentity : null
+    // `sessions:` is the persisted v6/v7 identity for the removed terminal-owned
+    // note type. It now opens the migrated note with the same stable id.
+    return id ? { kind: kind === 'sessions' ? 'note' : kind, id } as NoteLeafIdentity : null
   } catch {
     return null
   }

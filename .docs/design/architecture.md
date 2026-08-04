@@ -86,7 +86,7 @@ automatic fallback whenever the supervisor is unreachable.
   migrations.
 - `frontend/src/mobileWorkspace.ts`: pure depth-first mobile tab projection and close fallback.
 - `frontend/src/HistoryBrowser.tsx`: searchable archive, transcript review, and Project backfill.
-- `frontend/src/ProjectResource.tsx`: Project/session notes, folder browser, and file tabs.
+- `frontend/src/ProjectResource.tsx`: Project-owned notes, folder browser, and file tabs.
 - `frontend/src/ProjectNoteEditor.tsx`: the shared Continuity Markdown editor for every
   editable `.md` surface (notes and Markdown files) plus the note-specific autosave wrapper;
   it owns only the in-memory revision and commits through a caller-supplied callback.
@@ -94,9 +94,9 @@ automatic fallback whenever the supervisor is unreachable.
 ## Lifecycle invariants
 
 1. A Project must be created against an existing folder before any session can spawn.
-2. Project creation initializes `.swe-mux/config.toml` and `.swe-mux/notes/project.md`, seeding
-   the note with a Project-named heading only when that file is absent.
-   Session notes are initialized only when explicitly opened and never overwrite an existing file.
+2. Project creation initializes `.swe-mux/config.toml` and the first ordinary note at
+   `.swe-mux/notes/project.md`, seeding it only when that file is absent.
+   Additional notes are created explicitly from the Project's Notes collection.
 3. `POST /api/sessions` requires `project_id`; the daemon ignores no alternate cwd and
    always spawns at the canonical root.
 4. Session PATCH cannot change Project ownership. `cd` affects only validated runtime cwd.

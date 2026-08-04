@@ -16,7 +16,7 @@ from swe_mux.history import HistoryIndex
 from swe_mux.meta_hooks import HookRule, MetaHookEngine
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.profiles import resolve_profile
-from swe_mux.project_files import read_note, write_note
+from swe_mux.project_files import DEFAULT_NOTE_STORAGE_ID, read_note, write_note
 from swe_mux.runtime_cwd import Osc7Parser, local_directory_from_osc7
 from swe_mux.session import ScrollbackBuffer, Session, SessionManager
 
@@ -150,9 +150,9 @@ def test_hook_scope_is_authoritative_and_payload_cannot_spoof_it(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_project_note_has_one_canonical_project_path(tmp_path: Path) -> None:
-    first = await read_note(tmp_path, "projects", "scope-id")
+    first = await read_note(tmp_path, DEFAULT_NOTE_STORAGE_ID)
     assert Path(first["path"]) == tmp_path / ".swe-mux" / "notes" / "project.md"
-    saved = await write_note(tmp_path, "projects", "scope-id", "project context", "missing")
+    saved = await write_note(tmp_path, DEFAULT_NOTE_STORAGE_ID, "project context", "missing")
     assert saved["markdown"] == "project context"
 
 

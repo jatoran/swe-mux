@@ -24,8 +24,8 @@ PaneLeaf = terminal | note | preview | history | queue
 
 - A stack is a pane even when it has one tab. A split contains exactly two child branches.
 - `terminal` identifies a live/ended session viewport; `preview` identifies a loopback preview;
-  `history` identifies the searchable archive; `note` resource IDs encode Project note,
-  session note, canonical file editors, and exact-worktree file editors; `queue` identifies a session's prompt-queue tab
+  `history` identifies the searchable archive; `note` resource IDs encode Project-owned notes,
+  canonical file editors, and exact-worktree file editors; `queue` identifies a session's prompt-queue tab
   (`features/prompt-queue.md`), its id `queue:<session_id>` so it can never collide with the
   target's own terminal leaf in focus tracking. The prompt queue's home is the utility
   drawer; the `queue` leaf is now only the explicit pop-out (the `↗` in the panel header) and
@@ -47,15 +47,14 @@ PaneLeaf = terminal | note | preview | history | queue
 ## Placement and persistence
 
 - A never-arranged Project opens on the empty stage. Nothing is seeded: the two surfaces worth
-  seeding a pane with are the Project note and Files, and both are now one click away in the
+  seeding a pane with are Notes and Files, and both are now one click away in the
   utility drawer, so a seeded pane would cost pixels and a layout write to show what a panel
   already shows.
 - New terminals and resources join the focused pane by default; explicit directional actions
   create a split left/right/above/below.
 - Placement has no per-resource exceptions and no implicit splits. Every open — terminal, note,
   file editor, preview — is a tab in the anchor's pane, and an unanchored open lands in the
-  first pane. The two exceptions that used to exist are gone: skipping Files panes went with the
-  Files leaf, and session notes no longer split a pane off to sit beside their terminal. Nothing
+  first pane. The old Files-pane and terminal-owned-note exceptions are gone. Nothing
   rearranges the pane tree except an explicit split, drag, or move.
 - Every pane has its own tab strip and active tab. There is no global tab strip, dock/pop-out
   mode, detached layout, or separate resource workspace.

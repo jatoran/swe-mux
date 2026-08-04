@@ -66,7 +66,7 @@ import type { WatchScope } from './processWatch'
 import { DRAWER_TAB_ICONS, SidePanelIcon } from './railIcons'
 import { CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture } from './clipboardHistory'
 import { insertIntoFocusedSurface } from './insertTarget'
-import type { NotePlacement, SessionNoteSummary } from './NotesTab'
+import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
 import { VoicePlayer } from './VoicePlayer'
@@ -168,7 +168,6 @@ type HistoryEntry = {
   tokens_in?: number; tokens_out?: number; model?: string; measurement_source?: string
   compaction_count?:number;last_compaction_at?:number;compaction_capability?:string;compaction_confidence?:string
   auto_named?:number;generated_title?:string
-  note_id?:string
 }
 type ReviewPreview={source_run_id:string;source_backend:string;backend:'claude'|'codex';cwd:string;worktree_context:string;prompt:string;relation:'review';preview_token:string}
 type ReviewState={entry:HistoryEntry;instructions:string;project:string;preview:ReviewPreview;dirty:boolean;loading:boolean;error:string}
@@ -179,7 +178,7 @@ type SidebarContext = { x:number;y:number } | null
 type NoteContext = { resourceId:string;projectId:string;x:number;y:number } | null
 type TabContext = { leaf:PaneLeaf;label:string;projectId:string;x:number;y:number;source:'tab'|'mobile' } | null
 type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; project: Project }
-type NoteTarget={projectId:string;terminalSessionId:string|null;kind:'note'|'session-note'|'file'|'worktree-file';ownerLabel:string;worktree?:string}
+type NoteTarget={projectId:string;kind:'note'|'file'|'worktree-file';resourceId:string;worktree?:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
 type PendingSpawnPlacement = {
@@ -353,6 +352,7 @@ export function App() {
   // The Notes drawer tab lists the active Project by default; the app menu's unscoped
   // entry point flips it to every Project. Device-local UI state, not a modal.
   const [notesAllProjects,setNotesAllProjects]=useState(false)
+  const [noteTitles,setNoteTitles]=useState<Record<string,string>>({})
   // Which note each Project's drawer is editing instead of a pane. Device-local, because the
   // layout it would otherwise mutate is shared: a phone claiming a note must not rearrange the
   // desktop's panes. See `drawerNotes.ts` for why one editor per note per browser is a
@@ -551,7 +551,7 @@ export function App() {
     setMainMenuOpen(false);setProjectMenu(null);setContextMenu(null)
   }
   /** Same, but never toggling shut. A menu row or chip that names a surface ("Browse
-   *  files…", "Session notes…") has already said "show me this"; closing the drawer on
+   *  files…", "Notes…") has already said "show me this"; closing the drawer on
    *  it is perverse, and worse when the click also switched Project — the panel would
    *  vanish instead of retargeting. */
   const openDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
@@ -1275,7 +1275,7 @@ export function App() {
           // The drawer's Git tab refetches its worktree list off this. Branch/dirty/upstream
           // already ride the session snapshots, so `git_changed` needs no payload here.
           if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed')window.dispatchEvent(new CustomEvent('mux:git-changed'))
-          if(event.type==='project_note_changed'||event.type==='session_note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{projectId:String(event.payload?.project_id||''),kind:event.type==='session_note_changed'?'session-note':'note',noteId:event.type==='session_note_changed'?String(event.payload?.note_id||''):null,revision:String(event.payload?.revision||'')}}))
+          if(event.type==='note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{projectId:String(event.payload?.project_id||''),kind:'note',noteId:String(event.payload?.note_id||''),revision:String(event.payload?.revision||'')}}))
         } catch { /* malformed events are ignored */ }
       }
       next.onclose = () => { if (socket !== next) return; socket = null; scheduleRetry() }
@@ -1464,46 +1464,17 @@ export function App() {
   // Settings is global-only. Anything scoped to one Project lives in the Projects
   // registry (`openProjectsManager`), which is the single per-Project editor.
   const openSettings = (section='General') => { setSettingsSection(section); setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null) }
-  const projectNoteTarget=(value:Project|Session):NoteTarget=>{
-    const project='root' in value?value:projects.find(item=>item.id===value.project_id)
-    return {projectId:project?.id||value.id,terminalSessionId:'backend' in value&&!isEndedSession(value)?value.id:null,kind:'note',ownerLabel:project?.name||'Project note'}
-  }
-  const sessionNoteTarget=(session:Session):NoteTarget=>({projectId:session.project_id,terminalSessionId:isEndedSession(session)?null:session.id,kind:'session-note',ownerLabel:session.note_id||session.id})
   const noteIdForTarget=(target:NoteTarget)=>target.kind==='worktree-file'
-    ? target.worktree?worktreeFileResourceId(target.worktree,target.ownerLabel):''
-    : noteResourceId(target.kind,target.kind==='file'||target.kind==='session-note'?target.ownerLabel:target.projectId)
+    ? target.worktree?worktreeFileResourceId(target.worktree,target.resourceId):''
+    : noteResourceId(target.kind,target.resourceId)
   const noteTargetForResource=(resourceId:string,targetProject=projectId):NoteTarget|null=>{
     const identity=parseNoteResourceId(resourceId)
     if(!identity)return null
-    return {projectId:targetProject,terminalSessionId:null,kind:identity.kind,ownerLabel:identity.id,worktree:identity.kind==='worktree-file'?identity.worktree:undefined}
+    return {projectId:targetProject,kind:identity.kind,resourceId:identity.id,worktree:identity.kind==='worktree-file'?identity.worktree:undefined}
   }
-  const openNoteDefault=(target:NoteTarget)=>void showResourceForTarget(target)
-  const openProjectNotes=(value:Project|Session)=>openNoteDefault(projectNoteTarget(value))
-  /** Create the note if it is not there yet, then place it. `place` is a parameter because a
-   *  session note now has two hosts — a pane tab or the drawer — and initialization is the
-   *  same either way; only where it lands differs. */
-  const initializeAndOpenSessionNote=async(target:NoteTarget,place:(target:NoteTarget)=>void|Promise<void>=showResourceForTarget)=>{
-    try{
-      await api('POST',`/api/projects/${target.projectId}/session-notes/${encodeURIComponent(target.ownerLabel)}`)
-      setSessions(items=>items.map(item=>item.id===target.terminalSessionId||item.id===target.ownerLabel?{...item,note_id:target.ownerLabel,note_exists:true}:item))
-      await place(target)
-    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
-  }
-  const openSessionNotes=(session:Session)=>{setActiveId(session.id);void initializeAndOpenSessionNote(sessionNoteTarget(session))}
-  const openHistorySessionNote=(entry:HistoryEntry)=>{
-    if(!entry.project_id||!entry.note_id){setError('This historical session is not linked to a Project note owner.');return}
-    void initializeAndOpenSessionNote({projectId:entry.project_id,terminalSessionId:null,kind:'session-note',ownerLabel:entry.note_id})
-  }
-  // The Notes tab lists notes from disk, so an owner may be long gone. Route through
-  // the same initialize-then-open path: initialization is idempotent and keeps a
-  // note whose file was removed underneath the listing from opening onto nothing.
-  const openBrowsedSessionNote=(targetProject:string,noteId:string,place:NotePlacement='tab')=>{
-    void initializeAndOpenSessionNote({
-      projectId:targetProject,
-      terminalSessionId:sessions.some(item=>item.id===noteId&&!isEndedSession(item))?noteId:null,
-      kind:'session-note',
-      ownerLabel:noteId,
-    },place==='drawer'?openTargetInDrawer:showResourceForTarget)
+  const openBrowsedNote=(targetProject:string,noteId:string,place:NotePlacement='tab')=>{
+    const target:NoteTarget={projectId:targetProject,kind:'note',resourceId:noteId}
+    if(place==='drawer')openTargetInDrawer(target);else void showResourceForTarget(target)
   }
   // Files is a drawer tab, not a pane tab: it is a navigator that opens documents into
   // the workspace, so it costs a panel rather than a permanent tab. Its view follows the
@@ -1514,8 +1485,8 @@ export function App() {
     setNotesAllProjects(!scope)
     openDrawerTab('notes',scope?.id||projectId)
   }
-  const openProjectFile=(project:Project,path:string,targetViewId?:string)=>void showResourceForTarget({projectId:project.id,terminalSessionId:null,kind:'file',ownerLabel:path},targetViewId)
-  const openWorktreeFile=(project:Project,worktree:string,path:string,targetViewId?:string)=>void showResourceForTarget({projectId:project.id,terminalSessionId:null,kind:'worktree-file',ownerLabel:path,worktree},targetViewId)
+  const openProjectFile=(project:Project,path:string,targetViewId?:string)=>void showResourceForTarget({projectId:project.id,kind:'file',resourceId:path},targetViewId)
+  const openWorktreeFile=(project:Project,worktree:string,path:string,targetViewId?:string)=>void showResourceForTarget({projectId:project.id,kind:'worktree-file',resourceId:path,worktree},targetViewId)
   // Notifications are a drawer tab, not a modal: checking what fired should not be
   // a full-screen interruption. Opening the tab is what marks them read.
   const openNotifications = () => { showDrawerTab('notifications');setNotificationUnread(0);void loadNotifications() }
@@ -2170,12 +2141,12 @@ export function App() {
     // An explicit target (drag/drop) is honored exactly. Everything else lands in the pane
     // you were last in: the focused view when it is still in this layout, then the owning
     // terminal, then whatever the layout has.
-    const preferredAnchor=(targetProject===projectId&&focusedViewId&&stackForView(current,focusedViewId)?focusedViewId:null)||target.terminalSessionId||terminalIds(current)[0]||leaves(current)[0]?.id||null
+    const preferredAnchor=(targetProject===projectId&&focusedViewId&&stackForView(current,focusedViewId)?focusedViewId:null)||terminalIds(current)[0]||leaves(current)[0]?.id||null
     const focused=targetViewId||openAnchorId(current,preferredAnchor)
-    setProjectId(targetProject);if(target.terminalSessionId)setActiveId(target.terminalSessionId);setFocusedViewId(resourceId)
+    setProjectId(targetProject);setFocusedViewId(resourceId)
     setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setMainMenuOpen(false);setEmptyMenu(null)
     releaseIfDrawerHolds(targetProject,resourceId)
-    // Every resource opens the same way: a tab in the anchor's pane. Session notes used to
+    // Every resource opens the same way: a tab in the anchor's pane. Notes previously
     // split a pane off to sit beside their terminal, which spent workspace geometry on a
     // guess — splitting is an explicit action (the tab menu, a drag), not something an
     // ordinary open should do on your behalf.
@@ -2713,11 +2684,9 @@ export function App() {
     { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => {setUsageOpen(true);setMainMenuOpen(false)} },
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {setAutomationOpen(true);setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
-    { id: 'notes.open', label: 'Open current project note', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectNotes(activeProject) },
-    { id: 'session.note', label: 'Open selected session note', category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession&&openSessionNotes(commandSession) },
-    { id: 'notes.browse', label: 'Browse session notes', category: 'view', available: true, run: () => openNotesBrowser(null) },
-    { id: 'notes.browseProject', label: 'Browse this project’s session notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
-    { id: 'project.note', label: 'Open selected project note', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => commandProject&&openProjectNotes(commandProject) },
+    { id: 'notes.open', label: 'Open current project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
+    { id: 'notes.browse', label: 'Browse all notes', category: 'view', available: true, run: () => openNotesBrowser(null) },
+    { id: 'notes.browseProject', label: 'Browse this project’s notes', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openNotesBrowser(activeProject) },
     { id: 'processes.open', label: 'Inspect selected session processes and previews', category: 'view', available: !!commandSession, disabledReason: 'No session selected', run: () => {if(commandSession)openProcessViewer(commandSession)} },
     { id: 'processes.all', label: 'Open unified process viewer', category: 'view', available: true, run: () => openProcessViewer() },
     { id: 'processes.project', label: 'Inspect selected project’s processes', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => openProcessViewer(null,commandProject?.id||null) },
@@ -3323,8 +3292,7 @@ export function App() {
         <div><span class={`pane-state ${session.state}${session.observation_stale_since?' observation-stale':''}`} title={[session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}{session.observation_stale_since?' · stale':''}</span></div>
         {!agentSession&&<div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
         <div class="pane-voice">{paneVoice}</div>
-        <div class="pane-tools"><button data-tutorial="session-note" class={`pane-tool-label note-chip ${noteChipState(session)}`} aria-label={noteChipLabel(session)} title={noteChipTitle(session)} onClick={()=>openSessionNotes(session)}>note{noteChipState(session)==='empty'?'':'•'}</button>{isAgent(session)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{/* No `proc` chip. It was the only pane tool carrying no state of its own — `note` reports
-            empty/written/open and `queue` its pending count, while `proc` was pure navigation — and
+        <div class="pane-tools">{isAgent(session)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and
             on a phone it cost 40px of a bar that also has to fit the session name and path. What it
             opened is now the drawer's Processes tab, which pins this session's row first, and the
             session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
@@ -3339,8 +3307,10 @@ export function App() {
   }
 
   type FileMenuSource={resourceId:string;projectId:string}|{leaf:PaneLeaf;projectId:string}
-  const workspaceNoteIds=(targetProject:string)=>leaves(resolveLayout(layoutMap[targetProject],projects.find(item=>item.id===targetProject)?.layout),'note').map(leaf=>leaf.id)
-
+  const workspaceNoteIds=(targetProject:string)=>leaves(
+    resolveLayout(layoutMap[targetProject],projects.find(item=>item.id===targetProject)?.layout),
+    'note',
+  ).map(leaf=>leaf.id)
   // Resource menus cover notes and opened files; only the latter have filesystem actions.
   // Accept both resource-list and workspace-tab targets so the two menus share one resolver.
   const fileMenuTarget=(menu:FileMenuSource)=>{
@@ -3382,39 +3352,6 @@ export function App() {
       }
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
-  // The chip reports whether this terminal has anything written down, which is
-  // most of its value: `open` when its note is the focused tab, `written` when
-  // the note holds text, `empty` otherwise.
-  const noteChipState=(session:Session):'open'|'written'|'empty'=>{
-    const resourceId=noteResourceId('session-note',session.note_id||session.id)
-    const layout=resolveLayout(layoutMap[session.project_id],projects.find(item=>item.id===session.project_id)?.layout)
-    if(stackForView(layout,resourceId)?.active_child_id===resourceId)return 'open'
-    return session.note_exists?'written':'empty'
-  }
-  const noteChipTitle=(session:Session)=>({
-    open:'Session note · open · click to focus it',
-    written:'Session note · has content · click to open it beside this terminal',
-    empty:'Session note · empty · click to start one beside this terminal',
-  })[noteChipState(session)]
-  const noteChipLabel=(session:Session)=>`${noteChipState(session)==='empty'?'Start':'Open'} session note for ${sessionName(session)}`
-  // Session notes only. The Project note and Files used to sit here too, as a chip pair
-  // costing every Project a permanent second line; both surfaces are now reached from the
-  // drawer (Notes pins the Project note first and unconditionally, Files is its own tab)
-  // and from the Project context menu, so the row is nothing but navigation the sidebar
-  // was paying for on every Project, open or not. A session note keeps its row because it
-  // is conditional — it appears only once the note holds text or is open — and because it
-  // is the one note that belongs *next to* something in the tree.
-  const sidebarNoteRow=(resourceId:string,targetProject:string)=>{
-    const identity=parseNoteResourceId(resourceId)
-    if(!identity)return null
-    const noteLayout=resolveLayout(layoutMap[targetProject],projects.find(item=>item.id===targetProject)?.layout)
-    const workspaceOpen=workspaceNoteIds(targetProject).includes(resourceId)
-    const selected=targetProject===projectId&&stackForView(noteLayout,resourceId)?.active_child_id===resourceId
-    const label=identity.kind==='note'?'Project note':identity.kind==='session-note'?'Session note':identity.id.split('/').pop()||'File'
-    return <button class={`sidebar-note-row ${selected?'active':''} ${workspaceOpen?'open':''}`} title={`${label} · opens in the focused pane`} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openNoteContext(resourceId,targetProject,event.clientX,event.clientY)}} onClick={event=>{event.stopPropagation();showNoteResource(resourceId,targetProject);setSidebarOpen(false)}}>
-      <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>{label}</strong></span>
-    </button>
-  }
   // A server a session spawned lives beside it: nested under its sidebar row and
   // activated as a tab in the same region, so it is always one click away.
   const sidebarPreviewRow=(preview:Preview,session:Session)=>{
@@ -3448,8 +3385,6 @@ export function App() {
     // rendered by that row instead.
     const spawnedServers=detectedServers(sessionProcesses[session.id]||[])
       .filter(server=>!spawnedPreviews.some(preview=>preview.port===server.port))
-    const sessionNoteId=noteResourceId('session-note',session.note_id||session.id)
-    const showSessionNote=!!session.note_exists||workspaceNoteIds(session.project_id).includes(sessionNoteId)
     // Sidebar attention tier for agent rows. The focused row keeps its own
     // `.active` treatment; a row visible in another split pane reads as
     // "viewing" (on screen, not focused); an off-screen row with unseen output
@@ -3462,7 +3397,7 @@ export function App() {
       <span class={sessionDotClass(session)} />
       <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={session.backend}>{providerGlyph(session.backend as ProviderName)}</span>}{sessionName(session)}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}{activityGlyphs(session)}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
-    </button>{showSessionNote&&sidebarNoteRow(sessionNoteId,session.project_id)}{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}{spawnedServers.map(server=>sidebarServerRow(server,session))}</div>
+    </button>{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}{spawnedServers.map(server=>sidebarServerRow(server,session))}</div>
   }
   const sidebarNode=(node:PaneNode|PaneLeaf|null|undefined):ComponentChildren=>{
     if(!node)return null
@@ -3485,11 +3420,7 @@ export function App() {
 
   const noteTabLabel=(resourceId:string)=>{
     const identity=parseNoteResourceId(resourceId)
-    if(identity?.kind==='note')return 'Project note'
-    if(identity?.kind==='session-note'){
-      const owner=sessions.find(session=>(session.note_id||session.id)===identity.id)
-      return owner?`Note · ${sessionName(owner)}`:'Session note'
-    }
+    if(identity?.kind==='note')return noteTitles[`${projectId}:${identity.id}`]||'Note'
     return identity?.id.split('/').pop()||'File'
   }
   const projectPreviewIds=dragProject?.previewIds||displayProjectIds
@@ -3545,7 +3476,7 @@ export function App() {
     {mobileProjection.tabs.length>0&&<OverflowRail className="stack-tabs mobile-unified-tabs" itemLabel="Project tabs" wrapperClassName="stack-tabs-rail" activeKey={mobileProjection.selected?.id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'All Project tabs'}}>
       {mobileProjection.tabs.map(mobileTab)}
     </OverflowRail>}
-    <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open the Project note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>}</div>
+    <div class="stack-active mobile-unified-active">{mobileProjection.selected?renderPaneNode(mobileProjection.selected,'mobile',true):<div class="empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>}</div>
   </section>
 
   return <div class="app-shell">
@@ -3745,13 +3676,10 @@ export function App() {
         queuePending={queuePendingTotal}
         notesAllProjects={notesAllProjects}
         onNotesAllProjects={setNotesAllProjects}
-        focusedNote={active?.note_exists?{projectId:active.project_id,noteId:active.note_id||active.id,label:sessionName(active)}:null}
-        onOpenProjectNote={(targetProject,place)=>{
-          const project=projects.find(item=>item.id===targetProject)
-          if(!project)return
-          if(place==='drawer')openTargetInDrawer(projectNoteTarget(project));else openProjectNotes(project)
+        onOpenNote={(targetProject,noteId,title,place)=>{
+          setNoteTitles(current=>({...current,[`${targetProject}:${noteId}`]:title}))
+          openBrowsedNote(targetProject,noteId,place)
         }}
-        onOpenSessionNote={(targetProject,noteId,place)=>openBrowsedSessionNote(targetProject,noteId,place)}
         drawerNoteId={drawerNoteId}
         onCloseDrawerNote={()=>closeDrawerNote(projectId)}
         onPopDrawerNoteToTab={resourceId=>popDrawerNoteToTab(resourceId,projectId)}
@@ -3791,6 +3719,7 @@ export function App() {
           const visible=!!owner&&clipboardOpen&&activeDrawerPresentation.selected_tabs[owner.id]===tab.id
           return <button
             key={tab.id}
+            data-tutorial={tab.id==='notes'?'project-notes':undefined}
             data-scope={tab.scope}
             class={visible?'active':''}
             aria-pressed={visible}
@@ -3805,7 +3734,7 @@ export function App() {
         <div class="project-workspace unified-workspace">
           <div class="terminal-workspace">
             {mobileWorkspace?mobileUnifiedWorkspace:(activeLayout.root||focusedOutsideLayout) ? <div class="pane-tree">{renderPaneNode(zoomedId ? stackForView(activeLayout,zoomedId)||activeLayout.root! : focusedOutsideLayout&&activeId ? paneStack([terminalLeaf(activeId)],activeId) : activeLayout.root!)}</div> : <div class="pane-tree"><section data-tutorial="workspace-pane" class="pane-stack empty-workspace-pane">
-              <div class="stack-active empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open the Project note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>
+              <div class="stack-active empty-stage"><div class="hero-terminal" aria-hidden="true">&gt;_</div><h1>Your Project workspace.</h1><p>Run a terminal, or open a note, a file, or a preview to begin. Files and notes live in the side panel.</p></div>
             </section></div>}
           </div>
         </div>
@@ -3851,7 +3780,6 @@ export function App() {
       {['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button onClick={() => runNamedCommand('session.resume')}>Resume as new…</button>}
       <button onClick={() => runNamedCommand('session.copyId')}>Copy session ID</button>
       <button onClick={() => runNamedCommand('session.copyCwd')}>Copy working directory</button>
-      <button onClick={() => runNamedCommand('session.note')}>Open session note</button>
       <button onClick={()=>{const target=contextMenu.session;setPromptScope(projects.find(project=>project.id===target.project_id)||null);setPromptTargetId(target.id);setContextMenu(null);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
       {/* No context menu touches tab order or pane geometry on any platform — not split,
           stack, dissolve, or move. They answer "how is the workspace laid out", which is
@@ -3882,13 +3810,8 @@ export function App() {
           duplicating it here left two doors to one action. */}
       {/* The same surfaces the app menu opens globally, prefiltered to this Project. */}
       <div class="context-subtitle">BROWSE THIS PROJECT</div>
-      {/* No ellipsis, unlike every row below it: those open a browser (a drawer tab or a
-          modal) over this Project, while this one opens the document itself into a pane.
-          It is here because the sidebar's Note chip is gone, and a Project note reachable
-          only by selecting the Project first would be a step backwards from that chip. */}
-      <button onClick={()=>{const target=projectMenu.project;setProjectMenu(null);openProjectNotes(target)}}>Project note</button>
       <button onClick={() => runNamedCommand('history.openProject')}>Session history…</button>
-      <button onClick={()=>{const target=projectMenu.project;setProjectMenu(null);openNotesBrowser(target)}}>Session notes…</button>
+      <button onClick={()=>{const target=projectMenu.project;setProjectMenu(null);openNotesBrowser(target)}}>Notes…</button>
       <button onClick={() => runNamedCommand('processes.project')}>Processes…</button>
       <button onClick={() => runNamedCommand('prompts.openProject')}>Prompt library…</button>
       <button onClick={() => runNamedCommand('observations.open')}>Observation inbox…</button>
@@ -3923,7 +3846,7 @@ export function App() {
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('project.create')}}>Manage projects…</button>
       <button onClick={()=>{setSidebarMenu(null);setGroupEdit({name:''})}}>Create group</button>
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('history.open')}}>Session history</button>
-      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('notes.browse')}}>Session notes…</button>
+      <button onClick={()=>{setSidebarMenu(null);runNamedCommand('notes.browse')}}>Notes…</button>
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('processes.all')}}>Process fleet…</button>
       <div class="context-rule" />
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('settings.open')}}>All Settings…</button>
@@ -4009,7 +3932,7 @@ export function App() {
           Project-scoped ones prefiltered to it. Anything that acts on one Project
           lives there, not here. */}
       <button onClick={() => runNamedCommand('history.open')}>Session history</button>
-      <button onClick={() => runNamedCommand('notes.browse')}>Session notes…</button>
+      <button onClick={() => runNamedCommand('notes.browse')}>Notes…</button>
       <button onClick={() => runNamedCommand('processes.all')}>Process fleet…</button>
       <button onClick={()=>runNamedCommand('prompts.open')}>Prompt library…</button>
       <button onClick={()=>runNamedCommand('clipboard.open')}>Clipboard history…</button>
@@ -4048,9 +3971,9 @@ export function App() {
     {redeploying&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App redeploying"><div class="modal daemon-reload-modal"><h2>Rebuilding + redeploying app…</h2><p>The new bundle builds while the current app keeps running, then the app restarts around your live sessions. This takes a few minutes; the page reloads automatically. A failed build leaves the current app untouched.</p></div></div>}
     {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions (a few minutes). A failed build leaves the current app running.</p><div class="modal-actions"><button onClick={()=>void startRedeploy()}>Rebuild + redeploy</button><button onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button></div></div></div>}
 
-    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSessionNote={openHistorySessionNote} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
+    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
 
-    {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} initialTab={projectsManagerFocus?.tab} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onNote={project=>{setProjectsManagerOpen(false);openProjectNotes(project)}} onFiles={project=>{setProjectsManagerOpen(false);openProjectFiles(project)}} onPatch={patchManagedProject} onDelete={deleteProject}/>}
+    {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} initialTab={projectsManagerFocus?.tab} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onNotes={project=>{setProjectsManagerOpen(false);openNotesBrowser(project)}} onFiles={project=>{setProjectsManagerOpen(false);openProjectFiles(project)}} onPatch={patchManagedProject} onDelete={deleteProject}/>}
 
     {projectCreateOpen&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setProjectCreateOpen(false)}>
       <form data-tutorial="project-form" class="modal" onSubmit={event=>{event.preventDefault();void submitProject()}}>

@@ -22,19 +22,10 @@ responsive controls.
 - On mobile, selecting either a Project row or a session row closes the navigation overlay. Project
   selection closes it before restoring that Project's remembered active view, including when no
   valid remembered view exists.
-- The sidebar shows only Projects marked for active navigation. A Project row is followed
-  directly by its layout/session rows. An initialized or open session note appears beneath its
-  terminal, and is the only note row the sidebar draws.
-- **Project rows carry no `Note` / `Files` chips.** They used to, as a fixed pair costing every
-  Project a permanent second line whether or not either surface was ever used, and both are
-  pure navigation into surfaces that live elsewhere: the drawer's Notes tab pins the Project
-  note first and unconditionally (so the creation affordance survives), and Files is its own
-  drawer tab. What the chips uniquely offered was reaching *another* Project's note or files
-  without selecting that Project first; the Project context menu now covers that with a
-  `Project note` row beside its existing `Browse files…`. What is genuinely lost is the ambient
-  indicator of which Project notes are currently open in the workspace, which is the price of
-  the row. The session note row stays because it is conditional — drawn only once the note
-  holds text or is open — so it costs nothing on a Project that has no session notes.
+- The sidebar shows only Projects marked for active navigation.
+  A Project row is followed directly by its layout/session rows; notes do not appear in the tree.
+- **Project rows carry no `Note` / `Files` chips.**
+  Both surfaces live in the utility drawer and the Project context menu exposes `Notes…` and `Browse files…` for another Project.
 - Projects sit in sections: one per Group, plus the ungrouped remainder headed `PROJECTS`, which
   behaves as a section in every respect rather than as a pinned leftover. A section header does
   two jobs, and they compose rather than competing: press-and-move reorders it, press-and-release
@@ -139,7 +130,7 @@ responsive controls.
 ## Menus and overlays
 
 - Scope follows the menu that opened a surface, never a hidden mode. The app menu's unlabeled
-  lead block opens History, session notes, Process fleet, prompt library, clipboard history,
+  lead block opens History, Notes, Process fleet, prompt library, clipboard history,
   usage, and notifications across every Project; right-clicking a Project row opens the same
   surfaces under `BROWSE THIS PROJECT`, prefiltered to it. Right-clicking empty sidebar space is
   the no-Project case and matches the app menu.
@@ -192,7 +183,7 @@ responsive controls.
   layout projection, and the device-local permutation the touch row used to write was deleted
   along with it rather than left orphaned (see `workspace-layout.md` § mobile projection).
 - The **resource** menu is the one exception that keeps a directional row — `Open in split`,
-  because a Project note or an opened file has no tab to drag until it is already in a pane.
+  because a note or an opened file has no tab to drag until it is already in a pane.
   It uses a non-clickable label with directional arrow buttons, enabling only directions valid
   for the current split tree.
 - Pointer-anchored menus are re-fitted to the viewport after they mount, not merely clamped at
@@ -402,15 +393,10 @@ responsive controls.
   marker and starts immediately.
 - The action-driven walkthrough covers the real Projects registry and creation form,
   provider-native Claude/Codex login or current-login capture, Run menu, shell launch, pane/tab
-  lifetime, second-tab creation, tab movement, pane-edge splitting, session notes, menu browsers,
+  lifetime, second-tab creation, tab movement, pane-edge splitting, Project notes, menu browsers,
   and keyboard shortcuts. Replay with an existing Project opens it instead of forcing a duplicate.
-- The notes step is anchored on the **pane header's `note` chip**, not on a sidebar row. An
-  action step replaces **Next** with a highlighted control, so a step whose anchor can be absent
-  strands the tour with only **Exit**: the anchor has to be one that is guaranteed rendered on
-  both desktop and mobile at that point in the walkthrough, and the pane chip is (two shell
-  sessions exist by then). This is why removing the sidebar's Project-note chip required moving
-  the step rather than re-pointing it at another Project-note affordance — the remaining ones
-  are behind a context menu or a drawer tab that may be closed.
+- The notes step is anchored on the utility rail's persistent **Notes** button.
+  It opens the Project-owned collection and teaches note creation independently of sessions.
 - Highlighted product controls replace **Next** for action steps. Transparent blockers leave only
   the spotlight opening and tutorial card interactive; Project creation, account save, terminal
   launch, and layout drops advance only after their ordinary operation reports success.
@@ -860,21 +846,21 @@ responsive controls.
   telemetry; here it would be a stranger's words under this session's name.
 - **Files** is a navigator, not a peer of the terminals it opens files next to, so it costs a
   drawer tab rather than a permanent workspace tab. As a pane it forced the layout to route
-  every placement rule around it (an unanchored open, a Files-focused open, and session-note
-  placement each had to skip Files panes) and it seeded every new Project with a narrow column
+  every placement rule around it and it seeded every new Project with a narrow column
   most people ignored. Nothing is lost by the move: expanded-folder state was already persisted per Project
   outside the layout, and on desktop the drawer is an in-flow column, so a file row can still be
   dragged onto any pane.
   Files can remain visible beside Clipboard or another utility body when the user places them in separate drawer panes.
-- **Notes** is an index *and* an editor, and a note is open in exactly one of the two hosts at a time.
-  The tab pins a visually prominent Project note first and unconditionally, reports its stored size, pins the focused terminal's note second when that note holds text, then lists every other session note with content, searchable and scoped to this Project or to all of them.
+- **Notes** is a flat Project-owned collection *and* an editor, and a note is open in exactly one of the two hosts at a time.
+  The tab lists explicit notes, including empty notes, searchable over title, Project, and excerpt and scoped to this Project or to all Projects.
+  It creates and renames notes through title prompts.
   Selecting a row opens that note **in the drawer**; the `⇥` on each row opens it as a workspace tab instead.
-  Each session-note row places a two-click inline delete control immediately before `⇥`.
-  Desktop right-click and guarded mobile long-press open the same two-action menu: open in a workspace tab or delete with the same second confirmation.
+  Each note row places a two-click inline delete control immediately before `⇥`.
+  Desktop right-click and guarded mobile long-press expose open, rename, and revision-checked delete actions.
   Deletion submits the revision carried by the listing, refuses a concurrent edit with `409 revision_conflict`, logs the user action, and emits the normal note-change event with revision `missing`.
-  An open clean editor follows that event to an empty missing note; an editor with unsaved local work keeps its text and reaches the existing revision-conflict path instead of being silently cleared.
+  An open clean editor follows that event to a deleted state; an editor with unsaved local work keeps its text and reaches the existing revision-conflict path instead of being silently cleared.
   From inside the drawer editor, `‹ Notes` returns to the index and `⇥ tab` moves the note into a pane.
-  The former session-notes modal entry points now open this tab.
+  Terminals and History do not create or own notes.
 - **Why one host at a time is a rule and not a preference.** `noteSaveQueue` keys one entry per
   `(Project, resource)` at module scope, so two mounted editors on one note share it: each submits
   its whole document, newest wins, and the loser's text is dropped with no conflict for the daemon

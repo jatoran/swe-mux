@@ -42,7 +42,7 @@
 - Multi-device terminal input and shared geometry: `features/terminal-input.md`
 - Device presence (which device the human is at): `features/device-presence.md`
 - Project registry and Groups: `features/projects.md`
-- Project/session notes, files, ignores, and watches: `features/project-resources.md`
+- Project-owned notes, files, ignores, and watches: `features/project-resources.md`
 - Read-only Project/global agent instructions, memory, and manual Project-root sync: `features/agent-context.md`
 - Trusted task discovery and the Project Run menu: `features/project-actions.md`
 - Mixed-view panes, tabs, drag/drop, and mobile projection: `features/workspace-layout.md`
@@ -74,8 +74,8 @@
 - New sessions start at their Project's canonical root. Runtime cwd is display/Git
   telemetry and never changes ownership.
 - A Group organizes Project rows only.
-- Each Project has one project note and one folder browser. Any terminal may lazily create a
-  distinct session note; opened notes and files are project-owned resource tabs.
+- Each Project has a flat collection of Project-owned notes and one folder browser.
+- Notes are created from that collection and are independent of terminal and session lifetimes.
 - Worktrees remain backend Git capability, not a sidebar, tab, or session-creation concept.
 - Native transcripts stay in vendor locations and are never deleted by swe-mux.
 - Live provider system auth is authoritative. Startup never restores an older saved account;

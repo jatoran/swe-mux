@@ -9,9 +9,9 @@ import {
   worktreeFileResourceId,
 } from '../src/layout.ts'
 
-const noteLeaf=(id='sessions:one')=>resourceLeaf('note',noteResourceId('session-note',id))
+const noteLeaf=(id='working-note')=>resourceLeaf('note',noteResourceId('note',id))
 
-test('a session note joins its anchor pane instead of splitting the workspace',()=>{
+test('a note joins its anchor pane instead of splitting the workspace',()=>{
   // Opening a note is not a layout command. It used to split a pane off so the note sat
   // beside its terminal, which spent workspace geometry on a guess; splitting is now only
   // ever explicit (the tab menu, a drag onto a pane edge).
@@ -23,7 +23,7 @@ test('a session note joins its anchor pane instead of splitting the workspace',(
   assert.equal(paneStacks(placed)[0].active_child_id,noteLeaf().id)
 })
 
-test('a session note opens in the pane its anchor is in, not the first one',()=>{
+test('a note opens in the pane its anchor is in, not the first one',()=>{
   let layout=openTab(emptyLayout(),null,terminalLeaf('one'))
   layout=splitTerminal(layout,'one','two','horizontal')
   const placed=openTab(layout,'two',noteLeaf())
@@ -59,7 +59,7 @@ test('a persisted Files leaf is pruned on read rather than rendered as a tab',()
   assert.equal(parseNoteResourceId('files:project-a'),null)
 })
 
-test('a session note already open is focused where it is, never duplicated or moved',()=>{
+test('a note already open is focused where it is, never duplicated or moved',()=>{
   // Reopening from a different pane must not tear the note out of the pane the user put
   // it in; it activates in place.
   let layout=openTab(emptyLayout(),null,terminalLeaf('one'))
@@ -147,16 +147,17 @@ test('hidden v5 resource workspace migrates as closed views',()=>{
 })
 
 test('terminals, previews, notes, file editors, and History share one pane',()=>{
-  const note=noteResourceId('note','project-a'),sessionNote=noteResourceId('session-note','terminal-a'),file=noteResourceId('file','src/app.ts')
+  const note=noteResourceId('note','project-a'),secondNote=noteResourceId('note','release-plan'),file=noteResourceId('file','src/app.ts')
   let layout=openTab(emptyLayout(),null,terminalLeaf('term-a'))
   layout=openTab(layout,'term-a',resourceLeaf('preview','preview-a'))
   layout=openTab(layout,'preview-a',resourceLeaf('note',note))
-  layout=openTab(layout,note,resourceLeaf('note',sessionNote))
-  layout=openTab(layout,sessionNote,resourceLeaf('note',file))
+  layout=openTab(layout,note,resourceLeaf('note',secondNote))
+  layout=openTab(layout,secondNote,resourceLeaf('note',file))
   layout=openTab(layout,file,resourceLeaf('history','history:archive'))
   assert.equal(paneStacks(layout).length,1)
   assert.deepEqual(leaves(layout).map(leaf=>leaf.kind),['terminal','preview','note','note','note','history'])
-  assert.deepEqual(parseNoteResourceId(sessionNote),{kind:'session-note',id:'terminal-a'})
+  assert.deepEqual(parseNoteResourceId(secondNote),{kind:'note',id:'release-plan'})
+  assert.deepEqual(parseNoteResourceId('sessions:terminal-a'),{kind:'note',id:'terminal-a'})
   assert.deepEqual(parseNoteResourceId(file),{kind:'file',id:'src/app.ts'})
 })
 

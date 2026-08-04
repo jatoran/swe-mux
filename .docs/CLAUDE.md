@@ -5,7 +5,7 @@
   `design/features/delivery-readiness.md`
 - Changing Project/Group registration, ownership, ordering, or sidebar visibility:
   `design/features/projects.md`, `design/data-model.md`, `design/interfaces.md`
-- Changing Project/session notes, files, ignores, or watches:
+- Changing Project notes, files, ignores, or watches:
   `design/features/project-resources.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing Agent Context discovery, root instruction sync/restore, or its drawer surface:
   `design/features/agent-context.md`, `design/features/ui.md`, `design/interfaces.md`,

@@ -98,9 +98,8 @@ def test_project_resources_share_unified_mixed_view_panes() -> None:
     resource = source("ProjectResource.tsx")
     css = source("style.css")
 
-    assert "openProjectNotes" in app
-    assert "openSessionNotes" in app
-    assert "Open session note" in app
+    assert "openNotesBrowser" in app
+    assert "openBrowsedNote" in app
     assert "openProjectFiles" in app
     assert "openProjectFile" in app
     assert "ProjectResource" in app
@@ -110,10 +109,7 @@ def test_project_resources_share_unified_mixed_view_panes() -> None:
     assert "version: 7" in layout
     assert "showNoteWorkspace" not in app
     assert not (ROOT / "frontend" / "src" / "NotesWorkspace.tsx").exists()
-    assert "/api/projects/${project.id}/note" in resource
-    assert (
-        "/api/projects/${project.id}/session-notes/${encodeURIComponent(resource.id)}" in resource
-    )
+    assert "/api/projects/${project.id}/notes/${encodeURIComponent(resource.id)}" in resource
     assert "/api/projects/${project.id}/files" in resource
     assert "/api/projects/${project.id}/file" in resource
     assert "onOpenFile" in resource
@@ -152,17 +148,13 @@ def test_note_selection_can_be_consumed_only_after_an_accepted_agent_handoff() -
     assert "if (result.status === 'done')" in picker
 
 
-def test_session_note_is_one_click_from_the_pane_bar_and_opens_in_the_anchor_pane() -> None:
+def test_notes_are_decoupled_from_terminals_and_open_in_the_anchor_pane() -> None:
     app = source("App.tsx")
     layout = source("layout.ts")
-    css = source("style.css")
-
-    # One click from the pane bar, with a state the user can read at a glance.
-    assert "note-chip" in app
-    assert "noteChipState" in app
-    assert "onClick={()=>openSessionNotes(session)}" in app
-    assert ".pane-tools .note-chip.written" in css
-    assert ".pane-tools .note-chip.open" in css
+    assert "note-chip" not in app
+    assert "noteChipState" not in app
+    assert "openSessionNotes" not in app
+    assert "session.note" not in app
 
     # Opening a resource is not a layout command. Every kind lands as a tab in the anchor's
     # pane; nothing splits the workspace on the user's behalf.
@@ -173,32 +165,22 @@ def test_session_note_is_one_click_from_the_pane_bar_and_opens_in_the_anchor_pan
     assert "target.kind==='session-note'&&!targetViewId" not in app
 
 
-def test_notes_tab_indexes_written_notes_without_hosting_an_editor() -> None:
-    """Notes are found in the drawer and edited in a pane, never edited in the drawer.
-
-    The drawer unmounts a tab body on every tab switch, which would cost the editor's
-    cursor/undo history and detach it from the insert routing that Clipboard and Prompts
-    depend on. So the Notes tab is an index: it opens a note into the workspace.
-    """
+def test_notes_tab_manages_the_project_owned_collection() -> None:
     app = source("App.tsx")
     notes = source("NotesTab.tsx")
     drawer = source("UtilityDrawer.tsx")
     css = source("style.css")
 
-    assert "/api/session-notes" in notes
+    assert "/api/notes" in notes
+    assert "/api/projects/${project.id}/notes" in notes
     assert "project_id=${encodeURIComponent(scopeId)}" in notes
-    assert "Filter session notes by project" in notes
-    assert "Search session notes" in notes
+    assert "Filter notes by project" in notes
+    assert "Search notes" in notes
     assert "All projects" in notes
-    assert ".session-note-row" in css and ".notes-tab" in css
-    # An index, not an editor: no Continuity editor and no save queue live here.
-    assert "ProjectNoteEditor" not in notes
-    assert "noteSaveQueue" not in notes
-    # The Project note is pinned and unconditional; the focused terminal's note is
-    # pinned only when it holds text, which is the "only if one exists" rule.
-    assert "note-pin-row" in notes
-    assert "focusedNote&&" in notes
-    assert "focusedNote={active?.note_exists?" in app
+    assert ".project-note-row" in css and ".notes-tab" in css
+    assert "+ New note" in notes
+    assert "mode:'rename'" in notes
+    assert "onOpenNote" in drawer
 
     # The retired modal is gone, and its three entry points now open the drawer tab.
     assert not (ROOT / "frontend" / "src" / "SessionNotesBrowser.tsx").exists()
@@ -207,7 +189,7 @@ def test_notes_tab_indexes_written_notes_without_hosting_an_editor() -> None:
     assert "openNotesBrowser" in app
     assert "id: 'notes.browse'" in app
     assert "runNamedCommand('notes.browse')" in app
-    assert "openBrowsedSessionNote" in app
+    assert "openBrowsedNote" in app
 
     # Scope follows how you arrived. Every scope-less entry point (rail, strip, drawer.notes)
     # goes through showDrawerTab and means "this Project"; only the app menu's unscoped

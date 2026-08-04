@@ -14,7 +14,6 @@ export type HistoryEntry = {
   compaction_count?:number;last_compaction_at?:number;compaction_capability?:string;compaction_confidence?:string
   native_started_at?:number|null;last_message_at?:number|null;last_message_role?:'user'|'assistant'|null
   transcript_size?:number|null;time_summary_size?:number|null
-  note_id?:string
   auto_named?:number;generated_title?:string;matches?:HistoryMatch[];match_count?:number
 }
 type DerivedAnnotation={id:string;tag:string;content:string;provenance:string;resolved_model?:string;confidence?:number;cost_usd?:number;created_at:number}
@@ -34,7 +33,6 @@ type Props={
   initialProjectId:string
   onClose:()=>void
   onResume:(entry:HistoryEntry)=>void|Promise<void>
-  onSessionNote:(entry:HistoryEntry)=>void
   onSecondOpinion:(entry:HistoryEntry)=>void|Promise<void>
   onHandoff:(entry:HistoryEntry)=>void|Promise<void>
 }
@@ -58,7 +56,7 @@ const formatBytes=(bytes?:number|null)=>{
   return `${value>=100||unit===0?Math.round(value):value.toFixed(1)} ${units[unit]}`
 }
 
-export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSessionNote,onSecondOpinion,onHandoff}:Props){
+export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSecondOpinion,onHandoff}:Props){
   const [items,setItems]=useState<HistoryEntry[]>([])
   const [historyProjects,setHistoryProjects]=useState<HistoryProject[]>([])
   const [nextCursor,setNextCursor]=useState<string|null>(null)
@@ -202,7 +200,7 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSes
         {nextCursor&&!loading&&<button class="history-load-more" onClick={()=>void load(true)}>Load more</button>}
       </aside>
       <main>{transcript?<><div class="transcript-heading"><button class="history-back" onClick={()=>setTranscript(null)}>← Results</button><div><h3>[{transcript.entry.backend}] {historyName(transcript.entry)}</h3><span>{transcript.entry.project_label||'Unassigned'} · {transcript.entry.cwd}</span><small>Started {timestampLabel(historyStart(transcript.entry))} · last {transcript.entry.last_message_role==='assistant'?'agent':transcript.entry.last_message_role==='user'?'you':'message'} {timestampLabel(transcript.entry.last_message_at)}</small><small>{transcript.entry.exit_reason||transcript.entry.final_state||'indexed'} · {transcript.entry.model||'model unavailable'} · {transcript.entry.external?'external':'mux session'}</small><small>{transcript.entry.context_window?`context final ${Math.round((transcript.entry.final_context_pct||0)*100)}% · peak ${Math.round((transcript.entry.peak_context_pct||0)*100)}% · ${transcript.entry.measurement_source||'native observation'}`:'context unavailable'} · tokens in {transcript.entry.tokens_in||0} / out {transcript.entry.tokens_out||0}{formatBytes(transcriptBytes(transcript.entry))?` · transcript ${formatBytes(transcriptBytes(transcript.entry))}`:''}</small><small>{transcript.entry.compaction_count?`explicit compactions ${transcript.entry.compaction_count} · ${transcript.entry.compaction_capability||'native evidence'} · confidence ${transcript.entry.compaction_confidence||'unknown'}`:'compaction count unavailable — token drops are not treated as compaction evidence'}</small></div><button class="primary" onClick={()=>void onResume(transcript.entry)}>Resume as new</button></div>
-        <div class="transcript-actions">{transcript.entry.project_id&&transcript.entry.note_id&&<button onClick={()=>onSessionNote(transcript.entry)}>Session note</button>}<button onClick={()=>void onHandoff(transcript.entry)}>Export handoff</button><button class="primary" onClick={()=>void onSecondOpinion(transcript.entry)}>Review with {transcript.entry.backend==='claude'?'Codex':'Claude'}</button>{transcript.matches.length>0&&<div class="transcript-match-nav"><button aria-label="Previous search match" onClick={()=>moveMatch(-1)}>↑</button><span>{activeMatch+1}/{transcript.matches.length}</span><button aria-label="Next search match" onClick={()=>moveMatch(1)}>↓</button></div>}</div>
+        <div class="transcript-actions"><button onClick={()=>void onHandoff(transcript.entry)}>Export handoff</button><button class="primary" onClick={()=>void onSecondOpinion(transcript.entry)}>Review with {transcript.entry.backend==='claude'?'Codex':'Claude'}</button>{transcript.matches.length>0&&<div class="transcript-match-nav"><button aria-label="Previous search match" onClick={()=>moveMatch(-1)}>↑</button><span>{activeMatch+1}/{transcript.matches.length}</span><button aria-label="Next search match" onClick={()=>moveMatch(1)}>↓</button></div>}</div>
         {lineage.length>0&&<section class="transcript-lineage"><h4>Work lineage</h4>{lineage.map(edge=><article><strong>{edge.relation}</strong><span>{edge.parent_run_id} → {edge.child_run_id}</span><small>{new Date(edge.created_at*1000).toLocaleString()}</small></article>)}</section>}{transcript.annotations.length>0&&<section class="transcript-annotations"><h4>Run notes</h4>{transcript.annotations.map(item=><details><summary>{item.tag} · {item.content}</summary><small>{new Date(item.created_at*1000).toLocaleString()} · {item.provenance} · model::{item.resolved_model||'deterministic'} · confidence::{item.confidence??'—'} · cost::{money.format(item.cost_usd||0)}</small></details>)}</section>}
         <div class="messages" ref={transcriptBody}>{transcript.messages.length?transcript.messages.map((message,ordinal)=><article data-message-ordinal={ordinal} class={`${message.role} ${transcript.matches.some(match=>match.ordinal===ordinal)?'search-match-message':''} ${activeOrdinal===ordinal?'active-search-match':''}`}><header><span>{message.role}</span><time dateTime={timestampIso(message.ts)}>{timestampLabel(message.ts)}</time></header>{message.content.map(block=>block.type==='text'?<p>{block.text}</p>:<pre>{block.type==='tool_use'?`${block.name}\n${JSON.stringify(block.input,null,2)}`:block.type}</pre>)}</article>):<div class="no-transcript">No native transcript is available for this session.</div>}</div></>:<div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Search prompts and replies, then inspect the native transcript.</p></div>}</main>
     </div>

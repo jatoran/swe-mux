@@ -52,7 +52,7 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'queue', label: 'Queue', heading: 'Prompt Queue', title: 'Queue - messages staged for this agent, and the mailbox', scope: 'session' },
   { id: 'transcript', label: 'Transcript', heading: 'Transcript', title: 'Transcript - read and copy this session’s conversation', scope: 'session' },
   { id: 'files', label: 'Files', heading: 'File Explorer', title: 'Files - browse or search this Project, then open into a pane', scope: 'project' },
-  { id: 'notes', label: 'Notes', heading: 'Notes', title: 'Notes - read and write Project and session notes here, or open one in a pane', scope: 'project' },
+  { id: 'notes', label: 'Notes', heading: 'Notes', title: 'Notes - create and edit Project-owned notes here, or open one in a pane', scope: 'project' },
   { id: 'context', label: 'Context', heading: 'Agent Context', title: 'Context - view agent instructions and learned project memory', scope: 'project' },
   { id: 'git', label: 'Git', heading: 'Git', title: 'Git - worktree map and commit graph for this Project', scope: 'project' },
   { id: 'processes', label: 'Processes', heading: 'Processes', title: 'Processes - what this Project’s sessions are running, and what they are serving', scope: 'project' },

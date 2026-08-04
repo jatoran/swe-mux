@@ -98,14 +98,14 @@ test('both tab-icon surfaces mark session scope without using notification badge
 test('Notes exposes one revision-safe action model through inline and pointer menus', () => {
   const notes = readFileSync(join(import.meta.dirname, '..', 'src', 'NotesTab.tsx'), 'utf8')
   const css = readFileSync(join(import.meta.dirname, '..', 'src', 'style.css'), 'utf8')
-  assert.ok(notes.includes("await api('DELETE',`/api/projects/${note.project_id}/session-notes/"))
+  assert.ok(notes.includes("await api('DELETE',`/api/projects/${note.project_id}/notes/"))
   assert.ok(notes.includes('{revision:note.revision}'))
   assert.ok(notes.includes("confirming?'delete?':'×'"), 'inline delete must expose its second step')
   assert.ok(notes.includes('onContextMenu={event=>openContextMenu(note,event)}'))
   assert.ok(notes.includes('const LONG_PRESS_MS=550'))
-  assert.ok(notes.includes("'Confirm delete':'Delete session note'"), 'context delete must expose the same second step')
-  assert.ok(notes.includes("projectNoteBytes===null?'size …':sizeLabel(projectNoteBytes)"))
-  assert.match(css, /\.project-note-shell\{[^}]*border:[^}]*box-shadow:/)
+  assert.ok(notes.includes("'Confirm delete':'Delete note'"), 'context delete must expose the same second step')
+  assert.ok(notes.includes("setTitlePrompt({mode:'create',title:'Untitled note'})"))
+  assert.match(css, /\.project-note-row\{[^}]*grid-template-columns:/)
 })
 
 test('dock width has no fixed maximum and preserves a minimum workspace', () => {

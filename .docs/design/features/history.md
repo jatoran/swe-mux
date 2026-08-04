@@ -8,8 +8,8 @@
   remain separate display metadata. Startup-reconciled native transcripts may be unassigned;
   an explicit Project scan assigns only transcripts whose recorded cwd belongs to that
   registered Project, preferring the most-specific registered root.
-- Each row also carries the owning terminal `note_id`. Opening `Session note` lazily creates or
-  reopens the Project file for that terminal; nested agent-run IDs never fork the terminal note.
+- The historical `note_id` column remains migration provenance for notes created by older builds.
+  History no longer creates, opens, or owns notes.
 - **One row per agent run, and an in-CLI `/clear` or `/new` ends a run** (`backends.md`). The
   retired conversation keeps its own row with its own `native_id`, transcript path, indexed
   messages, and final token/context figures; the successor gets a separate row under a new

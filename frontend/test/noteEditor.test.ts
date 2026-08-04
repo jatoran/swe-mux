@@ -23,7 +23,7 @@ function makeTransport() {
   return { transport, calls, deferreds }
 }
 
-const noteTarget = noteSaveTarget('p1', null)
+const noteTarget = noteSaveTarget('p1', 'note-a')
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
@@ -41,7 +41,7 @@ test('save queue commits text with the storage revision and advances it on ack',
   queue.reset(key, noteTarget, 'rev0')
   queue.submit(key, 'hello')
   queue.flush(key)
-  assert.deepEqual(calls, [{ url: '/api/projects/p1/note', text: 'hello', revision: 'rev0' }])
+  assert.deepEqual(calls, [{ url: '/api/projects/p1/notes/note-a', text: 'hello', revision: 'rev0' }])
   deferreds[0].resolve({ revision: 'rev1', status: 'ready' })
   await tick()
   assert.equal(queue.getState(key).storageRevision, 'rev1')
@@ -84,7 +84,7 @@ test('a storage conflict keeps local text, blocks auto-save, and overwrite re-co
   // Resolve by adopting the on-disk revision and overwriting with local text.
   queue.overwrite(key, 'rev5')
   assert.equal(calls.length, 2)
-  assert.deepEqual(calls[1], { url: '/api/projects/p1/note', text: 'mine2', revision: 'rev5' })
+  assert.deepEqual(calls[1], { url: '/api/projects/p1/notes/note-a', text: 'mine2', revision: 'rev5' })
 })
 
 test('reset adopts a fresh revision and clears conflict/pending state', () => {
@@ -118,14 +118,14 @@ test('live follow is allowed only for a different remote revision while locally 
   assert.equal(queue.canFollowRemote(key, 'rev2'), true)
 })
 
-test('session notes retain their storage identity through queued saves', () => {
+test('project notes retain their storage identity through queued saves', () => {
   const { transport, calls } = makeTransport()
   const queue = new NoteSaveQueue(transport)
-  const key = noteQueueKey('project', 'session-note:terminal')
-  queue.reset(key, noteSaveTarget('project', 'terminal'), 'rev0')
-  queue.submit(key, 'session context')
+  const key = noteQueueKey('project', 'note:release-plan')
+  queue.reset(key, noteSaveTarget('project', 'release-plan'), 'rev0')
+  queue.submit(key, 'release context')
   queue.flush(key)
-  assert.deepEqual(calls, [{ url: '/api/projects/project/session-notes/terminal', text: 'session context', revision: 'rev0' }])
+  assert.deepEqual(calls, [{ url: '/api/projects/project/notes/release-plan', text: 'release context', revision: 'rev0' }])
 })
 
 test('markdown files queue-save to the project file endpoint with their path', () => {
@@ -169,7 +169,7 @@ test('the unload beacon sends the newest snapshot even while a save is in flight
   }
 
   assert.equal(beacons.length, 1)
-  assert.equal(beacons[0].url, '/api/projects/p1/note')
+  assert.equal(beacons[0].url, '/api/projects/p1/notes/note-a')
   assert.equal(beacons[0].keepalive, true)
   assert.deepEqual(beacons[0].body, { markdown: 'typed while saving', revision: 'rev0' })
   deferreds[0].resolve({ revision: 'rev1', status: 'ready' })

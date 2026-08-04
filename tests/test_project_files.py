@@ -8,6 +8,7 @@ from PIL import Image
 
 from swe_mux.git_projects import ProjectIdentity, rebase_identity
 from swe_mux.project_files import (
+    DEFAULT_NOTE_STORAGE_ID,
     ObservationsUnreadableError,
     ProjectFileRevisionConflict,
     ProjectImageUnavailable,
@@ -84,15 +85,15 @@ async def test_explicit_project_identity_keeps_a_nested_project_out_of_its_workt
 
     monkeypatch.setattr("swe_mux.project_files.resolve_project", resolve_to_outer)
 
-    bled = await read_note(inner, "projects", "inner-project")
+    bled = await read_note(inner, DEFAULT_NOTE_STORAGE_ID)
     assert Path(bled["path"]) == outer / ".swe-mux" / "notes" / "project.md"
 
     identity = ProjectIdentity("inner-project", "app", str(inner), "registered")
-    scoped = await read_note(inner, "projects", "inner-project", project=identity)
+    scoped = await read_note(inner, DEFAULT_NOTE_STORAGE_ID, project=identity)
     assert Path(scoped["path"]) == inner / ".swe-mux" / "notes" / "project.md"
 
     written = await write_note(
-        inner, "projects", "inner-project", "# App\n", "missing", project=identity
+        inner, DEFAULT_NOTE_STORAGE_ID, "# App\n", "missing", project=identity
     )
     assert Path(written["path"]).is_file()
     assert not (outer / ".swe-mux" / "notes" / "project.md").exists()
@@ -130,10 +131,10 @@ async def test_corrupt_observations_are_refused_rather_than_clobbered(tmp_path: 
 
 
 async def test_project_note_round_trips_and_detects_external_edits(tmp_path: Path) -> None:
-    missing = await read_note(tmp_path, "projects", "project-id")
+    missing = await read_note(tmp_path, DEFAULT_NOTE_STORAGE_ID)
     assert missing["revision"] == "missing"
     saved = await write_note(
-        tmp_path, "projects", "project-id", "# Plan\n\nKeep this local.\n", "missing"
+        tmp_path, DEFAULT_NOTE_STORAGE_ID, "# Plan\n\nKeep this local.\n", "missing"
     )
     path = Path(saved["path"])
     assert path == tmp_path / ".swe-mux" / "notes" / "project.md"
@@ -141,25 +142,25 @@ async def test_project_note_round_trips_and_detects_external_edits(tmp_path: Pat
 
     path.write_text(path.read_text(encoding="utf-8") + "external\n", encoding="utf-8")
     with pytest.raises(ValueError, match="changed externally"):
-        await write_note(tmp_path, "projects", "project-id", "overwrite", saved["revision"])
+        await write_note(tmp_path, DEFAULT_NOTE_STORAGE_ID, "overwrite", saved["revision"])
 
 
-async def test_session_note_is_lazily_initialized_and_never_overwritten(tmp_path: Path) -> None:
-    note = await initialize_note(tmp_path, "sessions", "terminal-123")
+async def test_generic_note_is_initialized_once_and_never_overwritten(tmp_path: Path) -> None:
+    note = await initialize_note(tmp_path, "durable-note", "Durable context")
     path = Path(note["path"])
-    assert path == tmp_path / ".swe-mux" / "notes" / "sessions" / "terminal-123.md"
+    assert path == tmp_path / ".swe-mux" / "notes" / "items" / "durable-note.md"
     assert note["exists"]
     assert note["markdown"] == ""
-    assert note_exists(tmp_path, "sessions", "terminal-123")
+    assert note_exists(tmp_path, "durable-note")
 
     saved = await write_note(
-        tmp_path, "sessions", "terminal-123", "# Durable session context\n", note["revision"]
+        tmp_path, "durable-note", "# Durable context\n", note["revision"]
     )
-    reopened = await initialize_note(tmp_path, "sessions", "terminal-123")
+    reopened = await initialize_note(tmp_path, "durable-note", "Different title")
     assert reopened["markdown"] == saved["markdown"]
     assert reopened["revision"] == saved["revision"]
 
-    unsafe = await initialize_note(tmp_path, "sessions", "external:provider/run")
+    unsafe = await initialize_note(tmp_path, "external:provider/run", "External context")
     assert Path(unsafe["path"]).parent == path.parent
     assert Path(unsafe["path"]).name.startswith("id-")
 

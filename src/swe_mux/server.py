@@ -109,16 +109,15 @@ from .project_files import (
     ProjectImageUnavailable,
     ProjectResourceExists,
     append_observation,
+    create_note,
     create_project_resource,
     delete_note,
     effective_project_ignores,
     ignored_project_path,
-    initialize_note,
     list_project_directories,
     list_project_directory,
-    note_exists,
-    note_has_content,
     project_automations,
+    project_note_summaries,
     project_path,
     read_note,
     read_observations,
@@ -126,7 +125,6 @@ from .project_files import (
     read_project_file,
     read_project_image_content,
     search_project_files,
-    session_note_summaries,
     update_observation_request,
     write_note,
     write_observations,
@@ -568,8 +566,12 @@ def create_app(
             web.post("/api/projects/{project_id}/actions/trust", trust_project_actions),
             web.post("/api/projects/{project_id}/actions/run", run_project_action),
             web.post("/api/projects/{project_id}/init-scripts/run", run_project_init_scripts),
-            web.get("/api/projects/{project_id}/note", get_project_note),
-            web.put("/api/projects/{project_id}/note", put_project_note),
+            web.get("/api/notes", list_notes),
+            web.post("/api/projects/{project_id}/notes", create_project_note),
+            web.get("/api/projects/{project_id}/notes/{note_id}", get_note),
+            web.put("/api/projects/{project_id}/notes/{note_id}", put_note),
+            web.patch("/api/projects/{project_id}/notes/{note_id}", patch_note),
+            web.delete("/api/projects/{project_id}/notes/{note_id}", delete_project_note),
             web.get("/api/projects/{project_id}/observations", get_observations),
             web.post("/api/projects/{project_id}/observations", post_observation),
             web.put("/api/projects/{project_id}/observations", put_observations),
@@ -603,11 +605,6 @@ def create_app(
                 "/api/projects/{project_id}/agent-context/restore",
                 restore_agent_context,
             ),
-            web.get("/api/session-notes", list_session_notes),
-            web.get("/api/projects/{project_id}/session-notes/{note_id}", get_session_note),
-            web.post("/api/projects/{project_id}/session-notes/{note_id}", initialize_session_note),
-            web.put("/api/projects/{project_id}/session-notes/{note_id}", put_session_note),
-            web.delete("/api/projects/{project_id}/session-notes/{note_id}", delete_session_note),
             web.get("/api/projects/{project_id}/files/tree", list_project_files_tree),
             web.get("/api/projects/{project_id}/files", list_project_files),
             web.post("/api/projects/{project_id}/resources", post_project_resource),
@@ -2839,30 +2836,182 @@ def _registered_identity(project) -> ProjectIdentity:  # type: ignore[no-untyped
     return ProjectIdentity(project.id, project.name, project.root, "registered")
 
 
-async def get_project_note(request: web.Request) -> web.Response:
-    project_id = request.match_info["project_id"]
-    project = request.app["projects"].projects.get(project_id)
+def _notes_project(request: web.Request):  # type: ignore[no-untyped-def]
+    project = request.app["projects"].projects.get(request.match_info["project_id"])
     if not project:
         raise ValueError("unknown project")
-    note = await read_note(
-        project.root, "projects", project.id, project=_registered_identity(project)
+    return project
+
+
+def _storage_note_id(project, note_id: str) -> str:  # type: ignore[no-untyped-def]
+    # The initial note has historically used the Project id in layout resources.
+    # Keep that stable while storing it at the existing `project.md` path.
+    return "project" if note_id == project.id else note_id
+
+
+async def _legacy_note_titles(request: web.Request, project) -> dict[str, str]:  # type: ignore[no-untyped-def]
+    titles: dict[str, str] = {}
+    if "history" in request.app:
+        owners = await request.app["history"].note_owner_labels(project.id)
+        titles.update(
+            {
+                str(note_id): str(owner.get("name") or note_id)
+                for note_id, owner in owners.items()
+            }
+        )
+    if "sessions" in request.app:
+        for session in request.app["sessions"].sessions.values():
+            if session.record.project_id == project.id:
+                titles[session.record.id] = session.record.name
+    return titles
+
+
+async def _project_note_items(request: web.Request, project) -> list[dict[str, Any]]:  # type: ignore[no-untyped-def]
+    titles = await _legacy_note_titles(request, project)
+    return await asyncio.to_thread(
+        project_note_summaries,
+        project.root,
+        default_note_id=project.id,
+        default_title=f"{project.name} notes",
+        legacy_titles=titles,
     )
-    note.update({"project_id": project.id, "project_name": project.name})
+
+
+async def list_notes(request: web.Request) -> web.Response:
+    manager: ProjectManager = request.app["projects"]
+    requested = request.query.get("project_id") or ""
+    projects = [
+        project
+        for project in manager.ordered_projects()
+        if not requested or project.id == requested
+    ]
+    if requested and not projects:
+        raise ValueError("unknown project")
+    items: list[dict[str, Any]] = []
+    for project in projects:
+        for summary in await _project_note_items(request, project):
+            items.append(
+                {**summary, "project_id": project.id, "project_name": project.name}
+            )
+    items.sort(key=lambda item: float(item["updated_at"]), reverse=True)
+    return json_response({"items": items})
+
+
+async def create_project_note(request: web.Request) -> web.Response:
+    project = _notes_project(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise ValueError("note request body must be an object")
+    result = await create_note(
+        project.root,
+        str(body.get("title") or ""),
+        project=_registered_identity(project),
+    )
+    result.update({"project_id": project.id, "project_name": project.name})
+    log.info(
+        "project note created project_id=%s note_id=%s title=%r",
+        project.id,
+        result["id"],
+        result["title"],
+    )
+    await request.app["events"].emit(
+        "note_changed",
+        source="user",
+        project_id=project.id,
+        note_id=result["id"],
+        revision=result["revision"],
+    )
+    return json_response(result, 201)
+
+
+async def get_note(request: web.Request) -> web.Response:
+    project = _notes_project(request)
+    note_id = request.match_info["note_id"]
+    await _project_note_items(request, project)
+    storage_id = _storage_note_id(project, note_id)
+    note = await read_note(
+        project.root,
+        storage_id,
+        default_title=f"{project.name} notes" if storage_id == "project" else "Untitled note",
+        project=_registered_identity(project),
+    )
+    if not note["exists"]:
+        raise ValueError("unknown note")
+    note.update(
+        {"id": note_id, "project_id": project.id, "project_name": project.name}
+    )
     return json_response(note)
 
 
-async def put_project_note(request: web.Request) -> web.Response:
-    project_id = request.match_info["project_id"]
-    project = request.app["projects"].projects.get(project_id)
-    if not project:
-        raise ValueError("unknown project")
+async def _write_project_note(request: web.Request, *, title_only: bool = False) -> web.Response:
+    project = _notes_project(request)
+    note_id = request.match_info["note_id"]
+    await _project_note_items(request, project)
+    storage_id = _storage_note_id(project, note_id)
     body = await request.json()
+    if not isinstance(body, dict):
+        raise ValueError("note request body must be an object")
+    current = await read_note(
+        project.root,
+        storage_id,
+        default_title=f"{project.name} notes" if storage_id == "project" else "Untitled note",
+        project=_registered_identity(project),
+    )
+    if not current["exists"]:
+        raise ValueError("unknown note")
     try:
         result = await write_note(
             project.root,
-            "projects",
-            project.id,
-            str(body.get("markdown") or ""),
+            storage_id,
+            str(current["markdown"] if title_only else body.get("markdown") or ""),
+            str(body.get("revision") or "missing"),
+            title=str(body.get("title") or "") if title_only else str(current["title"]),
+            default_title=f"{project.name} notes" if storage_id == "project" else "Untitled note",
+            project=_registered_identity(project),
+        )
+    except ValueError as exc:
+        if "changed externally" in str(exc):
+            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        raise
+    result.update(
+        {"id": note_id, "project_id": project.id, "project_name": project.name}
+    )
+    log.info(
+        "project note %s project_id=%s note_id=%s revision=%s",
+        "renamed" if title_only else "saved",
+        project.id,
+        note_id,
+        result["revision"],
+    )
+    await request.app["events"].emit(
+        "note_changed",
+        source="user",
+        project_id=project.id,
+        note_id=note_id,
+        revision=result["revision"],
+    )
+    return json_response(result)
+
+
+async def put_note(request: web.Request) -> web.Response:
+    return await _write_project_note(request)
+
+
+async def patch_note(request: web.Request) -> web.Response:
+    return await _write_project_note(request, title_only=True)
+
+
+async def delete_project_note(request: web.Request) -> web.Response:
+    project = _notes_project(request)
+    note_id = request.match_info["note_id"]
+    await _project_note_items(request, project)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise ValueError("note request body must be an object")
+    try:
+        result = await delete_note(
+            project.root,
+            _storage_note_id(project, note_id),
             str(body.get("revision") or "missing"),
             project=_registered_identity(project),
         )
@@ -2870,14 +3019,20 @@ async def put_project_note(request: web.Request) -> web.Response:
         if "changed externally" in str(exc):
             return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
         raise
+    log.info(
+        "project note deleted project_id=%s note_id=%s bytes=%d",
+        project.id,
+        note_id,
+        result["bytes"],
+    )
     await request.app["events"].emit(
-        "project_note_changed",
+        "note_changed",
         source="user",
         project_id=project.id,
-        revision=result["revision"],
+        note_id=note_id,
+        revision="missing",
     )
-    result.update({"project_id": project.id, "project_name": project.name})
-    return json_response(result)
+    return json_response({"deleted": True, "project_id": project.id, "note_id": note_id})
 
 
 def _observations_project(request: web.Request):  # type: ignore[no-untyped-def]
@@ -3102,142 +3257,6 @@ async def put_project_automations(request: web.Request) -> web.Response:
         raise
     await request.app["events"].emit("project_configuration_changed", project_id=project.id)
     return await get_project_automations(request)
-
-
-async def list_session_notes(request: web.Request) -> web.Response:
-    """List session notes that hold real text, newest first, for the notes browser.
-
-    The listing is filesystem-derived so a note remains reachable after its
-    session, its history row, and the daemon that created it are all gone.
-    History and live sessions only supply display labels.
-    """
-    manager: ProjectManager = request.app["projects"]
-    requested = request.query.get("project_id") or ""
-    projects = [
-        project
-        for project in manager.ordered_projects()
-        if not requested or project.id == requested
-    ]
-    if requested and not projects:
-        raise ValueError("unknown project")
-    live_names = {
-        session.record.id: session.record for session in request.app["sessions"].sessions.values()
-    }
-    items: list[dict[str, Any]] = []
-    for project in projects:
-        summaries = await asyncio.to_thread(session_note_summaries, project.root)
-        if not summaries:
-            continue
-        owners = await request.app["history"].note_owner_labels(project.id)
-        for summary in summaries:
-            note_id = str(summary["note_id"])
-            record = live_names.get(note_id)
-            owner = owners.get(note_id) or {}
-            live = record is not None and record.state not in {"exited", "crashed"}
-            items.append(
-                {
-                    **summary,
-                    "project_id": project.id,
-                    "project_name": project.name,
-                    "owner_label": (record.name if record else owner.get("name")) or note_id,
-                    "owner_backend": (record.backend if record else owner.get("backend")) or None,
-                    "owner_live": live,
-                    "owner_known": record is not None or bool(owner),
-                }
-            )
-    items.sort(key=lambda item: float(item["updated_at"]), reverse=True)
-    return json_response({"items": items})
-
-
-async def _session_note_owner(request: web.Request):  # type: ignore[no-untyped-def]
-    project_id = request.match_info["project_id"]
-    note_id = request.match_info["note_id"]
-    project = request.app["projects"].projects.get(project_id)
-    if not project:
-        raise ValueError("unknown project")
-    live = request.app["sessions"].sessions.get(note_id)
-    live_owned = bool(live and live.record.project_id == project_id)
-    historical = await request.app["history"].session_note_owned(project_id, note_id)
-    if not live_owned and not historical and not note_exists(project.root, "sessions", note_id):
-        raise ValueError("session note is not owned by this project")
-    return project, note_id
-
-
-async def get_session_note(request: web.Request) -> web.Response:
-    project, note_id = await _session_note_owner(request)
-    note = await read_note(project.root, "sessions", note_id, project=_registered_identity(project))
-    note.update({"project_id": project.id, "project_name": project.name})
-    return json_response(note)
-
-
-async def initialize_session_note(request: web.Request) -> web.Response:
-    project, note_id = await _session_note_owner(request)
-    note = await initialize_note(
-        project.root, "sessions", note_id, project=_registered_identity(project)
-    )
-    await request.app["events"].emit(
-        "session_note_initialized", source="user", project_id=project.id, note_id=note_id
-    )
-    note.update({"project_id": project.id, "project_name": project.name})
-    return json_response(note, 201)
-
-
-async def put_session_note(request: web.Request) -> web.Response:
-    project, note_id = await _session_note_owner(request)
-    body = await request.json()
-    try:
-        result = await write_note(
-            project.root,
-            "sessions",
-            note_id,
-            str(body.get("markdown") or ""),
-            str(body.get("revision") or "missing"),
-            project=_registered_identity(project),
-        )
-    except ValueError as exc:
-        if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
-        raise
-    await request.app["events"].emit(
-        "session_note_changed",
-        source="user",
-        project_id=project.id,
-        note_id=note_id,
-        revision=result["revision"],
-    )
-    result.update({"project_id": project.id, "project_name": project.name})
-    return json_response(result)
-
-
-async def delete_session_note(request: web.Request) -> web.Response:
-    project, note_id = await _session_note_owner(request)
-    body = await request.json()
-    try:
-        result = await delete_note(
-            project.root,
-            "sessions",
-            note_id,
-            str(body.get("revision") or "missing"),
-            project=_registered_identity(project),
-        )
-    except ValueError as exc:
-        if "changed externally" in str(exc):
-            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
-        raise
-    log.info(
-        "session note deleted project_id=%s note_id=%s bytes=%d",
-        project.id,
-        note_id,
-        result["bytes"],
-    )
-    await request.app["events"].emit(
-        "session_note_changed",
-        source="user",
-        project_id=project.id,
-        note_id=note_id,
-        revision="missing",
-    )
-    return json_response({"deleted": True, "project_id": project.id, "note_id": note_id})
 
 
 async def resolve_project_scope(request: web.Request) -> web.Response:
@@ -3495,13 +3514,6 @@ async def list_sessions(request: web.Request) -> web.Response:
     readiness = request.app["fleet"].readiness
     for session in manager.sessions.values():
         item = session.record.snapshot()
-        item["note_id"] = session.record.id
-        project = request.app["projects"].projects.get(session.record.project_id)
-        # Content, not presence: a note created by a stray click must not pin a
-        # permanent sidebar row under its terminal.
-        item["note_exists"] = bool(
-            project and note_has_content(project.root, "sessions", session.record.id)
-        )
         delivery = readiness.evaluate(session, record_metrics=False)
         item["delivery_readiness"] = {
             "state": delivery["delivery_state"],

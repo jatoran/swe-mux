@@ -2,59 +2,39 @@
 
 ## What it is
 
-Safe access to Project and session notes, a bounded Project file tree, revision-checked text
-editing, ignore patterns, host file-manager reveal, and leased filesystem watches. Editable
-resources (notes, file editors) are pane tabs alongside terminals and previews. The two
-*navigators* — the file tree and the notes index — are utility-drawer tabs: they open documents
-into panes rather than holding one, so they cost a panel instead of a permanent tab.
+Safe access to Project-owned notes, a bounded Project file tree, revision-checked text editing,
+ignore patterns, host file-manager reveal, and leased filesystem watches.
+Editable resources are pane tabs alongside terminals and previews.
+The file tree and notes collection are utility-drawer tabs.
 
 ## Notes
 
-- Every Project has one canonical note at `.swe-mux/notes/project.md`. Creation seeds an absent
-  file with a `# <Project name> notes` heading followed by two blank lines. An existing note is
-  never rewritten, and renaming a Project never rewrites its heading.
-- The Project note has **no sidebar chip**. It is opened from the Notes drawer tab's first
-  pinned row (always present, even when the note is empty), the Project context menu's
-  `Project note`, the `notes.open` / `project.note` commands, or the Projects registry's
-  per-Project note action. The sidebar chip it replaced cost every Project row a permanent
-  second line for a surface most Projects never opened; see `ui.md` § sidebar.
-- Every shell, Claude, or Codex terminal can lazily initialize a distinct note at
-  `.swe-mux/notes/sessions/<safe-session-id>.md`. Unsafe/external identities use a stable hashed
-  filename. Opening an existing note never overwrites it.
-- **Every note file opens with a TOML identity header, and the editor never sees it.** The header
-  records `swe_mux_note = 1` plus the note's kind and id; `_note_body` strips it on read and
-  `write_note` rebuilds it on save, so the pair the file path was derived from is the only pair
-  that can ever be stored. Reading normalizes newlines first and saving writes LF, because the
-  header is matched byte-exactly: `read_note` decodes raw bytes to hash the file, so unlike the
-  `read_text` callers it gets no universal-newline translation, and a note rewritten with CRLF
-  would render its header as body text. That failure used to compound — the leaked header was
-  submitted back on save and went unrecognized, stacking a second one — so the strip now peels
-  every header it finds and heals an already-corrupted file. A repository `.gitattributes` pins
-  these files to `eol=lf` so a checkout under `core.autocrlf=true` cannot reintroduce it.
-- Each terminal's pane bar carries a one-click `note` chip that starts, opens, or focuses that
-  terminal's note. It reports three states: empty, written (the note holds text), and open (the
-  note is the focused tab). `session.note` is the same action from the command palette and its
-  default `Ctrl+Alt+N` binding.
-- A session note opens as a tab in the pane you were last in — the focused view when it is still
-  in the layout, then the owning terminal's pane, then whatever the layout has. Every entry point
-  (pane chip, context menu, palette, sidebar row, Notes tab) uses this one rule, which is the same
-  rule the Project note and file editors already used.
-- It used to split a pane off so the note sat *beside* its terminal rather than over it. That
-  traded workspace geometry for a guess: it rearranged panes every time a note was opened, and
-  the split it chose was rarely the one wanted. Splitting is an explicit action — the tab menu's
-  split rows, or a drag onto a pane edge — not a side effect of opening something.
-- A note that is already open is activated **where it is**, never moved. Reopening it from a
-  different pane must not tear it out of the pane the user put it in. The note context menu's
-  explicit `Open in focused pane` is the deliberate way to move it.
-- The browser's per-session note signal is content, not file presence: a note created by a stray
-  chip click stays readable and writable but earns no sidebar row until it holds text. Note
-  authorization still keys on file existence, so an empty note is never locked out.
-- The **Notes** drawer tab is both the index and a second host for the editor. The Project note is
-  pinned first and is always present even when empty (it is the one note every Project has). The
-  focused terminal's note is pinned second when it holds text. Below them sits every other session
-  note with content, searchable over owner, Project, and excerpt, scoped to this Project or to all
-  of them. Selecting a row opens that note **in the drawer**; the row's `⇥` opens it as a pane tab
-  through the ordinary placement rule above instead.
+- Notes are a flat Project-owned collection.
+- A note has a stable ID, title, body, creation time, update time, and optional migration provenance.
+- Project creation seeds the first ordinary note at `.swe-mux/notes/project.md` with the title `<Project name> notes` and a matching heading.
+- Additional notes live at `.swe-mux/notes/items/<safe-note-id>.md`.
+- The historical `project.md` path and Project-ID layout identity remain stable for existing Projects, but the note has no special behavior in the collection.
+- Notes are created from the Notes drawer, not from terminals, sessions, or History.
+- There is no session-note command, terminal note chip, per-session hierarchy, or session ownership check.
+- `notes.open`, `notes.browseProject`, the Project context menu, and the Projects registry open the current Project's collection.
+- `notes.browse` opens the all-Projects collection.
+- The default `Ctrl+Alt+N` binding and two-finger swipe-up gesture open the current Project's notes.
+- Stored `project.note` and `session.note` bindings and gestures migrate to `notes.open`.
+- The Notes drawer lists explicit notes even when empty, supports Project/all-Projects scope, searches title/Project/excerpt, and provides create, rename, delete, open-in-drawer, and open-in-pane actions.
+- A note already open in a pane is activated where it is.
+- Opening a note never creates or rearranges a split.
+- Moving a note is an explicit tab move or pane-edge split action.
+- Each note file has a hidden TOML header containing `swe_mux_note`, `kind = "notes"`, `id`, `title`, `created_at`, and optional `origin_session_id`.
+- The editor sees only the Markdown body.
+- Reads normalize CRLF and peel stacked legacy headers; writes rebuild one LF header.
+- Non-empty legacy `.swe-mux/notes/sessions/*.md` files migrate into the flat collection with their stable ID and `origin_session_id` provenance.
+- A migrated title uses the best available historical owner label plus date, falling back to the first body line.
+- Empty legacy note files are not promoted into collection entries.
+- Migrated and empty legacy source files move into `.swe-mux/notes/legacy/` so migration is recoverable and idempotent.
+- Persisted `sessions:<id>` layout resources resolve to the migrated generic `note:<id>` identity.
+- Listing is derived from the filesystem, so notes remain reachable after sessions and History rows disappear.
+- Successful create, save, rename, and delete operations emit `note_changed {project_id, note_id, revision}`.
+- Clean editors live-follow a different revision; local pending, in-flight, failed, or conflicted work is never replaced.
 - **A note has exactly one live editor per browser, and that is a correctness requirement.**
   `noteSaveQueue` holds one entry per `(Project, resource)` at module scope, so two mounted
   editors share it: each submits its whole document, newest wins, and the loser's text is dropped
@@ -64,8 +44,7 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
   banner — which is why only same-browser duplication has to be structurally prevented.
 - The drawer's claim is therefore exclusive: while it holds a note, that note's pane leaf keeps
   its place in the layout but renders an "open in the panel" placeholder, and every pane placement
-  (sidebar row, pane `note` chip, tab menu open/split, drag, `notes.open`) releases the claim
-  first so it cannot land on that placeholder. The claim is **device-local** and stored per
+  releases the claim first so it cannot land on that placeholder. The claim is **device-local** and stored per
   Project (`mux.drawer.note.v1`), never in `project.layout`, which is shared: a phone must not be
   able to rearrange the desktop's panes.
   Closing the complete drawer releases the claim and hands the note back to its pane.
@@ -77,9 +56,8 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
   survive drawer tab switches, because the Notes body is kept mounted and hidden rather than
   unmounted (see `ui.md` — the other half of that is `insertTarget`, which refuses a detached
   editor and would otherwise route a Clipboard paste into a terminal).
-- The tab replaced the session-notes modal and is reached from a Project's sidebar context menu
-  (scoped to that Project), the main menu, the `notes.browse`/`notes.browseProject` commands, and
-  its own control on the desktop launcher.
+- The collection is reached from a Project's sidebar context menu, the main menu, the
+  `notes.open`/`notes.browse`/`notes.browseProject` commands, and the desktop launcher.
 - Scope follows how you arrived, the same rule the rest of the app's browsers use. Reaching the
   tab from the rail icon, the tab strip, or `drawer.notes` says nothing about scope, so it means
   *this Project* — the drawer sits beside that Project's workspace. Only the app menu's
@@ -89,25 +67,15 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
   scoped entry points go through `openNotesBrowser`, which is not on that path.
 - The scoped listing follows the active Project rather than pinning the one it opened with, so
   switching Project with the tab open refetches instead of showing a stale Project's notes.
-- The listing is derived from the filesystem, not from history, so a note stays reachable after
-  its terminal is dismissed, its history row is pruned, and the daemon restarts. Live sessions
-  and history rows only supply display labels; a note whose owner left no record anywhere still
-  lists under its own note identity. This is the only UI path to a plain shell terminal's note,
-  which History never shows and the file browser hides with the rest of `.swe-mux`.
-- A terminal and its nested agent runs share the terminal's stable `note_id`. Agent History rows
-  retain that identity so `Session note` can reopen the same file after exit or daemon restart.
-- Session-note initialization accepts a live terminal, a History row owned by the Project, or a
-  note file already owned by that Project. Arbitrary client-supplied note identities are rejected.
-- Project and session notes autosave through separate revision-safe queues. Note identity is
-  part of the save key, so editing one note cannot overwrite another.
+- Note identity is part of the revision-safe save key, so editing one note cannot overwrite another.
 - Successful saves emit the note identity and storage revision. Other connected browsers
   live-follow by refetching and replacing an open note only while their resource queue is clean;
   pending, in-flight, failed, or conflicted local work is never replaced. Reconnect performs the
   same clean-state revision check so a browser returning from suspension catches up.
 - A browser ignores its own echoed save event by comparing storage revisions. Simultaneous edits
   remain intentionally non-merged and use the existing optimistic revision conflict flow.
-- One shared Continuity editor renders every editable Markdown surface (project note, session
-  note, and Markdown files opened from the browser) on desktop and mobile, and all of them
+- One shared Continuity editor renders every editable Markdown surface (notes and Markdown files
+  opened from the browser) on desktop and mobile, and all of them
   autosave through the same resource-scoped queue. Only the save target differs: notes PUT the
   note endpoint (`{markdown, revision}`); Markdown files PUT the file endpoint
   (`{path, text, revision}`). The queue's debounce, in-flight coalescing, 409 conflict banner,
@@ -202,7 +170,7 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
 
 ### Sending a selection to an agent
 
-- Every Continuity-backed view (project note, session note, Markdown file) offers **send to
+- Every Continuity-backed view (Project-owned note, Markdown file) offers **send to
   agent**: the highlighted text, or the whole document when nothing is highlighted, becomes the
   first message of a new Claude/Codex session or is delivered to a live one through the prompt
   queue. Plain-text file editors offer it too (always the whole document — they own no
@@ -217,7 +185,7 @@ into panes rather than holding one, so they cost a panel instead of a permanent 
   user-initiated send, and the text on screen is the text that leaves. A selection enters the
   message box without an origin preamble; the source remains visible in the dialog heading but
   is not sent. Whole-document sends retain one origin line naming the document.
-- A project/session-note selection offers **Remove the selected text from the note**, on by
+- A Project-owned-note selection offers **Remove the selected text from the note**, on by
   default. Removal happens only after the handoff is accepted: immediate delivery, durable queue
   staging (including **Add to queue**), composer fill, or successful new-session seeding. Cancel,
   error, and blocked/refused delivery leave the note untouched. Whole-document and file sends do
@@ -365,8 +333,8 @@ include a registered Project nested below another Git root.
 
 ## View lifetime
 
-Project note, session notes, and file editors are ordinary `note`-kind layout leaves with typed
-resource IDs. They can share a pane, move between panes, or create a pane-edge split. Closing a
+Project-owned notes and file editors are ordinary `note`-kind layout leaves with typed resource
+IDs. They can share a pane, move between panes, or create a pane-edge split. Closing a
 resource tab closes only the viewport: it never deletes the underlying file. Moving a file editor
 preserves its unsaved draft.
 
@@ -386,7 +354,7 @@ on read (`workspace-layout.md`).
 - `frontend/src/delimitedText.ts`
 - `frontend/src/projectResourceCreate.ts`
 - `frontend/src/ProjectNoteEditor.tsx`
-- `frontend/src/NotesTab.tsx` (the notes index; hosted by `UtilityDrawer.tsx`, which also hosts
+- `frontend/src/NotesTab.tsx` (the notes collection; hosted by `UtilityDrawer.tsx`, which also hosts
   the drawer's note editor)
 - `frontend/src/drawerNotes.ts` (which note the drawer holds, and why one host at a time)
 - `frontend/src/layout.ts` (`openAnchorId`, `openTab`)

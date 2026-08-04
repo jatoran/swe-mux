@@ -150,7 +150,7 @@ type Props = {
   onAdd:()=>void
   onAddGroup:()=>void
   onOpen:(project:Project)=>void
-  onNote:(project:Project)=>void
+  onNotes:(project:Project)=>void
   onFiles:(project:Project)=>void
   onPatch:(project:Project,changes:ProjectPatch)=>Promise<Project>
   onDelete:(project:Project)=>Promise<void>
@@ -159,7 +159,7 @@ type Props = {
 const BACKENDS:ProjectBackend[]=['shell','claude','codex']
 const SCOPE_LABELS:Record<PromptLibraryScope,string>={off:'Off',global:'Global only',project:'Project only',both:'Global + Project'}
 
-export function ProjectsManager({projects,groups,sessions,profiles,initialProjectId,initialTab,onClose,onAdd,onAddGroup,onOpen,onNote,onFiles,onPatch,onDelete}:Props){
+export function ProjectsManager({projects,groups,sessions,profiles,initialProjectId,initialTab,onClose,onAdd,onAddGroup,onOpen,onNotes,onFiles,onPatch,onDelete}:Props){
   const isVisible=(project:Project)=>project.sidebar_visible!==false
   const ordered=useMemo(()=>[...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)),[projects])
   const [selectedId,setSelectedId]=useState(initialProjectId||ordered[0]?.id||'')
@@ -285,7 +285,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
         </aside>
         <main>{selected?<>
           <div class="projects-manager-title"><div><span>PROJECT::{selected.id.slice(0,8)}</span><h3>{selected.name}</h3><small>{liveCount} live session{liveCount===1?'':'s'} · {isVisible(selected)?'shown in sidebar':'configured, hidden from sidebar'}</small></div><button class={`sidebar-visibility-toggle ${isVisible(selected)?'active':''}`} disabled={busy} onClick={()=>void toggleVisible()}><span aria-hidden="true">{isVisible(selected)?'◉':'○'}</span>{isVisible(selected)?'Shown in sidebar':'Show in sidebar'}</button></div>
-          <div class="projects-manager-actions"><button data-tutorial="open-project" class="primary" onClick={()=>onOpen(selected)}>Open workspace</button><button onClick={()=>onNote(selected)}>Project note</button><button onClick={()=>onFiles(selected)}>Files</button></div>
+          <div class="projects-manager-actions"><button data-tutorial="open-project" class="primary" onClick={()=>onOpen(selected)}>Open workspace</button><button onClick={()=>onNotes(selected)}>Notes</button><button onClick={()=>onFiles(selected)}>Files</button></div>
           <div class="projects-manager-tabs" role="tablist" aria-label="Project record and settings">
             <button role="tab" aria-selected={tab==='details'} class={tab==='details'?'active':''} onClick={()=>setTab('details')}>Details</button>
             <button role="tab" aria-selected={tab==='settings'} class={tab==='settings'?'active':''} onClick={()=>setTab('settings')}>Settings</button>

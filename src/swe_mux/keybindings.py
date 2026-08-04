@@ -21,7 +21,7 @@ DEFAULT_KEYBINDINGS = {
     "ctrl+alt+arrowright": "pane.next",
     "ctrl+alt+arrowleft": "pane.previous",
     "ctrl+alt+s": "settings.open",
-    "ctrl+alt+n": "session.note",
+    "ctrl+alt+n": "notes.open",
     **{f"ctrl+alt+{index}": f"project.activate({index})" for index in range(1, 10)},
 }
 
@@ -34,7 +34,7 @@ KEYBINDING_COMMANDS = (
     ("usage.open", "Open usage analytics", "view"),
     ("hooks.open", "Open hooks and notification settings", "view"),
     ("notifications.open", "Open notifications", "view"),
-    ("notes.open", "Open current project note", "view"),
+    ("notes.open", "Open current project's notes", "view"),
     ("processes.open", "Inspect session processes and previews", "view"),
     ("processes.project", "Inspect selected project's processes", "view"),
     ("prompts.openProject", "Open prompt library for selected project", "input"),
@@ -51,9 +51,8 @@ KEYBINDING_COMMANDS = (
     ("session.reveal", "Reveal selected session directory", "session"),
     ("session.resume", "Resume selected agent session", "session"),
     ("session.broadcastMembership", "Toggle selected session broadcast", "session"),
-    ("session.note", "Open selected session note", "notes"),
-    ("notes.browse", "Browse session notes", "notes"),
-    ("notes.browseProject", "Browse this project's session notes", "notes"),
+    ("notes.browse", "Browse all notes", "notes"),
+    ("notes.browseProject", "Browse this project's notes", "notes"),
     ("project.add", "Add project", "project"),
     ("project.create", "Create project", "project"),
     ("project.newTerminal", "New terminal in selected project", "project"),
@@ -61,7 +60,6 @@ KEYBINDING_COMMANDS = (
     ("project.rename", "Rename selected project", "project"),
     ("project.settings", "Open selected project settings", "project"),
     ("project.delete", "Delete selected project", "project"),
-    ("project.note", "Open selected project note", "notes"),
     ("project.files", "Browse selected project files", "project"),
     ("pane.splitHorizontal", "Split focused pane right", "pane"),
     ("pane.splitVertical", "Split focused pane below", "pane"),
@@ -123,7 +121,7 @@ KEYBINDING_COMMANDS = (
     ("drawer.queue", "Side panel: always prompt queue", "input"),
     ("drawer.transcript", "Side panel: always this session's transcript", "terminal"),
     ("drawer.files", "Side panel: always project files", "view"),
-    ("drawer.notes", "Side panel: always project and session notes", "view"),
+    ("drawer.notes", "Side panel: always project notes", "view"),
     ("drawer.context", "Side panel: always agent context", "view"),
     ("drawer.git", "Side panel: always project Git status", "view"),
     ("drawer.processes", "Side panel: always project processes", "view"),
@@ -146,7 +144,11 @@ KEYBINDING_COMMANDS = (
 COMMAND_IDS = {command_id for command_id, _, _ in KEYBINDING_COMMANDS}
 
 _PROJECT_COMMAND = re.compile(r"project\.activate\(([1-9])\)\Z")
-_COMMAND_MIGRATIONS = {"drawer.resetTabs": "drawer.resetLayout"}
+_COMMAND_MIGRATIONS = {
+    "drawer.resetTabs": "drawer.resetLayout",
+    "project.note": "notes.open",
+    "session.note": "notes.open",
+}
 
 
 def is_command(command_id: object) -> bool:

@@ -43,7 +43,8 @@
   There is no stored "last active": it is derived per request from `history`.
   `projects.git_compare_ref` is a nullable exact ref override for Git review display, migrated additively for existing databases and preserved by unrelated Project patches.
   It is intentionally outside `.swe-mux/config.toml`, so changing the display comparison does not dirty the repository.
-- `history`: durable agent-run lifecycle, canonical `project_id`, owning terminal `note_id`,
+- `history`: durable agent-run lifecycle, canonical `project_id`, legacy terminal `note_id`
+  retained for note migration provenance,
   native identity, transcript pointer, derived Git metadata, context/model telemetry, explicit
   compaction summary, exit state, materialized chronological native start/final conversational message
   time and role, plus source mtime/size watermarks for bounded timestamp-summary refreshes.
@@ -166,14 +167,15 @@
   generated `attachments/.gitignore` excludes all contents from Git. These files are persistent,
   bounded per upload/session, and are not removed with the live session. See
   `features/project-resources.md`.
-- `<project>/.swe-mux/notes/project.md`: the Project's one canonical note, seeded at creation
-  with a Project-named heading only when the file is absent.
-- `<project>/.swe-mux/notes/sessions/<safe-session-id>.md`: lazily initialized notes owned by
-  individual terminal sessions. Unsafe or external identities map to a stable hashed filename;
-  note contents remain ordinary Project files and are not stored in SQLite.
-  Both note files open with a `swe_mux_note = 1` TOML identity header carrying the note's kind
-  and id. It is stripped on read and rebuilt on save, is matched byte-exactly, and is therefore
-  written LF-only and pinned to `eol=lf` in `.gitattributes`; see `features/project-resources.md`.
+- `<project>/.swe-mux/notes/project.md`: the Project's initial ordinary note, seeded at creation
+  with a Project-named title and heading only when the file is absent.
+- `<project>/.swe-mux/notes/items/<safe-note-id>.md`: additional flat Project-owned notes.
+  Note contents are ordinary Project files and are not stored in SQLite.
+  Each note has a `swe_mux_note = 1` TOML identity header carrying its ID, title, creation time,
+  and optional migration provenance.
+  The header is stripped on read and rebuilt on save, matched byte-exactly, and written LF-only.
+- `<project>/.swe-mux/notes/legacy/`: recoverable source archive for migrated pre-collection
+  session-note files, including empty legacy artifacts that are not promoted to notes.
 - `<project>/.swe-mux/prompts/<uuid>.md`: Project prompt templates with TOML frontmatter and
   inert Markdown-like text bodies. `<data_dir>/prompts/` holds global templates;
   `<data_dir>/prompt-library-state.json` holds bounded device-independent favorites/recents.

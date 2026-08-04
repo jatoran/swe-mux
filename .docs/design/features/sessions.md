@@ -86,9 +86,8 @@ and reattachable browser viewports.
   of the OS pseudoconsole handle. This lets ended sessions remain visible until explicitly
   dismissed without retaining `OpenConsole.exe`/`conhost.exe`.
 - Ended-session history remains durable.
-- Every terminal type can lazily initialize a Project-owned session note from its context menu.
-  The note survives terminal exit and daemon restart as a file under `.swe-mux/notes/sessions/`;
-  agent History retains the terminal note identity so it can be reopened later.
+- Sessions do not own notes.
+  Notes are created and managed through the owning Project's flat Notes collection.
 - Resume requires a target Project and a valid native identity/transcript. The new process
   starts at the selected Project root and receives a new mux identity.
 - Terminal environments are built from a scrubbed base: parent-Claude session markers
@@ -250,6 +249,6 @@ and reattachable browser viewports.
 ## Relates to
 
 - `projects.md`: canonical ownership and Project registration.
-- `project-resources.md`: terminal-owned session notes.
+- `project-resources.md`: Project-owned notes.
 - `history.md`: durable agent-run lifecycle.
 - `project-actions.md`: trusted multi-session task launch.

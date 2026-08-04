@@ -1477,45 +1477,27 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   --continuity-decoration:color-mix(in srgb,var(--amber) 34%,transparent);
   --continuity-decoration-active:color-mix(in srgb,var(--amber) 68%,transparent)}
 .note-conflict{position:absolute;left:0;right:0;top:calc(42px*var(--ui-scale));z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 18px #0009}.note-conflict-actions{display:flex;gap:6px}.note-conflict-actions button{min-height:26px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;padding:0 8px;cursor:pointer}
-/* The session-notes listing lives in the drawer's Notes tab. It kept its own class
-   names through the move: the row, group heading, and empty states are unchanged,
-   only the host is (a drawer that can narrow to 300px instead of a 760px modal). */
-.session-notes-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,220px);gap:6px;padding:8px 9px;border-bottom:1px solid var(--line)}
-.session-notes-filters>*{min-width:0}
-.session-notes-body{flex:1;min-height:0;overflow:auto}
-.session-notes-state{padding:18px 12px;color:var(--muted);text-align:center}
-.session-notes-state.error{color:var(--error,#f07178)}
-.session-notes-group>h3{display:flex;justify-content:space-between;align-items:center;gap:8px;position:sticky;top:0;margin:0;padding:6px 9px;background:var(--panel2);color:var(--muted);font-size:11px;font-weight:600;letter-spacing:.04em}
-.session-note-row>button:first-child{width:100%;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:3px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--text);padding:8px 9px;text-align:left;cursor:pointer}
-.session-note-row>button:first-child:hover,.session-note-row>button:first-child:focus-visible{background:var(--panel2)}
-.session-note-row strong{display:flex;align-items:center;gap:6px;min-width:0}
-.session-note-row span{color:var(--muted);font-size:11px}
-.session-note-row small{color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.session-note-live{font-style:normal;font-size:10px;padding:0 4px;border:1px solid var(--line);border-radius:8px;color:var(--green,#8bd450)}
-@media(max-width:760px){.session-notes-filters{grid-template-columns:minmax(0,1fr)}}
-/* Notes tab: a navigator, not an editor. The two pinned rows are the notes tied to
-   where you are right now (this Project, this terminal) and sit above the search-
-   filtered listing, which by design holds only notes that already have text. */
+/* Notes tab: a Project-owned collection and navigator. */
+.notes-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,220px) auto;gap:6px;padding:8px 9px;border-bottom:1px solid var(--line)}
+.notes-filters>*{min-width:0}
+.notes-body{flex:1;min-height:0;overflow:auto}
+.notes-state{padding:18px 12px;color:var(--muted);text-align:center}
+.notes-state.error{color:var(--error,#f07178)}
+.notes-group>h3{display:flex;justify-content:space-between;align-items:center;gap:8px;position:sticky;top:0;margin:0;padding:6px 9px;background:var(--panel2);color:var(--muted);font-size:11px;font-weight:600;letter-spacing:.04em}
+.project-note-row>button:first-child{width:100%;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:3px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--text);padding:8px 9px;text-align:left;cursor:pointer}
+.project-note-row>button:first-child:hover,.project-note-row>button:first-child:focus-visible{background:var(--panel2)}
+.project-note-row strong{display:flex;align-items:center;gap:6px;min-width:0}
+.project-note-row span{color:var(--muted);font-size:11px}
+.project-note-row small{color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .notes-tab{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
-.notes-tab .session-notes-filters{flex:none;grid-template-columns:minmax(0,1fr) minmax(0,116px)}
-.notes-tab .session-notes-filters input,.notes-tab .session-notes-filters select{min-width:0;height:calc(30px*var(--ui-scale));padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
-.notes-tab .session-notes-filters input:focus,.notes-tab .session-notes-filters select:focus{outline:0;border-color:var(--green)}
-.notes-tab .session-notes-state{padding:14px 10px;font-size:9px;line-height:1.45}
-.notes-tab .session-notes-group>h3,.notes-tab .session-note-row span,.notes-tab .session-note-row small{font-size:8px}
-.notes-tab .session-note-row strong{font-size:10px}
-.notes-pinned{display:grid;border-bottom:1px solid var(--line)}
-.note-pin-shell{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;background:var(--panel2)}
-.session-note-pin-shell{grid-template-columns:minmax(0,1fr) auto auto}
-.note-pin-row{min-width:0;display:flex;align-items:baseline;gap:7px;min-height:32px;padding:6px 9px;border:0;border-left:2px solid var(--accent);background:var(--panel2);color:var(--text);font:inherit;text-align:left;cursor:pointer}
-.note-pin-row:hover,.note-pin-row:focus-visible{background:var(--panel)}
-.note-pin-shell+.note-pin-shell{border-top:1px solid var(--line)}
-.note-pin-kind{flex:none;color:var(--muted);font-size:8px}
-.note-pin-row strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}
-.note-pin-size{flex:none;margin-left:auto;color:var(--muted);font-size:8px;white-space:nowrap}
-.project-note-shell{margin:8px;border:1px solid color-mix(in srgb,var(--accent) 58%,var(--line));background:color-mix(in srgb,var(--accent) 8%,var(--panel2));box-shadow:inset 3px 0 color-mix(in srgb,var(--accent) 75%,transparent)}
-.project-note-shell .project-note-pin{min-height:48px;border-left:0;background:transparent}
-.project-note-shell>.note-open-as-tab{background:color-mix(in srgb,var(--accent) 7%,transparent)}
-.project-note-shell+.session-note-pin-shell{border-top:1px solid var(--line)}
+.notes-tab .notes-filters{flex:none;grid-template-columns:minmax(0,1fr) minmax(0,116px) auto}
+.notes-tab .notes-filters input,.notes-tab .notes-filters select{min-width:0;height:calc(30px*var(--ui-scale));padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
+.notes-tab .notes-filters input:focus,.notes-tab .notes-filters select:focus{outline:0;border-color:var(--green)}
+.notes-tab .notes-new{min-height:calc(30px*var(--ui-scale));padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;white-space:nowrap;cursor:pointer}
+.notes-tab .notes-new:disabled{opacity:.45;cursor:not-allowed}
+.notes-tab .notes-state{padding:14px 10px;font-size:9px;line-height:1.45}
+.notes-tab .notes-group>h3,.notes-tab .project-note-row span,.notes-tab .project-note-row small{font-size:8px}
+.notes-tab .project-note-row strong{font-size:10px}
 /* Every note row selects into the panel; this is the escape hatch to a pane. Kept to a glyph
    so the row's own text keeps the width — the label lives in the title and the aria-label. */
 .note-open-as-tab{flex:none;align-self:stretch;min-width:26px;padding:0 7px;border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;cursor:pointer}
@@ -1524,10 +1506,11 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .note-delete:hover,.note-delete:focus-visible{background:color-mix(in srgb,var(--red) 10%,var(--panel));color:var(--red)}
 .note-delete.confirming{min-width:54px;padding:0 6px;background:color-mix(in srgb,var(--red) 18%,var(--panel));color:var(--red)}
 .note-delete:disabled{opacity:.55;cursor:progress}
-.session-note-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:stretch}
-.session-note-row>.note-delete,.session-note-row>.note-open-as-tab{border-bottom:1px solid var(--line)}
+.project-note-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:stretch}
+.project-note-row>.note-delete,.project-note-row>.note-open-as-tab{border-bottom:1px solid var(--line)}
 .note-row-menu button.confirming{width:100%}
 .notes-footnote{flex:none;margin:0;padding:6px 9px;border-top:1px solid var(--line);color:var(--muted);font-size:8px;line-height:1.4}
+.note-title-layer{z-index:95}.note-title-modal{width:min(430px,calc(100% - 24px))}
 /* The drawer's note editor. Kept mounted while another tab is showing (cursor, undo, and the
    insert-routing handle all die with it), so `hidden` has to beat this rule's own display. */
 .drawer-note-host{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
@@ -1587,10 +1570,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .utility-drawer .project-resource.file-browser>header{min-height:26px;padding:4px 9px}
 .utility-drawer .project-resource.file-browser>header strong{color:var(--muted);font-size:8px;font-weight:400}
 @media(max-width:760px){
-  .notes-tab .session-notes-filters{grid-template-columns:minmax(0,1fr)}
-  .notes-tab .session-notes-filters input,.notes-tab .session-notes-filters select{height:calc(38px*var(--ui-scale));font-size:16px}
-  .note-pin-row{min-height:44px}
-  .project-note-shell .project-note-pin{min-height:56px}
+  .notes-tab .notes-filters{grid-template-columns:minmax(0,1fr) auto}
+  .notes-tab .notes-filters input{grid-column:1/-1}
+  .notes-tab .notes-filters input,.notes-tab .notes-filters select{height:calc(38px*var(--ui-scale));font-size:16px}
+  .notes-tab .notes-new{min-height:calc(38px*var(--ui-scale))}
   /* Touch targets: the glyph is narrow by design on desktop, but it is a real destination. */
   .note-open-as-tab,.note-delete{min-width:44px}
   .drawer-note-bar button{min-height:40px}
@@ -1600,8 +1583,6 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .history-modal>.modal-heading{flex:none}
 .history-modal>.history-workspace{flex:1;min-height:0}
 @media(max-width:760px){.history-modal{width:100%;height:100%;max-height:100dvh;border-radius:0}}
-.pane-tools .note-chip.written{color:var(--text)}
-.pane-tools .note-chip.open{color:var(--accent,#7aa2f7)}
 /* Voice chip states. These read as tinted text in the header (the bar's buttons are
    borderless) and keep their outline on the bottom rail's bordered buttons, so both the
    border and the colour are set and whichever the host applies wins. */
@@ -1727,7 +1708,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-panel-title{position:absolute;z-index:8;top:3px;left:7px;width:var(--drawer-panel-title-width);max-width:calc(100% - 14px);height:18px;margin:0;padding:0 6px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid color-mix(in srgb,var(--accent) 58%,var(--line));background:color-mix(in srgb,var(--accent) 13%,var(--panel2));box-shadow:inset 2px 0 color-mix(in srgb,var(--accent) 82%,transparent);color:var(--text);font:600 8px/16px 'Cascadia Mono',Consolas,monospace;letter-spacing:.035em;cursor:help}
 .drawer-panel-title:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 20%,var(--panel2))}
 .drawer-body-clipboard>.drawer-status,.drawer-body-commands>.drawer-status,.drawer-body-prompts>.drawer-status,.drawer-body-git>.drawer-status,.drawer-body-notifications>.drawer-status,.drawer-body-context>.drawer-status{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
-.drawer-body-files>.project-resource.file-browser>header,.drawer-body-context .agent-context-header,.drawer-body-processes .processes-filters,.drawer-body-notes .session-notes-filters,.drawer-body-notes .drawer-note-bar,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
+.drawer-body-files>.project-resource.file-browser>header,.drawer-body-context .agent-context-header,.drawer-body-processes .processes-filters,.drawer-body-notes .notes-filters,.drawer-body-notes .drawer-note-bar,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
 .drawer-body-transcript .transcript-tab-meta{padding-left:calc(var(--drawer-panel-title-width) + 4px)}
 .drawer-body-context .agent-context-header>div>strong{display:none}
 .drawer-body-files>.drawer-empty:first-of-type,.drawer-body-transcript>.drawer-empty:first-of-type{padding-top:38px}

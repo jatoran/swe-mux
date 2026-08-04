@@ -12,7 +12,7 @@ from typing import Any
 
 from .keybindings import is_command
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -196,7 +196,7 @@ def default_mobile_gestures() -> dict[str, str]:
         # drawer in. Both were sidebar.toggle before that drawer existed.
         "two_finger_swipe_left": "drawer.toggle",
         "two_finger_swipe_right": "sidebar.toggle",
-        "two_finger_swipe_up": "session.note",
+        "two_finger_swipe_up": "notes.open",
         "two_finger_swipe_down": "terminal.keyboardToggle",
         "two_finger_tap": "palette.open",
     }
@@ -998,6 +998,13 @@ def load_config(path: Path | None = None) -> Config:
             if gestures.get("two_finger_swipe_left") == "sidebar.toggle":
                 gestures["two_finger_swipe_left"] = "drawer.toggle"
                 migrated = True
+            cfg.mobile_gestures = gestures
+        if source_schema < 18:
+            gestures = dict(cfg.mobile_gestures)
+            for slot, command in gestures.items():
+                if command in {"project.note", "session.note"}:
+                    gestures[slot] = "notes.open"
+                    migrated = True
             cfg.mobile_gestures = gestures
     if not cfg.shell_profiles:
         if "shell_exe" not in raw and shutil.which("pwsh.exe"):

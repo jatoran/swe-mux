@@ -8,6 +8,7 @@ import pytest
 from swe_mux.history import HistoryIndex
 from swe_mux.layouts import MAX_LAYOUT_LEAVES, layout_terminal_ids, normalize_layout
 from swe_mux.models import SessionRecord
+from swe_mux.project_files import read_note
 from swe_mux.projects import ProjectManager
 
 
@@ -23,8 +24,9 @@ async def test_project_creation_initializes_resources_and_persists_layout(
     project = await projects.create("Main", str(root))
     assert Path(project.root) == root.resolve()
     assert (root / ".swe-mux" / "config.toml").read_text(encoding="utf-8") == "version = 1\n"
-    note = root / ".swe-mux" / "notes" / "project.md"
-    assert note.read_text(encoding="utf-8") == "# Main notes\n\n\n"
+    loaded = await read_note(root, "project")
+    assert loaded["title"] == "Main notes"
+    assert loaded["markdown"] == "# Main notes\n\n\n"
 
     updated = await projects.update(
         project.id,
@@ -125,8 +127,9 @@ async def test_project_note_seeding_never_overwrites_existing_text(tmp_path: Pat
     other = tmp_path / "second"
     other.mkdir()
     await projects.create("  Main   Repo  ", str(other))
-    seeded = other / ".swe-mux" / "notes" / "project.md"
-    assert seeded.read_text(encoding="utf-8") == "# Main Repo notes\n\n\n"
+    loaded = await read_note(other, "project")
+    assert loaded["title"] == "Main Repo notes"
+    assert loaded["markdown"] == "# Main Repo notes\n\n\n"
     history.close()
 
 

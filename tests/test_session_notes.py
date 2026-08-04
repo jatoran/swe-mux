@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from aiohttp import web
@@ -7,410 +8,191 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux.event_bus import EventBus
 from swe_mux.git_projects import ProjectIdentity
-from swe_mux.history import HistoryIndex
-from swe_mux.models import SessionRecord
 from swe_mux.project_files import (
-    note_exists,
-    note_has_content,
+    create_note,
+    migrate_legacy_notes,
     note_header,
+    note_path,
+    project_note_summaries,
     read_note,
-    revision,
-    session_note_summaries,
     write_note,
 )
 from swe_mux.server import (
-    delete_session_note,
+    create_project_note,
+    delete_project_note,
     error_middleware,
-    get_project_note,
-    get_session_note,
-    initialize_session_note,
-    list_session_notes,
-    put_project_note,
-    put_session_note,
+    get_note,
+    list_notes,
+    patch_note,
+    put_note,
 )
 
 
-def _write_note(root, note_id: str, body: str) -> None:  # type: ignore[no-untyped-def]
-    directory = root / ".swe-mux" / "notes" / "sessions"
-    directory.mkdir(parents=True, exist_ok=True)
-    header = f'---\nswe_mux_note = 1\nkind = "sessions"\nid = "{note_id}"\n---\n'
-    (directory / f"{note_id}.md").write_text(header + body, encoding="utf-8")
+def _identity(root: Path) -> ProjectIdentity:
+    return ProjectIdentity("project-one", "Project One", str(root), "test")
 
 
-def test_session_note_summaries_lists_only_notes_holding_text(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    root = tmp_path / "project"
-    root.mkdir()
-    _write_note(root, "written-one", "deployment  steps\nsecond line\n")
-    _write_note(root, "blank-one", "   \n\n")
-    _write_note(root, "header-only", "")
-
-    summaries = session_note_summaries(root)
-
-    assert [item["note_id"] for item in summaries] == ["written-one"]
-    # The excerpt collapses whitespace so a listing row stays one readable line.
-    assert summaries[0]["excerpt"] == "deployment steps second line"
-    assert summaries[0]["bytes"] > 0
-    note_path = root / ".swe-mux" / "notes" / "sessions" / "written-one.md"
-    assert summaries[0]["revision"] == revision(note_path.read_bytes())
+def _project(root: Path):  # type: ignore[no-untyped-def]
+    return SimpleNamespace(id="project-one", root=str(root), name="Project One")
 
 
-def test_session_note_summaries_tolerates_a_project_without_notes(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    assert session_note_summaries(tmp_path) == []
-
-
-async def test_session_notes_listing_filters_by_project_and_labels_owners(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    first = tmp_path / "alpha"
-    second = tmp_path / "beta"
-    first.mkdir()
-    second.mkdir()
-    _write_note(first, "terminal-live", "live terminal context\n")
-    _write_note(first, "terminal-archived", "archived agent context\n")
-    _write_note(second, "terminal-other", "other project context\n")
-    projects = [
-        SimpleNamespace(id="alpha", root=str(first), name="Alpha"),
-        SimpleNamespace(id="beta", root=str(second), name="Beta"),
-    ]
-    history = HistoryIndex(tmp_path / "mux.db")
-    archived = SessionRecord(
-        "terminal-archived", "Archived agent", "alpha", "claude", "native", str(first), "claude", []
-    )
-    await history.session_started(archived, None)
-    live = SimpleNamespace(
-        record=SimpleNamespace(
-            id="terminal-live", name="Live shell", backend="shell", state="running"
-        )
-    )
+def _app(root: Path) -> web.Application:
+    project = _project(root)
     app = web.Application(middlewares=[error_middleware])
-    app["projects"] = SimpleNamespace(ordered_projects=lambda: projects)
-    app["sessions"] = SimpleNamespace(sessions={"terminal-live": live})
-    app["history"] = history
-    app.router.add_get("/session-notes", list_session_notes)
-
-    async with TestClient(TestServer(app)) as client:
-        every = await (await client.get("/session-notes")).json()
-        scoped = await (await client.get("/session-notes?project_id=beta")).json()
-        unknown = await client.get("/session-notes?project_id=missing")
-
-    rows = {item["note_id"]: item for item in every["items"]}
-    assert set(rows) == {"terminal-live", "terminal-archived", "terminal-other"}
-    # A live terminal supplies its own name; an ended one falls back to history.
-    assert rows["terminal-live"]["owner_label"] == "Live shell"
-    assert rows["terminal-live"]["owner_live"] is True
-    assert rows["terminal-archived"]["owner_label"] == "Archived agent"
-    assert rows["terminal-archived"]["owner_backend"] == "claude"
-    assert rows["terminal-archived"]["owner_live"] is False
-    # A note whose owner left no record anywhere still lists, under its identity.
-    assert rows["terminal-other"]["owner_label"] == "terminal-other"
-    assert rows["terminal-other"]["owner_known"] is False
-    assert rows["terminal-other"]["project_name"] == "Beta"
-
-    assert [item["note_id"] for item in scoped["items"]] == ["terminal-other"]
-    assert unknown.status == 400
-    history.close()
-
-
-async def test_empty_note_exists_for_access_but_reports_no_content(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """A note created by a stray click must stay usable yet invisible in the sidebar."""
-    root = tmp_path / "project"
-    root.mkdir()
-    project = SimpleNamespace(id="project-one", root=str(root), name="Project One")
-    live = SimpleNamespace(record=SimpleNamespace(id="terminal-one", project_id=project.id))
-    history = HistoryIndex(tmp_path / "mux.db")
-    app = web.Application(middlewares=[error_middleware])
-    app["projects"] = SimpleNamespace(projects={project.id: project})
-    app["sessions"] = SimpleNamespace(sessions={"terminal-one": live})
-    app["history"] = history
+    app["projects"] = SimpleNamespace(
+        projects={project.id: project}, ordered_projects=lambda: [project]
+    )
+    app["sessions"] = SimpleNamespace(sessions={})
     app["events"] = EventBus()
-    app.router.add_post("/projects/{project_id}/session-notes/{note_id}", initialize_session_note)
-    app.router.add_put("/projects/{project_id}/session-notes/{note_id}", put_session_note)
-
-    async with TestClient(TestServer(app)) as client:
-        created = await client.post("/projects/project-one/session-notes/terminal-one")
-        revision = (await created.json())["revision"]
-
-        # Created but untouched: readable and writable, but not a sidebar row.
-        assert note_exists(project.root, "sessions", "terminal-one")
-        assert not note_has_content(project.root, "sessions", "terminal-one")
-
-        blank = await client.put(
-            "/projects/project-one/session-notes/terminal-one",
-            json={"markdown": "   \n\n", "revision": revision},
-        )
-        assert not note_has_content(project.root, "sessions", "terminal-one")
-
-        written = await client.put(
-            "/projects/project-one/session-notes/terminal-one",
-            json={"markdown": "real content\n", "revision": (await blank.json())["revision"]},
-        )
-        assert written.status == 200
-        # The cached answer must follow the file rather than the first read.
-        assert note_has_content(project.root, "sessions", "terminal-one")
-
-    history.close()
+    app.router.add_get("/notes", list_notes)
+    app.router.add_post("/projects/{project_id}/notes", create_project_note)
+    app.router.add_get("/projects/{project_id}/notes/{note_id}", get_note)
+    app.router.add_put("/projects/{project_id}/notes/{note_id}", put_note)
+    app.router.add_patch("/projects/{project_id}/notes/{note_id}", patch_note)
+    app.router.add_delete("/projects/{project_id}/notes/{note_id}", delete_project_note)
+    return app
 
 
-def test_missing_note_reports_no_content(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    assert not note_has_content(tmp_path, "sessions", "never-created")
-
-
-async def test_project_note_change_event_carries_saved_revision(tmp_path) -> None:  # type: ignore[no-untyped-def]
+async def test_project_notes_create_list_rename_save_and_delete(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
-    project = SimpleNamespace(id="project-one", root=str(root), name="Project One")
-    events = EventBus()
-    app = web.Application(middlewares=[error_middleware])
-    app["projects"] = SimpleNamespace(projects={project.id: project})
-    app["events"] = events
-    app.router.add_get("/projects/{project_id}/note", get_project_note)
-    app.router.add_put("/projects/{project_id}/note", put_project_note)
+    app = _app(root)
 
     async with TestClient(TestServer(app)) as client:
-        loaded = await client.get("/projects/project-one/note")
-        loaded_payload = await loaded.json()
-        assert loaded_payload["bytes"] == 0
-        event_queue = events.subscribe()
+        created = await client.post(
+            "/projects/project-one/notes", json={"title": "Release plan"}
+        )
+        created_payload = await created.json()
+        note_id = created_payload["id"]
+        listing = await (await client.get("/notes?project_id=project-one")).json()
         saved = await client.put(
-            "/projects/project-one/note",
-            json={"markdown": "Shared project context\n", "revision": loaded_payload["revision"]},
+            f"/projects/project-one/notes/{note_id}",
+            json={"markdown": "Ship carefully.\n", "revision": created_payload["revision"]},
         )
         saved_payload = await saved.json()
-        assert saved_payload["bytes"] > 0
-        changed = await event_queue.get()
-
-    assert saved.status == 200
-    assert changed.type == "project_note_changed"
-    assert changed.payload == {"project_id": project.id, "revision": saved_payload["revision"]}
-
-
-async def test_live_terminal_note_is_initialized_saved_and_revision_safe(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    root = tmp_path / "project"
-    root.mkdir()
-    project = SimpleNamespace(id="project-one", root=str(root), name="Project One")
-    live = SimpleNamespace(record=SimpleNamespace(id="terminal-one", project_id=project.id))
-    history = HistoryIndex(tmp_path / "mux.db")
-    app = web.Application(middlewares=[error_middleware])
-    app["projects"] = SimpleNamespace(projects={project.id: project})
-    app["sessions"] = SimpleNamespace(sessions={"terminal-one": live})
-    app["history"] = history
-    events = EventBus()
-    app["events"] = events
-    app.router.add_get("/projects/{project_id}/session-notes/{note_id}", get_session_note)
-    app.router.add_post("/projects/{project_id}/session-notes/{note_id}", initialize_session_note)
-    app.router.add_put("/projects/{project_id}/session-notes/{note_id}", put_session_note)
-
-    async with TestClient(TestServer(app)) as client:
-        created = await client.post("/projects/project-one/session-notes/terminal-one")
-        created_payload = await created.json()
-        event_queue = events.subscribe()
-        saved = await client.put(
-            "/projects/project-one/session-notes/terminal-one",
-            json={"markdown": "Useful terminal context\n", "revision": created_payload["revision"]},
+        renamed = await client.patch(
+            f"/projects/project-one/notes/{note_id}",
+            json={"title": "Release checklist", "revision": saved_payload["revision"]},
         )
-        stale = await client.put(
-            "/projects/project-one/session-notes/terminal-one",
-            json={"markdown": "Overwrite", "revision": created_payload["revision"]},
-        )
-        loaded = await client.get("/projects/project-one/session-notes/terminal-one")
-        unknown = await client.post("/projects/project-one/session-notes/not-a-session")
-
-        assert created.status == 201
-        assert saved.status == 200
-        assert stale.status == 409
-        assert (await stale.json())["code"] == "revision_conflict"
-        assert (await loaded.json())["markdown"] == "Useful terminal context\n"
-        assert unknown.status == 400
-        changed = await event_queue.get()
-        assert changed.type == "session_note_changed"
-        assert changed.payload == {
-            "project_id": project.id,
-            "note_id": "terminal-one",
-            "revision": (await saved.json())["revision"],
-        }
-
-    assert (
-        (root / ".swe-mux" / "notes" / "sessions" / "terminal-one.md")
-        .read_text(encoding="utf-8")
-        .endswith("Useful terminal context\n")
-    )
-    history.close()
-
-
-async def test_session_note_delete_is_revision_checked_and_emits_change(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    root = tmp_path / "project"
-    root.mkdir()
-    project = SimpleNamespace(id="project-one", root=str(root), name="Project One")
-    live = SimpleNamespace(record=SimpleNamespace(id="terminal-one", project_id=project.id))
-    history = HistoryIndex(tmp_path / "mux.db")
-    events = EventBus()
-    app = web.Application(middlewares=[error_middleware])
-    app["projects"] = SimpleNamespace(projects={project.id: project})
-    app["sessions"] = SimpleNamespace(sessions={"terminal-one": live})
-    app["history"] = history
-    app["events"] = events
-    app.router.add_post("/projects/{project_id}/session-notes/{note_id}", initialize_session_note)
-    app.router.add_put("/projects/{project_id}/session-notes/{note_id}", put_session_note)
-    app.router.add_delete("/projects/{project_id}/session-notes/{note_id}", delete_session_note)
-
-    async with TestClient(TestServer(app)) as client:
-        created = await client.post("/projects/project-one/session-notes/terminal-one")
-        created_payload = await created.json()
-        saved = await client.put(
-            "/projects/project-one/session-notes/terminal-one",
-            json={"markdown": "Delete this note\n", "revision": created_payload["revision"]},
-        )
-        saved_payload = await saved.json()
-        event_queue = events.subscribe()
+        renamed_payload = await renamed.json()
         stale = await client.delete(
-            "/projects/project-one/session-notes/terminal-one",
+            f"/projects/project-one/notes/{note_id}",
             json={"revision": created_payload["revision"]},
         )
         deleted = await client.delete(
-            "/projects/project-one/session-notes/terminal-one",
-            json={"revision": saved_payload["revision"]},
+            f"/projects/project-one/notes/{note_id}",
+            json={"revision": renamed_payload["revision"]},
         )
-        stale_payload = await stale.json()
-        deleted_payload = await deleted.json()
-        changed = await event_queue.get()
 
+    assert created.status == 201
+    assert [item["note_id"] for item in listing["items"]] == [note_id]
+    assert listing["items"][0]["title"] == "Release plan"
+    assert saved.status == 200
+    assert renamed_payload["title"] == "Release checklist"
     assert stale.status == 409
-    assert stale_payload["code"] == "revision_conflict"
     assert deleted.status == 200
-    assert deleted_payload == {
-        "deleted": True,
-        "project_id": project.id,
-        "note_id": "terminal-one",
-    }
-    assert not note_exists(root, "sessions", "terminal-one")
-    assert changed.type == "session_note_changed"
-    assert changed.payload == {
-        "project_id": project.id,
-        "note_id": "terminal-one",
-        "revision": "missing",
-    }
-    history.close()
+    assert not note_path(root, note_id).exists()
 
 
-async def test_history_owned_session_can_initialize_its_note(tmp_path) -> None:  # type: ignore[no-untyped-def]
+async def test_note_change_events_use_one_generic_event_type(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
-    project = SimpleNamespace(id="project-one", root=str(root), name="Project One")
-    history = HistoryIndex(tmp_path / "mux.db")
-    record = SessionRecord(
-        "terminal-history-id",
-        "Archived agent",
-        project.id,
-        "claude",
-        "native-id",
-        str(root),
-        "claude",
-        [],
-    )
-    await history.session_started(record, str(tmp_path / "transcript.jsonl"))
-    app = web.Application(middlewares=[error_middleware])
-    app["projects"] = SimpleNamespace(projects={project.id: project})
-    app["sessions"] = SimpleNamespace(sessions={})
-    app["history"] = history
-    app["events"] = EventBus()
-    app.router.add_post("/projects/{project_id}/session-notes/{note_id}", initialize_session_note)
+    app = _app(root)
+    events: EventBus = app["events"]
 
     async with TestClient(TestServer(app)) as client:
-        response = await client.post("/projects/project-one/session-notes/terminal-history-id")
-        assert response.status == 201
+        queue = events.subscribe()
+        created = await client.post(
+            "/projects/project-one/notes", json={"title": "Working context"}
+        )
+        payload = await created.json()
+        event = await queue.get()
 
-    assert (root / ".swe-mux" / "notes" / "sessions" / "terminal-history-id.md").is_file()
-    history.close()
-
-
-def _identity(root) -> ProjectIdentity:  # type: ignore[no-untyped-def]
-    return ProjectIdentity(id="project-one", label="Project One", root=str(root), source="test")
-
-
-def _seed_note(root, note_id: str, text: str):  # type: ignore[no-untyped-def]
-    """Write a note file verbatim, so a test can choose its exact bytes."""
-    path = root / ".swe-mux" / "notes" / "sessions" / f"{note_id}.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(text.encode("utf-8"))
-    return path
+    assert event.type == "note_changed"
+    assert event.payload == {
+        "project_id": "project-one",
+        "note_id": payload["id"],
+        "revision": payload["revision"],
+    }
 
 
-async def test_note_read_strips_a_header_written_with_crlf(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """A note rewritten with Windows line endings must not expose its header.
-
-    `read_note` decodes raw bytes to hash the file, so it is the one reader that
-    gets no universal-newline translation from `read_text`. Git checking a
-    committed note out under `core.autocrlf=true` is how this happens in practice.
-    """
+async def test_generic_note_round_trip_normalizes_headers_and_line_endings(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "project"
     root.mkdir()
-    body = "deployment steps\nsecond line\n"
-    stored = (note_header("sessions", "terminal-one") + body).replace("\n", "\r\n")
-    _seed_note(root, "terminal-one", stored)
+    project = _identity(root)
+    created = await create_note(root, "Deployment", project=project)
+    header = note_header(created["id"], "Deployment")
 
-    loaded = await read_note(root, "sessions", "terminal-one", project=_identity(root))
+    saved = await write_note(
+        root,
+        created["id"],
+        header + "one\r\ntwo\r\n",
+        created["revision"],
+        project=project,
+    )
 
-    assert loaded["markdown"] == body
+    assert saved["markdown"] == "one\ntwo\n"
+    assert note_path(root, created["id"]).read_bytes() == (
+        note_header(created["id"], "Deployment", created_at=saved["created_at"])
+        + "one\ntwo\n"
+    ).encode("utf-8")
 
 
-async def test_note_read_heals_a_file_that_already_stacked_headers(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """Notes corrupted before the write path was fixed must still open cleanly.
-
-    A leaked CRLF header used to be submitted back by the editor and go
-    unrecognized on save, so the file grew a second header on top of the first.
-    """
+async def test_note_read_strips_crlf_and_stacked_headers(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
-    header = note_header("sessions", "terminal-one")
-    _seed_note(root, "terminal-one", header + (header + "real content\n").replace("\n", "\r\n"))
+    note_id = "durable-note"
+    header = note_header(note_id, "Durable note")
+    path = note_path(root, note_id)
+    path.parent.mkdir(parents=True)
+    path.write_bytes((header + (header + "real content\n").replace("\n", "\r\n")).encode())
 
-    loaded = await read_note(root, "sessions", "terminal-one", project=_identity(root))
+    loaded = await read_note(root, note_id, project=_identity(root))
 
     assert loaded["markdown"] == "real content\n"
 
 
-async def test_note_save_rebuilds_one_canonical_header(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """Saving a body that still carries a header replaces it instead of stacking."""
+def test_legacy_session_notes_migrate_to_flat_collection(tmp_path: Path) -> None:
     root = tmp_path / "project"
-    root.mkdir()
-    header = note_header("sessions", "terminal-one")
-    path = _seed_note(root, "terminal-one", (header + "first draft\n").replace("\n", "\r\n"))
-    project = _identity(root)
-    loaded = await read_note(root, "sessions", "terminal-one", project=project)
-
-    saved = await write_note(
-        root,
-        "sessions",
-        "terminal-one",
-        header + "second draft\r\n",
-        loaded["revision"],
-        project=project,
+    legacy = root / ".swe-mux" / "notes" / "sessions"
+    legacy.mkdir(parents=True)
+    (legacy / "terminal-one.md").write_text(
+        '---\nswe_mux_note = 1\nkind = "sessions"\nid = "terminal-one"\n---\n'
+        "deployment context\n",
+        encoding="utf-8",
+    )
+    (legacy / "empty.md").write_text(
+        '---\nswe_mux_note = 1\nkind = "sessions"\nid = "empty"\n---\n',
+        encoding="utf-8",
     )
 
-    assert saved["markdown"] == "second draft\n"
-    # The stored file is canonically LF with exactly one header, whatever arrived.
-    assert path.read_bytes() == (header + "second draft\n").encode("utf-8")
-
-
-async def test_note_save_normalizes_client_line_endings(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """A client sending CRLF text still leaves an LF note on disk."""
-    root = tmp_path / "project"
-    root.mkdir()
-    header = note_header("sessions", "terminal-one")
-    path = _seed_note(root, "terminal-one", header)
-    project = _identity(root)
-    loaded = await read_note(root, "sessions", "terminal-one", project=project)
-
-    await write_note(
-        root, "sessions", "terminal-one", "one\r\ntwo\r\n", loaded["revision"], project=project
+    result = migrate_legacy_notes(root, legacy_titles={"terminal-one": "Deploy agent"})
+    summaries = project_note_summaries(
+        root, default_note_id="project-one", default_title="Project One notes"
     )
 
-    assert path.read_bytes() == (header + "one\ntwo\n").encode("utf-8")
+    assert result == {"migrated": 1, "archived_empty": 1}
+    assert [(item["note_id"], item["excerpt"]) for item in summaries] == [
+        ("terminal-one", "deployment context")
+    ]
+    assert summaries[0]["title"].startswith("Deploy agent - ")
+    assert summaries[0]["origin_session_id"] == "terminal-one"
+    assert not legacy.exists() or not list(legacy.glob("*.md"))
+    assert (root / ".swe-mux" / "notes" / "legacy" / "session-notes").is_dir()
+    assert (root / ".swe-mux" / "notes" / "legacy" / "empty-session-notes").is_dir()
 
 
-def test_crlf_header_only_note_still_counts_as_empty(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """A CRLF header must not read as user text and pin a sidebar row."""
+def test_listing_includes_explicit_empty_notes(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
-    _seed_note(root, "crlf-blank", note_header("sessions", "crlf-blank").replace("\n", "\r\n"))
+    path = note_path(root, "empty-note")
+    path.parent.mkdir(parents=True)
+    path.write_text(note_header("empty-note", "Empty note"), encoding="utf-8")
 
-    assert session_note_summaries(root) == []
-    assert note_has_content(root, "sessions", "crlf-blank") is False
+    summaries = project_note_summaries(
+        root, default_note_id="project-one", default_title="Project One notes"
+    )
+
+    assert [(item["title"], item["excerpt"]) for item in summaries] == [("Empty note", "")]

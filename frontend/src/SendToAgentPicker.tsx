@@ -21,7 +21,7 @@ export type SendToAgentRequest = {
   scope: MessageScope
   /** The composed message, already bounded; the dialog lets the user edit it before sending. */
   message: string
-  /** Present only for a complete selection captured from a project/session note. The picker
+  /** Present only for a complete selection captured from a Project-owned note. The picker
    *  calls it after the payload has been accepted, never on cancel, refusal, or error. */
   removeSelectionAfterSend?: () => void
 }

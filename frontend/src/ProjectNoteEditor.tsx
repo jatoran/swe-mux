@@ -164,7 +164,7 @@ async function handlePasteRequest(element: ContinuityEditorElement | null): Prom
 
 /**
  * Shared Continuity WebAssembly markdown surface for every editable `.md` view: project
- * and session notes and markdown files opened from the Files browser, on desktop and mobile.
+ * and Markdown files opened from the Files browser, on desktop and mobile.
  *
  * The engine is seeded once (text `initialText`, revision 0) and then left uncontrolled: we
  * never push the engine's own `onChange` output back in as `value`/`revision`. Feeding it
@@ -281,13 +281,13 @@ export function ContinuityMarkdownEditor({
   )
 }
 
-/** Project/session note surface: Continuity committing through the resource-scoped autosave
+/** Project-owned note surface: Continuity committing through the resource-scoped autosave
  *  queue. Remounted (keyed by project/resource/load-generation) when a different note loads. */
 export function ProjectNoteEditor({
   projectId,
   resourceId,
   initialText,
-  label = 'Project note',
+  label = 'Note',
   railActions,
   elementRef,
 }: Props) {

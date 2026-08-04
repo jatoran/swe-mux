@@ -2163,7 +2163,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     <button role="menuitem" onClick={() => runCommand('terminal.selectAll')}>Select all</button>
     <button role="menuitem" onClick={() => runCommand('terminal.find')}>Find…</button>
     <button role="menuitem" onClick={() => runCommand('terminal.clear')}>Clear display</button>
-    <button role="menuitem" onClick={() => runCommand('session.note')}>Session note…</button>
     <button role="menuitem" onClick={() => runCommand('processes.open')}>Processes and previews…</button>
     <div class="context-rule" />
     <button role="menuitem" onClick={() => runCommand('pane.splitHorizontal')}>Split right</button>

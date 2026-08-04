@@ -77,9 +77,7 @@ type Props = {
    *  `notes.browse` and `notes.browseProject` commands can each pick one. */
   notesAllProjects: boolean
   onNotesAllProjects: (value: boolean) => void
-  focusedNote: { projectId: string; noteId: string; label: string } | null
-  onOpenProjectNote: (projectId: string, place: NotePlacement) => void
-  onOpenSessionNote: (projectId: string, noteId: string, place: NotePlacement) => void
+  onOpenNote: (projectId: string, noteId: string, title: string, place: NotePlacement) => void
   /** Processes: the fleet sample `App` already polls. Passed in rather than fetched here so an
    *  open panel adds no process enumeration to the daemon's loop — see `ProcessesTab`. */
   processSnapshot: WatchSnapshot
@@ -140,7 +138,7 @@ export function UtilityDrawer(props: Props) {
   const drawerNote = props.drawerNoteId && project && noteIdentity && noteIdentity.kind !== 'file' && noteIdentity.kind !== 'worktree-file'
     ? { resourceId: props.drawerNoteId, identity: noteIdentity }
     : null
-  const drawerNoteLabel = drawerNote?.identity.kind === 'session-note' ? 'Session note' : 'Project note'
+  const drawerNoteLabel = 'Note'
 
   // Where the last Clipboard insert landed. `ClipboardTab` reports its own outcome to
   // `onInsert` and then calls `onDone` with nothing, so the two are joined here rather than by
@@ -246,9 +244,7 @@ export function UtilityDrawer(props: Props) {
             project={project}
             allProjects={props.notesAllProjects}
             onAllProjects={props.onNotesAllProjects}
-            focusedNote={props.focusedNote}
-            onOpenProjectNote={props.onOpenProjectNote}
-            onOpenSessionNote={props.onOpenSessionNote}
+            onOpenNote={props.onOpenNote}
             onDone={onDone}
           />
       case 'context':

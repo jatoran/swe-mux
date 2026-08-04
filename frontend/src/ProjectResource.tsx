@@ -23,10 +23,10 @@ import { REQUEST_TIMEOUT_MS, retryDelay, watchResume } from './liveness'
 import type { Project } from './types'
 
 export type ProjectResourceIdentity=
-  | {kind:'note'|'session-note'|'files'|'file';id:string}
+  | {kind:'note'|'files'|'file';id:string}
   | {kind:'worktree-file';id:string;worktree:string}
 
-type NotePayload={revision:string;markdown:string;status:string;path:string}
+type NotePayload={revision:string;markdown:string;status:string;path:string;title:string}
 type FilePresentation=
   | {kind:'text'}
   | {kind:'delimited';delimiter:','|'\t'}
@@ -36,7 +36,7 @@ type FilePayload={revision:string;status:string;path:string;size:number;text?:st
 type DirectoryItem={name:string;path:string;kind:'directory'|'file';size:number|null}
 type DirectoryPayload={path:string;parent:string|null;items:DirectoryItem[];truncated:boolean}
 type ResourceEvent={projectId:string;paths:string[];worktree?:string}
-type NoteResourceEvent={projectId:string;kind:'note'|'session-note';noteId:string|null;revision:string}
+type NoteResourceEvent={projectId:string;kind:'note';noteId:string;revision:string}
 type TreeMenu={item:DirectoryItem;x:number;y:number}
 type SearchMode='names'|'contents'|'both'
 type SearchHit={name:string;path:string;match:'name'|'content';line:number|null;snippet:string|null}
@@ -82,7 +82,7 @@ function scheduleTreeSave(projectId:string,paths:string[]){
 }
 
 export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onSendToAgent}:Props){
-  const isNote=resource.kind==='note'||resource.kind==='session-note'
+  const isNote=resource.kind==='note'
   const isFile=resource.kind==='file'||resource.kind==='worktree-file'
   const worktree=resource.kind==='worktree-file'?resource.worktree:undefined
   const fileQuery=(path=resource.id)=>{
@@ -95,17 +95,15 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const isMarkdownFile=isFile&&/\.(md|markdown|mdx)$/i.test(resource.id)
   const autosaved=isNote||isMarkdownFile
   const saveTarget=():ResourceSaveTarget=>isNote
-    ?noteSaveTarget(project.id,resource.kind==='session-note'?resource.id:null)
+    ?noteSaveTarget(project.id,resource.id)
     :fileSaveTarget(project.id,resource.id,worktree)
-  const noteEndpoint=resource.kind==='session-note'
-    ?`/api/projects/${project.id}/session-notes/${encodeURIComponent(resource.id)}`
-    :`/api/projects/${project.id}/note`
-  const noteLabel=resource.kind==='session-note'?'Session note':'Project note'
+  const noteEndpoint=`/api/projects/${project.id}/notes/${encodeURIComponent(resource.id)}`
   const resourceKey=`${project.id}\0${resource.kind}\0${worktree||''}\0${resource.id}`
   const cachedFile=isFile?fileDrafts.get(resourceKey):undefined
   const cachedBrowser=resource.kind==='files'?browserStates.get(resourceKey):undefined
   const [revision,setRevision]=useState(cachedFile?.revision||'missing')
   const [text,setText]=useState(cachedFile?.text||'')
+  const [noteTitle,setNoteTitle]=useState('Note')
   const [baseline,setBaseline]=useState(cachedFile?.baseline||'')
   const [status,setStatus]=useState(cachedFile?.status||'loading')
   const [fileSize,setFileSize]=useState(cachedFile?.size||0)
@@ -221,6 +219,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       // A newer request owns the outcome; this one is neither a success nor a failure.
       if(isNote&&requestGeneration!==noteLoadGeneration.current)return true
       const stored='markdown' in payload?payload.markdown:payload.text||''
+      if('markdown' in payload)setNoteTitle(payload.title)
       // Local work the daemon may not have yet outranks what it just sent us. This is the
       // handoff case: a note moving between the drawer and a pane unmounts one editor and
       // mounts this one against the same save-queue entry, and the flush that unmount fired
@@ -266,7 +265,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       // Typing may have started while the GET was in flight. In that case the
       // local editor wins and the existing revision-conflict path stays armed.
       if(!noteSaveQueue.canFollowRemote(noteKey,payload.revision))return true
-      setRevision(payload.revision);setText(payload.markdown);setBaseline(payload.markdown)
+      setRevision(payload.revision);setText(payload.markdown);setBaseline(payload.markdown);setNoteTitle(payload.title)
       setStatus(payload.status);setSaveState('idle');setError('')
       noteSaveQueue.reset(noteKey,saveTarget(),payload.revision)
       setLoadGeneration(generation=>generation+1)
@@ -485,8 +484,15 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     const follow=async(remoteRevision='')=>settleRecovery(await followNote(remoteRevision))
     const changed=(event:Event)=>{
       const detail=(event as CustomEvent<NoteResourceEvent>).detail
-      if(detail.projectId!==project.id||detail.kind!==resource.kind)return
-      if(resource.kind==='session-note'&&detail.noteId!==resource.id)return
+      if(detail.projectId!==project.id||detail.kind!==resource.kind||detail.noteId!==resource.id)return
+      if(detail.revision==='missing'&&noteSaveQueue.canFollowRemote(noteKey,detail.revision)){
+        noteLoadGeneration.current++
+        setRevision('missing');setText('');setBaseline('');setStatus('deleted');setSaveState('idle');setError('')
+        noteSaveQueue.reset(noteKey,saveTarget(),'missing')
+        setLoadGeneration(generation=>generation+1)
+        loadedOnce.current=true
+        return
+      }
       void follow(detail.revision)
     }
     const reconnected=()=>void follow()
@@ -513,9 +519,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   // touch the same action is registered on Continuity's own rail, where a tap keeps the soft
   // keyboard and the selection where they are.
   const editorElement=useRef<ContinuityEditorElement|null>(null)
-  const sourceLabel=resource.kind==='note'?`project note (${project.name})`
-    :resource.kind==='session-note'?`session note (${project.name})`
-    :resource.id
+  const sourceLabel=resource.kind==='note'?`note (${noteTitle}, ${project.name})`:resource.id
   const requestSendToAgent=()=>{
     if(!onSendToAgent)return
     let snapshot:EditorSnapshot|null=null
@@ -1014,11 +1018,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     :status==='too-large'&&presentation?.kind==='image'?'This image exceeds the 16 MiB viewer limit.'
     :status==='too-large'?'This file exceeds the 2 MiB text and table limit.'
     :status==='unsupported'?'This file is not a valid allowlisted PNG, JPEG, GIF, or WebP image.'
+    :status==='deleted'?'This note was deleted. Close this tab or open another note.'
     :status==='loading'?'Loading…'
     :status==='error'?null
     :'This resource is read-only.'
   return <section class="project-resource file-editor" onKeyDown={handleFindKey}>
-    <header><div>{!isNote&&<strong>{resource.id}</strong>}<span>{project.name} · {stateLabel}</span></div>{autosaved||onSendToAgent||isDelimitedFile||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
+    <header><div><strong>{isNote?noteTitle:resource.id}</strong><span>{project.name} · {stateLabel}</span></div>{autosaved||onSendToAgent||isDelimitedFile||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
       {/* Continuity-backed views send the live selection (or the document); a plain-text
           editor owns no selection engine, so its send is always the whole document. */}
       {canSendText&&<button class="resource-send" title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}
@@ -1046,7 +1051,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     {autosaved&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
     {imageReady?<ImageViewer key={revision} projectId={project.id} path={resource.id} revision={revision} mime={imagePresentation!.mime!} width={imagePresentation!.width!} height={imagePresentation!.height!} frames={imagePresentation!.frames!} size={fileSize} worktree={worktree}/>
       :isDelimitedFile&&readableFile&&fileViewMode==='preview'?<DelimitedTextViewer text={text} delimiter={presentation.delimiter}/>
-      :editable?(autosaved?<ProjectNoteEditor key={`${project.id}:${resource.kind}:${resource.id}:${loadGeneration}`} projectId={project.id} resourceId={`${resource.kind}:${resource.id}`} initialText={text} label={isNote?noteLabel:resource.id} railActions={railActions} elementRef={editorElement}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>)
+      :editable?(autosaved?<ProjectNoteEditor key={`${project.id}:${resource.kind}:${resource.id}:${loadGeneration}`} projectId={project.id} resourceId={`${resource.kind}:${resource.id}`} initialText={text} label={isNote?noteTitle:resource.id} railActions={railActions} elementRef={editorElement}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>)
       :isDelimitedFile&&readableFile&&fileViewMode==='raw'?<textarea readOnly value={text} spellcheck={false}/>
       :<div class="resource-unavailable">{status==='error'?<><span>{isNote?'This note could not be loaded.':'This file could not be loaded.'}</span> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>
         :unavailableMessage

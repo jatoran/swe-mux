@@ -441,7 +441,7 @@ def test_mobile_gestures_default_and_are_hot_reloadable_and_validated(tmp_path: 
         # the left-edge sidebar (both were sidebar.toggle before the panel existed).
         "two_finger_swipe_left": "drawer.toggle",
         "two_finger_swipe_right": "sidebar.toggle",
-        "two_finger_swipe_up": "session.note",
+        "two_finger_swipe_up": "notes.open",
         "two_finger_swipe_down": "terminal.keyboardToggle",
         "two_finger_tap": "palette.open",
     }
@@ -480,6 +480,26 @@ def test_swipe_away_close_defaults_on_and_is_hot_reloadable(tmp_path: Path) -> N
 
     reloaded = load_config(path)
     assert reloaded.mobile_gesture_swipe_away_close is False
+
+
+def test_legacy_note_gestures_migrate_to_project_notes(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '\n'.join(
+            [
+                'schema_version = 17',
+                '[mobile_gestures]',
+                'two_finger_swipe_up = "session.note"',
+                'two_finger_tap = "project.note"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.mobile_gestures["two_finger_swipe_up"] == "notes.open"
+    assert config.mobile_gestures["two_finger_tap"] == "notes.open"
 
 
 def test_legacy_sidebar_gestures_migrate_to_toggle(tmp_path: Path) -> None:

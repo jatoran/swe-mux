@@ -9,6 +9,7 @@ from pathlib import Path
 from .history import HistoryIndex
 from .layouts import normalize_layout
 from .models import ProjectGroupRecord, ProjectRecord
+from .project_files import DEFAULT_NOTE_STORAGE_ID, note_header
 
 
 def canonical_project_root(value: str | Path, *, create: bool = False) -> Path:
@@ -36,7 +37,7 @@ def canonical_project_root(value: str | Path, *, create: bool = False) -> Path:
 
 
 def project_note_template(name: str) -> str:
-    """Seed a new Project note with its own heading and room to start typing.
+    """Seed a Project's initial note with a heading and room to start typing.
 
     An empty file gives the editor no anchor; a heading plus trailing blank lines
     puts the caret where a person actually writes. Existing notes are never
@@ -55,7 +56,13 @@ def initialize_project_files(root: Path, name: str | None = None) -> None:
         config.write_text("version = 1\n", encoding="utf-8")
     note = notes_dir / "project.md"
     if not note.exists():
-        note.write_text(project_note_template(name or root.name), encoding="utf-8")
+        label = name or root.name
+        note.write_text(
+            note_header(DEFAULT_NOTE_STORAGE_ID, f"{label} notes")
+            + project_note_template(label),
+            encoding="utf-8",
+            newline="\n",
+        )
 
 
 class ProjectManager:
