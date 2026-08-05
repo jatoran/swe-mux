@@ -20,6 +20,16 @@ interface OverflowRailProps {
   wrapperClassName?: string
   activeKey?: string
   stripProps?: OverflowRailStripProps
+  touchDrag?: boolean
+}
+
+type TouchDragState = {
+  pointerId: number
+  startX: number
+  startY: number
+  startScrollLeft: number
+  dragging: boolean
+  cancelled: boolean
 }
 
 const NO_OVERFLOW: RailOverflowState = { left: false, right: false }
@@ -65,8 +75,11 @@ export function OverflowRail({
   wrapperClassName = '',
   activeKey,
   stripProps,
+  touchDrag = false,
 }: OverflowRailProps) {
   const stripRef = useRef<HTMLDivElement>(null)
+  const touchDragRef = useRef<TouchDragState | null>(null)
+  const suppressClickUntilRef = useRef(0)
   const [overflow, setOverflow] = useState<RailOverflowState>(NO_OVERFLOW)
 
   const syncOverflow = () => {
@@ -128,7 +141,54 @@ export function OverflowRail({
     })
   }
 
-  return <div class={`overflow-rail ${wrapperClassName}`.trim()}>
+  const finishTouchDrag = (wrapper: HTMLDivElement, pointerId: number, cancelled: boolean) => {
+    const state = touchDragRef.current
+    if (!state || state.pointerId !== pointerId) return
+    if (state.dragging && !cancelled) suppressClickUntilRef.current = performance.now() + 500
+    touchDragRef.current = null
+    if (wrapper.hasPointerCapture(pointerId)) wrapper.releasePointerCapture(pointerId)
+    syncOverflow()
+  }
+
+  return <div
+    class={`overflow-rail ${touchDrag ? 'overflow-rail-touch-drag' : ''} ${wrapperClassName}`.trim()}
+    onPointerDown={event => {
+      if (!touchDrag || event.pointerType !== 'touch' || !event.isPrimary) return
+      const strip = stripRef.current
+      if (!strip || strip.scrollWidth <= strip.clientWidth + 1) return
+      touchDragRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startScrollLeft: strip.scrollLeft,
+        dragging: false,
+        cancelled: false,
+      }
+      event.currentTarget.setPointerCapture(event.pointerId)
+    }}
+    onPointerMove={event => {
+      const state = touchDragRef.current
+      const strip = stripRef.current
+      if (!state || !strip || state.pointerId !== event.pointerId || state.cancelled) return
+      const dx = event.clientX - state.startX
+      const dy = event.clientY - state.startY
+      if (!state.dragging) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 6) return
+        if (Math.abs(dy) >= Math.abs(dx)) { state.cancelled = true; return }
+        state.dragging = true
+      }
+      event.preventDefault()
+      strip.scrollLeft = state.startScrollLeft - dx
+      syncOverflow()
+    }}
+    onPointerUp={event => finishTouchDrag(event.currentTarget, event.pointerId, false)}
+    onPointerCancel={event => finishTouchDrag(event.currentTarget, event.pointerId, true)}
+    onClickCapture={event => {
+      if (performance.now() > suppressClickUntilRef.current) return
+      event.preventDefault()
+      event.stopPropagation()
+    }}
+  >
     {overflow.left && <button class="overflow-rail-edge overflow-rail-left" type="button" aria-label={`Scroll ${itemLabel} left`} title={`More ${itemLabel} to the left`} onClick={() => page(-1)}>‹</button>}
     <div
       {...stripProps}

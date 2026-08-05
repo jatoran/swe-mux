@@ -79,7 +79,7 @@ export type GestureSample = {
 
 type HorizontalScrollElement = Pick<Element, 'matches' | 'scrollWidth' | 'clientWidth'>
 
-const KNOWN_HORIZONTAL_SCROLLERS = '.terminal-action-rail, .stack-tabs, .voice-strip'
+const KNOWN_HORIZONTAL_SCROLLERS = '.terminal-action-rail, .stack-tabs, .drawer-tabs, .overflow-rail-touch-drag, .voice-strip'
 
 /**
  * Return whether a touch's composed event path crosses a horizontal scroller.

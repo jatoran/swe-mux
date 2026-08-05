@@ -1688,7 +1688,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .utility-rail button.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel2));color:var(--text);box-shadow:inset -2px 0 var(--accent)}
 .drawer-badge{position:absolute;top:-4px;right:-4px;min-width:14px;height:14px;padding:0 3px;display:grid;place-items:center;border-radius:7px;background:var(--amber);color:#12140c;font:600 8px 'Cascadia Mono',Consolas,monospace;font-style:normal}
 .drawer-tabs-rail{--overflow-rail-bg:var(--panel2);--overflow-rail-accent:var(--accent);flex:none}
-.drawer-tabs{width:100%;flex:1 1 auto;min-width:0;display:flex;flex-wrap:nowrap;align-items:stretch;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain}
+.drawer-tabs{width:100%;flex:1 1 auto;min-width:0;display:flex;flex-wrap:nowrap;align-items:stretch;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x;-webkit-overflow-scrolling:touch}
+.drawer-tabs-rail.overflow-rail-touch-drag{touch-action:none}
 .drawer-tabs::-webkit-scrollbar{display:none}
 /* Icon-only tabs. They share the strip evenly but are capped, because a 17px mark centred in
    a very wide cell reads as an accident rather than a control. The

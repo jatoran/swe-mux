@@ -48,10 +48,14 @@ test('a composed path exposes an overflowing scroller inside a shadow root', () 
 test('horizontal scroll ownership requires overflow or a registered strip', () => {
   const fittingStrip = fakeElement('command-rail-buttons', 300, 300, 'auto')
   const registeredStrip = fakeElement('terminal-action-rail', 300, 300, 'hidden')
+  const drawerTabs = fakeElement('drawer-tabs', 300, 300, 'hidden')
+  const manualDragRail = fakeElement('overflow-rail-touch-drag', 300, 300, 'hidden')
   const overflowX = (element: FakeElement) => element.overflowX
 
   assert.equal(pathOwnsHorizontalScroll([fittingStrip], overflowX), false)
   assert.equal(pathOwnsHorizontalScroll([registeredStrip], overflowX), true)
+  assert.equal(pathOwnsHorizontalScroll([drawerTabs], overflowX), true)
+  assert.equal(pathOwnsHorizontalScroll([manualDragRail], overflowX), true)
 })
 
 test('vertical single-finger drags are left to the terminal', () => {
