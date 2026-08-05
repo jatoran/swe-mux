@@ -31,6 +31,21 @@ uv run python tools/perf_snapshot.py --json before.json
 Use `--json` on both sides of a change so a before/after is a diff rather than a memory.
 The rest of this document is what the tool is doing and how to read it.
 
+```
+uv run python tools/pty_latency_bench.py --samples 25 --idle-gap 6
+```
+
+`tools/pty_latency_bench.py` measures the other half: keystroke to echo, end to end,
+across websocket, daemon, supervisor, ConPTY and the child.
+No component's own metrics report that number, and it is the one a user means by "snappy".
+Run it against a quiet daemon; a working agent's output makes every reading noise.
+Vary `--idle-gap` to cross the PTY reader's poll rungs
+(`pty_host.read_poll_interval`) - after the reader's wake was made interruptible, all
+three rungs read the same, and a gap-dependent result means that wake has regressed.
+
+Reference, measured 2026-08-05 on a quiet fleet: **p50 ~16 ms, max ~17 ms, independent of
+idle gap**. A p50 that tracks the idle gap is the specific regression to look for.
+
 ## Order of investigation
 
 ### 1. Establish what the daemon costs at rest

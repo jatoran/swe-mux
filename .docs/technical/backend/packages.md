@@ -167,6 +167,14 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   a session quiet at its prompt is exactly the one whose reader would otherwise be sitting on
   the slowest rung. The ladder only ever slows down, and never below what the fixed interval
   already gave a session that was doing anything.
+  **Re-tiering alone is not enough and shipping it alone was a regression.** Choosing the next
+  interval does nothing about the one already running, so a keystroke arriving mid-sleep still
+  waited it out: measured end to end at 30 ms p50 and 40 ms max against a 40 ms rung, worse
+  than the fixed 10 ms it replaced, in exactly the case the ladder exists to improve. `write()`
+  therefore also sets `_io_wake`, and the reader waits on that event rather than sleeping. With
+  the wake in place, typed-input latency is independent of the rung entirely: p50 ~16 ms at
+  idle gaps of 0.05 s, 1 s and 6 s alike, where the remaining 16 ms is the rest of the stack.
+  `tools/pty_latency_bench.py` is what caught this and is what re-checks it.
 - **`asyncio.to_thread` does not make psutil work free.** Its Windows calls are C extension
   calls that hold the GIL, so a long sampling pass in a worker thread starves the event loop
   just as a blocking call would — it only stops looking like a blocking call. `processes.py`

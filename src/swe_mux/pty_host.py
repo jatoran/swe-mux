@@ -143,6 +143,16 @@ class PtyHost:
     # `write()` on the loop thread; a float assignment is atomic under the GIL and a
     # torn value could only mis-tier one sleep, so it needs no lock.
     _last_io_at: float = field(default_factory=time.monotonic, init=False)
+    # Set by `write()` to cut short a poll interval already in flight.
+    #
+    # Re-tiering the ladder is not enough on its own, and measuring proved it: a
+    # keystroke arriving while the reader sits in `time.sleep(deep_idle)` still waits
+    # out the remainder, so input into an idle session paid up to a full interval.
+    # Measured end to end at 30ms p50 and 40ms max against a 40ms rung, which was
+    # *worse* than the fixed 10ms this ladder replaced, in exactly the case the ladder
+    # exists to improve. An interruptible wait is what makes arming the window mean
+    # anything.
+    _io_wake: threading.Event = field(default_factory=threading.Event, init=False)
     _console_host_pid: int | None = field(default=None, init=False)
     _console_host_started_at: float | None = field(default=None, init=False)
     _console_hosts_before: set[int] = field(default_factory=set, init=False)
@@ -243,7 +253,12 @@ class PtyHost:
                 elif not pty.isalive():
                     break
                 else:
-                    time.sleep(read_poll_interval(time.monotonic() - self._last_io_at))
+                    # Interruptible: `write()` sets this, so a keystroke does not wait
+                    # out an interval chosen for an idle pseudoconsole. Cleared after the
+                    # wait rather than before, so a set that lands mid-wait is consumed
+                    # by this iteration instead of spinning the next one.
+                    self._io_wake.wait(read_poll_interval(time.monotonic() - self._last_io_at))
+                    self._io_wake.clear()
         finally:
             try:
                 asyncio.run_coroutine_threadsafe(self._queue.put(b""), self._loop).result(timeout=2)
@@ -290,8 +305,12 @@ class PtyHost:
         # Arm the reader's active window before the write, not after. Input is the one
         # case where the *response* latency is a human waiting on their own keystroke,
         # and a session that has been quiet at its prompt is exactly the one whose
-        # reader would otherwise be sitting on the deep-idle interval.
+        # reader would otherwise be sitting on the deep-idle interval. Both halves are
+        # load-bearing: re-tiering decides the *next* interval, and the wake cuts short
+        # the one already running. Without the wake this made idle echo slower than the
+        # fixed interval it replaced.
         self._last_io_at = time.monotonic()
+        self._io_wake.set()
         self._pty.write(data.decode("utf-8", "replace") if isinstance(data, bytes) else data)
 
     def resize(self, cols: int, rows: int) -> None:

@@ -722,3 +722,28 @@ def test_writing_input_arms_the_reader_active_window() -> None:
 
     assert written == ["ls\r"]
     assert time.monotonic() - host._last_io_at < 1.0
+
+
+def test_writing_input_wakes_a_reader_already_sleeping() -> None:
+    """Re-tiering the ladder decides the next interval; only the wake cuts the current one.
+
+    Measured before this existed: a keystroke into a session idle past the deep-idle
+    threshold took 30ms p50 and 40ms max end to end, against a 40ms rung, because the
+    reader was already inside `time.sleep` when the write landed. That was *worse* than
+    the fixed 10ms interval the ladder replaced, in precisely the case it exists to
+    improve. Arming the window means nothing if the wait cannot be interrupted.
+    """
+    from swe_mux.pty_host import PtyHost
+
+    class FakePty:
+        def write(self, data: str) -> None:
+            return None
+
+    host = PtyHost(appname="x", argv=())
+    host._pty = FakePty()  # type: ignore[assignment]
+    host._last_io_at = time.monotonic() - 3600.0
+    assert not host._io_wake.is_set()
+
+    host.write("x")
+
+    assert host._io_wake.is_set(), "a reader parked on the deep-idle interval must be woken"
