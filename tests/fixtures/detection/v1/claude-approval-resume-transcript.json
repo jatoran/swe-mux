@@ -17,7 +17,6 @@
       {"type": "turn_started", "source": "transcript", "scope": "root"},
       {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "Bash"},
       {"type": "approval_needed", "source": "hook", "scope": "root", "kind": "approval"},
-      {"type": "approval_needed", "source": "hook", "scope": "root", "kind": "approval"},
       {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "Bash", "success": true},
       {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
     ],

@@ -10,7 +10,7 @@ rendering and local interaction; pure helpers own transformations that need dete
 
 | Area | Primary files | Boundary |
 |---|---|---|
-| Workspace composition | `App.tsx` | fetch/coordinate Projects, sessions, layouts, menus, overlays |
+| Workspace composition | `App.tsx`, `sessionSnapshots.ts` | fetch/coordinate Projects, sessions, layouts, menus, overlays; `sessionSnapshots.ts` is the pure REST/PTY merge contract, rejecting stale same-generation revisions while preserving enriched title/readiness fields across raw PTY updates |
 | Horizontal overflow rails | `RailScroller.tsx`, `railOverflow.ts`, `wheelScroll.ts` | shared endpoint detection, overlay fade chevrons, tab-boundary paging, wheel translation, and separate selection/focus reveal triggers for workspace tabs, utility tabs, and the terminal command rail; callers retain tablist semantics, drag targets, and native touch/trackpad scrolling |
 | Layout algebra | `layout.ts` | parse/migrate and pure stack/split/leaf transforms |
 | Mobile projection | `mobileWorkspace.ts` | pure flatten/select/adjacent-close rules; no persistence |
@@ -62,7 +62,8 @@ if (mobile) updateLayout(projectId, flattenIntoOneStack(layout))
 
 ## UI state boundaries
 
-- Daemon snapshots are refreshed/coalesced at the composition root.
+- Daemon snapshots are refreshed/coalesced at the composition root and merged through `sessionSnapshots.ts`.
+- Snapshot ordering is `(daemon generation, session revision)`, not arrival order; a new generation resets the revision domain.
 - Project layout is optimistic durable state; focus, sidebar size/collapse, audio unlock, and
   responsive mode are device-local state.
 - Utility-drawer width is one device-local value, with a viewport-derived live cap that preserves 150 px for the main workspace.

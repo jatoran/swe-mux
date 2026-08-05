@@ -21,6 +21,7 @@ from swe_mux.observation import (
     apply_hook_observation,
     classify_transcript_event,
     observe_transcript,
+    restore_pending_approval,
     transcript_tail_turn_state,
 )
 from swe_mux.scrollback import ScrollbackBuffer
@@ -449,6 +450,136 @@ async def test_permission_prompt_notification_still_awaits_approval() -> None:
     )
     assert session.record.state == "awaiting"
     assert "approval_needed" in [item.type for item in drain(queue)]
+
+
+async def test_short_approval_is_cancelled_before_status_or_notification() -> None:
+    session = cast(Any, ReplaySession("codex"))
+    session.approval_stabilization_seconds = 0.05
+    events = EventBus()
+    queue = events.subscribe()
+    await _codex(
+        session,
+        {"type": "event_msg", "payload": {"type": "task_started"}},
+        events,
+    )
+    await apply_hook_observation(
+        session,
+        "PermissionRequest",
+        {"tool_name": "shell"},
+        events,
+    )
+    assert session.record.state == "working"
+    assert [item.type for item in drain(queue)] == [
+        "state_changed",
+        "turn_started",
+        "approval_detected",
+    ]
+
+    await apply_hook_observation(session, "PostToolUse", {}, events)
+    await asyncio.sleep(0.07)
+
+    assert session.record.state == "working"
+    assert "approval_needed" not in [item.type for item in drain(queue)]
+    assert any(
+        item.get("kind") == "approval_stabilization_cancelled"
+        for item in session.state_transitions
+    )
+
+
+async def test_stable_approval_becomes_visible_once_after_the_window() -> None:
+    session = cast(Any, ReplaySession("codex"))
+    session.approval_stabilization_seconds = 0.01
+    events = EventBus()
+    queue = events.subscribe()
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    drain(queue)
+
+    await apply_hook_observation(session, "PermissionRequest", {"tool_name": "shell"}, events)
+    assert session.record.state == "working"
+    assert [item.type for item in drain(queue)] == ["approval_detected"]
+
+    await asyncio.sleep(0.03)
+
+    assert session.record.state == "awaiting"
+    emitted = [item.type for item in drain(queue)]
+    assert emitted.count("state_changed") == 1
+    assert emitted.count("approval_needed") == 1
+
+
+async def test_pending_approval_restores_after_daemon_reload() -> None:
+    session = cast(Any, ReplaySession("codex"))
+    session.approval_stabilization_seconds = 0.05
+    session.approval_candidate = {
+        "started_at": time.time() - 0.04,
+        "source": "hook",
+        "evidence": "hook:PermissionRequest",
+        "detail": "shell",
+    }
+    mirrored: list[dict[str, Any] | None] = []
+    session.meta_sink = lambda: mirrored.append(session.approval_candidate)
+    events = EventBus()
+    queue = events.subscribe()
+
+    assert await restore_pending_approval(session, events) is True
+    assert [item.type for item in drain(queue)] == ["approval_detected"]
+    await asyncio.sleep(0.03)
+
+    assert session.record.state == "awaiting"
+    emitted = [item.type for item in drain(queue)]
+    assert emitted.count("state_changed") == 1
+    assert emitted.count("approval_needed") == 1
+    assert session.approval_candidate is None
+    assert mirrored[-1] is None
+
+
+async def test_immediate_question_replaces_a_pending_approval_candidate() -> None:
+    session = cast(Any, ReplaySession("codex"))
+    session.approval_stabilization_seconds = 0.05
+    events = EventBus()
+    queue = events.subscribe()
+    await _codex(
+        session,
+        {"type": "event_msg", "payload": {"type": "task_started"}},
+        events,
+    )
+    drain(queue)
+
+    await apply_hook_observation(session, "PermissionRequest", {}, events)
+    drain(queue)
+    await _codex(
+        session,
+        {"type": "event_msg", "payload": {"type": "request_user_input"}},
+        events,
+    )
+    await asyncio.sleep(0.07)
+
+    assert session.record.state == "awaiting"
+    assert session.record.awaiting_reason == "question"
+    emitted = [item for item in drain(queue) if item.type == "approval_needed"]
+    assert len(emitted) == 1
+    assert emitted[0].payload["kind"] == "input"
+
+
+async def test_session_start_during_an_active_codex_turn_is_not_a_boundary() -> None:
+    session = cast(Any, ReplaySession("codex"))
+    events = EventBus()
+    queue = events.subscribe()
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    drain(queue)
+
+    await apply_hook_observation(
+        session,
+        "SessionStart",
+        {"session_id": session.record.native_session_id, "source": "compact"},
+        events,
+    )
+
+    assert session.record.state == "working"
+    assert "turn_ended" not in [item.type for item in drain(queue)]
+    assert any(
+        item.get("kind") == "session_start_state_ignored"
+        for item in session.state_transitions
+    )
 
 
 async def test_idle_prompt_never_clobbers_a_pending_approval() -> None:
@@ -1085,6 +1216,10 @@ async def test_the_pty_starts_and_ends_the_first_turn_when_nothing_else_can(
     assert session.record.state == "idle"
 
     session.scrollback = screen(b"? for shortcuts\n\xe2\x80\xa2 Working (esc to interrupt)")
+    await SessionManager._watchdog_check_session(manager, session, time.time())
+    assert session.record.state == "idle"
+
+    session.observation_state["unwitnessed_turn_armed"] = True
     await SessionManager._watchdog_check_session(manager, session, time.time())
     assert session.record.state == "working"
 

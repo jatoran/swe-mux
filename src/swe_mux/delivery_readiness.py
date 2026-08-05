@@ -172,7 +172,7 @@ class DeliveryReadinessTracker:
             self._transition(memory, phase="working", reason="root_turn_started", event=event)
         elif event.type == "tool_use":
             self._transition(memory, phase="working", reason="root_tool_active", event=event)
-        elif event.type == "approval_needed":
+        elif event.type in {"approval_detected", "approval_needed"}:
             kind = str(event.payload.get("kind") or "approval")
             reason = (
                 "awaiting_user_input"

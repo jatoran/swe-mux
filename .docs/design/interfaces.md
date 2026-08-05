@@ -505,6 +505,10 @@ the returned reference as unicast draft input without submitting it.
 
 `GET /sessions` adds a compact, read-only `delivery_readiness` object with
 `state: safe|blocked|unknown`, a reason, and `authorized: false`. It is not accepted on writes.
+Every `GET /sessions` row and every PTY `state`/`update`/`exit` snapshot carries
+`_snapshot_generation`, `_snapshot_revision`, and `_snapshot_enriched`.
+The generation identifies one daemon process, the revision orders one session inside that generation, and the enriched flag identifies REST rows that authoritatively carry generated-title and delivery-readiness presentation fields.
+Clients reject lower revisions from the same generation, accept a new generation even when its revision resets, and preserve enriched fields when applying a raw PTY snapshot for the same agent run.
 Rows also carry `idle_reason`, the idle-axis sibling of `awaiting_reason`:
 `waiting_on_background` means the turn genuinely ended (the composer accepts input,
 `delivery_state` is unchanged) while the agent has background work that will wake it back
@@ -830,15 +834,12 @@ POST   /history/{id}/second-opinion   preview/confirm with project_id
 GET    /history/{id}/handoff
 ```
 
-Resume/review confirmation must target an existing Project and starts at its root. Resume
-returns `409 conversation_live` (with the owning `session_id`) when a live session currently
-claims the row's native conversation — Branch, not resume, is the flow for forking a live
-conversation. The resumed pane keeps the conversation's own name (no suffix), and for a Claude
-row resumed at its recorded root it keeps the conversation's `agent_run_id` too: that resume
-continues one transcript, so it continues one history entry rather than opening a second over
-the same file. A Codex resume, or a Claude resume into a different root, is a new conversation
-and gets its own entry plus a `resume` lineage edge. Backfill
-jobs are daemon-local, cancellable, idempotent scans of complete shared native CLI history.
+Resume/review confirmation must target an existing Project and starts at its root.
+Resume returns `409 conversation_live` (with the owning `session_id`) when a live session currently claims the row's native conversation; Branch, not resume, is the flow for forking a live conversation.
+The resumed pane keeps the conversation's effective visible name (manual name, or generated title while auto-named) with no suffix, and for a Claude row resumed at its recorded root it keeps the conversation's `agent_run_id` too: that resume continues one transcript, so it continues one history entry rather than opening a second over the same file.
+A Codex resume inherits that effective name before it mints a new run, so the generated title does not disappear with the old annotation key.
+A Codex resume, or a Claude resume into a different root, is a new conversation and gets its own entry plus a `resume` lineage edge.
+Backfill jobs are daemon-local, cancellable, idempotent scans of complete shared native CLI history.
 Handoff Markdown exposes the swe-mux history ID, provider-native session ID, and recorded native
 transcript path; transcript bytes remain in the provider-owned file and are never copied into the
 export. A missing or stale transcript pointer is reported explicitly.

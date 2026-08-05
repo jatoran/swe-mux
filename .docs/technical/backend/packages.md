@@ -38,7 +38,7 @@ It should call domain packages rather than acquire their storage or process resp
 | `history.py` | shared schema, Project/layout persistence, run history, search index | live PTY lifecycle |
 | `history_backfill.py` | bounded cancellable complete-history jobs | durable job scheduling, native file mutation |
 | `transcript_view.py` | bounded Claude/Codex conversation parsing; the human-readable `conversation_view` reduction (CLI machinery classified out, agent turns merged, byte/message capped, own LRU) | process state, transcript writes, redaction (the reader is the machine's owner) |
-| `observation.py` | provider hook/transcript normalization, root-turn state, first/latest user-request capture, immediate `transcript_message` fanout, standing-activity evidence | HTTP routing, title policy, transcript rendering |
+| `observation.py` | provider hook/transcript normalization, root-turn state, supervisor-resumable 5 s approval stabilization with immediate delivery blocking, first/latest user-request capture, immediate `transcript_message` fanout, standing-activity evidence | HTTP routing, title policy, transcript rendering |
 | `automation.py`, `automation_store.py` | bounded rule evaluation and observer lifecycle, including provisional/settled title state, retries, budgets, and append-only annotations | PTY writes, provider transcript mutation, browser presentation |
 | `layouts.py` | layout-v6 validation and migrations | UI focus or drag state |
 | `operational_telemetry.py` | process/quota/reset/context/tool evidence; provider-evidence reset after proven session-identity repair | credentials, automatic process killing |

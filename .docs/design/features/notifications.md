@@ -51,10 +51,10 @@ resuming cancels it, reusing the same cancellation the deferral path already had
 120 s is measured, not chosen: over one 10-hour, 17-session day, 89 of 211 idle transitions
 were back to `working` inside that window with no human input in between. The 8 s
 semantic-dedup window caught none of them, because the flaps run 11-50 s. Categories that
-are true the instant they are raised (`attention`, `failure`, `reset`) are never held —
-an approval that arrives two minutes late is worse than useless. Sounds are not settled
-either: a live tab's chime is cheap, immediate, and the user is already looking at the
-screen that shows the correction.
+are true the instant they are raised (`failure`, `reset`, questions, and elicitation) are never held.
+Approval attention has its own 5 s stabilization before `approval_needed` exists.
+The same stabilized event drives sidebar state, foreground sound, automation attention, and web push, so an auto-approved review produces none of them.
+This is separate from the 120 s waiting settle and from device deferral.
 
 A settle and a deferral are different questions and compose: the settle asks "did the agent
 actually stop", the deferral asks "is the human somewhere else", so a held-then-deferred

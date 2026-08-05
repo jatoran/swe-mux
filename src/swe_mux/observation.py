@@ -1329,6 +1329,243 @@ def conversation_unbound(session: Session) -> bool:
 
 
 MAX_REMEMBERED_PROMPT_CHARS = 4000
+APPROVAL_STABILIZATION_SECONDS = 5.0
+
+
+def _persist_approval_candidate(
+    session: Session, candidate: dict[str, Any] | None
+) -> None:
+    """Mirror a pending approval timer into supervisor-owned session metadata."""
+    session.approval_candidate = candidate
+    meta_sink = getattr(session, "meta_sink", None)
+    if meta_sink is not None:
+        try:
+            meta_sink()
+        except Exception:
+            log.debug("approval candidate meta sink failed", exc_info=True)
+
+
+def cancel_pending_approval(session: Session, reason: str) -> bool:
+    """Cancel an approval candidate before it becomes user-visible attention."""
+    state = _observation_state(session)
+    pending = state.pop("pending_approval", None)
+    candidate = getattr(session, "approval_candidate", None)
+    if not isinstance(pending, dict) and not isinstance(candidate, dict):
+        return False
+    _persist_approval_candidate(session, None)
+    source_record = pending if isinstance(pending, dict) else candidate
+    assert isinstance(source_record, dict)
+    task = source_record.get("task")
+    if isinstance(task, asyncio.Task) and task is not asyncio.current_task() and not task.done():
+        task.cancel()
+    elapsed_seconds = 0.0
+    if isinstance(pending, dict):
+        elapsed_seconds = max(
+            0.0, time.monotonic() - float(pending.get("started") or 0.0)
+        )
+    else:
+        elapsed_seconds = max(
+            0.0, time.time() - float(source_record.get("started_at") or 0.0)
+        )
+    transitions = getattr(session, "state_transitions", None)
+    if transitions is not None:
+        transitions.append(
+            {
+                "ts": time.time(),
+                "kind": "approval_stabilization_cancelled",
+                "reason": reason,
+                "source": source_record.get("source"),
+                "elapsed_seconds": round(elapsed_seconds, 3),
+            }
+        )
+    return True
+
+
+async def _request_stabilized_approval(
+    session: Session,
+    events: EventBus,
+    *,
+    detail: str,
+    source: str,
+    evidence: str,
+) -> None:
+    """Block delivery immediately, but expose approval only after a stable 5 s wait."""
+    if getattr(session, "observation_replay", False):
+        return
+    state = _observation_state(session)
+    if session.record.state == "awaiting" and session.record.awaiting_reason == "approval":
+        if isinstance(getattr(session, "approval_candidate", None), dict):
+            _persist_approval_candidate(session, None)
+        transitions = getattr(session, "state_transitions", None)
+        if transitions is not None:
+            transitions.append(
+                {
+                    "ts": time.time(),
+                    "kind": "approval_stabilization_already_visible",
+                    "source": source,
+                    "evidence": evidence,
+                }
+            )
+        return
+    if isinstance(state.get("pending_approval"), dict):
+        transitions = getattr(session, "state_transitions", None)
+        if transitions is not None:
+            transitions.append(
+                {
+                    "ts": time.time(),
+                    "kind": "approval_stabilization_coalesced",
+                    "source": source,
+                    "evidence": evidence,
+                }
+            )
+        return
+
+    candidate = getattr(session, "approval_candidate", None)
+    restored = isinstance(candidate, dict)
+    now_wall = time.time()
+    if restored:
+        assert isinstance(candidate, dict)
+        raw_started_at = candidate.get("started_at")
+        try:
+            started_at = (
+                float(raw_started_at)
+                if isinstance(raw_started_at, (int, float, str))
+                else now_wall
+            )
+        except (TypeError, ValueError):
+            started_at = now_wall
+        source = str(candidate.get("source") or source)
+        evidence = str(candidate.get("evidence") or evidence)
+        detail = str(candidate.get("detail") or detail)
+    else:
+        started_at = now_wall
+        candidate = {
+            "started_at": started_at,
+            "source": source,
+            "evidence": evidence,
+            "detail": detail,
+        }
+        _persist_approval_candidate(session, candidate)
+    elapsed_before_start = max(0.0, now_wall - started_at)
+    pending: dict[str, Any] = {
+        "started": time.monotonic() - elapsed_before_start,
+        "source": source,
+        "evidence": evidence,
+        "detail": detail,
+    }
+    state["pending_approval"] = pending
+    stabilization_seconds = float(
+        getattr(session, "approval_stabilization_seconds", APPROVAL_STABILIZATION_SECONDS)
+    )
+    delay_seconds = max(0.0, stabilization_seconds - elapsed_before_start)
+    transitions = getattr(session, "state_transitions", None)
+    if transitions is not None:
+        transitions.append(
+            {
+                "ts": time.time(),
+                "kind": "approval_stabilization_started",
+                "source": source,
+                "evidence": evidence,
+                "delay_seconds": delay_seconds,
+                "restored": restored,
+            }
+        )
+    # Delivery readiness consumes this internal event. Sounds, UI attention,
+    # automation triage, and web push consume only the stabilized event below.
+    await events.emit(
+        "approval_detected",
+        session_id=session.record.id,
+        source=source,
+        scope="root",
+        kind="approval",
+        detail=detail,
+    )
+
+    async def settle() -> None:
+        await asyncio.sleep(max(0.0, delay_seconds))
+        if state.get("pending_approval") is not pending:
+            return
+        state.pop("pending_approval", None)
+        _persist_approval_candidate(session, None)
+        if session.record.state in {"exited", "crashed"}:
+            return
+        if transitions is not None:
+            transitions.append(
+                {
+                    "ts": time.time(),
+                    "kind": "approval_stabilization_committed",
+                    "source": source,
+                    "evidence": evidence,
+                    "elapsed_seconds": round(
+                        max(0.0, time.monotonic() - float(pending["started"])), 3
+                    ),
+                }
+            )
+        accepted = await _transition(
+            session,
+            events,
+            "awaiting",
+            detail,
+            source=source,
+            evidence=evidence,
+            awaiting_reason="approval",
+        )
+        if not accepted and not (
+            session.record.state == "awaiting"
+            and session.record.awaiting_reason == "approval"
+        ):
+            if transitions is not None:
+                transitions.append(
+                    {
+                        "ts": time.time(),
+                        "kind": "approval_stabilization_transition_refused",
+                        "source": source,
+                        "evidence": evidence,
+                        "state": session.record.state,
+                    }
+                )
+            return
+        await events.emit(
+            "approval_needed",
+            session_id=session.record.id,
+            source=source,
+            scope="root",
+            kind="approval",
+            detail=detail,
+            stabilized=True,
+        )
+
+    if delay_seconds <= 0:
+        await settle()
+        return
+
+    task = asyncio.create_task(settle(), name=f"approval-settle-{session.record.id}")
+    pending["task"] = task
+
+    def finished(done: asyncio.Task[None]) -> None:
+        if done.cancelled():
+            return
+        try:
+            done.result()
+        except Exception:
+            log.exception("approval stabilization failed for session %s", session.record.id)
+
+    task.add_done_callback(finished)
+
+
+async def restore_pending_approval(session: Session, events: EventBus) -> bool:
+    """Resume a supervisor-mirrored stabilization timer after daemon adoption."""
+    candidate = getattr(session, "approval_candidate", None)
+    if not isinstance(candidate, dict):
+        return False
+    await _request_stabilized_approval(
+        session,
+        events,
+        detail=str(candidate.get("detail") or "Approval needed"),
+        source=str(candidate.get("source") or "hook"),
+        evidence=str(candidate.get("evidence") or "approval:restored"),
+    )
+    return True
 
 
 def _remember_user_prompt(session: Session, payload: dict[str, Any]) -> None:
@@ -1509,11 +1746,17 @@ def foreign_conversation_hook_id(session: Session, payload: dict[str, Any]) -> s
     it speaking while the session is bound elsewhere is identity-corruption
     evidence, which the heal path acts on rather than discarding.
     """
-    if session.record.backend != "claude":
+    if session.record.backend not in {"claude", "codex"}:
         return None
     if conversation_unbound(session):
         return None
-    native_id = str(payload.get("session_id") or payload.get("sessionId") or "")
+    native_id = str(
+        payload.get("session_id")
+        or payload.get("sessionId")
+        or payload.get("thread-id")
+        or payload.get("thread_id")
+        or ""
+    )
     if not _HOOK_NATIVE_ID.fullmatch(native_id):
         return None
     if native_id == (session.record.native_session_id or ""):
@@ -1951,7 +2194,28 @@ async def apply_hook_observation(
         # plain fact with no timestamp, because the settle it gates is measured
         # against the tracker's own clock (`delivery_readiness.py`).
         _observation_state(session)["session_start_seen"] = True
-        await _transition(session, events, "idle", source="hook", evidence="hook:SessionStart")
+        if _observation_state(session).get("root_turn_active") or session.record.state in {
+            "working",
+            "awaiting",
+        }:
+            # SessionStart is process/conversation lifecycle evidence, not a turn
+            # boundary. Codex can emit it while compacting an active turn. The
+            # previous unconditional idle transition produced a false ready beep
+            # until the next tool record restored working.
+            transitions = getattr(session, "state_transitions", None)
+            if transitions is not None:
+                transitions.append(
+                    {
+                        "ts": time.time(),
+                        "kind": "session_start_state_ignored",
+                        "state": session.record.state,
+                        "reason": "active_root_turn",
+                    }
+                )
+        else:
+            await _transition(
+                session, events, "idle", source="hook", evidence="hook:SessionStart"
+            )
     elif event_type in {"UserPromptSubmit", "turn_started", "task_started"}:
         # Capture the request itself before the authority check below, which returns
         # early whenever the transcript is driving state — i.e. for every healthy
@@ -1986,22 +2250,12 @@ async def apply_hook_observation(
         )
     elif event_type in {"PermissionRequest", "approval_needed", "approval-requested"}:
         tool = str(payload.get("tool_name") or payload.get("message") or "approval")
-        await _transition(
+        await _request_stabilized_approval(
             session,
             events,
-            "awaiting",
-            tool,
+            detail=tool,
             source="hook",
             evidence=f"hook:{event_type}",
-            awaiting_reason="approval",
-        )
-        await events.emit(
-            "approval_needed",
-            session_id=session.record.id,
-            source="hook",
-            scope="root",
-            kind="approval",
-            detail=tool,
         )
     elif event_type == "Notification":
         notification = str(payload.get("notification_type") or "")
@@ -2021,23 +2275,32 @@ async def apply_hook_observation(
             kind = "approval" if notification == "permission_prompt" else "input"
             reason = "approval" if notification == "permission_prompt" else "elicitation"
             detail = str(payload.get("message") or notification)
-            await _transition(
-                session,
-                events,
-                "awaiting",
-                detail,
-                source="hook",
-                evidence=f"hook:Notification:{notification}",
-                awaiting_reason=reason,
-            )
-            await events.emit(
-                "approval_needed",
-                session_id=session.record.id,
-                source="hook",
-                scope="root",
-                kind=kind,
-                detail=detail,
-            )
+            if reason == "approval":
+                await _request_stabilized_approval(
+                    session,
+                    events,
+                    detail=detail,
+                    source="hook",
+                    evidence=f"hook:Notification:{notification}",
+                )
+            else:
+                await _transition(
+                    session,
+                    events,
+                    "awaiting",
+                    detail,
+                    source="hook",
+                    evidence=f"hook:Notification:{notification}",
+                    awaiting_reason=reason,
+                )
+                await events.emit(
+                    "approval_needed",
+                    session_id=session.record.id,
+                    source="hook",
+                    scope="root",
+                    kind=kind,
+                    detail=detail,
+                )
         elif notification in {"rate_limit", "rate_limited"}:
             await _transition(
                 session,
@@ -2087,6 +2350,11 @@ async def _transition(
 ) -> bool:
     if getattr(session, "observation_replay", False):
         return False
+    keeps_approval_candidate = state == "awaiting" and awaiting_reason == "approval"
+    if not keeps_approval_candidate and not (
+        state == "working" and session_pty_state(session) == "approval"
+    ):
+        cancel_pending_approval(session, f"state_evidence:{state}:{source}")
     # force: interrupt/abort evidence exists only in the transcript; hooks never
     # deliver it, so it may reclaim authority from an earlier hook state. The
     # shared contract resets arbitration before applying.
@@ -2564,21 +2832,30 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
     }:
         detail = "input" if payload_type == "request_user_input" else "approval"
         reason = "question" if payload_type == "request_user_input" else "approval"
-        await _transition(
-            session,
-            events,
-            "awaiting",
-            detail,
-            evidence=str(payload_type),
-            awaiting_reason=reason,
-        )
-        await events.emit(
-            "approval_needed",
-            session_id=session.record.id,
-            source="transcript",
-            scope="root",
-            kind=detail,
-        )
+        if reason == "approval":
+            await _request_stabilized_approval(
+                session,
+                events,
+                detail=detail,
+                source="transcript",
+                evidence=str(payload_type),
+            )
+        else:
+            await _transition(
+                session,
+                events,
+                "awaiting",
+                detail,
+                evidence=str(payload_type),
+                awaiting_reason=reason,
+            )
+            await events.emit(
+                "approval_needed",
+                session_id=session.record.id,
+                source="transcript",
+                scope="root",
+                kind=detail,
+            )
     elif payload_type in {"rate_limit", "rate_limited"}:
         await _transition(
             session,

@@ -101,6 +101,9 @@ class ReplaySession:
             parser_status="watching",
             parser_schema_version="2",
         )
+        if backend == "codex":
+            self.record.native_session_id = self.record.id
+        self.agent_lifecycle_id: str | None = None
         # The observer asks the adapter which conversation-identity rules apply
         # (whether mux named the conversation at spawn). Replay uses the real
         # per-backend values so the corpus cannot drift from production.
@@ -160,6 +163,8 @@ class ReplaySession:
         # manager-side watchdog pass consults.
         self.layer_readings: dict[str, str] = {}
         self.observation_replay = False
+        # Golden fixtures test stabilized semantics without wall-clock sleeps.
+        self.approval_stabilization_seconds = 0.0
 
     def publish_update(self) -> None:
         return
@@ -299,13 +304,13 @@ class DetectionReplay:
     async def drain(self) -> None:
         while not self.queue.empty():
             event = await self.queue.get()
+            self.readiness.observe(event, self.session)
             # UI/automation fanout after a user transcript record is consumed is
             # not status evidence. Keep the detection goldens scoped to state,
             # attention, and standing-activity semantics.
-            if event.type == "transcript_message":
+            if event.type in {"transcript_message", "approval_detected"}:
                 continue
             self.normalized.append(normalized_event(event))
-            self.readiness.observe(event, self.session)
 
     def _stamp(self, record: dict[str, Any], offset: float) -> dict[str, Any]:
         """Give a fixture record a virtual-clock timestamp.
@@ -398,6 +403,8 @@ class DetectionReplay:
         elif kind == "input":
             self.session.input_revision += 1
             self.session.last_input_event_ts = self.clock.monotonic()
+            if step.get("submit") is True and session_is_unwitnessed(self.session):
+                self.session.observation_state["unwitnessed_turn_armed"] = True
             await self.events.emit(
                 "terminal_input",
                 session_id=self.session.record.id,
@@ -521,6 +528,9 @@ class DetectionReplay:
             pty_state=pty_state,
             awaiting_reason=session.record.awaiting_reason,
             unwitnessed=unwitnessed,
+            unwitnessed_turn_armed=bool(
+                session.observation_state.get("unwitnessed_turn_armed")
+            ),
             startup_no_turn=startup_no_turn,
             startup_dialog_seconds=dialog_seconds,
             startup_dialog_raised=startup_raised,
@@ -535,6 +545,9 @@ class DetectionReplay:
                 pty_state=pty_state,
                 awaiting_reason=session.record.awaiting_reason,
                 unwitnessed=unwitnessed,
+                unwitnessed_turn_armed=bool(
+                    session.observation_state.get("unwitnessed_turn_armed")
+                ),
                 startup_no_turn=startup_no_turn,
                 startup_dialog_seconds=dialog_seconds,
                 startup_dialog_raised=startup_raised,

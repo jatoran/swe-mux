@@ -62,6 +62,11 @@ export interface Session {
   relaunchable?: boolean
   /** Client-only optimistic row/tab shown while POST /api/sessions is in flight. */
   pending?: boolean
+  /** Daemon process generation plus session-local ordering for multi-channel snapshots. */
+  _snapshot_generation?: string
+  _snapshot_revision?: number
+  /** True only for REST snapshots that authoritatively include generated-title fields. */
+  _snapshot_enriched?: boolean
 }
 
 export type VoiceContent = 'summary' | 'verbatim'

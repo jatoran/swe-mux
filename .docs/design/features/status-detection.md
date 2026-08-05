@@ -64,8 +64,8 @@ Codex publishes no equivalent side state; this layer is Claude-only.
 | --- | --- | --- |
 | `starting` | daemon | Spawn/promotion of an agent backend (lifecycle ownership). |
 | `running` | daemon | Shell lifecycle (spawn or demotion back to shell). |
-| `working` | transcript, hook, watchdog-pty | A root turn began or root tool activity: user prompt / assistant / tool records in order, or `UserPromptSubmit`/`PreToolUse`/`PostToolUse` while the transcript is not authoritative. The PTY may never invent work — except under the two narrow `watchdog-pty` rules below, both of which need the CLI's own spinner to be the *last* marker on screen. |
-| `awaiting` | transcript, hook, watchdog-pty | An explicit block: approval request, `request_user_input` (question), elicitation dialog, or rate limit — always with a typed `awaiting_reason`. `watchdog-pty` covers exactly one case: the startup-dialog rule below, on a session no turn has ever run. |
+| `working` | transcript, hook, watchdog-pty | A root turn began or root tool activity: user prompt / assistant / tool records in order, or `UserPromptSubmit`/`PreToolUse`/`PostToolUse` while the transcript is not authoritative. The PTY may never invent work except under the two narrow `watchdog-pty` rules below. The unwitnessed first-turn rule also requires a submit from the current input owner before it may read a working marker. |
+| `awaiting` | transcript, hook, watchdog-pty | A stabilized approval request, immediate `request_user_input` question, elicitation dialog, or rate limit, always with a typed `awaiting_reason`. `watchdog-pty` covers exactly one case: the startup-dialog rule below, on a session no turn has ever run. |
 | `idle` | transcript, hook, pty, watchdog, watchdog-pty, daemon | A proven turn boundary (`turn_duration`, `end_turn`+text, `task_complete`, Stop hook, `idle_prompt`, interrupt marker, catch-up settle) — or a bounded inferred recovery (startup-quiet fallback, watchdog paths below). A catch-up settle over a session already idle also emits `root_turn_settled`, which changes no state but is the only way delivery readiness can learn that a session left running across a daemon restart is at its prompt (`delivery-readiness.md`). |
 | `exited` / `crashed` | pty, daemon | Process ground truth: the exit code through `terminal_exit_outcome`. |
 
@@ -93,6 +93,10 @@ dropped. Staleness therefore returns state to the hook/PTY fallback tiers and ha
 delivery, rather than leaving a healthy-looking session reporting a retired conversation.
 A conversation rollover itself is a `daemon`-sourced forced transition to `starting`, the same
 lifecycle class as promotion.
+
+`SessionStart` is lifecycle and identity evidence, never a turn boundary.
+When it arrives during an active `working` or `awaiting` root turn, including Codex compaction, it is ledgered as `session_start_state_ignored` and cannot move the session to `idle`.
+A `SessionStart` refused as another process generation returns from hook ingress before binding, liveness, automation, or status observation.
 
 **Terminal latch.** `exited`/`crashed` is process ground truth, so once a record is in one of
 them only `source="daemon"` may move it out; every other source is refused and ledgered
@@ -139,6 +143,17 @@ session sits displayed as "working" until the 900s no-evidence alarm.
 `idle_prompt` maps to `idle` (ready), never `awaiting`. It does not clobber a pending
 approval unless this session's own screen proves the dialog is gone (see below).
 `SessionRecord.awaiting_reason` is cleared by every transition off `awaiting`.
+
+### Approval stabilization
+
+Approval detection has an internal and a user-visible boundary.
+`approval_detected` blocks delivery readiness immediately but does not change `SessionState`, run automation attention, play a sound, or route web push.
+If the approval remains unresolved for `APPROVAL_STABILIZATION_SECONDS` (5 s), the daemon transitions to `awaiting(approval)` and emits one stabilized `approval_needed` event.
+Positive resumed-work evidence or terminal input cancels the pending approval before the boundary.
+The PTY approval screen vetoes cancellation from a stale working record.
+The candidate timestamp and evidence are mirrored into supervisor-owned metadata, so a session-preserving daemon reload resumes the remaining delay instead of losing or restarting it.
+Questions, elicitation prompts, and rate limits remain immediate because they are not routinely auto-approved.
+The transition ledger records `approval_stabilization_started`, `approval_stabilization_coalesced`, `approval_stabilization_cancelled`, and `approval_stabilization_committed` so a missing or late alert is reconstructable.
 
 ### Idle sub-reason
 
@@ -290,18 +305,20 @@ startup-quiet PTY fallback's `idle` was therefore the last word for the whole tu
 measured live at 200 s of "ready · turn complete" while the agent worked, with the
 rollout's own `task_started` sitting on disk 4 s after spawn.
 
-For such a session the watchdog runs a symmetric pair, the only rules here that read
+For such a session the watchdog runs a paired fallback, the only rules here that read
 an `idle` session:
 
-- `idle` + screen shows the working spinner → `begin_pty_turn` (opens a real root turn
+- `idle` + a current-owner submit was observed + screen shows the working spinner -> `begin_pty_turn` (opens a real root turn
   through `_begin_root_turn`, so `turn_started`, delivery readiness, and every turn
   consumer see what a transcript-started turn produces).
-- `working` + screen shows the idle prompt → `end_pty_turn`.
+- `working` + screen shows the idle prompt -> `end_pty_turn`.
 
 Both are `watchdog-pty`/`inferred`, filed at PTY priority so any transcript or hook
 evidence in the same turn outranks them without forcing. Neither is stall-gated: the
 other recoveries wait because a proven source might still be about to speak, and here
-none can. Neither can act on an approval screen, because `pty_tail_state` is
+none can. The submit arm is run-local and prevents a retained or replayed working marker from
+making a newly started or resumed session report `working` before the user sends anything.
+Neither rule can act on an approval screen, because `pty_tail_state` is
 ordering-aware and a live dialog reads `approval` rather than `working` or `idle` — so
 this pair can no more start a turn on top of an unanswered prompt than close one that
 is still blocked. A single hook or a bound transcript ends the standing permanently;
@@ -426,7 +443,7 @@ The hook ingress authenticates the *session*, not the process: a nested child CL
 launched by the session's own tool call inherits the hook wiring and speaks over the same
 channel with its own conversation id. Identity is guarded at the rollover decision
 (`backends.md` — a bound session rolls only on an in-place replacement: not
-`source: "startup"`, not another cwd), and state is guarded here: once a Claude session is
+`source: "startup"`, not another cwd), and state is guarded here: once a Claude or Codex session is
 bound, `apply_hook_observation` drops any hook naming a different conversation before it
 can move state — a child's `PermissionRequest` must not raise an "awaiting approval" no
 screen shows. Drops are ledgered (`foreign_conversation_hook_ignored`) and counted in

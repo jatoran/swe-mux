@@ -49,6 +49,7 @@ def resume_call(
     project_root: Path | None = None,
     name: str = "device ownership",
     auto_named: int = 1,
+    generated_title: str | None = None,
 ) -> tuple[Any, list[dict[str, Any]], list[tuple[str, str, str, dict[str, Any]]]]:
     """A `/api/history/{id}/resume` request over stubbed collaborators."""
     transcript = tmp_path / "transcript.jsonl"
@@ -73,6 +74,11 @@ def resume_call(
         parent: str, child: str, relation: str, metadata: dict[str, Any]
     ) -> None:
         lineage.append((parent, child, relation, metadata))
+
+    async def annotations(**kwargs: Any) -> list[dict[str, Any]]:
+        if generated_title is None:
+            return []
+        return [{"agent_run_id": RUN, "content": generated_title}]
 
     async def update_project(*args: Any, **kwargs: Any) -> Any:
         return (args, kwargs)
@@ -107,7 +113,10 @@ def resume_call(
                 },
                 update=update_project,
             ),
-            "automation_store": SimpleNamespace(add_lineage=add_lineage),
+            "automation_store": SimpleNamespace(
+                add_lineage=add_lineage,
+                annotations=annotations,
+            ),
         },
         match_info={"sid": RUN},
         can_read_body=False,
@@ -157,6 +166,20 @@ async def test_a_codex_resume_opens_its_own_run(tmp_path: Path) -> None:
 
     assert captured[0]["adopt_run_id"] is None
     assert lineage == [(RUN, PANE, "resume", {"backend": "codex", "project_id": "default"})]
+
+
+async def test_a_codex_resume_inherits_the_effective_generated_title(tmp_path: Path) -> None:
+    request, captured, _ = resume_call(
+        tmp_path,
+        backend="codex",
+        name="codex-e09a7f",
+        generated_title="Session notes redesign",
+    )
+
+    await resume_history(cast(Any, request))
+
+    assert captured[0]["name"] == "Session notes redesign"
+    assert captured[0]["auto_named"] is True
 
 
 async def test_a_claude_resume_into_another_root_opens_its_own_run(tmp_path: Path) -> None:

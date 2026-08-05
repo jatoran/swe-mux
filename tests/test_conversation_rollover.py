@@ -218,11 +218,11 @@ def test_a_bound_sessions_state_only_listens_to_its_own_conversation() -> None:
     assert foreign_conversation_hook_id(session, spawn) is None
 
 
-def test_the_foreign_filter_stands_down_while_unbound_and_for_other_backends() -> None:
+def test_the_foreign_filter_stands_down_only_while_unbound() -> None:
     unbound = hook_session(native_id="mux-id")
     assert foreign_conversation_hook_id(unbound, {"session_id": CLEARED}) is None
     codex = hook_session(backend="codex")
-    assert foreign_conversation_hook_id(codex, {"session_id": CLEARED}) is None
+    assert foreign_conversation_hook_id(codex, {"session_id": CLEARED}) == CLEARED
     # A payload that names no conversation cannot be judged.
     assert foreign_conversation_hook_id(hook_session(), {}) is None
 

@@ -207,6 +207,7 @@ and reattachable browser viewports.
   by any of this: an unrolled resume still proves its claim through its spawn id, so the sweep
   still never heals it off the conversation it was spawned to continue. Codex mints a new
   rollout id on resume, so there the pane starts a genuinely new conversation and run.
+  Before that new run is created, resume resolves the source row's effective visible name: a manual name remains pinned, while an auto-generated title becomes the new pane's initial auto-nameable name instead of falling back to `codex-<id>`.
 - **A rollover onto a conversation a live sibling owns is refused outright.** The collision is
   prevented rather than repaired, because repair does not work here: a rollover moves
   `agent_lifecycle_id`, so a pane that followed an in-CLI `/resume` onto a sibling's live

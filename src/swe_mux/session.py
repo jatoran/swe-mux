@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -943,6 +944,7 @@ def watchdog_decision(
     pty_state: PtyTailState,
     awaiting_reason: str | None = None,
     unwitnessed: bool = False,
+    unwitnessed_turn_armed: bool = False,
     startup_no_turn: bool = False,
     startup_dialog_seconds: float | None = None,
     startup_dialog_raised: bool = False,
@@ -980,7 +982,7 @@ def watchdog_decision(
     caller is doing the cheap pass that can only resume an awaiting session.
     """
     if unwitnessed:
-        if state == "idle" and pty_state == "working":
+        if state == "idle" and unwitnessed_turn_armed and pty_state == "working":
             return "begin_pty_turn"
         if state == "working" and pty_state == "idle":
             return "end_pty_turn"
@@ -1191,6 +1193,7 @@ async def apply_watchdog_recovery(
             inferred=True,
             evidence="pty_idle_prompt_unwitnessed",
         )
+        session.observation_state.pop("unwitnessed_turn_armed", None)
     elif action == "resume_working":
         # The block is gone but the turn is not: reclaim arbitration from the
         # hook that raised the awaiting and let the run finish normally. The
@@ -1248,6 +1251,19 @@ class PtySubscriber:
     dropped_bytes: int = 0
     dropped_chunks: int = 0
     exit_pending: dict[str, Any] | None = None
+
+
+def reset_session_observation_state(session: Any, evidence: str) -> None:
+    """Reset run-scoped observation state without leaving delayed work behind."""
+    # Local import avoids the observation -> session module cycle.
+    from .observation import cancel_pending_approval
+
+    cancel_pending_approval(session, evidence)
+    session.observation_state = {
+        "root_turn_active": False,
+        "root_completion_seen": False,
+        "codex_scope": "root",
+    }
 
 
 class Session:
@@ -1423,6 +1439,10 @@ class Session:
             "root_completion_seen": False,
             "codex_scope": "root",
         }
+        # A short-lived approval candidate is mirrored separately from the
+        # public SessionRecord. The supervisor retains it across daemon reloads
+        # so the stabilization timer cannot silently disappear mid-window.
+        self.approval_candidate: dict[str, Any] | None = None
         # True while the observer replays transcript content that predates its
         # attachment; state transitions and update fanout are suppressed then.
         self.observation_replay = False
@@ -2177,6 +2197,7 @@ class SessionManager:
             "mcp_token": session.mcp_token,
             "transcript_path": str(transcript) if transcript else None,
             "agent_lifecycle_id": session.agent_lifecycle_id,
+            "approval_candidate": getattr(session, "approval_candidate", None),
         }
 
     @staticmethod
@@ -2723,6 +2744,32 @@ class SessionManager:
                 mcp_token=str(meta.get("mcp_token") or ""),
                 attach_replay_bytes=self.attach_replay_bytes,
             )
+            raw_approval_candidate = meta.get("approval_candidate")
+            if isinstance(raw_approval_candidate, dict):
+                raw_candidate_started_at = raw_approval_candidate.get("started_at")
+                try:
+                    candidate_started_at = (
+                        float(raw_candidate_started_at)
+                        if isinstance(raw_candidate_started_at, (int, float, str))
+                        else 0.0
+                    )
+                except (TypeError, ValueError):
+                    candidate_started_at = 0.0
+                if candidate_started_at > 0.0 and math.isfinite(candidate_started_at):
+                    session.approval_candidate = {
+                        "started_at": candidate_started_at,
+                        "source": str(raw_approval_candidate.get("source") or "hook"),
+                        "evidence": str(
+                            raw_approval_candidate.get("evidence") or "approval:restored"
+                        ),
+                        "detail": str(
+                            raw_approval_candidate.get("detail") or "Approval needed"
+                        ),
+                    }
+            if previous_identity is not None:
+                # The candidate belonged to the disputed run. Identity repair
+                # deliberately refuses to carry run-scoped attention across it.
+                session.approval_candidate = None
             session.scrollback.seed(replay, int(response.get("position", len(replay))))
             # The screen switch is written once, at startup, and never repeated.
             # Replaying the retained bytes through the parser is what keeps an
@@ -2750,6 +2797,11 @@ class SessionManager:
             self.sessions[sid] = session
             self._attach_ledger_sink(session)
             self._attach_meta_sink(session)
+            if session.approval_candidate is not None:
+                # Local import avoids the observation -> session module cycle.
+                from .observation import restore_pending_approval
+
+                await restore_pending_approval(session, self.events)
             # Identity repair mutates record.state directly (it runs before the
             # Session exists). Ledger it now that one does, so the state-log after
             # a restart does not start with a state nothing explains — the
@@ -2978,11 +3030,7 @@ class SessionManager:
                 session.record.parser_unknown_events = 0
                 session.record.parser_unknown_signatures = {}
                 session.record.parser_schema_version = None
-                session.observation_state = {
-                    "root_turn_active": False,
-                    "root_completion_seen": False,
-                    "codex_scope": "root",
-                }
+                reset_session_observation_state(session, "backend_detected")
                 session.agent_promoted_at = time.time()
                 session.publish_update()
                 await self.history.session_promoted(session.record, str(path))
@@ -3050,11 +3098,7 @@ class SessionManager:
         session.record.parser_unknown_events = 0
         session.record.parser_unknown_signatures = {}
         session.record.parser_schema_version = None
-        session.observation_state = {
-            "root_turn_active": False,
-            "root_completion_seen": False,
-            "codex_scope": "root",
-        }
+        reset_session_observation_state(session, "promotion")
         clear_all_standing_activity(session, evidence="promotion")
         session.record.state_detail = None
         session.state_source_priority = -1
@@ -3116,11 +3160,7 @@ class SessionManager:
         session.record.parser_unknown_events = 0
         session.record.parser_unknown_signatures = {}
         session.record.parser_schema_version = None
-        session.observation_state = {
-            "root_turn_active": False,
-            "root_completion_seen": False,
-            "codex_scope": "root",
-        }
+        reset_session_observation_state(session, "demotion")
         clear_all_standing_activity(session, evidence="demotion")
         session.observation_replay = False
         session.agent_promoted_at = None
@@ -3288,11 +3328,7 @@ class SessionManager:
         record.parser_unknown_events = 0
         record.parser_unknown_signatures = {}
         record.parser_schema_version = None
-        session.observation_state = {
-            "root_turn_active": False,
-            "root_completion_seen": False,
-            "codex_scope": "root",
-        }
+        reset_session_observation_state(session, f"conversation_rolled:{source}")
         clear_all_standing_activity(session, evidence=f"conversation_rolled:{source}")
         session.observation_replay = False
         session.agent_promoted_at = time.time()
@@ -3891,11 +3927,7 @@ class SessionManager:
         # annotation list silently, which would leave nothing to ledger.
         clear_all_standing_activity(session, evidence="identity_reconciled")
         self._reset_provider_observation(record)
-        session.observation_state = {
-            "root_turn_active": False,
-            "root_completion_seen": False,
-            "codex_scope": "root",
-        }
+        reset_session_observation_state(session, "identity_reconciled")
         session.observation_replay = False
         session.state_source_priority = -1
         session.transcript_path = None
@@ -4145,6 +4177,9 @@ class SessionManager:
             pty_state=self._pty_tail_state(session),
             awaiting_reason=record.awaiting_reason,
             unwitnessed=True,
+            unwitnessed_turn_armed=bool(
+                session.observation_state.get("unwitnessed_turn_armed")
+            ),
         )
         if action not in {"begin_pty_turn", "end_pty_turn"}:
             return False

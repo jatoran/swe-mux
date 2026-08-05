@@ -86,6 +86,7 @@ from .meta_hooks import MetaHookEngine, parse_hook_rules
 from .models import MuxEvent
 from .observation import (
     apply_hook_observation,
+    cancel_pending_approval,
     conversation_rollover_decision,
     foreign_conversation_hook_id,
     hook_event_scope,
@@ -468,6 +469,11 @@ def create_app(
         client_max_size=MAX_ATTACHMENT_BYTES + 1024 * 1024,
     )
     app["config"] = config
+    # Every client snapshot carries this process-generation identity alongside
+    # the session-local revision. Session revisions restart from zero when a
+    # daemon adopts supervisor-owned PTYs, so revision alone cannot distinguish
+    # a stale pre-restart response from the new daemon's current state.
+    app["daemon_generation"] = uuid4().hex
     app["frontend_dir"] = frontend_dir or Path(__file__).parent / "static"
     app["preview_http_semaphore"] = asyncio.Semaphore(PREVIEW_HTTP_CONCURRENCY)
     app["preview_ws_semaphore"] = asyncio.Semaphore(PREVIEW_WS_CONCURRENCY)
@@ -3574,6 +3580,9 @@ async def list_sessions(request: web.Request) -> web.Response:
     readiness = request.app["fleet"].readiness
     for session in manager.sessions.values():
         item = session.record.snapshot()
+        item["_snapshot_generation"] = request.app["daemon_generation"]
+        item["_snapshot_revision"] = session.revision
+        item["_snapshot_enriched"] = True
         delivery = readiness.evaluate(session, record_metrics=False)
         item["delivery_readiness"] = {
             "state": delivery["delivery_state"],
@@ -5633,6 +5642,13 @@ async def resume_history(request: web.Request) -> web.Response:
             {"error": "only Claude and Codex history can be resumed", "code": "not_agent"},
             422,
         )
+    # History stores the stable raw session name; generated titles live in run
+    # annotations. Resolve the effective visible name before Codex mints its new
+    # run, otherwise the annotation remains keyed to the retired run and the
+    # resumed pane falls back to `codex-<id>`.
+    annotation_reader = getattr(request.app.get("automation_store"), "annotations", None)
+    if callable(annotation_reader):
+        await _decorate_generated_titles(request.app, [row])
     body = await request.json() if request.can_read_body else {}
     target_project = str(body.get("project_id") or row.get("project_id") or "")
     requirements = {
@@ -5685,12 +5701,17 @@ async def resume_history(request: web.Request) -> web.Response:
         str(row["cwd"]), owning_project.root
     )
     requested_name = str(body.get("name") or "")
+    inherited_name = (
+        str(row.get("generated_title"))
+        if row.get("auto_named") is not False and row.get("generated_title")
+        else str(row["name"])
+    )
     session = await request.app["sessions"].spawn(
         backend=str(row["backend"]),
         # The conversation keeps its name. A suffix here compounded on every
         # resume ("… resumed resumed") and, for Claude, retitled an entry the
         # resumed pane now shares rather than replaces.
-        name=requested_name or str(row["name"]),
+        name=requested_name or inherited_name,
         cwd=owning_project.root,
         project_id=target_project,
         resume_native_id=str(row["native_id"]),
@@ -7155,6 +7176,11 @@ async def hook_ingress(request: web.Request) -> web.Response:
             native_session_id=decision.refused,
             reason=decision.refusal_reason,
         )
+        # A refused SessionStart belongs to another process generation. It is
+        # diagnostic evidence only and must not continue into binding, liveness,
+        # automation, or status observation. Continuing used to let a Codex
+        # startup emitted around compaction force the active root session idle.
+        return json_response({"ok": True, "ignored": "foreign_conversation"})
     # The session's own spawn conversation speaking while the record is bound
     # elsewhere is proof the identity was stolen (a nested child rolled it away);
     # heal before the foreign check below would discard the evidence.
@@ -7396,6 +7422,7 @@ async def reveal_path(request: web.Request) -> web.Response:
 
 async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     session = request.app["sessions"].resolve(request.match_info["sid"])
+    snapshot_generation = str(request.app.get("daemon_generation") or "legacy")
     connection_id = secrets.token_urlsafe(12)
     ws = web.WebSocketResponse(heartbeat=20, max_msg_size=2 * 1024 * 1024)
     await ws.prepare(request)
@@ -7419,7 +7446,12 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
             source="daemon",
             connections=len(session.subscribers),
         )
-        await ws.send_json({"type": "state", "snapshot": snapshot, "revision": revision})
+        await ws.send_json(
+            _versioned_pty_frame(
+                {"type": "state", "snapshot": snapshot, "revision": revision},
+                snapshot_generation,
+            )
+        )
         pending_messages: list[Any] = []
         attach_deadline = asyncio.get_running_loop().time() + PTY_ATTACH_READY_TIMEOUT_SECONDS
         attach_closed = False
@@ -7466,15 +7498,20 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
             await ws.send_json(session.geometry_frame())
         if snapshot["state"] in {"exited", "crashed"}:
             await ws.send_json(
-                {
-                    "type": "exit",
-                    "snapshot": snapshot,
-                    "revision": revision,
-                    "reason": "already_ended",
-                }
+                _versioned_pty_frame(
+                    {
+                        "type": "exit",
+                        "snapshot": snapshot,
+                        "revision": revision,
+                        "reason": "already_ended",
+                    },
+                    snapshot_generation,
+                )
             )
             return ws
-        sender_task = asyncio.create_task(_pty_sender(ws, session, subscriber))
+        sender_task = asyncio.create_task(
+            _pty_sender(ws, session, subscriber, snapshot_generation)
+        )
         for pending_message in pending_messages:
             await _handle_pty_client_message(request, ws, session, connection_id, pending_message)
         async for message in ws:
@@ -7511,7 +7548,29 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
-async def _pty_sender(ws: web.WebSocketResponse, session: Session, subscriber: Any) -> None:
+def _versioned_pty_frame(frame: dict[str, Any], generation: str) -> dict[str, Any]:
+    """Attach the same ordering contract used by the REST fleet snapshot.
+
+    PTY frames deliberately remain presentation-unenriched. The browser merger
+    preserves generated titles from an enriched REST snapshot while applying
+    newer core state from this channel.
+    """
+    snapshot = frame.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return frame
+    result = dict(frame)
+    result["snapshot"] = {
+        **snapshot,
+        "_snapshot_generation": generation,
+        "_snapshot_revision": int(frame.get("revision") or 0),
+        "_snapshot_enriched": False,
+    }
+    return result
+
+
+async def _pty_sender(
+    ws: web.WebSocketResponse, session: Session, subscriber: Any, generation: str
+) -> None:
     # unsupervised-loop-ok: lives for one PTY websocket, not the daemon.
     while True:
         message = await subscriber.queue.get()
@@ -7538,17 +7597,20 @@ async def _pty_sender(ws: web.WebSocketResponse, session: Session, subscriber: A
                 await ws.send_bytes(replay_bytes)
             await ws.send_json({"type": "replay_end", "reason": "resync"})
             await ws.send_json(
-                {"type": "update", "snapshot": current, "revision": current_revision}
+                _versioned_pty_frame(
+                    {"type": "update", "snapshot": current, "revision": current_revision},
+                    generation,
+                )
             )
             # Control frames are skipped while a subscriber is resyncing, so restate the
             # arbitrated geometry here rather than leaving this client sized by whatever
             # it last heard before the gap.
             await ws.send_json(session.geometry_frame())
             if exit_frame:
-                await ws.send_json(exit_frame)
+                await ws.send_json(_versioned_pty_frame(exit_frame, generation))
                 return
         else:
-            await ws.send_json(message)
+            await ws.send_json(_versioned_pty_frame(message, generation))
             if message.get("type") == "exit":
                 return
 
@@ -7716,11 +7778,33 @@ async def _handle_terminal_input(
     now = time.monotonic()
     pointer = pointer_report_kind(data)
     if not is_terminal_response and pointer is None:
+        cancel_pending_approval(session, "terminal_input")
         session.input_revision += 1
         session.last_input_event_ts = now
         # Typing is the strongest evidence of where the human is; it renews this
         # connection's protection from a background pane's passive re-claim.
         session.note_owner_input(now)
+        if (
+            session.record.state == "idle"
+            and session_is_unwitnessed(session)
+            and ("\r" in data or "\n" in data)
+        ):
+            # A retained spinner may predate this process or prompt. Only a
+            # submit from the current input owner licenses the PTY-only first-turn
+            # fallback to interpret a subsequent working frame as new work.
+            session.observation_state["unwitnessed_turn_armed"] = True
+            session.state_transitions.append(
+                {
+                    "ts": time.time(),
+                    "kind": "unwitnessed_turn_armed",
+                    "source": "terminal_input",
+                }
+            )
+            request.app["events"].emit_background(
+                "unwitnessed_turn_armed",
+                session_id=session.record.id,
+                source="terminal_input",
+            )
     elif pointer == "button":
         # A click or a wheel notch is the human being here, but it puts no text in
         # the composer, so it moves the presence clock and not the input revision.

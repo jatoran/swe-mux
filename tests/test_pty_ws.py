@@ -78,6 +78,9 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         state = await ws.receive_json()
         assert state["type"] == "state"
         assert state["revision"] == 0
+        assert state["snapshot"]["_snapshot_generation"] == "legacy"
+        assert state["snapshot"]["_snapshot_revision"] == 0
+        assert state["snapshot"]["_snapshot_enriched"] is False
         # Messages that race readiness are held until replay finishes, while the
         # fitted dimensions reach the PTY before any replay bytes are sent.
         await ws.send_json({"type": "claim_input"})
@@ -124,6 +127,7 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         assert update["revision"] == 1
         assert update["snapshot"]["state"] == "working"
         assert update["snapshot"]["state_detail"] == "tool"
+        assert update["snapshot"]["_snapshot_revision"] == 1
 
         session.record.state = "exited"
         session.publish_exit("complete")

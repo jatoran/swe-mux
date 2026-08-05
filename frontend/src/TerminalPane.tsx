@@ -666,7 +666,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // characters the mobile IME baseline has already advanced past. Hold and flush in order.
     const pendingUserInput: { data: string; broadcast: boolean }[] = []
     let pendingUserInputLength = 0
-    let currentRevision = -1
+    let currentGeneration = session._snapshot_generation || ''
+    let currentRevision = session._snapshot_generation ? Number(session._snapshot_revision ?? -1) : -1
     let lastReplyTriggerState=session.state
     let exitWritten = false
     let fitFrame = 0
@@ -1154,6 +1155,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       else {
         const frame = JSON.parse(event.data)
         if (frame.type === 'gap') replaying = true
+        const frameGeneration=String(frame.snapshot?._snapshot_generation||'')
+        if(frameGeneration&&frameGeneration!==currentGeneration){currentGeneration=frameGeneration;currentRevision=-1}
         if ((frame.type === 'state' || frame.type === 'update') && Number(frame.revision ?? 0) > currentRevision) {
           currentRevision = Number(frame.revision ?? 0)
           const nextState=frame.snapshot?.state as Session['state']|undefined
@@ -1209,6 +1212,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         }
         if (frame.type === 'exit') {
           setConnectionState('ended')
+          const exitGeneration=String(frame.snapshot?._snapshot_generation||'')
+          if(exitGeneration&&exitGeneration!==currentGeneration){currentGeneration=exitGeneration;currentRevision=-1}
           if (frame.snapshot && Number(frame.revision ?? 0) >= currentRevision) {
             currentRevision = Number(frame.revision ?? 0)
             onState(frame.snapshot)

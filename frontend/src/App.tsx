@@ -73,6 +73,7 @@ import { VoicePlayer } from './VoicePlayer'
 import { ConversationControl } from './ConversationControl'
 import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
+import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
 import { currentProfile, loadDrawerTabOrder, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
@@ -918,7 +919,7 @@ export function App() {
       ])
       setSessions(current => {
         const optimistic=current.filter(session=>session.pending&&pendingSpawns.current[session.id]&&!pendingSpawns.current[session.id].resolvedId)
-        return [...nextSessions,...optimistic]
+        return reconcileSessionSnapshots(current,nextSessions,optimistic)
       })
       setProjects(nextProjects)
       // A project with a layout PATCH in flight is deliberately skipped below, so
@@ -1754,7 +1755,7 @@ export function App() {
       // Remembered so holding mobile Run repeats the last launch without the menu.
       localStorage.setItem('mux.lastBackend',backend)
       placement.resolvedId=next.id
-      setSessions(items => [...items.filter(item=>item.id!==pendingId&&item.id!==next.id),next])
+      setSessions(items => [...items.filter(item=>item.id!==pendingId&&item.id!==next.id),mergeSessionSnapshot(items.find(item=>item.id===next.id),next)])
       setActiveId(next.id)
       setFocusedViewId(next.id)
       const latestLayout=layoutValues.current[targetProject]||optimisticLayout
@@ -1826,7 +1827,10 @@ export function App() {
     let targetId=openAnchorId(nextLayout,targetProject===projectId?(focusedViewId||activeId):null)
     for(const session of nextSessions){nextLayout=openTab(nextLayout,targetId,terminalLeaf(session.id));targetId=session.id}
     layoutValues.current[targetProject]=nextLayout
-    setSessions(items=>[...items.filter(item=>!nextSessions.some(next=>next.id===item.id)),...nextSessions])
+    setSessions(items=>[
+      ...items.filter(item=>!nextSessions.some(next=>next.id===item.id)),
+      ...nextSessions.map(next=>mergeSessionSnapshot(items.find(item=>item.id===next.id),next)),
+    ])
     setLayoutMap(current=>({...current,[targetProject]:nextLayout}))
     setProjectId(targetProject);setActiveId(nextSessions.at(-1)!.id);setFocusedViewId(nextSessions.at(-1)!.id);setSidebarOpen(false)
     await updateLayout(targetProject,nextLayout)
@@ -2984,7 +2988,7 @@ export function App() {
     }
   }, [mobileWorkspace, mobileGestures, swipeAwayClose])
 
-  const updateSession = (next: Session) => setSessions(items => items.map(item => item.id === next.id ? next : item))
+  const updateSession = (next: Session) => setSessions(items => items.map(item => item.id === next.id ? mergeSessionSnapshot(item,next) : item))
   const recordClientStartupTiming=(sessionId:string,milestone:StartupMilestone,elapsedMs:number)=>{
     const current=clientStartupTimingValues.current[sessionId]||{}
     if(current[milestone]!==undefined)return
