@@ -188,7 +188,7 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
             <span>
               <code>{skill.invocation}</code>
               {skillLabel(skill) !== skill.name && <em>{skillLabel(skill)}</em>}
-              {skill.added_after_start && <b class="skill-flag warn" title="Added after this session started">new</b>}
+              {skill.added_after_start && <b class="skill-flag warn" title="Added after this agent loaded">new</b>}
               {!skill.implicit && <b class="skill-flag" title="Explicit-only: the agent never invokes this on its own">explicit</b>}
             </span>
             <small>{skill.short_description || skill.description || skill.origin}</small>

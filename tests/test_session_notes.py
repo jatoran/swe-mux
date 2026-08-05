@@ -175,6 +175,7 @@ def test_legacy_session_notes_migrate_to_flat_collection(tmp_path: Path) -> None
     )
 
     assert result == {"migrated": 1, "archived_empty": 1}
+    assert (root / ".swe-mux" / "notes" / ".gitignore").read_text(encoding="utf-8") == "*\n"
     assert [(item["note_id"], item["excerpt"]) for item in summaries] == [
         ("terminal-one", "deployment context")
     ]

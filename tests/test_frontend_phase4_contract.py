@@ -23,7 +23,7 @@ def test_mobile_workspace_and_recovery_contracts_remain_available() -> None:
     assert "mobile-project-name" in combined
     assert "mobile-session-switcher" not in combined
     assert "mobile-new-session" not in combined
-    assert ".pane-stack>.stack-tabs{display:flex;flex-wrap:nowrap" in css
+    assert ".pane-stack>.stack-tabs-rail>.stack-tabs{display:flex;flex-wrap:nowrap" in css
     assert "mobileWorkspaceProjection" in combined
     assert "mobile-unified-tabs" in combined
     assert (
@@ -251,6 +251,7 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     drawer = source("UtilityDrawer.tsx")
     app = source("App.tsx")
     css = source("style.css")
+    rail = source("RailScroller.tsx")
 
     # Bumped deliberately, not incidentally. Six *labelled* tabs measured ~444px, which
     # overflowed a phone drawer (`min(430px, 92vw)`) into a scrollbar-less scroller that
@@ -276,14 +277,19 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     #
     # Re-checked at twelve (Mailbox): it is an application-wide narrow review surface and
     # uses the existing one-row scroller without changing its accessibility contract.
+    #
+    # Re-checked at thirteen (Agent): it is a session-scoped compact disclosure surface and
+    # uses the same one-row scroller and selected-tab reveal contract.
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
-    assert len(ids) == 12, ids
+    assert len(ids) == 13, ids
     tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
     assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
     assert ".drawer-chrome>.drawer-close" in css
     assert ".drawer-tabs button{position:relative;min-height:34px;flex:1 0 32px" in css
     assert ".drawer-tabs button{min-height:44px;flex-basis:36px;min-width:36px" in css
-    assert "scrollIntoView({ block: 'nearest', inline: 'nearest' })" in drawer
+    assert "activeKey={selected}" in drawer
+    assert "querySelector<HTMLElement>('[role=\"tab\"][aria-selected=\"true\"]')" in rail
+    assert "revealItem(strip, selected)" in rail
     icon_map = icons[icons.index("DRAWER_TAB_ICONS") :]
     for tab_id in ids:
         assert re.search(rf"^  {tab_id}: \w+Icon,$", icon_map, re.MULTILINE), tab_id
@@ -381,7 +387,7 @@ def test_drawer_tab_display_is_live_and_searchable() -> None:
 def test_recursive_drawer_exposes_tab_and_separator_accessibility() -> None:
     drawer = source("UtilityDrawer.tsx")
 
-    assert 'role="tablist"' in drawer
+    assert "role:'tablist'" in drawer
     assert 'role="tab"' in drawer
     assert 'role="tabpanel"' in drawer
     assert "aria-controls={panelDomId(stack.id)}" in drawer

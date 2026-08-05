@@ -229,13 +229,14 @@ def test_pane_local_tab_rails_and_resizable_collapsible_sidebar_are_wired() -> N
     workspace_at = app.index("<div class={`workspace")
     assert workspace_at < app.index('<header class="app-topbar">', workspace_at)
     assert 'class="top-workspace-tabs"' not in app
-    assert 'class="stack-tabs" role="tablist" aria-label="Workspace tabs"' in app
+    assert 'className="stack-tabs" itemLabel="workspace tabs"' in app
+    assert "role:'tablist','aria-label':'Workspace tabs'" in app
     assert "node.children.map(child=>" in app
     assert "mux.sidebar.width.v1" in app
     assert "mux.sidebar.collapsed.v1" in app
     assert 'class="sidebar-resizer"' in app
     assert ".workspace.sidebar-collapsed" in css
-    assert ".pane-stack>.stack-tabs{display:flex}" in css
+    assert ".pane-stack>.stack-tabs-rail>.stack-tabs{display:flex" in css
     # 34px at chrome scale 1; the row follows `--ui-scale` so the tab strip grows
     # with the tab titles in it (`features/ui.md`, Appearance → chrome scale).
     assert "grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)" in css

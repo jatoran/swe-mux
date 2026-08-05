@@ -139,6 +139,7 @@ async def test_project_note_round_trips_and_detects_external_edits(tmp_path: Pat
     path = Path(saved["path"])
     assert path == tmp_path / ".swe-mux" / "notes" / "project.md"
     assert "# Plan" in path.read_text(encoding="utf-8")
+    assert (path.parent / ".gitignore").read_text(encoding="utf-8") == "*\n"
 
     path.write_text(path.read_text(encoding="utf-8") + "external\n", encoding="utf-8")
     with pytest.raises(ValueError, match="changed externally"):

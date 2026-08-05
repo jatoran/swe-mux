@@ -64,6 +64,9 @@ _agents-orchestrator/
 .tmp-orca/
 .trash/
 
+# === Project-local swe-mux state ===
+.swe-mux/notes/
+
 # === Test / verification scratch ===
 # Throwaway working directories written by live-agent and identity tests and by
 # the verification runs. They hold binary mux.db copies and fake executables and

@@ -243,6 +243,24 @@ def note_path(root: str | Path, identity: str) -> Path:
     return mux_dir / "items" / f"{safe_note_filename(identity)}.md"
 
 
+def ensure_project_notes_ignored(root: str | Path) -> Path:
+    """Keep all Project-owned note storage out of Git."""
+    notes_root = Path(root).resolve() / ".swe-mux" / "notes"
+    notes_root.mkdir(parents=True, exist_ok=True)
+    if notes_root.is_symlink() or not notes_root.is_dir():
+        raise ValueError("Project note storage path is unsafe")
+    ignore = notes_root / ".gitignore"
+    try:
+        with ignore.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write("*\n")
+        log.info("Project notes Git ignore initialized root=%s path=%s", root, ignore)
+    except FileExistsError:
+        pass
+    if ignore.is_symlink() or not ignore.is_file():
+        raise ValueError("Project note ignore file is unsafe")
+    return ignore
+
+
 def note_exists(root: str | Path, identity: str) -> bool:
     return note_path(root, identity).is_file()
 
@@ -387,6 +405,7 @@ def migrate_legacy_notes(
     moved into the recoverable ``notes/legacy`` tree after the new file is durable.
     """
     project_root = Path(root).resolve()
+    ensure_project_notes_ignored(project_root)
     legacy_dir = project_root / ".swe-mux" / "notes" / "sessions"
     titles = legacy_titles or {}
     migrated = 0
@@ -1460,6 +1479,8 @@ async def write_note(
     current = await read_note(cwd, identity, default_title=default_title, project=project)
     if current["revision"] != expected_revision:
         raise ValueError("note changed externally; reload before saving")
+    project_root = Path(str(current["project"]["root"]))
+    ensure_project_notes_ignored(project_root)
     body = note_header(
         identity,
         normalize_note_title(title or str(current["title"]), default=default_title),
@@ -1484,6 +1505,8 @@ async def initialize_note(
     if current["exists"]:
         return current
     path = Path(current["path"])
+    project_root = Path(str(current["project"]["root"]))
+    ensure_project_notes_ignored(project_root)
     _create_note_file(path, note_header(identity, title))
     return await read_note(cwd, identity, default_title=title, project=project)
 

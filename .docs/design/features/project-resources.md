@@ -16,6 +16,7 @@ The file tree and notes collection are utility-drawer tabs.
 - The Scratchpad file is created lazily on first save, has the fixed title `Scratchpad`, and cannot be renamed or deleted.
 - `notes.scratchpad` opens Scratchpad directly.
 - Notes are a flat Project-owned collection.
+- The complete `.swe-mux/notes/` tree is local application state and is Git-ignored by a generated `.swe-mux/notes/.gitignore` containing `*`.
 - A note has a stable ID, title, body, creation time, update time, and optional migration provenance.
 - Project creation seeds the first ordinary note at `.swe-mux/notes/project.md` with the title `<Project name> notes` and a matching heading.
 - Additional notes live at `.swe-mux/notes/items/<safe-note-id>.md`.
