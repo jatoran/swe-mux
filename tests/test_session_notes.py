@@ -110,6 +110,7 @@ async def test_note_change_events_use_one_generic_event_type(tmp_path: Path) -> 
 
     assert event.type == "note_changed"
     assert event.payload == {
+        "scope": "project",
         "project_id": "project-one",
         "note_id": payload["id"],
         "revision": payload["revision"],

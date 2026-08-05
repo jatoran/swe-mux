@@ -34,6 +34,7 @@ KEYBINDING_COMMANDS = (
     ("usage.open", "Open usage analytics", "view"),
     ("hooks.open", "Open hooks and notification settings", "view"),
     ("notifications.open", "Open notifications", "view"),
+    ("notes.scratchpad", "Open global Scratchpad", "view"),
     ("notes.open", "Open current project's notes", "view"),
     ("processes.open", "Inspect session processes and previews", "view"),
     ("processes.project", "Inspect selected project's processes", "view"),

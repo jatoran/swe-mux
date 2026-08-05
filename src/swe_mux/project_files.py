@@ -44,6 +44,7 @@ FORBIDDEN_PROJECT_FIELDS = {
 }
 _SAFE_NOTE_ID = re.compile(r"[A-Za-z0-9._-]{1,120}\Z")
 DEFAULT_NOTE_STORAGE_ID = "project"
+GLOBAL_SCRATCHPAD_ID = "scratchpad"
 MAX_NOTE_TITLE_CHARS = 160
 MAX_NOTE_SUMMARIES = 500
 NOTE_EXCERPT_CHARS = 240
@@ -264,14 +265,15 @@ def note_header(
     identity: str,
     title: str,
     *,
+    kind: str = "notes",
     created_at: float | None = None,
     origin_session_id: str | None = None,
 ) -> str:
-    """Build the hidden metadata header for one Project-owned note."""
+    """Build the hidden metadata header for one durable note."""
     lines = [
         "---",
         "swe_mux_note = 1",
-        'kind = "notes"',
+        f"kind = {json.dumps(kind)}",
         f"id = {json.dumps(identity)}",
         f"title = {json.dumps(normalize_note_title(title, default='Untitled note'))}",
         f"created_at = {float(created_at if created_at is not None else time.time())}",
@@ -1305,25 +1307,15 @@ async def write_observations(
     return await read_observations(cwd, project=project)
 
 
-async def read_note(
-    cwd: str | Path,
+def _read_note_file(
+    path: Path,
     identity: str,
     *,
-    default_title: str = "Untitled note",
-    project: ProjectIdentity | None = None,
+    default_title: str,
+    base: dict[str, Any],
 ) -> dict[str, Any]:
-    if project is None:
-        project, mux_dir = await project_status(cwd)
-    else:
-        mux_dir = Path(project.root) / ".swe-mux"
-    path = (
-        mux_dir / "notes" / "project.md"
-        if identity == DEFAULT_NOTE_STORAGE_ID
-        else mux_dir / "notes" / "items" / f"{safe_note_filename(identity)}.md"
-    )
-    base = {
-        "project": asdict(project),
-        "kind": "note",
+    payload = {
+        **base,
         "id": identity,
         "title": normalize_note_title(default_title, default="Untitled note"),
         "created_at": None,
@@ -1332,7 +1324,7 @@ async def read_note(
     }
     if not path.exists():
         return {
-            **base,
+            **payload,
             "exists": False,
             "bytes": 0,
             "revision": "missing",
@@ -1343,7 +1335,7 @@ async def read_note(
         data, size = _read_regular_file_bounded(path, MAX_NOTE_FILE_BYTES)
         if data is None:
             return {
-                **base,
+                **payload,
                 "exists": True,
                 "bytes": size,
                 "revision": _unread_revision(),
@@ -1357,7 +1349,7 @@ async def read_note(
         stat_result = path.stat()
         status = "ready" if os.access(path, os.W_OK) else "read-only"
         return {
-            **base,
+            **payload,
             "title": _stored_note_title(metadata, markdown, default_title),
             "created_at": _stored_note_created_at(
                 metadata.get("created_at"), stat_result.st_ctime
@@ -1375,7 +1367,7 @@ async def read_note(
         except OSError:
             size = 0
         return {
-            **base,
+            **payload,
             "exists": True,
             "bytes": size,
             "revision": "unreadable",
@@ -1383,6 +1375,74 @@ async def read_note(
             "status": "malformed",
             "error": str(exc),
         }
+
+
+async def read_note(
+    cwd: str | Path,
+    identity: str,
+    *,
+    default_title: str = "Untitled note",
+    project: ProjectIdentity | None = None,
+) -> dict[str, Any]:
+    if project is None:
+        project, mux_dir = await project_status(cwd)
+    else:
+        mux_dir = Path(project.root) / ".swe-mux"
+    path = (
+        mux_dir / "notes" / "project.md"
+        if identity == DEFAULT_NOTE_STORAGE_ID
+        else mux_dir / "notes" / "items" / f"{safe_note_filename(identity)}.md"
+    )
+    return _read_note_file(
+        path,
+        identity,
+        default_title=default_title,
+        base={"project": asdict(project), "kind": "note"},
+    )
+
+
+def global_note_path(data_dir: str | Path, identity: str) -> Path:
+    """Return one global-note path inside the swe-mux data directory."""
+    return Path(data_dir).resolve() / "notes" / "items" / f"{safe_note_filename(identity)}.md"
+
+
+async def read_global_note(
+    data_dir: str | Path,
+    identity: str,
+    *,
+    default_title: str = "Untitled note",
+) -> dict[str, Any]:
+    note = _read_note_file(
+        global_note_path(data_dir, identity),
+        identity,
+        default_title=default_title,
+        base={"scope": "global", "kind": "global-note"},
+    )
+    note["title"] = normalize_note_title(default_title, default="Scratchpad")
+    return note
+
+
+async def write_global_note(
+    data_dir: str | Path,
+    identity: str,
+    markdown: str,
+    expected_revision: str,
+    *,
+    title: str,
+) -> dict[str, Any]:
+    if len(markdown.encode("utf-8")) > MAX_NOTE_MARKDOWN_BYTES:
+        raise ValueError("note exceeds the 1 MiB limit")
+    current = await read_global_note(data_dir, identity, default_title=title)
+    if current["revision"] != expected_revision:
+        raise ValueError("note changed externally; reload before saving")
+    body = note_header(
+        identity,
+        title,
+        kind="global-notes",
+        created_at=float(current.get("created_at") or time.time()),
+    ) + _note_body(markdown)
+    _atomic_write(Path(current["path"]), body.encode("utf-8"))
+    return await read_global_note(data_dir, identity, default_title=title)
 
 
 async def write_note(

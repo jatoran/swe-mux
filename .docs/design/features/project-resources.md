@@ -2,13 +2,19 @@
 
 ## What it is
 
-Safe access to Project-owned notes, a bounded Project file tree, revision-checked text editing,
+Safe access to Project-owned notes, the global Scratchpad, a bounded Project file tree, revision-checked text editing,
 ignore patterns, host file-manager reveal, and leased filesystem watches.
 Editable resources are pane tabs alongside terminals and previews.
 The file tree and notes collection are utility-drawer tabs.
 
 ## Notes
 
+- Scratchpad is the singleton global note.
+- Scratchpad is pinned under `GLOBAL` at the top of the Notes drawer in both Project and all-Projects scopes.
+- Scratchpad has the fixed `global-note:scratchpad` resource identity and can move between the drawer and a workspace pane like a Project note.
+- Scratchpad is stored at `<data_dir>/notes/items/scratchpad.md`, outside every Project and repository.
+- The Scratchpad file is created lazily on first save, has the fixed title `Scratchpad`, and cannot be renamed or deleted.
+- `notes.scratchpad` opens Scratchpad directly.
 - Notes are a flat Project-owned collection.
 - A note has a stable ID, title, body, creation time, update time, and optional migration provenance.
 - Project creation seeds the first ordinary note at `.swe-mux/notes/project.md` with the title `<Project name> notes` and a matching heading.
@@ -33,10 +39,11 @@ The file tree and notes collection are utility-drawer tabs.
 - Migrated and empty legacy source files move into `.swe-mux/notes/legacy/` so migration is recoverable and idempotent.
 - Persisted `sessions:<id>` layout resources resolve to the migrated generic `note:<id>` identity.
 - Listing is derived from the filesystem, so notes remain reachable after sessions and History rows disappear.
-- Successful create, save, rename, and delete operations emit `note_changed {project_id, note_id, revision}`.
+- Successful Project note operations emit `note_changed {scope: "project", project_id, note_id, revision}`.
+- Successful Scratchpad saves emit `note_changed {scope: "global", note_id: "scratchpad", revision}`.
 - Clean editors live-follow a different revision; local pending, in-flight, failed, or conflicted work is never replaced.
 - **A note has exactly one live editor per browser, and that is a correctness requirement.**
-  `noteSaveQueue` holds one entry per `(Project, resource)` at module scope, so two mounted
+  `noteSaveQueue` holds one entry per `(scope, resource)` at module scope, so two mounted
   editors share it: each submits its whole document, newest wins, and the loser's text is dropped
   with nothing for the daemon to flag, because the revision each holds is correct. The second
   editor's load then calls `reset`, discarding whatever the first had pending. Two devices are
@@ -333,7 +340,7 @@ include a registered Project nested below another Git root.
 
 ## View lifetime
 
-Project-owned notes and file editors are ordinary `note`-kind layout leaves with typed resource
+Project-owned notes, the global Scratchpad, and file editors are ordinary `note`-kind layout leaves with typed resource
 IDs. They can share a pane, move between panes, or create a pane-edge split. Closing a
 resource tab closes only the viewport: it never deletes the underlying file. Moving a file editor
 preserves its unsaved draft.

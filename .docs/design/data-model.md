@@ -179,6 +179,8 @@
   The header is stripped on read and rebuilt on save, matched byte-exactly, and written LF-only.
 - `<project>/.swe-mux/notes/legacy/`: recoverable source archive for migrated pre-collection
   session-note files, including empty legacy artifacts that are not promoted to notes.
+- `<data_dir>/notes/items/scratchpad.md`: global Scratchpad Markdown with a `global-notes` identity header.
+  The file is absent until the first save and is independent of Project registration, deletion, and Git state.
 - `<project>/.swe-mux/prompts/<uuid>.md`: Project prompt templates with TOML frontmatter and
   inert Markdown-like text bodies. `<data_dir>/prompts/` holds global templates;
   `<data_dir>/prompt-library-state.json` holds bounded device-independent favorites/recents.

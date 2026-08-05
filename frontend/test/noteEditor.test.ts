@@ -4,6 +4,7 @@ import { insertEditorTab } from '../src/editorText.ts'
 import {
   NoteSaveQueue,
   fileSaveTarget,
+  globalNoteSaveTarget,
   noteQueueKey,
   noteSaveTarget,
   type NoteSaveAck,
@@ -26,6 +27,12 @@ function makeTransport() {
 const noteTarget = noteSaveTarget('p1', 'note-a')
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
+
+test('global notes use their own project-agnostic endpoint', () => {
+  const target = globalNoteSaveTarget('scratchpad')
+  assert.equal(target.url, '/api/global-notes/scratchpad')
+  assert.deepEqual(target.body('remember this', 'rev0'), { markdown: 'remember this', revision: 'rev0' })
+})
 
 test('Tab inserts a literal tab and replaces the active selection', () => {
   assert.deepEqual(insertEditorTab('hello world', 5, 5), { text: 'hello\t world', caret: 6 })

@@ -34,6 +34,7 @@ type Props={
   allProjects:boolean
   onAllProjects:(value:boolean)=>void
   onOpenNote:(projectId:string,noteId:string,title:string,place:NotePlacement)=>void
+  onOpenScratchpad:(place:NotePlacement)=>void
   onDone:()=>void
 }
 
@@ -43,7 +44,7 @@ const noteKey=(note:Pick<ProjectNoteSummary,'project_id'|'note_id'>)=>`${note.pr
 type NoteMenu={note:ProjectNoteSummary;x:number;y:number}
 type NoteTitlePrompt={mode:'create'|'rename';title:string;note?:ProjectNoteSummary}
 
-export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onDone}:Props){
+export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScratchpad,onDone}:Props){
   const [items,setItems]=useState<ProjectNoteSummary[]|null>(null)
   const [query,setQuery]=useState('')
   const [error,setError]=useState('')
@@ -152,6 +153,10 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onDone}:P
     onOpenNote(note.project_id,note.note_id,note.title,place)
     if(place==='tab')onDone()
   }
+  const openScratchpad=(place:NotePlacement)=>{
+    onOpenScratchpad(place)
+    if(place==='tab')onDone()
+  }
 
   const cancelLongPress=()=>{
     if(longPress.current!==null)window.clearTimeout(longPress.current)
@@ -195,7 +200,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onDone}:P
       await api('DELETE',`/api/projects/${note.project_id}/notes/${encodeURIComponent(note.note_id)}`,{revision:note.revision})
       setItems(current=>current?.filter(item=>noteKey(item)!==key)||current)
       setDeleteConfirm('');setMenu(null);setError('')
-      window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{projectId:note.project_id,kind:'note',noteId:note.note_id,revision:'missing'}}))
+      window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{scope:'project',projectId:note.project_id,kind:'note',noteId:note.note_id,revision:'missing'}}))
     }catch(cause){
       setDeleteConfirm('');setError(cause instanceof Error?cause.message:String(cause));void load()
     }finally{setDeleting('')}
@@ -231,7 +236,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onDone}:P
         const renamed=await api<ProjectNoteSummary>('PATCH',`/api/projects/${note.project_id}/notes/${encodeURIComponent(note.note_id)}`,{title,revision:note.revision})
         setItems(current=>current?.map(item=>noteKey(item)===noteKey(note)?{...item,...renamed,title}:item)||current)
         setTitlePrompt(null);setMenu(null)
-        window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{projectId:note.project_id,kind:'note',noteId:note.note_id,revision:renamed.revision}}))
+        window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{scope:'project',projectId:note.project_id,kind:'note',noteId:note.note_id,revision:renamed.revision}}))
       }
     }catch(cause){setTitleError(cause instanceof Error?cause.message:String(cause))}
     finally{setTitleBusy(false)}
@@ -256,6 +261,17 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onDone}:P
   </article>
 
   return <div class="notes-tab">
+    <section class="notes-global" aria-label="Global notes">
+      <h3>global<span>1</span></h3>
+      <article class="project-note-row global-note-row">
+        <button onClick={()=>openScratchpad('drawer')} title="Open Scratchpad in this panel">
+          <strong>Scratchpad</strong>
+          <span>Available in every Project</span>
+          <small>Quick notes that do not belong to a Project.</small>
+        </button>
+        <button class="note-open-as-tab" aria-label="Open Scratchpad as a workspace tab" title="Open as a workspace tab instead" onClick={()=>openScratchpad('tab')}>⇥</button>
+      </article>
+    </section>
     <div class="notes-filters">
       <input
         aria-label="Search notes"
@@ -290,7 +306,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onDone}:P
           </section>}
       </div>}
     </div>
-    <p class="notes-footnote">Notes belong to Projects. Select to open here; <b>⇥</b> opens a pane. Right-click or hold for actions.</p>
+    <p class="notes-footnote">Scratchpad is global. Other notes belong to Projects. Select to open here; <b>⇥</b> opens a pane.</p>
     {menu&&<div
       class="context-menu note-row-menu"
       ref={el=>{menuPanel.current=el;fitMenuInViewport(el)}}

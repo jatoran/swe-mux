@@ -14,7 +14,7 @@ export type PaneNode = PaneStack | PaneSplit
 export type PaneLayout = { version: 7; root: PaneNode | null }
 
 export type NoteLeafIdentity =
-  | { kind: 'note' | 'file'; id: string }
+  | { kind: 'note' | 'global-note' | 'file'; id: string }
   | { kind: 'worktree-file'; id: string; worktree: string }
 
 type BrowserCrypto = Pick<Crypto, 'getRandomValues'> & Partial<Pick<Crypto, 'randomUUID'>>
@@ -80,7 +80,7 @@ export function parseNoteResourceId(resourceId: string): NoteLeafIdentity | null
       return null
     }
   }
-  if (kind !== 'note' && kind !== 'sessions' && kind !== 'file') return null
+  if (kind !== 'note' && kind !== 'global-note' && kind !== 'sessions' && kind !== 'file') return null
   try {
     const id = decodeURIComponent(resourceId.slice(separator + 1))
     // `sessions:` is the persisted v6/v7 identity for the removed terminal-owned
