@@ -1899,6 +1899,7 @@ class SessionManager:
             # hook replay and transcript candidacy, and backdating it to the
             # resumed conversation's start would re-admit a retired pane's events.
             record.agent_run_started_at = record.created_at
+            record.agent_loaded_at = record.created_at
             record.run_cwd = str(resolved_cwd)
             record.run_project_scope_id = project.id
             record.run_repo_group_id = project.repo_group_id
@@ -2205,6 +2206,13 @@ class SessionManager:
     @classmethod
     def _ensure_spawn_identity(cls, record: SessionRecord) -> None:
         record.spawn_backend = cls._infer_spawn_backend(record)
+        if record.agent_loaded_at is None:
+            if record.spawn_backend in AGENT_BACKENDS:
+                record.agent_loaded_at = record.created_at
+            elif record.backend in AGENT_BACKENDS:
+                # Compatibility for supervisor records written before this field
+                # existed. The first observed run is the closest durable floor.
+                record.agent_loaded_at = record.agent_run_started_at or record.created_at
         if record.spawn_native_session_id:
             return
         native_id: str | None = None
@@ -2522,6 +2530,7 @@ class SessionManager:
             record.native_session_id = record.spawn_native_session_id or record.id
             record.agent_run_id = None
             record.agent_run_started_at = None
+            record.agent_loaded_at = None
             record.run_cwd = None
             record.run_project_scope_id = None
             record.run_repo_group_id = None
@@ -3122,6 +3131,7 @@ class SessionManager:
         self.discard_hook_spool(session.record.id)
         session.record.agent_run_id = None
         session.record.agent_run_started_at = None
+        session.record.agent_loaded_at = None
         session.record.run_cwd = None
         session.record.run_project_scope_id = None
         session.record.run_repo_group_id = None
@@ -4532,7 +4542,9 @@ class SessionManager:
         project = await resolve_project(cwd)
         await self.history.register_project_scope(project)
         session.record.agent_run_id = str(uuid.uuid4())
-        session.record.agent_run_started_at = time.time()
+        started_at = time.time()
+        session.record.agent_run_started_at = started_at
+        session.record.agent_loaded_at = started_at
         session.record.run_cwd = str(cwd.resolve())
         session.record.run_project_scope_id = project.id
         session.record.run_repo_group_id = project.repo_group_id

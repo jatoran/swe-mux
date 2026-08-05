@@ -20,6 +20,9 @@
   A root agent's run id is otherwise pinned to its session id, and adoption repairs any other
   value as misattribution, so `agent_run_seq > 0` is what marks a differing id as the daemon's
   own successor run rather than corruption.
+- `SessionRecord.agent_loaded_at`: the start of the current Claude or Codex process generation.
+  It is set at direct agent spawn or shell-to-agent promotion, survives conversation rollover and daemon adoption, and clears on demotion.
+  Agent Environment and skill drift compare current file mtimes with this field rather than with `agent_run_started_at`.
 - `SessionRecord.observation_stale_since`: volatile. Set when the followed transcript is
   provably no longer this PTY's conversation and no successor could be corroborated; it
   revokes the transcript's authority over hooks and hard-blocks delivery.

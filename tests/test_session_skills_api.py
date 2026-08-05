@@ -12,7 +12,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux.agent_skills import clear_cache
 from swe_mux.models import SessionRecord
-from swe_mux.server import error_middleware, session_skills
+from swe_mux.server import error_middleware, session_agent_environment, session_skills
 
 
 @pytest.fixture(autouse=True)
@@ -25,6 +25,7 @@ def _isolated_cache():
 class SessionStub:
     def __init__(self, record: SessionRecord) -> None:
         self.record = record
+        self.agent_promoted_at: float | None = None
 
 
 class ManagerStub:
@@ -53,6 +54,7 @@ def build(session_record: SessionRecord) -> web.Application:
     app = web.Application(middlewares=[error_middleware])
     app["sessions"] = ManagerStub(SessionStub(session_record))
     app.router.add_get("/api/sessions/{sid}/skills", session_skills)
+    app.router.add_get("/api/sessions/{sid}/agent-environment", session_agent_environment)
     return app
 
 
@@ -142,6 +144,7 @@ async def test_a_skill_newer_than_the_run_is_flagged_as_not_loaded(
     # the difference between a button that works and one that types a dead command.
     assert flags == {"added-since": True, "was-there": False}
     assert payload["agent_run_started_at"] == 2_000.0
+    assert payload["agent_loaded_at"] == 2_000.0
 
 
 async def test_refresh_bypasses_the_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -161,3 +164,53 @@ async def test_refresh_bypasses_the_cache(tmp_path: Path, monkeypatch: pytest.Mo
     assert [skill["name"] for skill in first["skills"]] == ["first"]
     assert [skill["name"] for skill in cached["skills"]] == ["first"]
     assert [skill["name"] for skill in fresh["skills"]] == ["first", "second"]
+
+
+async def test_agent_environment_is_session_scoped_and_shells_are_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    home.mkdir()
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    (home / "config.toml").write_text('model = "gpt-test"\n', encoding="utf-8")
+    app = build(record(cwd=str(cwd), agent_run_started_at=1_500.0))
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get("/api/sessions/sess-1/agent-environment")
+        payload = await response.json()
+    assert response.status == 200
+    assert payload["backend"] == "codex"
+    assert payload["runtime"]["loaded_at"] == 1_500.0
+    assert any(section["id"] == "policies" for section in payload["sections"])
+
+    shell_app = build(record(backend="shell", cwd=str(cwd)))
+    async with TestClient(TestServer(shell_app)) as client:
+        response = await client.get("/api/sessions/sess-1/agent-environment")
+        assert response.status == 409
+
+
+async def test_agent_environment_keeps_the_cli_generation_across_conversation_rollover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    home.mkdir()
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    app = build(
+        record(
+            cwd=str(cwd),
+            spawn_backend="codex",
+            created_at=1_000.0,
+            agent_loaded_at=1_000.0,
+            agent_run_started_at=2_000.0,
+            agent_run_seq=1,
+        )
+    )
+
+    async with TestClient(TestServer(app)) as client:
+        payload = await (await client.get("/api/sessions/sess-1/agent-environment")).json()
+
+    assert payload["runtime"]["loaded_at"] == 1_000.0
+    assert payload["runtime"]["run_started_at"] == 2_000.0

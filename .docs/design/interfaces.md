@@ -435,6 +435,7 @@ POST   /sessions/{id}/media         legacy image-only compatibility route
 GET    /sessions/{id}/last-reply
 GET    /sessions/{id}/transcript[?limit=]
 GET    /sessions/{id}/skills[?refresh=1]
+GET    /sessions/{id}/agent-environment[?refresh=1]
 ```
 
 `POST /sessions/{id}/title/regenerate` accepts no body and returns `202 {ok:true}` after emitting
@@ -509,6 +510,8 @@ Rows also carry `idle_reason`, the idle-axis sibling of `awaiting_reason`:
 `delivery_state` is unchanged) while the agent has background work that will wake it back
 up. Completion sounds and push alerts skip that turn end; the next one is the moment worth
 the user's attention.
+Rows carry nullable `agent_loaded_at`, the start of the current Claude or Codex process generation.
+Unlike `agent_run_started_at`, it survives an in-process conversation rollover and daemon adoption.
 Rows carry `standing_activity`, the standing-engagement annotation axis: a list of
 `{kind: loop|cron|background_tasks|subagents, source, evidence, since, expires_at,
 count, detail}` objects describing engagements that outlive the turn (an armed `/loop`
@@ -650,6 +653,7 @@ interface SkillInventory {
   backend: 'claude' | 'codex'
   cwd: string
   generated_at: number
+  agent_loaded_at: number
   agent_run_started_at: number
   roots: Array<{ path: string; scope: SkillScope; kind: 'skill' | 'command'
                  origin: string; exists: boolean; count: number }>
@@ -664,7 +668,7 @@ interface SkillInventory {
     display_name: string | null       // Codex agents/openai.yaml interface
     short_description: string | null
     shadowed_by: string | null        // the higher-precedence root that wins the name
-    added_after_start: boolean        // newer than this agent run, so not loaded
+    added_after_start: boolean        // newer than this CLI generation, so not loaded
   }>
   errors: Array<{ path: string; message: string }>
   truncated: boolean
@@ -678,6 +682,64 @@ scanned (a CLI update moving one) is otherwise indistinguishable from an empty o
 inventory is deliberately not exhaustive in one direction and says so: Claude's built-in skills
 are compiled into the CLI and cannot be enumerated from disk, which `builtin_skills_hidden`
 declares rather than implying they do not exist.
+
+`GET /sessions/{id}/agent-environment` returns the passive Agent Environment inventory described in `features/agent-environment.md`.
+It is session-scoped, uses the live trusted cwd, returns `409` for a shell, and accepts only the optional `refresh=1` cache bypass.
+The inventory and reused skill discovery each have a ten-second cache; the cached CLI `--version` probe has a one-hour lifetime.
+The handler runs the bounded filesystem work off the event loop.
+
+```ts
+interface AgentEnvironmentInventory {
+  schema_version: 1
+  backend: 'claude' | 'codex'
+  cwd: string
+  generated_at: number
+  runtime: {
+    executable: string
+    version: string | null
+    model: string | null
+    loaded_at: number
+    run_started_at: number | null
+    options: Array<{label: string; value: string}>
+    modes: string[]
+  }
+  sources: Array<{
+    id: string
+    label: string
+    scope: AgentEnvironmentScope
+    format: string
+    status: string
+    mtime: number | null
+    changed_after_start: boolean
+  }>
+  sections: Array<{
+    id: string
+    label: string
+    completeness: string
+    items: Array<{
+      id: string
+      kind: string
+      name: string
+      description: string
+      scope: AgentEnvironmentScope
+      origin: string
+      state: string
+      source_id: string | null
+      source_label: string | null
+      changed_after_start: boolean
+      meta: Array<{label: string; value: string}>
+    }>
+    total: number
+    truncated: boolean
+    note: string
+  }>
+  diagnostics: Array<{kind: string; source_id: string | null; message: string}>
+}
+```
+
+`AgentEnvironmentScope` is `built_in | managed | user | project | local | session | unknown`.
+The response never includes hook commands, arguments, environment values, credentials, or unredacted MCP URLs.
+Configured MCP entries intentionally have no connection-health claim because the route never starts a server.
 
 ## Voice and Conversation mode
 

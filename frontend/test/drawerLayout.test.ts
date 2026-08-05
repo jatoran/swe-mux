@@ -66,7 +66,7 @@ test('missing shipped tabs join their canonical predecessor without moving exist
   const layout = normalizeDrawerLayout({ type: 'stack', id: 'one', tabs: ['notifications', 'files', 'clipboard'] })
   assert.deepEqual(drawerTabs(layout), [
     'notifications', 'files', 'notes', 'context', 'git', 'processes', 'mailbox',
-    'clipboard', 'commands', 'prompts', 'queue', 'transcript',
+    'clipboard', 'commands', 'prompts', 'queue', 'transcript', 'agent',
   ])
 })
 

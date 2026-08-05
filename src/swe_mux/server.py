@@ -38,6 +38,7 @@ from aiohttp.multipart import BodyPartReader
 from . import git_review
 from .adapters import BackendAdapter, ClaudeAdapter, CodexAdapter, ShellAdapter
 from .agent_context import AgentContextConflict, AgentContextService
+from .agent_environment import discover_agent_environment
 from .agent_messaging import AgentMessagingService
 from .agent_skills import discover_skills
 from .auto_delivery import AutoDeliveryController
@@ -646,6 +647,7 @@ def create_app(
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
             web.get("/api/sessions/{sid}/transcript", session_transcript),
             web.get("/api/sessions/{sid}/skills", session_skills),
+            web.get("/api/sessions/{sid}/agent-environment", session_agent_environment),
             web.patch("/api/sessions/{sid}", patch_session),
             web.post("/api/sessions/{sid}/title/regenerate", regenerate_session_title),
             web.delete("/api/sessions/{sid}", delete_session),
@@ -6071,14 +6073,74 @@ async def session_skills(request: web.Request) -> web.Response:
         cwd,
         refresh=request.query.get("refresh") in {"1", "true"},
     )
-    # A CLI reads its skills at startup, so anything newer than this run exists on
-    # disk but not in the process the drawer is about to type into. Decorated per
-    # session rather than cached with the scan, which is session-independent.
-    started = record.agent_run_started_at or record.created_at
+    # Conversation rollover does not restart the CLI. Root sessions therefore
+    # retain their process start; promoted shell sessions retain the promotion
+    # timestamp rather than treating every /clear or /new as a skill reload.
+    started = _agent_loaded_at(session)
     skills = [
         {**skill, "added_after_start": skill["mtime"] > started} for skill in payload["skills"]
     ]
-    return json_response({**payload, "skills": skills, "agent_run_started_at": started})
+    return json_response(
+        {
+            **payload,
+            "skills": skills,
+            "agent_loaded_at": started,
+            "agent_run_started_at": record.agent_run_started_at or record.created_at,
+        }
+    )
+
+
+def _agent_loaded_at(session: Any) -> float:
+    """Start of the live CLI process generation, not its current conversation."""
+    record = session.record
+    if record.agent_loaded_at is not None:
+        return float(record.agent_loaded_at)
+    if record.spawn_backend == record.backend:
+        return float(record.created_at)
+    return float(
+        getattr(session, "agent_promoted_at", None)
+        or record.agent_run_started_at
+        or record.created_at
+    )
+
+
+async def session_agent_environment(request: web.Request) -> web.Response:
+    """Return a bounded passive inventory for the focused agent CLI."""
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    record = session.record
+    if record.backend not in {"claude", "codex"}:
+        return json_response(
+            {"error": "agent environment is available only for agent sessions"}, 409
+        )
+    cwd = Path(
+        (record.runtime_cwd if record.runtime_cwd_live else None)
+        or record.run_cwd
+        or record.spawn_cwd
+        or record.cwd
+    )
+    if not cwd.is_dir():
+        cwd = Path(record.spawn_cwd or record.cwd)
+    refresh = request.query.get("refresh") in {"1", "true"}
+    payload = await asyncio.to_thread(
+        discover_agent_environment,
+        backend=record.backend,
+        cwd=cwd,
+        executable=record.exe,
+        args=list(record.args),
+        model=record.model,
+        loaded_at=_agent_loaded_at(session),
+        run_started_at=record.agent_run_started_at,
+        refresh=refresh,
+    )
+    if refresh:
+        log.info(
+            "agent environment refreshed session=%s backend=%s sources=%d sections=%d",
+            record.id,
+            record.backend,
+            len(payload["sources"]),
+            len(payload["sections"]),
+        )
+    return json_response(payload)
 
 
 async def voice_generate(request: web.Request) -> web.Response:

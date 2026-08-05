@@ -35,6 +35,7 @@ function inventory(overrides: Partial<SkillInventory> = {}): SkillInventory {
     backend: 'codex',
     cwd: 'D:/repo',
     generated_at: 10,
+    agent_loaded_at: 5,
     agent_run_started_at: 5,
     roots: [],
     skills: [],
@@ -88,7 +89,7 @@ test('the tooltip leads with what changes the click', () => {
   // before the description rather than after it.
   const title = skillTitle(skill({ added_after_start: true, implicit: false, shadowed_by: 'project skills' }))
   const lines = title.split('\n')
-  assert.match(lines[0], /Added after this session started/)
+  assert.match(lines[0], /Added after this agent loaded/)
   assert.match(lines[1], /Explicit-only/)
   assert.match(lines[2], /Shadowed by project skills/)
   assert.match(lines[3], /\$learn · user skills/)

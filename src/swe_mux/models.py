@@ -144,6 +144,9 @@ class SessionRecord:
     runtime_cwd_dropped: int = 0
     agent_run_id: str | None = None
     agent_run_started_at: float | None = None
+    # Start of the current CLI process generation. Unlike agent_run_started_at,
+    # this does not move when /clear or /new replaces the conversation.
+    agent_loaded_at: float | None = None
     # Which agent run of this session this is: 0 is the run the session spawned
     # (or was promoted into), and every in-CLI conversation replacement (`/clear`,
     # `/new`) increments it. A root agent's run id is otherwise indistinguishable

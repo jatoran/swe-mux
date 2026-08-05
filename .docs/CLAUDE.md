@@ -10,6 +10,9 @@
 - Changing Agent Context discovery, root instruction sync/restore, or its drawer surface:
   `design/features/agent-context.md`, `design/features/ui.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`
+- Changing the session Agent Environment inventory, safety boundaries, or drawer surface:
+  `design/features/agent-environment.md`, `design/features/ui.md`, `design/interfaces.md`,
+  `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing trusted task imports, the Project Run menu, or task launch:
   `design/features/project-actions.md`, `design/features/projects.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`

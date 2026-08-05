@@ -7,10 +7,8 @@
 //
 // Tab order groups by what a tab acts on. First the surfaces that *inject into the
 // focused session* (clipboard, session commands, prompt templates, the prompt queue),
-// then Transcript, which is session-scoped like them but writes nothing: it reads the
-// focused session's conversation back. It closes that block rather than opening it
-// because the block is ordered by what you do to a session, and reading is what you do
-// between the doing.
+// then the passive session surfaces: Transcript reads the focused conversation and Agent
+// inventories the selected CLI environment. Agent closes the session-scoped block.
 // Then the *navigators* (files, notes): project-scoped indexes over documents rather than
 // surfaces that inject text — narrow-column surfaces that used to cost a permanent
 // workspace tab each. Files opens what you pick into a pane; Notes hosts the editor itself
@@ -27,7 +25,7 @@
 // the terminal, a modal covers it; the docked column is the one placement that keeps the
 // target and the control on screen together.
 
-export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'queue' | 'transcript' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'mailbox' | 'notifications'
+export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'queue' | 'transcript' | 'agent' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'mailbox' | 'notifications'
 
 /** What a tab acts on: the focused terminal, the active Project, or the app itself. */
 export type DrawerTabScope = 'session' | 'project' | 'app'
@@ -52,9 +50,10 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'prompts', label: 'Prompts', heading: 'Prompt Library', title: 'Prompts - insert a saved template into the focused terminal', scope: 'session' },
   { id: 'queue', label: 'Queue', heading: 'Prompt Queue', title: 'Queue - messages staged for the focused agent', scope: 'session' },
   { id: 'transcript', label: 'Transcript', heading: 'Transcript', title: 'Transcript - read and copy this session’s conversation', scope: 'session' },
+  { id: 'agent', label: 'Agent', heading: 'Agent Environment', title: 'Agent - inspect tools, extensions, policies, and configuration for this session', scope: 'session' },
   { id: 'files', label: 'Files', heading: 'File Explorer', title: 'Files - browse or search this Project, then open into a pane', scope: 'project' },
   { id: 'notes', label: 'Notes', heading: 'Notes', title: 'Notes - create and edit Project-owned notes here, or open one in a pane', scope: 'project' },
-  { id: 'context', label: 'Context', heading: 'Agent Context', title: 'Context - view agent instructions and learned project memory', scope: 'project' },
+  { id: 'context', label: 'Context', heading: 'Instructions & Memory', title: 'Context - view agent instructions and learned project memory', scope: 'project' },
   { id: 'git', label: 'Git', heading: 'Git', title: 'Git - worktree map and commit graph for this Project', scope: 'project' },
   { id: 'processes', label: 'Processes', heading: 'Processes', title: 'Processes - what this Project’s sessions are running, and what they are serving', scope: 'project' },
   { id: 'mailbox', label: 'Mailbox', heading: 'Mailbox', title: 'Mailbox - application-wide queued-message provenance and delivery state', scope: 'app' },

@@ -763,11 +763,12 @@ responsive controls.
 ## Utility drawer
 
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they are one gesture on mobile or one visible click on desktop away instead of two menu levels deep.
-  The canonical default order is **Clipboard**, **Commands**, **Prompts**, **Queue**, **Transcript**, **Files**, **Notes**, **Context**, **Git**, **Processes**, and **Alerts**.
+  The canonical default order is **Clipboard**, **Commands**, **Prompts**, **Queue**, **Transcript**, **Agent**, **Files**, **Notes**, **Context**, **Git**, **Processes**, **Mailbox**, and **Alerts**.
   Users may distribute those singleton tabs across a recursive arrangement, but the default order groups by what a tab acts on.
   The first
-  four are the same verb — text into the focused session — and Transcript closes that block by
-  reading the same session back. Files and Notes are the **navigators**:
+  four are the same verb - text into the focused session - and Transcript reads the same session
+  back. Agent closes the session-scoped block with a passive view of the selected CLI environment.
+  Files and Notes are the **navigators**:
   project-scoped indexes over documents rather than surfaces that type into one. Files opens what
   you select into a pane; Notes can do that too but opens *into the drawer* by default, because
   reading or adding to a note without leaving the session on screen is the whole point of it on a
@@ -794,10 +795,10 @@ responsive controls.
   Queue remains strictly session-scoped.
 - **Mailbox** is an application-scoped provenance and delivery-state view over queued messages from every Project and session.
   It filters by explicit authorship, Project, and target session; owns the fleet-wide pending badge and emergency auto-delivery controls; and opens a target's Queue without pretending the global list is session-scoped.
-- **Transcript** is the drawer's one *inert* session surface: the focused session's conversation
+- **Transcript** is an *inert* session surface: the focused session's conversation
   as prose you can scroll and copy, without touching the live terminal or scrolling it back.
-  Deliberately no composer, no insert, no send. Every neighbouring tab exists to put text into an
-  agent, and mixing that into the surface for reviewing what already happened is how a stray tap
+  Deliberately no composer, no insert, no send. Mixing those actions into the surface for reviewing
+  what already happened is how a stray tap
   becomes a message nobody wrote. Copy is the only verb: per message, or the whole conversation
   with speakers.
   The top-bar search filters the already loaded messages with literal, case-insensitive matching, highlights every occurrence, and leaves whole-conversation copy unchanged.
@@ -809,6 +810,11 @@ responsive controls.
   It is a drawer tab and not a pane because the point is to read *beside* the
   terminal rather than in place of it.
   Its owning stack unmounts the body when another tab is selected there, which is why the scroll place is kept outside the component.
+- **Agent** is the session-scoped Agent Environment surface (`agent-environment.md`).
+  It shows retained launch identity and passively discovered built-in tools, skills and commands, MCP configuration, plugins, hooks, custom agents, policies, feature overrides, sources, and diagnostics.
+  Scope, origin, state, and completeness remain separate labels.
+  Opening it never starts a configured server or executes extension code, and it has no mutation or terminal-insertion action.
+  Source drift is measured against the current CLI process generation, not the latest conversation rollover.
 - **What the reader shows is a filtered conversation, not the transcript.** Tool calls are gone
   entirely — not collapsed, not summarised. So is CLI machinery that both providers write into
   the transcript as `user` records: slash-command expansions and their output, `!` shell escapes,
@@ -893,7 +899,7 @@ responsive controls.
   When the text landed in the note the panel is hosting, it stays open and returns to the note
   instead — closing would hide the result that was just asked for. Desktop does not move at all,
   because the column sits beside the workspace and a second insert is the common next action.
-- **Context** is the Agent Context surface (`agent-context.md`). It shows Project-root
+- **Context** is titled **Instructions & Memory** and remains the Agent Context surface (`agent-context.md`). It shows Project-root
   `CLAUDE.md`/`AGENTS.md` in an initially expanded disclosure, fixed global
   `~/.claude/CLAUDE.md`/`~/.codex/AGENTS.md` in an initially collapsed disclosure, and one
   initially collapsed **Memories** disclosure badged with the provider file count. All three
@@ -1113,6 +1119,7 @@ Detailed UI behavior belongs with the owning feature:
 - Pane tabs, close behavior, drag/drop, and mobile flattening: `workspace-layout.md`
 - Project registry and visibility: `projects.md`
 - Notes, Files, ignores, and watches: `project-resources.md`
+- Agent runtime and extension inspection: `agent-environment.md`
 - Provider selection and reset review: `provider-accounts.md`
 - CPU/RSS and Process fleet: `processes-and-previews.md`
 - Quota/context/tool evidence: `operational-telemetry.md`

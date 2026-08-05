@@ -102,6 +102,13 @@ export const TranscriptIcon = () => <svg {...stroke}>
   <path d="M21 14.5A1.5 1.5 0 0 0 19.5 13h-9A1.5 1.5 0 0 0 9 14.5v4A1.5 1.5 0 0 0 10.5 20H17l4 3z" />
 </svg>
 
+/** A hexagonal agent core with three capability ports. */
+export const AgentIcon = () => <svg {...stroke}>
+  <path d="m12 3 6 3.5v7L12 17l-6-3.5v-7z" />
+  <circle cx="12" cy="10" r="2.5" />
+  <path d="M12 17v4M6 13.5l-3 2M18 13.5l3 2" />
+</svg>
+
 /** A folder. A folder *tree* is the truer picture but turns to mud at this size. */
 export const FilesIcon = () => <svg {...stroke}>
   <path d="M3 7a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.7.9L11.5 8H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
@@ -169,6 +176,7 @@ export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   prompts: PromptsIcon,
   queue: QueueIcon,
   transcript: TranscriptIcon,
+  agent: AgentIcon,
   files: FilesIcon,
   notes: NotesIcon,
   context: ContextIcon,

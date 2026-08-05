@@ -8,7 +8,7 @@
 //
 // Two facts have to survive all the way to the button, because they are the
 // difference between a useful list and a misleading one:
-//   • `added_after_start` — the file is newer than the running agent process, so
+//   • `added_after_start` — the file is newer than the running CLI generation, so
 //     the CLI has not loaded it and typing the invocation will not work yet.
 //   • `implicit: false` — Codex's `allow_implicit_invocation: false`. The skill is
 //     real and invocable by name, the model just never reaches for it on its own.
@@ -47,6 +47,7 @@ export interface SkillInventory {
   backend: 'claude' | 'codex'
   cwd: string
   generated_at: number
+  agent_loaded_at: number
   agent_run_started_at: number
   roots: SkillRoot[]
   skills: AgentSkill[]
@@ -108,7 +109,7 @@ export function skillLabel(skill: AgentSkill): string {
 /** Tooltip: the caveats first, because they change what the click does. */
 export function skillTitle(skill: AgentSkill): string {
   const parts: string[] = []
-  if (skill.added_after_start) parts.push('Added after this session started — restart the agent to load it.')
+  if (skill.added_after_start) parts.push('Added after this agent loaded - restart the agent to load it.')
   if (!skill.implicit) parts.push('Explicit-only: the agent never invokes this on its own.')
   if (skill.shadowed_by) parts.push(`Shadowed by ${skill.shadowed_by}.`)
   parts.push(`${skill.invocation} · ${skill.origin}`)

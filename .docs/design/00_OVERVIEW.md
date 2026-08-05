@@ -44,6 +44,7 @@
 - Project registry and Groups: `features/projects.md`
 - Project-owned notes, files, ignores, and watches: `features/project-resources.md`
 - Read-only Project/global agent instructions, memory, and manual Project-root sync: `features/agent-context.md`
+- Passive session CLI tools, extensions, policies, and configuration inventory: `features/agent-environment.md`
 - Trusted task discovery and the Project Run menu: `features/project-actions.md`
 - Mixed-view panes, tabs, drag/drop, and mobile projection: `features/workspace-layout.md`
 - History: `features/history.md`

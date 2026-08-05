@@ -12,7 +12,7 @@ root instruction files. There is no automatic, watched, scheduled, or startup sy
 
 ## Surface
 
-The utility drawer's **Context** tab is titled **Agent Context** in its body and follows Notes in
+The utility drawer's **Context** tab is titled **Instructions & Memory** in its body and follows Notes in
 the project-scoped block. It contains:
 
 - an initially expanded **Project instructions** disclosure for Project-root `CLAUDE.md` and

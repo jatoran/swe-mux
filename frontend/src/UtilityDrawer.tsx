@@ -1,6 +1,7 @@
 import type { JSX } from 'preact'
 import { useRef } from 'preact/hooks'
 import { AgentContextTab } from './AgentContextTab'
+import { AgentEnvironmentTab } from './AgentEnvironmentTab'
 import { ClipboardTab } from './ClipboardPanel'
 import { CommandsTab } from './CommandsTab'
 import { PromptsTab } from './PromptsTab'
@@ -222,6 +223,8 @@ export function UtilityDrawer(props: Props) {
         // it has acted, because it acted on the terminal underneath; this one is
         // read there, and closing it after each copy would end the reading.
         return <TranscriptTab session={session} />
+      case 'agent':
+        return <AgentEnvironmentTab session={session} />
       case 'files':
         return project
           ? <ProjectResource
@@ -300,6 +303,7 @@ export function UtilityDrawer(props: Props) {
     itemLabel="panel tabs"
     wrapperClassName={`drawer-tabs-rail drawer-pane-rail ${props.tabDisplay === 'title' ? 'title-mode' : 'icon-mode'}`}
     activeKey={selected}
+    touchDrag={projection}
     stripProps={{
       'data-drawer-stack-id':stack.id,
       role:'tablist',
