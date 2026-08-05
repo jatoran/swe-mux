@@ -2700,6 +2700,11 @@ export function App() {
       window.dispatchEvent(claim)
       if (!claim.defaultPrevented) setError('No focused note to search. Click into a note first.')
     } },
+    { id: 'note.outline', label: 'Jump to a heading in the focused note', category: 'view', available: true, run: () => {
+      const claim = new CustomEvent('mux:note-outline', { cancelable: true })
+      window.dispatchEvent(claim)
+      if (!claim.defaultPrevented) setError('No focused note to outline. Click into a note first.')
+    } },
     // A plain "put the keyboard away" with no sticky mode behind it. On touch this is
     // the only way out of a note editor's keyboard: the read/select toggle below is a
     // terminal mode, and a note has no rail button of its own.

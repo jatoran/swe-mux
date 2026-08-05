@@ -94,10 +94,20 @@ The file tree and notes collection are utility-drawer tabs.
   note endpoint (`{markdown, revision}`); Markdown files PUT the file endpoint
   (`{path, text, revision}`). The queue's debounce, in-flight coalescing, 409 conflict banner,
   retry, and teardown beacon are identical for both.
-- The vendored Continuity 0.2.18 editor owns mobile touch arbitration. `pointerdown` does not
+- The vendored Continuity 0.2.19 editor owns mobile touch arbitration. `pointerdown` does not
   focus its textarea; a resolved tap projects the caret and focuses synchronously, while scroll,
   cancellation, and long-press paths leave the keyboard closed. swe-mux does not inspect the
   editor's shadow DOM or duplicate caret hit-testing for this behavior.
+- The same release owns two further touch behaviors we cannot reach: Enter continues a list
+  marker even while an IME composition is open (Android keyboards hold one across ordinary
+  typing, and the editor's `beforeinput` router used to skip its line-break entries for
+  anything composing, so a mid-line split lost its bullet), and the touch selection action bar
+  stays on screen for a selection taller than the viewport. Both are shadow-root behavior with
+  no host workaround: the action bar in particular exposes no part.
+- The parts the editor *does* expose (`selection-handle`, `command-rail`,
+  `command-rail-button`, `command-rail-settings`) are themed alongside the `--continuity-*`
+  custom properties, since the properties reach its text and surfaces but not the chrome it
+  draws itself.
 - The editor is remounted whenever a different document loads so a new engine cannot leak text
   between documents. Ordinary edits do not remount it, so cursor and undo history survive. A
   host replacement is an echo of pushed text and is never committed back.
@@ -181,6 +191,32 @@ The file tree and notes collection are utility-drawer tabs.
   is detected, since which editor has focus is not app state.
 - Leaving the bar selects the match the user stopped on, so the next edit happens where they
   were looking rather than where the caret sat before the search.
+
+### Jumping to a heading
+
+- Every Continuity-backed view carries a heading outline: a bounded, scrolling list of the
+  note's ATX headings that jumps the editor to the one picked.
+- The heading list is derived from the engine snapshot's text, not from the editor's own block
+  spans. The block `kind` strings are not part of the documented SDK surface, a span carries
+  whole-document byte offsets while the reveal API wants line/byte positions and the plain
+  presentation has no line index to convert with, and asking for a presentation materializes
+  every line of the document to yield a handful of headings. The same reasoning keeps find
+  matching on our side.
+- Fenced code is tracked and skipped, because a notes file is full of prose about code and a
+  `#` line inside a fence is a comment rather than a landmark. Setext headings are deliberately
+  not recognized: the `---` form is ambiguous with a thematic break, and guessing wrong puts a
+  phantom entry in the list.
+- Depth counts distinct heading levels rather than hash marks, so a note whose shallowest
+  heading is `##` does not render every row indented and a jump from `#` to `###` costs one
+  step. Notes are written loosely enough that the raw hash count is a poor guide.
+- The list opens focused on the heading the caret already sits under, so it answers "where am
+  I" as well as "where can I go". A pick centers the target rather than revealing it minimally,
+  since a deliberate jump should not leave the heading wherever it happened to land.
+- Three ways in, the same claim protocol as find: the resource-header button, a `mux:outline`
+  button on the touch rail (long notes are mostly read on the phone, where the header has no
+  room to spare), and a `note.outline` command for the palette, a gesture, or a chord.
+- Unlike find, the outline paints no decorations, so there is nothing to keep in step with an
+  edit; the list is re-derived when the panel opens and refreshed on commits while it is open.
 
 ### Sending a selection to an agent
 

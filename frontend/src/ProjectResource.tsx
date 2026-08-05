@@ -12,6 +12,7 @@ import { useModalFocus } from './modalFocus'
 import { composeAgentMessage, selectionText } from './noteSelection'
 import type { EditorSnapshot } from './noteSelection'
 import { findMatches, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
+import { headingIndexAt, outlineDepths, outlineHeadings, type OutlineHeading } from './noteOutline'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
 import { projectResourceCreationParent } from './projectResourceCreate'
@@ -675,6 +676,104 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     return()=>window.removeEventListener('mux:note-find',onFind)
   },[autosaved])
 
+  // Jump to a heading. Unlike the find bar this holds no decorations, so there is nothing to
+  // keep in step with an edit: the list is re-derived whenever the panel opens.
+  const [outlineOpen,setOutlineOpen]=useState(false)
+  const [outline,setOutline]=useState<readonly OutlineHeading[]>([])
+  const [outlineAt,setOutlineAt]=useState(-1)
+  const outlinePanel=useRef<HTMLDivElement>(null)
+  const outlineDepthList=useMemo(()=>outlineDepths(outline),[outline])
+
+  /** Re-read the note and rebuild the list. Cheap enough to redo on every change while open. */
+  const readOutline=()=>{
+    const element=editorElement.current
+    let snapshot:EditorSnapshot|null=null
+    try{snapshot=element?element.snapshot():null}catch{snapshot=null}
+    const headings=snapshot?outlineHeadings(snapshot.text):[]
+    setOutline(headings)
+    setOutlineAt(headingIndexAt(headings,snapshot?.selections[0]?.head??null))
+  }
+  const openOutline=()=>{
+    readOutline()
+    setOutlineOpen(true)
+  }
+  /**
+   * Centre the heading rather than revealing it minimally: `align:'nearest'` scrolls as little
+   * as it can, which for a deliberate jump leaves the target wherever it happened to land.
+   * The caret is collapsed to the line start so the next keystroke edits the heading, and
+   * focus goes back to the editor because the panel button took it on click.
+   */
+  const jumpToHeading=(heading:OutlineHeading)=>{
+    setOutlineOpen(false)
+    const element=editorElement.current
+    if(!element)return
+    // A heading can go stale if the note changed under an open panel; landing the caret is a
+    // convenience, never worth an error.
+    try{
+      element.revealRange({start:heading.start,end:heading.end},{align:'center'})
+      element.setSelections([{anchor:heading.start,head:heading.start,kind:'caret'}])
+    }catch{/* ignored */}
+    element.focus()
+  }
+  const outlineRef=useRef(openOutline)
+  outlineRef.current=openOutline
+
+  // Keep the list honest while the panel is open, and dismiss it the way the tree menu does.
+  useEffect(()=>{
+    if(!outlineOpen)return
+    const element=editorElement.current
+    // Deliberately no focus restore on close, unlike the tree menu: every way out of this
+    // panel already decides where focus belongs (a jump and Escape both put it back in the
+    // editor, an outside click leaves it where the user clicked), and restoring it here would
+    // pull focus back to the header button after the jump had already placed the caret.
+    const frame=requestAnimationFrame(()=>{
+      const buttons=[...outlinePanel.current?.querySelectorAll<HTMLButtonElement>('button')||[]]
+      ;(buttons[Math.max(outlineAt,0)]||buttons[0])?.focus()
+    })
+    const dismiss=()=>setOutlineOpen(false)
+    const key=(event:KeyboardEvent)=>{
+      if(event.key==='Escape'){
+        event.preventDefault();event.stopImmediatePropagation();dismiss()
+        editorElement.current?.focus()
+        return
+      }
+      if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return
+      const buttons=[...outlinePanel.current?.querySelectorAll<HTMLButtonElement>('button')||[]]
+      if(!buttons.length)return
+      event.preventDefault()
+      const current=buttons.indexOf(document.activeElement as HTMLButtonElement)
+      const next=event.key==='Home'?0:event.key==='End'?buttons.length-1
+        :(Math.max(current,0)+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length
+      buttons[next].focus()
+    }
+    window.addEventListener('mousedown',dismiss)
+    window.addEventListener('blur',dismiss)
+    window.addEventListener('keydown',key,true)
+    element?.addEventListener('continuity-change',readOutline)
+    return()=>{
+      cancelAnimationFrame(frame)
+      window.removeEventListener('mousedown',dismiss)
+      window.removeEventListener('blur',dismiss)
+      window.removeEventListener('keydown',key,true)
+      element?.removeEventListener('continuity-change',readOutline)
+    }
+  },[outlineOpen])
+
+  // Same claim protocol as the find command above: whichever resource holds the focused
+  // editor cancels the event, and an unclaimed event is what "no note is focused" looks like.
+  useEffect(()=>{
+    if(!autosaved)return
+    const onOutline=(event:Event)=>{
+      const element=editorElement.current
+      const target=currentInsertTarget()
+      if(!element||target?.kind!=='editor'||target.editor!==element)return
+      event.preventDefault()
+      openOutline()
+    }
+    window.addEventListener('mux:note-outline',onOutline)
+    return()=>window.removeEventListener('mux:note-outline',onOutline)
+  },[autosaved])
+
   // A tab pointed at a different note keeps this component, so the bar and its ranges have
   // to go with the old document rather than describing it over the new one.
   useEffect(()=>{
@@ -684,6 +783,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     setFindQuery('')
     setFindCount(0)
     setFindIndex(0)
+    setOutlineOpen(false)
+    setOutline([])
+    setOutlineAt(-1)
   },[project.id,resource.kind,resource.id])
 
   /**
@@ -715,6 +817,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     })
     // On touch there is no Ctrl+F and no menu bar, so the rail is the only way in.
     actions.push({id:'mux:find',label:'Find in this note',glyph:'⌕',run:()=>findRef.current()})
+    // Long notes are mostly read on the phone, where the header is too cramped to spare a
+    // second button; the rail puts the outline under the thumb instead.
+    actions.push({id:'mux:outline',label:'Jump to a heading',glyph:'☰',run:()=>outlineRef.current()})
     return actions
   },[!!onSendToAgent])
 
@@ -1034,6 +1139,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
           editor owns no selection engine, so its send is always the whole document. */}
       {canSendText&&<button class="resource-send" title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}
       {autosaved&&<button class="resource-find" disabled={!editable} title="Find in this note" aria-label="Find in this note" onClick={openFind}>⌕</button>}
+      {autosaved&&<button class="resource-outline" disabled={!editable} title="Jump to a heading" aria-label="Jump to a heading" aria-haspopup="menu" aria-expanded={outlineOpen}
+        onMouseDown={event=>event.stopPropagation()}
+        onClick={()=>outlineOpen?setOutlineOpen(false):openOutline()}>☰</button>}
       {isDelimitedFile&&<><button class={fileViewMode==='preview'?'active':''} onClick={()=>setFileViewMode('preview')}>Table</button><button class={fileViewMode==='raw'?'active':''} onClick={()=>setFileViewMode('raw')}>Raw</button></>}
       {isFile&&!isMarkdownFile&&presentation?.kind!=='image'&&presentation?.kind!=='unsupported'&&(!isDelimitedFile||fileViewMode==='raw')&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}
     </div>:null}</header>
@@ -1053,6 +1161,19 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       <button class={findCase?'active':''} title="Match case" aria-pressed={findCase} onClick={()=>setFindCase(value=>!value)}>Aa</button>
       <span class={findQuery&&!findCount?'missing':''} aria-live="polite">{!findQuery?'':findCount?`${findIndex+1}/${findCount}`:'no match'}</span>
       <button title="Close find" aria-label="Close find" onClick={closeFind}>×</button>
+    </div>}
+    {outlineOpen&&<div class="note-outline" ref={outlinePanel} role="menu" aria-label="Note headings"
+      onMouseDown={event=>event.stopPropagation()}>
+      {outline.length?outline.map((heading,index)=>{
+        const depth=outlineDepthList[index]
+        return <button key={`${heading.line}:${heading.level}`} role="menuitem" type="button"
+          class={index===outlineAt?'current':''}
+          style={{paddingLeft:`${8+depth*13}px`}}
+          onClick={()=>jumpToHeading(heading)}>
+          <span>H{heading.level}</span>
+          <strong>{heading.text||'(untitled)'}</strong>
+        </button>
+      }):<p>No headings in this note.</p>}
     </div>}
     {autosaved&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
     {imageReady?<ImageViewer key={revision} projectId={project.id} path={resource.id} revision={revision} mime={imagePresentation!.mime!} width={imagePresentation!.width!} height={imagePresentation!.height!} frames={imagePresentation!.frames!} size={fileSize} worktree={worktree}/>

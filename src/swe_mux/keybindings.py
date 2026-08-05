@@ -90,6 +90,9 @@ KEYBINDING_COMMANDS = (
     # here for the palette, a gesture, and anyone who wants a different chord — not
     # because the feature needs a binding to be usable.
     ("note.find", "Find in focused note", "view"),
+    # Same shape: reachable from the pane header and the editor's own command rail, so this
+    # exists for the palette, a gesture, and anyone who wants a chord for it.
+    ("note.outline", "Jump to a heading in the focused note", "view"),
     ("terminal.copy", "Copy from focused terminal", "terminal"),
     ("terminal.paste", "Paste into focused terminal", "terminal"),
     ("terminal.selectAll", "Select all in focused terminal", "terminal"),
