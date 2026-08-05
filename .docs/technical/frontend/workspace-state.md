@@ -49,6 +49,7 @@ Responsive transitions never flatten or persist replacement geometry.
 
 `OverflowRail` wraps workspace and utility tablists without taking over their ARIA roles or drag targets.
 It owns endpoint detection, non-layout-consuming fade chevrons, wheel translation, boundary-aware paging, and selected or focused tab reveal.
+Selection changes and pane-focus changes are separate reveal triggers because moving focus to an already-active pane tab does not change the selected child ID.
 The underlying tablist remains the native horizontal touch and trackpad scroller, and the controls do not render when the content fits.
 
 Notes is the only inactive drawer body kept mounted.

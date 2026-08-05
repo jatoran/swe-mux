@@ -2010,7 +2010,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     scrollTerminalToTail(term)
     appOffTailRef.current=false
     setAppOffTail(false)
-    if(!keyboardOffRef.current)focusTerminalInputRef.current()
   }
   const toggleKeyboard=()=>{
     const next=!keyboardOffRef.current

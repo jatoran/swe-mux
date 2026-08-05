@@ -72,7 +72,8 @@ PaneLeaf = terminal | note | preview | history | queue
   A soft edge fade and chevron appear only on sides with hidden content, occupy no layout space, and click-scroll to the next useful tab boundary.
   Plain wheel input translates to horizontal movement because the strip only overflows on that axis.
   Trackpad swipes, touch panning, and events already carrying horizontal intent remain native rather than being applied twice.
-  Selection and keyboard focus reveal the target tab automatically, and a strip that fits shows no affordance or consumes no wheel event.
+  Selection and keyboard focus reveal the target tab automatically, including a newly launched tab and an already-selected tab in a pane that just received workspace focus.
+  A strip that fits shows no affordance or consumes no wheel event.
 - The active tab carries an accent outline, a thick accent underline, and a tinted fill. A bare
   background swap is not enough: the previous treatment moved only `--panel` to `--bg`, a few
   RGB points that vanish on a phone screen in daylight and is easy to miss on desktop too. The

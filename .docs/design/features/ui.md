@@ -544,6 +544,8 @@ responsive controls.
 - A terminal scrolled off its newest line shows a jump-to-latest chip in the terminal's own
   grid cell, above the action rail. It is checked per render, not only on scroll, because
   output arriving while scrolled up moves the buffer base without moving the viewport.
+- Jump-to-latest changes only the terminal and application viewports.
+  It does not focus the terminal input or raise the mobile soft keyboard.
 - That check reads xterm's buffer, which is silent about a whole class of sessions. An
   application holding the mouse (Claude does; Codex enables no mouse mode at all) is handed
   every scroll gesture — the wheel on a desktop, and the drag a phone forwards as one via

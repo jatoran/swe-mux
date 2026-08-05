@@ -53,7 +53,8 @@ let term: Terminal
 let fit: FitAddon
 let clicks = 0
 
-// Exactly what TerminalPane's chip and rail keys do, minus the focus call (no PTY here).
+// Exactly what TerminalPane's chip and rail keys do. The chip deliberately does
+// not focus input, so it cannot raise the mobile soft keyboard.
 chipButton.addEventListener('click', () => { clicks += 1; scrollTerminalToTail(term) })
 railButton.addEventListener('click', () => { clicks += 1; railKey() })
 
@@ -142,8 +143,8 @@ const runCase = async (name: string, body: () => Promise<void>): Promise<ScrollC
 }
 
 window.runJumpLatestScenarios = async () => [
-  // The chip's handler order: scroll, then focus — and focusing is what raises the keyboard.
-  await runCase('chip-then-keyboard', async () => { scrollTerminalToTail(term); openKeyboard() }),
+  // Command-rail keys still restore input focus after sending, so preserve the
+  // resize that follows when the keyboard opens.
   await runCase('rail-key-then-keyboard', async () => { railKey(); openKeyboard() }),
   // The keyboard still animating open when the chip is tapped. The refit has already moved
   // baseY, but xterm republishes its scroller's range on a queued frame (`Viewport.queueSync`

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { railFocusTarget, railOverflowState, railPageTarget } from '../src/railOverflow.ts'
 
@@ -34,4 +35,21 @@ test('focused items are moved clear of both overlay controls', () => {
   assert.equal(railFocusTarget(metrics, 210, 260), 182)
   assert.equal(railFocusTarget(metrics, 460, 520), 248)
   assert.equal(railFocusTarget(metrics, 300, 360), 200)
+})
+
+test('workspace rails retrigger selected-tab reveal when their pane receives focus', () => {
+  const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+  const railSource = readFileSync(new URL('../src/RailScroller.tsx', import.meta.url), 'utf8')
+  assert.match(appSource, /activeKey=\{activeChild\.id\} focusKey=\{focusedPane\?activeChild\.id:undefined\}/)
+  assert.match(railSource, /if \(focusKey === undefined\) return\s+return scheduleSelectedReveal\(\)/)
+})
+
+test('jump-to-latest does not request terminal input focus', () => {
+  const source = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
+  const handler = source.slice(source.indexOf('const jumpToLatest='), source.indexOf('const toggleKeyboard='))
+  assert.ok(handler.length > 0)
+  assert.doesNotMatch(handler, /focusTerminalInputRef/)
+
+  const rendererHarness = readFileSync(new URL('./renderer/jumpLatest.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(rendererHarness, /chip-then-keyboard/)
 })

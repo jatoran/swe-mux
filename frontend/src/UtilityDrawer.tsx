@@ -295,6 +295,7 @@ export function UtilityDrawer(props: Props) {
     itemLabel="panel tabs"
     wrapperClassName={`drawer-tabs-rail drawer-pane-rail ${props.tabDisplay === 'title' ? 'title-mode' : 'icon-mode'}`}
     activeKey={selected}
+    focusKey={focusedTab === selected ? selected : undefined}
     touchDrag={projection}
     stripProps={{
       'data-drawer-stack-id':stack.id,

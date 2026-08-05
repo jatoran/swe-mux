@@ -19,6 +19,7 @@ interface OverflowRailProps {
   itemLabel: string
   wrapperClassName?: string
   activeKey?: string
+  focusKey?: string
   stripProps?: OverflowRailStripProps
   touchDrag?: boolean
 }
@@ -74,6 +75,7 @@ export function OverflowRail({
   itemLabel,
   wrapperClassName = '',
   activeKey,
+  focusKey,
   stripProps,
   touchDrag = false,
 }: OverflowRailProps) {
@@ -121,8 +123,7 @@ export function OverflowRail({
   // resizing the strip itself. Reconcile after every render as the cheap backstop.
   useEffect(syncOverflow)
 
-  useEffect(() => {
-    if (activeKey === undefined) return
+  const scheduleSelectedReveal = () => {
     const frame = requestAnimationFrame(() => {
       const strip = stripRef.current
       const selected = strip?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
@@ -130,7 +131,20 @@ export function OverflowRail({
       syncOverflow()
     })
     return () => cancelAnimationFrame(frame)
+  }
+
+  useEffect(() => {
+    if (activeKey === undefined) return
+    return scheduleSelectedReveal()
   }, [activeKey])
+
+  // A pane can receive workspace focus while its already-selected tab stays the
+  // same. That focus transition must reveal the tab too, without making a rail
+  // that just lost focus snap back to its selection.
+  useEffect(() => {
+    if (focusKey === undefined) return
+    return scheduleSelectedReveal()
+  }, [focusKey])
 
   const page = (direction: RailScrollDirection) => {
     const strip = stripRef.current

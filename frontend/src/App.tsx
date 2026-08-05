@@ -3177,7 +3177,7 @@ export function App() {
           void updateLayout(projectId,removeLeaf(latest,child.kind,child.id))
         }}>{confirming?'✓':'×'}</button>
       }
-      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={event=>{if(event.button!==2)setFocusedViewId(activeChild.id)}}><OverflowRail className="stack-tabs" itemLabel="workspace tabs" wrapperClassName="stack-tabs-rail" activeKey={activeChild.id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Workspace tabs'}}>
+      return <section data-pane-stack-id={node.id} data-tutorial="workspace-pane" class={`pane-stack ${focusedPane?'focused-pane':''} ${paneDropClass}`} onPointerDown={event=>{if(event.button!==2)setFocusedViewId(activeChild.id)}}><OverflowRail className="stack-tabs" itemLabel="workspace tabs" wrapperClassName="stack-tabs-rail" activeKey={activeChild.id} focusKey={focusedPane?activeChild.id:undefined} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Workspace tabs'}}>
         {node.children.map(child=>{
           const activate=()=>{if(suppressDragClickRef.current===`tab:${child.id}`){suppressDragClickRef.current=null;return}setFocusedViewId(child.id);if(child.kind==='terminal')setActiveId(child.id);if(child.id!==activeChild.id)void updateLayout(projectId,activateStackChild(activeLayout,node.id,child.id))}
           const dragClass=dragStackTab?.overId===child.id&&dragStackTab.side?`drag-over drop-${dragStackTab.side}`:''
