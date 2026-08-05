@@ -81,6 +81,7 @@ from .launchers import create_agent_shims, resolve_codex_pty_command, resolve_co
 from .layouts import attach_leaf, attach_terminal, stack_leaf
 from .lifecycle import HEARTBEAT_INTERVAL_SECONDS, daemon_clean_exit, daemon_started, heartbeat
 from .logsetup import current_log_level, set_log_level
+from .loop_lag import LoopLagMonitor
 from .mcp import McpAuthError, McpService
 from .meta_hooks import MetaHookEngine, parse_hook_rules
 from .models import MuxEvent
@@ -225,6 +226,7 @@ MCP_RATE_WINDOW_SECONDS = 60.0
 MCP_RATE_LIMIT = 120
 MCP_BODY_BYTES = 256 * 1024
 CONFIG_WATCH_LOOP = "config-watch"
+LOOP_LAG_LOOP = "loop-lag"
 LIFECYCLE_HEARTBEAT_LOOP = "lifecycle-heartbeat"
 MEDIA_CLEANUP_LOOP = "media-cleanup"
 RETENTION_LOOP = "store-retention"
@@ -1095,6 +1097,11 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # Every long-lived loop runs under the background-task supervisor: restarted
     # with capped backoff, faults counted, health surfaced at
     # /api/diagnostics/background. An unsupervised loop that dies is invisible.
+    # Started first among the supervised loops, so its own baseline is measured from
+    # the same moment everything that can stall it begins running.
+    loop_lag = LoopLagMonitor()
+    app["loop_lag"] = loop_lag
+    background.start(LOOP_LAG_LOOP, lambda: _loop_lag_loop(loop_lag))
     background.start(CONFIG_WATCH_LOOP, lambda: _watch_config(app))
     background.start(MEDIA_CLEANUP_LOOP, lambda: _media_cleanup_loop(config.data_dir, projects))
     background.start(
@@ -1230,6 +1237,21 @@ def _config_mtime(path: Path) -> int:
         return path.stat().st_mtime_ns
     except OSError:
         return 0
+
+
+async def _loop_lag_loop(monitor: LoopLagMonitor) -> None:
+    """Record how late this event loop is running its own scheduled work.
+
+    The sleep stays outside the supervisor's `iteration()` guard on purpose: timing it
+    would measure this probe's sleep rather than anything blocking the loop. Only the
+    recording is guarded, which is what makes a dead lag monitor visible in the same
+    place as every other stalled loop.
+    """
+    # unsupervised-loop-ok: supervised by `background.start(LOOP_LAG_LOOP, ...)`.
+    while True:
+        lag = await monitor.sample()
+        with background.iteration(LOOP_LAG_LOOP):
+            monitor.observe(lag)
 
 
 async def _watch_config(app: web.Application) -> None:
@@ -4021,9 +4043,15 @@ async def get_background_health(request: web.Request) -> web.Response:
     tier0: Tier0Store = request.app["tier0"]
     events: EventBus = request.app["events"]
     consumers: DeterministicConsumerService = request.app["deterministic_consumers"]
+    loop_lag: LoopLagMonitor = request.app["loop_lag"]
     return json_response(
         {
             **background.health(),
+            # Read this before the per-loop numbers when the question is "why does the
+            # UI feel slow". Loop cost tells you which subsystem is expensive; this
+            # tells you whether anything is blocking the thread every request, frame
+            # and keystroke shares.
+            "loop_lag": loop_lag.snapshot(),
             "event_bus": events.drop_stats(),
             "tier0_capture": tier0.capture_stats(),
             # A detector that stopped producing findings is indistinguishable from

@@ -170,3 +170,133 @@ def test_every_long_lived_daemon_loop_is_supervised() -> None:
     )
 
 
+
+
+def test_loop_health_ranks_by_cost_not_by_how_often_a_loop_ticks() -> None:
+    """The metric that made a 45%-of-CPU loop look like the cheapest in the daemon.
+
+    `process-inspector` ran 0.15 iterations/sec, second-least frequent of 27 loops,
+    while consuming 45.2% of the daemon's samples. Iteration counts ranked it last.
+    `busy_share` is what ranks an expensive rare loop above a cheap frequent one.
+    """
+    from swe_mux.background_tasks import TaskSupervisor
+
+    wall = [1000.0]
+    ticks = [0.0]
+    supervisor = TaskSupervisor(clock=lambda: wall[0], monotonic=lambda: ticks[0])
+
+    # A loop that ticks constantly and costs nothing.
+    for _ in range(100):
+        with supervisor.iteration("chatty"):
+            ticks[0] += 0.0001
+
+    # A loop that ticks twice and eats a second each time.
+    for _ in range(2):
+        with supervisor.iteration("expensive"):
+            ticks[0] += 1.0
+
+    wall[0] += 20.0
+    health = supervisor.health()
+    loops = {item["name"]: item for item in health["loops"]}
+
+    assert loops["chatty"]["iterations"] == 100
+    assert loops["expensive"]["iterations"] == 2
+    # The whole point: frequency says "chatty", cost says "expensive".
+    assert loops["expensive"]["busy_seconds"] > loops["chatty"]["busy_seconds"] * 50
+    assert health["costliest"][0]["name"] == "expensive"
+    assert loops["expensive"]["busy_share"] > loops["chatty"]["busy_share"]
+    assert loops["expensive"]["p95_seconds"] == 1.0
+    assert loops["expensive"]["slowest_seconds"] == 1.0
+
+
+def test_a_failing_iteration_is_still_timed() -> None:
+    """A loop burning the daemon and then raising is the worst case to leave unmeasured."""
+    from swe_mux.background_tasks import TaskSupervisor
+
+    ticks = [0.0]
+    supervisor = TaskSupervisor(clock=lambda: 5.0, monotonic=lambda: ticks[0])
+
+    with supervisor.iteration("doomed"):
+        ticks[0] += 0.5
+        raise RuntimeError("boom")
+
+    entry = supervisor.health()["loops"][0]
+    assert entry["faults"] == 1
+    assert entry["iterations"] == 0
+    assert entry["busy_seconds"] == 0.5
+
+
+def test_loop_lag_reports_the_delay_a_user_actually_feels() -> None:
+    """A 40ms synchronous call delays every frame, request and keystroke behind it.
+
+    Codex rollout discovery did exactly that every 2s and nothing reported it; it was
+    found by attaching a profiler while looking for something else.
+    """
+    from swe_mux.loop_lag import LoopLagMonitor
+
+    monitor = LoopLagMonitor(stall_threshold=0.1)
+    empty = monitor.snapshot()
+    assert empty["samples"] == 0 and empty["stalls"] == 0
+
+    for lag in (0.001, 0.002, 0.001, 0.36, 0.002):
+        monitor.observe(lag)
+
+    snapshot = monitor.snapshot()
+    assert snapshot["samples"] == 5
+    assert snapshot["stalls"] == 1, "only the 360ms sample is a stall"
+    assert snapshot["max_seconds"] == 0.36
+    assert snapshot["worst_seconds"] == 0.36
+    assert snapshot["p50_seconds"] <= 0.002, "one stall must not move the median"
+
+    # Negative lag is impossible to act on and only ever means clock noise.
+    monitor.observe(-5.0)
+    assert monitor.snapshot()["worst_seconds"] == 0.36
+
+
+def test_loop_lag_keeps_the_worst_stall_after_it_leaves_the_window() -> None:
+    """The window answers "is it slow now"; the worst stall must survive being old."""
+    from swe_mux.loop_lag import LoopLagMonitor
+
+    monitor = LoopLagMonitor(window=4)
+    monitor.observe(2.0)
+    for _ in range(8):
+        monitor.observe(0.001)
+
+    snapshot = monitor.snapshot()
+    assert snapshot["samples"] == 4
+    assert snapshot["max_seconds"] == 0.001, "the window has rolled past the stall"
+    assert snapshot["worst_seconds"] == 2.0, "but the report must not lose it"
+    assert snapshot["stalls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_loop_lag_sample_measures_delay_beyond_the_interval_it_asked_for() -> None:
+    """`asyncio.sleep` never returns early, so everything past the interval is lag."""
+    from swe_mux.loop_lag import LoopLagMonitor
+
+    monitor = LoopLagMonitor(interval=0.01)
+    lag = await monitor.sample()
+
+    assert lag >= 0.0
+    # An unblocked loop wakes within a few milliseconds of the interval it requested.
+    assert lag < 0.5
+
+
+def test_a_wait_inside_the_guard_is_reported_as_the_loop_s_own_cost() -> None:
+    """Pins the trap, because the metric cannot tell an await from work.
+
+    The first live reading of this instrumentation ranked `status-timeline-flush` the
+    most expensive loop in the daemon at a 1.02s p95, entirely because its batching
+    sleep sat inside `iteration()` while the event loop was free throughout. The rule
+    that follows is "wrap the work, not the waiting", and this is what makes the
+    consequence of breaking it visible rather than a mystery in a diagnostic.
+    """
+    from swe_mux.background_tasks import TaskSupervisor
+
+    ticks = [0.0]
+    supervisor = TaskSupervisor(clock=lambda: 100.0, monotonic=lambda: ticks[0])
+
+    with supervisor.iteration("guarded-wait"):
+        ticks[0] += 1.0  # stands in for `await asyncio.sleep(...)` inside the guard
+
+    assert supervisor.health()["loops"][0]["busy_seconds"] == 1.0

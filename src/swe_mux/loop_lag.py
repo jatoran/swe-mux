@@ -1,0 +1,118 @@
+"""How late the event loop is running the work it promised to run.
+
+A daemon can be fully healthy by every other measure and still feel slow, because
+the thing users experience is not CPU or memory but *when their keystroke gets
+serviced*. Everything on this loop shares one thread: a single synchronous call that
+takes 40 ms delays every terminal write, websocket frame, and HTTP response behind it
+by 40 ms, and no per-subsystem metric reports that. Only the loop can.
+
+The measurement is a sleep that knows what it asked for. `asyncio.sleep(interval)`
+resolves no earlier than `interval`, so anything beyond it is time the loop was not
+free to run this callback: some other coroutine was occupying the thread, or a
+synchronous call inside one was. That excess is the lag, and it is exactly the
+quantity a user feels.
+
+This exists because the alternative was finding such stalls by accident. Codex rollout
+discovery ran a 36 ms filesystem walk synchronously on this loop every 2 s
+(`adapters/codex.py`), and nothing in the daemon reported it -- it was found by
+attaching a sampling profiler while looking for something else. A stall that recurs
+every couple of seconds is precisely what this makes obvious and cheap to watch.
+
+Deliberately not a general metrics facility: one loop, one bounded window, read
+through `/api/diagnostics/background`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections import deque
+from collections.abc import Callable
+from typing import Any
+
+#: Cadence of the probe. Short enough to catch a stall that recurs every couple of
+#: seconds, long enough that the probe is never itself a meaningful load.
+SAMPLE_INTERVAL_SECONDS = 0.5
+#: Retained samples. At the cadence above this is about four minutes of history, which
+#: is the window in which "is it slow *right now*" is answerable.
+SAMPLE_WINDOW = 512
+#: Lag beyond which a sample is counted as a stall rather than as scheduling noise.
+#: An ordinary loop wakeup lands within a millisecond or two; a tenth of a second is
+#: unambiguously something blocking, and is also roughly where a human starts to feel
+#: a keystroke arrive late.
+STALL_THRESHOLD_SECONDS = 0.1
+
+
+class LoopLagMonitor:
+    """Samples event-loop scheduling delay and reports its distribution."""
+
+    def __init__(
+        self,
+        *,
+        interval: float = SAMPLE_INTERVAL_SECONDS,
+        window: int = SAMPLE_WINDOW,
+        stall_threshold: float = STALL_THRESHOLD_SECONDS,
+        monotonic: Callable[[], float] = time.perf_counter,
+    ) -> None:
+        self._interval = interval
+        self._stall_threshold = stall_threshold
+        self._monotonic = monotonic
+        self._samples: deque[float] = deque(maxlen=window)
+        self._worst = 0.0
+        self._worst_at: float | None = None
+        self._stalls = 0
+        self._observed = 0
+
+    def observe(self, lag_seconds: float) -> None:
+        """Record one measured lag. Separated from the loop so it can be tested."""
+        lag = max(0.0, lag_seconds)
+        self._observed += 1
+        self._samples.append(lag)
+        if lag > self._worst:
+            self._worst = lag
+            self._worst_at = time.time()
+        if lag >= self._stall_threshold:
+            self._stalls += 1
+
+    async def sample(self) -> float:
+        """Sleep one interval and return how much later than that the loop woke us.
+
+        Split from `observe` so the caller can run the recording under the background
+        supervisor's `iteration()` guard: this loop must report its own liveness like
+        every other, and a lag monitor that silently died is worse than none. The sleep
+        itself stays outside that guard, since timing it would only measure this
+        probe's own sleep rather than anything blocking the loop.
+        """
+        started = self._monotonic()
+        await asyncio.sleep(self._interval)
+        return self._monotonic() - started - self._interval
+
+    def snapshot(self) -> dict[str, Any]:
+        samples = sorted(self._samples)
+        if not samples:
+            return {
+                "samples": 0,
+                "observed": self._observed,
+                "stalls": self._stalls,
+                "stall_threshold_seconds": self._stall_threshold,
+            }
+        return {
+            "samples": len(samples),
+            "observed": self._observed,
+            "p50_seconds": round(_at(samples, 0.50), 5),
+            "p95_seconds": round(_at(samples, 0.95), 5),
+            "p99_seconds": round(_at(samples, 0.99), 5),
+            "max_seconds": round(samples[-1], 5),
+            # Retained across the whole process lifetime, unlike the window above: the
+            # single worst stall since boot is the one a report should not lose just
+            # because it happened a few minutes ago.
+            "worst_seconds": round(self._worst, 5),
+            "worst_at": self._worst_at,
+            "stalls": self._stalls,
+            "stall_threshold_seconds": self._stall_threshold,
+        }
+
+
+def _at(ordered: list[float], fraction: float) -> float:
+    index = min(len(ordered) - 1, max(0, round(fraction * (len(ordered) - 1))))
+    return ordered[index]

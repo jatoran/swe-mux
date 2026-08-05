@@ -814,7 +814,30 @@ depths plus `tier0_capture` (captured/dropped, last error) and `deterministic_co
 otherwise indistinguishable from a quiet fleet) plus `project_cards` (cached/builds/skipped
 and the last reason a project got no card — "no card" is a legitimate outcome, so the reason
 has to be readable somewhere). Both are in-memory per daemon
-boot and do not survive a restart. This is the surface that makes a poller which died — the
+boot and do not survive a restart.
+
+It also reports **what each loop costs**, not only whether it lives. Every `loops[]` entry
+carries `busy_seconds` (wall time inside `iteration()` bodies, **awaits included**),
+`busy_share` (that time over the loop's uptime), `mean_seconds`, `p50_seconds`, `p95_seconds`
+and `slowest_seconds`, and `costliest[]` ranks the top loops by `busy_share`. Because awaits
+count, where a loop puts its waits is part of its reported cost: a loop that awaits its batching
+window inside the guard reports that as its own cost while the event loop was free throughout.
+Keep waits outside the guard and wrap only the work. `busy_seconds` is wall time, not CPU, and
+is not evidence of blocking — `loop_lag` is the only measurement that separates an await from a
+stall. **Iteration counts
+are not a cost signal and reading them as one hides the expensive work by construction**: a loop
+that ticks rarely and costs a great deal per tick ranks last by frequency. Measured 2026-08-05,
+`process-inspector` ran 0.15 iterations/sec — second-least frequent of 27 loops — while
+consuming 45.2% of the daemon's CPU samples.
+
+`loop_lag` reports scheduling delay for the event loop itself: `p50/p95/p99_seconds`,
+`max_seconds` over a bounded window, `worst_seconds` retained for the whole process lifetime,
+and `stalls` (samples at or beyond `stall_threshold_seconds`). Everything on that loop shares
+one thread, so a single synchronous call delays every terminal write, websocket frame and HTTP
+response behind it, and no per-subsystem metric reports that. Investigation procedure:
+`development/PERFORMANCE_RUNBOOK.md`.
+
+This is the surface that makes a poller which died — the
 audited failure mode where a feature silently stops for the rest of the process lifetime —
 visible instead of merely absent.
 

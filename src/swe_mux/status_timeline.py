@@ -386,12 +386,17 @@ class StatusTimelineStore:
                 await asyncio.wait_for(self._wake.wait(), timeout=FLUSH_IDLE_WAKE_SECONDS)
             except TimeoutError:
                 pass
+            if self._wake.is_set():
+                # Batch window: let a busy turn's churn accumulate so it lands as one
+                # write instead of one commit per entry. Deliberately *outside* the
+                # supervisor's guard: `iteration()` times what it wraps, so a wait
+                # inside it is reported as this loop's cost. Measured live before the
+                # move, that put a purely idle batching sleep at the top of `costliest`
+                # with a 1.02s p95 — the loop looked like the most expensive in the
+                # daemon while doing nothing at all.
+                await asyncio.sleep(FLUSH_BATCH_SECONDS)
+                self._wake.clear()
             with background.iteration(STATUS_TIMELINE_FLUSH_LOOP):
-                if self._wake.is_set():
-                    # Batch window: let a busy turn's churn accumulate so it
-                    # lands as one write instead of one commit per entry.
-                    await asyncio.sleep(FLUSH_BATCH_SECONDS)
-                    self._wake.clear()
                 await self.flush_dirty()
                 if time.monotonic() >= self._next_prune:
                     self._next_prune = time.monotonic() + PRUNE_INTERVAL_SECONDS
