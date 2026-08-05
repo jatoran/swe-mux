@@ -660,3 +660,65 @@ async def test_remove_stops_a_session_the_daemon_wrongly_believes_is_dead(
 
     assert host.stopped is True
     assert host.released is False
+
+
+def test_the_reader_poll_follows_the_session_instead_of_a_single_fixed_interval() -> None:
+    """One interval cannot serve a live burst and a session idle at its prompt.
+
+    The read is nonblocking by choice — `pty.read(blocking=True)` parks the reader
+    thread where neither `_stop` nor a dead child can reach it — so the cadence is the
+    only lever. A fixed 10ms spent it as latency on every chunk of flowing output while
+    also costing 100 wakeups a second, per session, forever, on a fleet that is idle
+    most of the time.
+    """
+    from swe_mux.pty_host import (
+        _READ_POLL_ACTIVE_SECONDS,
+        _READ_POLL_DEEP_IDLE_SECONDS,
+        _READ_POLL_RECENT_SECONDS,
+        read_poll_interval,
+    )
+
+    # Output flowing, or a keystroke just written: the echo a human is waiting on must
+    # not queue behind an interval tuned for an empty pseudoconsole.
+    assert read_poll_interval(0.0) == _READ_POLL_ACTIVE_SECONDS
+    assert read_poll_interval(0.2) == _READ_POLL_ACTIVE_SECONDS
+
+    # Between bursts, exactly the old fixed interval: nothing that was fast enough
+    # before this ladder existed is allowed to get slower because of it.
+    assert read_poll_interval(0.25) == _READ_POLL_RECENT_SECONDS
+    assert read_poll_interval(4.9) == _READ_POLL_RECENT_SECONDS
+
+    # Whole seconds of silence. The only cost is unprompted output arriving up to one
+    # interval late, paid once per wake rather than per chunk.
+    assert read_poll_interval(5.0) == _READ_POLL_DEEP_IDLE_SECONDS
+    assert read_poll_interval(600.0) == _READ_POLL_DEEP_IDLE_SECONDS
+
+    # The ladder only ever slows down, and never below the responsiveness the fixed
+    # interval already guaranteed while a session was doing anything.
+    steps = [read_poll_interval(idle) for idle in (0.0, 0.1, 0.3, 1.0, 6.0, 60.0)]
+    assert steps == sorted(steps)
+    assert _READ_POLL_ACTIVE_SECONDS < _READ_POLL_RECENT_SECONDS < _READ_POLL_DEEP_IDLE_SECONDS
+
+
+def test_writing_input_arms_the_reader_active_window() -> None:
+    """A keystroke is the one case whose response latency a human is timing.
+
+    Without this a session quiet at its prompt has its reader sitting on the deep-idle
+    interval at the exact moment the user types, so the echo pays it.
+    """
+    from swe_mux.pty_host import PtyHost
+
+    written: list[str] = []
+
+    class FakePty:
+        def write(self, data: str) -> None:
+            written.append(data)
+
+    host = PtyHost(appname="x", argv=())
+    host._pty = FakePty()  # type: ignore[assignment]
+    host._last_io_at = time.monotonic() - 3600.0
+
+    host.write("ls\r")
+
+    assert written == ["ls\r"]
+    assert time.monotonic() - host._last_io_at < 1.0

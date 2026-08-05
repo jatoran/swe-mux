@@ -156,6 +156,17 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   scrollback, not an OS pseudoconsole reference, supplies ended-session replay.
 - Every poller/scan has an explicit bound, cancellation/stop path, freshness contract, and
   unavailable result. Optional integrations cannot make terminal operations fail.
+- **The PTY reader polls by choice, and its cadence follows the session.** `pty.read()` is
+  called nonblocking because `blocking=True` parks the reader thread somewhere neither `_stop`
+  nor a dead child can reach it. A single fixed interval then serves two opposite cases badly:
+  while output flows it is pure added latency on every chunk, and while a session sits at its
+  prompt it is a wakeup per interval, per session, forever. `read_poll_interval` grades it by
+  time since the last read *or write* (`_last_io_at`) across an active window, the previous
+  fixed 10 ms, and a deep-idle interval reached only after seconds of silence. `write()` arms
+  the active window deliberately: a keystroke's echo is the one latency a human is timing, and
+  a session quiet at its prompt is exactly the one whose reader would otherwise be sitting on
+  the slowest rung. The ladder only ever slows down, and never below what the fixed interval
+  already gave a session that was doing anything.
 - **`asyncio.to_thread` does not make psutil work free.** Its Windows calls are C extension
   calls that hold the GIL, so a long sampling pass in a worker thread starves the event loop
   just as a blocking call would — it only stops looking like a blocking call. `processes.py`
@@ -165,6 +176,25 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   psutil work: take **one** system-wide snapshot per pass (`_ppid_map()`, not
   `children(recursive=True)` per root), cache process handles across passes, and re-read only
   attributes that actually change per tick — never name, command line, or creation time.
+- **`Process.ppid()` is that same snapshot, and `oneshot()` does not cache it.** On Windows
+  psutil implements it as `ppid_map()[pid]`, rebuilding the whole parent table per call, and it
+  carries no `@memoize_when_activated` unlike the `name`/`cmdline`/`memory_info` calls beside it
+  in the same `oneshot()` block. One unguarded call site in `_revalidate_unseen` therefore made
+  every sampling pass O(processes²): measured 2026-08-05 with py-spy against the live daemon it
+  was **45.2% of all samples**, with `processes.py` the outermost module for 50.1% and the
+  daemon holding 22.6% of a core at rest. `_refresh_tree` already builds the full table for the
+  pass, so `_parents` is the only permitted source of a parent pid; `ppid()` is a fallback for a
+  pid younger than that refresh and nothing else. Iteration-count health could never have shown
+  this — `process-inspector` ticks about every 6.5 s, making it one of the *least* frequent
+  loops in the daemon.
+- **Directory walks read mtime from the walk, not from a second syscall.** Windows fills a
+  `DirEntry`'s stat fields during enumeration, so `os.scandir` answers for free what
+  `Path.glob` + `path.stat()` pays a syscall per file to re-fetch. Codex rollout discovery
+  (`adapters/codex.py`) walks a tree that mux never prunes, on a 2 s switch-watch tick, and it
+  runs **synchronously on the event loop**: measured against 1,314 rollouts in 158 directories,
+  35.8 ms to 7.5 ms (4.8x), turning a recurring daemon-wide stall into a much shorter one. That
+  tree cannot be pruned by directory name to go faster, because `codex resume` appends to the
+  original rollout and a file under an old date routinely holds the newest mtime.
   Expensive-but-honest metrics (unique set size) are opt-in per request, never on the cadence.
   See `design/features/processes-and-previews.md` §Sampling cost.
 - Voice STT/TTS subprocesses and local models stay off the event loop. Incoming WAV duration,

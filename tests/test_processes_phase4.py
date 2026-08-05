@@ -1500,3 +1500,83 @@ async def test_preview_shots_expire_but_recent_ones_survive(tmp_path: Path) -> N
     assert cleanup_expired_preview_shots([tmp_path], now) == 1
     assert not old.exists()
     assert fresh.exists()
+
+
+def test_revalidation_reads_the_parent_map_instead_of_snapshotting_per_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`ppid()` is a whole-system snapshot on Windows and `oneshot()` does not cache it.
+
+    psutil implements `Process.ppid()` as `ppid_map()[pid]`, rebuilding the entire
+    parent table per call, and it carries no `@memoize_when_activated` so `oneshot()`
+    caches name/cmdline/memory but not this. Calling it per tracked process made each
+    sampling pass O(processes^2): measured with py-spy against the live daemon it was
+    45.2% of all samples, invisible to iteration-count health because the loop ticks
+    only every ~6.5s. `_refresh_tree` already took that snapshot once for the pass.
+    """
+    from swe_mux import processes
+
+    snapshots = 0
+
+    class Fake:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def create_time(self) -> float:
+            return 100.0
+
+        def oneshot(self) -> Fake:
+            return self
+
+        def __enter__(self) -> Fake:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def ppid(self) -> int:
+            nonlocal snapshots
+            snapshots += 1
+            return 7
+
+        def name(self) -> str:
+            return "proc"
+
+        def cmdline(self) -> list[str]:
+            return ["proc"]
+
+        def memory_info(self) -> Any:
+            return SimpleNamespace(rss=1234)
+
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(Process=Fake, NoSuchProcess=RuntimeError, AccessDenied=PermissionError),
+    )
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+    item = OwnedProcess(
+        pid=55,
+        parent_pid=None,
+        session_id="s1",
+        executable="",
+        command="",
+        started_at=100.0,
+        exited_at=None,
+        cpu_pct=0.0,
+        memory_bytes=0,
+        listeners=[],
+        conditions=[],
+    )
+    inspector.owned = {(55, 100.0): item}
+
+    inspector._parents = {55: 7}
+    inspector._revalidate_unseen(set(), {}, time.time(), False)
+    assert item.parent_pid == 7
+    assert snapshots == 0, "the pass must read _parents, never re-snapshot per process"
+
+    # A pid created after the refresh is genuinely absent from the map, and one
+    # snapshot is the right price for it rather than the default for everything.
+    inspector._parents = {}
+    inspector._revalidate_unseen(set(), {}, time.time(), False)
+    assert item.parent_pid == 7
+    assert snapshots == 1

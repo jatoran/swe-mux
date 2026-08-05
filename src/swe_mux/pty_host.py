@@ -24,6 +24,40 @@ _MAX_COALESCE_BYTES = 256 * 1024
 # How often a blocked cross-thread handoff re-checks whether the child is still
 # alive. Not a deadline: a live child keeps its reader waiting indefinitely.
 _QUEUE_PUT_POLL_SECONDS = 5.0
+# Reader poll cadence, graduated by how recently this PTY did any I/O.
+#
+# The read is deliberately nonblocking: `pty.read(blocking=True)` parks the thread
+# somewhere neither `_stop` nor a dead child can reach it, so the reader polls and the
+# only real question is how often. A single fixed interval answers that question badly,
+# because the two cases want opposite things. While output is flowing, the interval is
+# pure added latency on every chunk. While a session sits at its prompt for minutes, it
+# is pure waste, once per session, forever.
+#
+# So the interval follows the session instead of being guessed once. `_ACTIVE` covers a
+# live burst and, more importantly, the keystroke-to-echo round trip, because `write()`
+# arms the window too: typing never waits on an idle-tuned timer. `_RECENT` is the old
+# fixed 10 ms, kept exactly so nothing that was fast enough before gets slower. `_DEEP`
+# only applies after whole seconds of silence, where the sole cost is that unprompted
+# output (a build finishing, a first token) can appear up to 40 ms late — invisible,
+# and paid once per wake rather than per chunk.
+_READ_POLL_ACTIVE_SECONDS = 0.0005
+_READ_POLL_RECENT_SECONDS = 0.01
+_READ_POLL_DEEP_IDLE_SECONDS = 0.04
+_READ_ACTIVE_WINDOW_SECONDS = 0.25
+_READ_DEEP_IDLE_AFTER_SECONDS = 5.0
+
+
+def read_poll_interval(idle_seconds: float) -> float:
+    """Seconds to sleep before the next nonblocking read attempt.
+
+    Pure so the ladder is testable without a pseudoconsole: the whole point is the
+    boundaries, and those are the thing a future edit would get subtly wrong.
+    """
+    if idle_seconds < _READ_ACTIVE_WINDOW_SECONDS:
+        return _READ_POLL_ACTIVE_SECONDS
+    if idle_seconds < _READ_DEEP_IDLE_AFTER_SECONDS:
+        return _READ_POLL_RECENT_SECONDS
+    return _READ_POLL_DEEP_IDLE_SECONDS
 _CONPTY_CREATE_ATTEMPTS = 3
 _CONSOLE_HOST_NAMES = {"conhost", "conhost.exe", "openconsole", "openconsole.exe"}
 _PTY_SPAWN_LOCK = threading.Lock()
@@ -104,6 +138,11 @@ class PtyHost:
     _loop: asyncio.AbstractEventLoop | None = field(default=None, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _first_output_at: float | None = field(default=None, init=False)
+    # Monotonic timestamp of the last read or write on this PTY, which is what the
+    # reader's poll ladder is measured from. Written by the reader thread and by
+    # `write()` on the loop thread; a float assignment is atomic under the GIL and a
+    # torn value could only mis-tier one sleep, so it needs no lock.
+    _last_io_at: float = field(default_factory=time.monotonic, init=False)
     _console_host_pid: int | None = field(default=None, init=False)
     _console_host_started_at: float | None = field(default=None, init=False)
     _console_hosts_before: set[int] = field(default_factory=set, init=False)
@@ -196,6 +235,7 @@ class PtyHost:
                         buffer += more.encode("utf-8") if isinstance(more, str) else more
                     if self._first_output_at is None:
                         self._first_output_at = time.perf_counter()
+                    self._last_io_at = time.monotonic()
                     # A single blocking put per drain preserves backpressure (a slow
                     # consumer throttles the child) while amortizing the round-trip cost.
                     if not self._put_with_backpressure(bytes(buffer), pty):
@@ -203,7 +243,7 @@ class PtyHost:
                 elif not pty.isalive():
                     break
                 else:
-                    time.sleep(0.01)
+                    time.sleep(read_poll_interval(time.monotonic() - self._last_io_at))
         finally:
             try:
                 asyncio.run_coroutine_threadsafe(self._queue.put(b""), self._loop).result(timeout=2)
@@ -247,6 +287,11 @@ class PtyHost:
     def write(self, data: str | bytes) -> None:
         if not self._pty:
             raise RuntimeError("PTY has not been spawned")
+        # Arm the reader's active window before the write, not after. Input is the one
+        # case where the *response* latency is a human waiting on their own keystroke,
+        # and a session that has been quiet at its prompt is exactly the one whose
+        # reader would otherwise be sitting on the deep-idle interval.
+        self._last_io_at = time.monotonic()
         self._pty.write(data.decode("utf-8", "replace") if isinstance(data, bytes) else data)
 
     def resize(self, cols: int, rows: int) -> None:

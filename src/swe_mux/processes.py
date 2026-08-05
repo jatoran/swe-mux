@@ -403,6 +403,15 @@ class ProcessInspector:
         times per tick (~16ms each). One shared map serves every root and the daemon
         tree. ``_ppid_map`` is psutil-private; if it is ever withdrawn the walk falls
         back to ``children(recursive=True)`` via ``_descendants`` returning ``None``.
+
+        **``_parents`` is the only permitted source of a parent pid in a sampling
+        pass.** ``Process.ppid()`` on Windows is ``ppid_map()[pid]``: it rebuilds this
+        exact table, for every call, and unlike name/cmdline/memory it is not memoized
+        by ``oneshot()``. One unguarded call site was enough to make sampling
+        O(processes²) — measured 2026-08-05 with py-spy against the live daemon, it was
+        **45.2% of all samples** while ``process-inspector`` ticked only every ~6.5 s,
+        which is also why iteration-count instrumentation never showed it. Read this
+        map; fall back to ``ppid()`` only for a pid younger than the last refresh.
         """
         self._children_by_pid = {}
         self._parents = {}
@@ -853,7 +862,17 @@ class ProcessInspector:
                 continue
             try:
                 with process.oneshot():
-                    item.parent_pid = process.ppid()
+                    # `_parents` first, and `oneshot()` is not the reason. On Windows
+                    # `Process.ppid()` is `ppid_map()[pid]` — a *whole system* parent-table
+                    # snapshot per call — and it carries no `@memoize_when_activated`, so
+                    # `oneshot()` does not cache it the way it caches name/cmdline/memory.
+                    # Calling it per tracked process made each pass O(processes²) against a
+                    # map `_refresh_tree` already built once for this pass. The fallback is
+                    # for a pid that appeared after that refresh, where one snapshot is the
+                    # right price rather than the default one.
+                    item.parent_pid = self._parents.get(item.pid)
+                    if item.parent_pid is None:
+                        item.parent_pid = process.ppid()
                     item.executable = process.name()
                     current_command = " ".join(process.cmdline())[:1000]
                     item.memory_bytes = process.memory_info().rss

@@ -162,6 +162,19 @@ class CodexAdapter:
         thousands of stat calls a second on an install with real history — pure
         waste whenever no switch is happening. The window is short enough that a
         genuine in-CLI resume is still noticed within one extra tick.
+
+        **``os.scandir``, not ``Path.glob`` + ``path.stat()``.** Windows fills a
+        ``DirEntry``'s stat fields from the directory enumeration itself, so the mtime
+        this needs is already in hand; ``path.stat()`` spends a fresh syscall per file
+        to fetch what the walk just read. Measured 2026-08-05 against a real tree of
+        1,314 rollouts in 158 directories: 35.8 ms to 7.5 ms, **4.8x**, byte-identical
+        results. It is also not free to be slow here — this runs synchronously on the
+        event loop, so the old cost was a ~36 ms daemon-wide stall every couple of
+        seconds rather than merely wasted CPU.
+
+        The date tree cannot be pruned by directory name to go faster: ``codex resume``
+        appends to the original rollout, so a file under an old date can have the
+        newest mtime in the tree, and that is exactly the case this has to catch.
         """
         now = time.monotonic()
         key = str(root)
@@ -169,9 +182,22 @@ class CodexAdapter:
         if cached and now - cached[0] < _ROLLOUT_CACHE_SECONDS:
             return cached[1]
         found: list[tuple[float, Path]] = []
-        for path in root.glob("**/rollout-*.jsonl"):
+        stack = [str(root)]
+        while stack:
             try:
-                found.append((path.stat().st_mtime, path))
+                with os.scandir(stack.pop()) as entries:
+                    for entry in entries:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                stack.append(entry.path)
+                            elif entry.name.startswith("rollout-") and entry.name.endswith(
+                                ".jsonl"
+                            ):
+                                found.append(
+                                    (entry.stat(follow_symlinks=False).st_mtime, Path(entry.path))
+                                )
+                        except OSError:
+                            continue
             except OSError:
                 continue
         found.sort(key=lambda item: item[0], reverse=True)
