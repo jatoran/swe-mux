@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import sqlite3
 import time
@@ -25,10 +26,12 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
+log = logging.getLogger(__name__)
+
 TELEMETRY_EVENT_LOOP = "operational-telemetry"
 TELEMETRY_RETENTION_LOOP = "telemetry-retention"
 
-TELEMETRY_SCHEMA_VERSION = 3
+TELEMETRY_SCHEMA_VERSION = 4
 TOOL_PARSER_VERSION = "phase2-v1"
 TOOL_PARSER_VERSIONS = {
     "claude": f"claude-{TOOL_PARSER_VERSION}",
@@ -107,7 +110,11 @@ CREATE TABLE IF NOT EXISTS process_evidence (
   exited_at REAL,
   exit_evidence TEXT,
   inaccessible_count INTEGER NOT NULL DEFAULT 0,
-  startup_revalidated INTEGER NOT NULL DEFAULT 0
+  startup_revalidated INTEGER NOT NULL DEFAULT 0,
+  attribution_version INTEGER NOT NULL DEFAULT 1,
+  attribution_source TEXT NOT NULL DEFAULT 'legacy',
+  last_attributed_at REAL,
+  last_job_confirmed_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_process_evidence_owner
   ON process_evidence(session_id,state,last_seen DESC);
@@ -379,6 +386,7 @@ class OperationalTelemetryStore:
             self._db = connect_or_quarantine(self.path, self._open)
             self._db.executescript(SCHEMA)
             self._migrate_schema()
+            self._repair_duplicate_process_ownership()
             self._repair_legacy_reset_classifications()
             # Per-store row, not PRAGMA user_version: that pragma is per *file*
             # and Tier 0 shares mux.db, so the two stores overwrote each other.
@@ -408,6 +416,50 @@ class OperationalTelemetryStore:
             # Recording the verified provider account makes a sample
             # self-describing and detectable in the data.
             self._db.execute("ALTER TABLE quota_samples ADD COLUMN provider_account_uuid TEXT")
+        process_columns = {
+            str(row["name"])
+            for row in self._db.execute("PRAGMA table_info(process_evidence)").fetchall()
+        }
+        if "attribution_version" not in process_columns:
+            self._db.execute(
+                "ALTER TABLE process_evidence ADD COLUMN "
+                "attribution_version INTEGER NOT NULL DEFAULT 1"
+            )
+        if "attribution_source" not in process_columns:
+            self._db.execute(
+                "ALTER TABLE process_evidence ADD COLUMN "
+                "attribution_source TEXT NOT NULL DEFAULT 'legacy'"
+            )
+        if "last_attributed_at" not in process_columns:
+            self._db.execute(
+                "ALTER TABLE process_evidence ADD COLUMN last_attributed_at REAL"
+            )
+        if "last_job_confirmed_at" not in process_columns:
+            self._db.execute(
+                "ALTER TABLE process_evidence ADD COLUMN last_job_confirmed_at REAL"
+            )
+
+    def _repair_duplicate_process_ownership(self) -> None:
+        """Retire every live claim when one OS process fingerprint has multiple owners."""
+        now = time.time()
+        cursor = self._db.execute(
+            "UPDATE process_evidence SET state='stale',"
+            " reason='duplicate_fingerprint_ownership',confidence='high',"
+            " exited_at=COALESCE(exited_at,?),exit_evidence='ownership_rejected',"
+            " last_verified_at=? WHERE exited_at IS NULL AND EXISTS ("
+            "SELECT 1 FROM process_evidence other "
+            "WHERE other.pid=process_evidence.pid "
+            "AND other.creation_time=process_evidence.creation_time "
+            "AND other.identity_id<>process_evidence.identity_id "
+            "AND other.exited_at IS NULL)",
+            (now, now),
+        )
+        if cursor.rowcount:
+            log.warning(
+                "Retired conflicting process ownership evidence rows count=%d reason=%s",
+                cursor.rowcount,
+                "duplicate_fingerprint_ownership",
+            )
 
     def _repair_legacy_reset_classifications(self) -> None:
         """Re-evaluate old unexpected rows under the hardened high-precision policy."""
@@ -883,8 +935,9 @@ class OperationalTelemetryStore:
                     "(identity_id,pid,creation_time,session_id,agent_run_id,project_id,executable,"
                     "command_hash,parent_pid,parent_lineage_json,job_assignment,state,reason,"
                     "confidence,first_seen,last_seen,last_verified_at,exited_at,exit_evidence,"
-                    "inaccessible_count,startup_revalidated) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "inaccessible_count,startup_revalidated,attribution_version,"
+                    "attribution_source,last_attributed_at,last_job_confirmed_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(identity_id) DO UPDATE SET parent_pid=excluded.parent_pid,"
                     "parent_lineage_json=excluded.parent_lineage_json,executable=excluded.executable,"
                     "command_hash=excluded.command_hash,job_assignment=excluded.job_assignment,"
@@ -892,7 +945,11 @@ class OperationalTelemetryStore:
                     "last_seen=excluded.last_seen,last_verified_at=excluded.last_verified_at,"
                     "exited_at=excluded.exited_at,exit_evidence=excluded.exit_evidence,"
                     "inaccessible_count=excluded.inaccessible_count,"
-                    "startup_revalidated=excluded.startup_revalidated",
+                    "startup_revalidated=excluded.startup_revalidated,"
+                    "attribution_version=excluded.attribution_version,"
+                    "attribution_source=excluded.attribution_source,"
+                    "last_attributed_at=excluded.last_attributed_at,"
+                    "last_job_confirmed_at=excluded.last_job_confirmed_at",
                     (
                         identity_id,
                         int(item["pid"]),
@@ -917,6 +974,10 @@ class OperationalTelemetryStore:
                         item.get("exit_evidence"),
                         int(item.get("inaccessible_count") or 0),
                         int(bool(item.get("startup_revalidated"))),
+                        int(item.get("attribution_version") or 1),
+                        str(item.get("attribution_source") or "legacy"),
+                        item.get("last_attributed_at"),
+                        item.get("last_job_confirmed_at"),
                     ),
                 )
             self._db.commit()

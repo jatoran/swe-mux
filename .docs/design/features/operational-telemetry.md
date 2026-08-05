@@ -27,7 +27,7 @@ All records live in the existing `<data_dir>/mux.db` through an independent seri
 SQLite connection:
 
 - `process_evidence`: fingerprint, lineage, Project/run owner, Job Object assignment result,
-  evidence state/reason/confidence, observation times, and exit evidence.
+  stable attribution version/source and confirmation times, evidence state/reason/confidence, observation times, and exit or ownership-rejection evidence.
 - `quota_samples`: append-only raw observations within the configured retention window.
 - `quota_sample_rollups`: daily first/last/min/max/error summaries produced before old raw
   samples are pruned.
@@ -49,8 +49,7 @@ compaction summary columns without replacing existing history rows.
 
 1. The process inspector samples only roots and descendants of live/retained mux sessions;
    one cached global network table supplies listener/connection evidence.
-2. Normal reconciliation keys each process by PID plus creation time and records parent
-   lineage, command hash, owner, resource counters, and Job Object assignment outcome.
+2. Normal reconciliation keys each process by PID plus creation time, validates creation-time causality on every parent edge, and records parent lineage, command hash, owner, resource counters, and Job Object assignment outcome.
 3. A descendant outside the current tree is `escaped`. After its root session ends and the
    configurable grace expires, a matching live fingerprint becomes `suspected_orphan`. The
    grace runs from a deadline stamped once, when the root is first observed ended; it is never
@@ -59,7 +58,10 @@ compaction summary columns without replacing existing history rows.
 4. Startup restores candidates, then revalidates creation time and available fingerprints.
    PID reuse becomes `stale`; inaccessible startup evidence stays stale/unverifiable rather
    than attaching to the process.
-5. Interrupt/terminate requests include the durable `identity_id` and perform another live
+   Current tree and Job Object members upgrade to attribution version 2; uncorroborated version-1 survivors become stale `ownership_rejected` evidence with cleared listeners.
+5. Startup also retires every live durable claim for a reused OS process fingerprint when multiple sessions claim it.
+   The current reconciliation pass may then re-establish exactly one supported owner.
+6. Interrupt/terminate requests include the durable `identity_id` and perform another live
    ownership/fingerprint check immediately before acting. No evidence state causes automatic
    termination.
 
@@ -153,7 +155,7 @@ POST /api/processes/action {session_id, pid, identity_id, action}
 The operational snapshot is bounded to 1–1,000 rows per collection and returns
 `interpretation: observational_correlation_only`. Provider-account responses include the
 latest confirmed reset summary. Process snapshots expose evidence states
-`active|exited|escaped|suspected_orphan|stale|inaccessible`.
+`active|exited|escaped|suspected_orphan|stale|inaccessible`, stable attribution provenance, derived server eligibility, and bounded ownership diagnostics.
 
 ## Configuration
 

@@ -57,7 +57,8 @@
   remain incremental.
 - `events`: monotonically sequenced mux events.
 - `process_evidence`: bounded PID+creation-time fingerprints, owner/lineage/Job Object
-  evidence, state/confidence, and exit evidence; command text is never stored.
+  evidence, stable attribution version/source and confirmation times, mutable state/reason/confidence, and exit or ownership-rejection evidence; command text is never stored.
+  Version 1 is legacy root-relative attribution; version 2 proves current per-edge causal validation or live Job Object membership.
 - `quota_samples` and `quota_sample_rollups`: durable raw observations and daily retention
   summaries. `quota_reset_events` retains reset/correlation evidence plus nullable durable user
   review (`manual_usage | discarded`, timestamp); `quota_attributions` retains correlation

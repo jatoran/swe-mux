@@ -34,6 +34,14 @@ test('an exited server is not reported despite the daemon retaining it', () => {
   assert.deepEqual(rows.map(row => row.port), [8080])
 })
 
+test('a listener with rejected ownership is not presented as a session server', () => {
+  const rows = detectedServers([
+    { pid: 11, server_eligible: false, listeners: [listener(8384)] },
+    { pid: 12, server_eligible: true, listeners: [listener(8080)] },
+  ])
+  assert.deepEqual(rows.map(row => row.port), [8080])
+})
+
 test('non-loopback listeners are excluded because a preview cannot bridge them', () => {
   const rows = detectedServers([
     { pid: 11, listeners: [listener(5173, '0.0.0.0', false)] },

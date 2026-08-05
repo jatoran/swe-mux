@@ -20,6 +20,9 @@
   session as `active`/`high` evidence — persisted, listed in the fleet, emitting
   `listener_detected` under the wrong session, and offering terminate on it. Sessions adopted
   from a supervisor predating the field have no reference and fall back to pid-only.
+- The parent walk validates creation-time causality on **every edge**, not only against the session root.
+  A child that predates its current parent names a recycled dead-parent PID and the entire foreign branch is rejected.
+  Root-relative validation alone is insufficient because both the recycled parent and foreign child may postdate a long-lived session root.
 - **A downward walk cannot reach a detached descendant, so job membership is a second
   attribution source.** Windows neither re-parents an orphan nor clears the dead pid from
   its ppid field, so once an intermediate parent exits its children are permanently
@@ -58,12 +61,19 @@
   by PID/parent PID; processes whose parent is outside the owned snapshot remain visible as
   roots. A no-output or high-resource label is diagnostic only; swe-mux never claims a
   server is hung or auto-kills it.
+- Stable provenance records `attribution_version`, `attribution_source` (`session_root`, `parent_walk`, or `job_membership`), `last_attributed_at`, and `last_job_confirmed_at` independently of mutable evidence state/reason.
+  Process actions and server presentation require current-version ownership.
+  The daemon and its descendant infrastructure fingerprints are reserved from session ownership, and equal-strength claims from multiple sessions are quarantined rather than assigned arbitrarily.
+- Ownership rejections emit bounded command-free diagnostics in the process snapshot and structured rolling daemon log.
+  Diagnostics cover causally impossible edges, infrastructure contamination, ambiguous multi-session claims, and legacy-evidence retirement.
 - Descendants leaving the current tree become `escaped`. After an ended root session's
   configurable grace, a matching survivor becomes `suspected_orphan`; swe-mux never
   auto-kills it. Startup revalidates persisted fingerprints and marks PID reuse or
   unverifiable ownership stale. Startup restores only fingerprints that might still be
   running: an already-exited durable record cannot become live again, so republishing it
   would fill the fleet with a previous daemon run's dead processes.
+- Persisted evidence written before edge-causal attribution is version 1.
+  On upgrade, every currently reachable tree or Job Object member is rewritten as version 2; an uncorroborated version-1 survivor is marked stale with `ownership_rejected`, and its listeners are cleared without signaling the OS process.
 - The orphan grace is measured from a `root_ended_at` stamped **once**, on the first pass
   that observes the root ended. Its value is the session record's last activity while that
   record still exists, and otherwise the previous pass's `last_seen` (which after a restart
@@ -197,9 +207,9 @@ forever and lands on the daemon's event loop. Two properties keep it cheap:
   `children(recursive=True)` per root.
 - **A parent map is not a process tree.** Windows never clears a dead parent's pid from a
   child's ppid field and recycles pids aggressively, so the map contains parent links that
-  were never real. The walk therefore rejects any descendant created *before* the root and
-  does not traverse through it — the same guard `children(recursive=True)` applies
-  internally, which is exactly why replacing that call means reproducing it. Skipping it is
+  were never real. The walk therefore rejects any child created before its current parent and
+  does not traverse through it. Root-only comparison misses a foreign long-lived process that
+  postdates the session root but predates a recycled intermediate parent. Skipping this guard is
   not a stray extra row: one stale link made the PTY supervisor look like a descendant of a
   single session, and since the supervisor parents *every* session, that session absorbed the
   whole fleet (34 processes, three `claude.exe`, another session's listeners) while its
@@ -275,9 +285,9 @@ more — swe-mux does not reap or share language servers.
   layout. Every detected loopback service receives a routing registration, nested under its
   actual owning session, without opening a workspace tab. Selecting its row opens or activates
   that registered service.
-- Sidebar rows are servers only. A live loopback listener is the sole test, since the rest of
+- Sidebar rows are servers only. A current-version, ownership-eligible live loopback listener is the sole test, since the rest of
   a session's tree is bookkeeping that no age or liveness filter distinguishes from signal;
-  exited records and non-loopback listeners are excluded, and a port bound on both 127.0.0.1
+  rejected/stale records, exited records, and non-loopback listeners are excluded, and a port bound on both 127.0.0.1
   and ::1 collapses to one row. Descendant shells have no PTY, are never terminal tabs, and
   are never sidebar rows: the process inspector remains the one place showing the full tree.
   The sidebar read reuses the inspector's existing cached sample, so it adds no process

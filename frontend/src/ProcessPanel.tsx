@@ -16,8 +16,14 @@ export type ProcessItem = {
   job_assignment?:string;evidence_state?:'active'|'exited'|'escaped'|'suspected_orphan'|'stale'|'inaccessible'
   evidence_reason?:string;confidence?:'high'|'medium'|'low';first_seen?:number;last_seen?:number
   last_verified_at?:number;exit_evidence?:string;startup_revalidated?:boolean
+  attribution_version?:number;attribution_source?:'session_root'|'parent_walk'|'job_membership'|'legacy'|'unknown'
+  last_attributed_at?:number;last_job_confirmed_at?:number;server_eligible?:boolean
 }
 export type SessionProcesses = {session_id:string;project_id:string;processes:ProcessItem[]}
+type OwnershipDiagnostic = {
+  ts:number;kind:string;pid?:number;session_id?:string;other_session_id?:string
+  parent_pid?:number;reason?:string
+}
 export type DaemonProcesses = {
   pid:number;processes:number;cpu_pct:number;memory_bytes:number
   listeners?:number;connections?:number;members?:ProcessItem[]
@@ -25,9 +31,13 @@ export type DaemonProcesses = {
 export type FleetSnapshot = {
   available:boolean;diagnostic?:string;sessions:SessionProcesses[]
   daemon?:DaemonProcesses
+  ownership_diagnostics?:OwnershipDiagnostic[]
   totals:{processes:number;cpu_pct:number;memory_bytes:number;listeners:number;connections:number}
 }
-type SessionSnapshot = {available:boolean;diagnostic?:string;session_id:string;processes:ProcessItem[]}
+type SessionSnapshot = {
+  available:boolean;diagnostic?:string;session_id:string;processes:ProcessItem[]
+  ownership_diagnostics?:OwnershipDiagnostic[]
+}
 type PreviewResult = {preview:Preview;project:Project}
 type PreviewList = {items:Preview[]}
 export type Preview = {id:string;session_id:string;project_id:string;url:string;host:string;port:number;source:string;viewport:string}
@@ -68,6 +78,7 @@ const normalizeSnapshot=(snapshot:FleetSnapshot|SessionSnapshot,sessions:Session
   return {
     available:snapshot.available,
     diagnostic:snapshot.diagnostic,
+    ownership_diagnostics:snapshot.ownership_diagnostics,
     sessions:[{
       session_id:snapshot.session_id,
       project_id:sessions.find(item=>item.id===snapshot.session_id)?.project_id||'',
@@ -84,6 +95,7 @@ const combineSessionSnapshots=(snapshots:SessionSnapshot[],sessions:Session[]):F
   return {
     available:normalized.every(snapshot=>snapshot.available),
     diagnostic:normalized.find(snapshot=>snapshot.diagnostic)?.diagnostic,
+    ownership_diagnostics:normalized.flatMap(snapshot=>snapshot.ownership_diagnostics||[]),
     sessions:groups,
     totals:processTotals(processes),
   }
@@ -150,6 +162,7 @@ export function ProcessPanel({initialSessionId=null,initialProjectId=null,sessio
   const fleetTotals=combinedResourceTotals(snapshot)
   const fleetListeners=(snapshot?.totals.listeners||0)+(snapshot?.daemon?.listeners||0)
   const fleetConnections=(snapshot?.totals.connections||0)+(snapshot?.daemon?.connections||0)
+  const ownershipDiagnostics=(snapshot?.ownership_diagnostics||[]).slice(-10).reverse()
   const act = async (sessionId:string,process:ProcessItem,action:'interrupt'|'terminate'|'terminate_tree') => {
     const key=`${sessionId}:${process.pid}:${action}`
     if(action!=='interrupt'&&confirm!==key){setConfirm(key);return}
@@ -172,7 +185,7 @@ export function ProcessPanel({initialSessionId=null,initialProjectId=null,sessio
       const state=process.evidence_state||(process.exited_at?'exited':'active')
       const evidenceTime=process.last_verified_at||process.last_seen
       return <li class={`${process.exited_at?'ended ':''}evidence-${state}`} key={process.identity_id||`${process.pid}:${process.started_at}`}>
-        <article><div class="process-copy"><strong>{process.executable} · PID {process.pid} <b class={`process-evidence ${state}`}>{state.replace('_',' ')}</b></strong><span>parent {process.parent_pid||'—'} · CPU {process.cpu_pct.toFixed(1)}% · memory {memoryLabel(process.memory_bytes)} · net {process.listeners.length}L/{process.connections.length}C</span><small title={process.command}>{process.command||`command fingerprint ${process.command_hash?.slice(0,12)||'unavailable'}`}</small><small>{process.evidence_reason||'live observation'} · confidence {process.confidence||'high'} · {process.job_assignment||'job assignment unknown'}{evidenceTime?` · checked ${new Date(evidenceTime*1000).toLocaleString()}`:''}</small>{process.first_seen&&<small>first seen {new Date(process.first_seen*1000).toLocaleString()} · last seen {new Date((process.last_seen||process.first_seen)*1000).toLocaleString()}{process.exit_evidence?` · exit evidence ${process.exit_evidence}`:''}</small>}{process.conditions.length>0&&<em>{process.conditions.join(' · ')}</em>}</div><div class="process-actions"><button onClick={()=>void navigator.clipboard.writeText(String(process.pid))}>Copy PID</button><button disabled={!!process.exited_at} title="Re-checks PID, creation time, and ownership before acting" onClick={()=>void act(group.session_id,process,'interrupt')}>Interrupt</button><button disabled={!!process.exited_at} title="Re-checks the durable process fingerprint before acting" class={confirm===terminateKey?'confirming':''} onClick={()=>void act(group.session_id,process,'terminate')}>{confirm===terminateKey?'✓':'Terminate'}</button><button disabled={!!process.exited_at} title="Re-checks this process and every attributable child before acting" class={confirm===treeKey?'confirming':''} onClick={()=>void act(group.session_id,process,'terminate_tree')}>{confirm===treeKey?'✓':'Terminate tree'}</button></div></article>
+        <article><div class="process-copy"><strong>{process.executable} · PID {process.pid} <b class={`process-evidence ${state}`}>{state.replace('_',' ')}</b></strong><span>parent {process.parent_pid||'—'} · CPU {process.cpu_pct.toFixed(1)}% · memory {memoryLabel(process.memory_bytes)} · net {process.listeners.length}L/{process.connections.length}C</span><small title={process.command}>{process.command||`command fingerprint ${process.command_hash?.slice(0,12)||'unavailable'}`}</small><small>{process.evidence_reason||'live observation'} · confidence {process.confidence||'high'} · attribution {process.attribution_source||'unknown'} v{process.attribution_version||1} · {process.job_assignment||'job assignment unknown'}{evidenceTime?` · checked ${new Date(evidenceTime*1000).toLocaleString()}`:''}</small>{process.first_seen&&<small>first seen {new Date(process.first_seen*1000).toLocaleString()} · last seen {new Date((process.last_seen||process.first_seen)*1000).toLocaleString()}{process.exit_evidence?` · exit evidence ${process.exit_evidence}`:''}</small>}{process.conditions.length>0&&<em>{process.conditions.join(' · ')}</em>}</div><div class="process-actions"><button onClick={()=>void navigator.clipboard.writeText(String(process.pid))}>Copy PID</button><button disabled={!!process.exited_at} title="Re-checks PID, creation time, and ownership before acting" onClick={()=>void act(group.session_id,process,'interrupt')}>Interrupt</button><button disabled={!!process.exited_at} title="Re-checks the durable process fingerprint before acting" class={confirm===terminateKey?'confirming':''} onClick={()=>void act(group.session_id,process,'terminate')}>{confirm===terminateKey?'✓':'Terminate'}</button><button disabled={!!process.exited_at} title="Re-checks this process and every attributable child before acting" class={confirm===treeKey?'confirming':''} onClick={()=>void act(group.session_id,process,'terminate_tree')}>{confirm===treeKey?'✓':'Terminate tree'}</button></div></article>
         {node.children.length>0&&<ul>{node.children.map(renderProcessNode)}</ul>}
       </li>
     }
@@ -229,6 +242,6 @@ export function ProcessPanel({initialSessionId=null,initialProjectId=null,sessio
   return <div class="process-layer" onPointerDown={event=>{if(event.target===event.currentTarget)onClose()}}><section ref={panel} class="process-panel unified" role="dialog" aria-modal="true" aria-label={selectedSession?`Processes for ${selectedSession.name}`:'All processes'}>
     <header><div>{selectedSessionId&&<button class="process-back" onClick={()=>setSelectedSessionId(null)}>← all processes</button>}<span>{selectedSessionId?'SESSION PROCESSES':'PROCESS FLEET'}</span><strong>{selectedSession?`${projects.find(item=>item.id===selectedSession.project_id)?.name||'project'} :: ${selectedSession.name} · PID ${selectedSession.pid}`:'All projects, sessions, and swe-mux infrastructure'}</strong></div><button aria-label="Close process inspector" onClick={onClose}>×</button></header>
     {selectedSession?<div class="process-toolbar"><input value={customUrl} aria-label="Loopback preview URL" onInput={event=>setCustomUrl(event.currentTarget.value)} /><button title="Register a loopback URL you vouch for. Use this when the server is not attributable to this session, such as one running in WSL or Docker or started outside it." onClick={()=>void attach(selectedSession.id,customUrl,true)}>Add preview by URL</button>{endedToggle}<button onClick={()=>void load()}>Refresh</button></div>:<div class="process-fleet-summary">{scopeSelect}<span>{fleetTotals.processes} processes</span><span>CPU {fleetTotals.cpu_pct.toFixed(1)}%</span><span>memory {memoryLabel(fleetTotals.memory_bytes)}</span><span>network {fleetListeners} listeners · {fleetConnections} connections</span>{endedToggle}<button onClick={()=>void load()}>Refresh</button></div>}
-    <div class="process-fleet-list">{error&&<p class="process-error" aria-live="assertive">{error}</p>}{!snapshot&&!error&&<p class="process-empty">Loading process trees…</p>}{snapshot&&!snapshot.available&&<p class="process-empty">{snapshot.diagnostic}</p>}{renderDaemonGroup()}{projectProcessGroups.map(group=><section class="process-project-group" key={group.id}><h2>project::{group.label}</h2>{group.groups.map(renderGroup)}</section>)}{snapshot?.available&&!sessionGroups.length&&<p class="process-empty">No matching live sessions.</p>}</div>
+    <div class="process-fleet-list">{error&&<p class="process-error" aria-live="assertive">{error}</p>}{!snapshot&&!error&&<p class="process-empty">Loading process trees…</p>}{snapshot&&!snapshot.available&&<p class="process-empty">{snapshot.diagnostic}</p>}{ownershipDiagnostics.length>0&&<details class="process-ownership-diagnostics"><summary>Ownership diagnostics ({ownershipDiagnostics.length} recent)</summary><ul>{ownershipDiagnostics.map((item,index)=><li key={`${item.ts}:${item.kind}:${item.pid||0}:${index}`}><strong>{item.kind.replaceAll('_',' ')}</strong><span>{item.pid?`PID ${item.pid}`:'process'}{item.session_id?` · session ${item.session_id}`:''}{item.other_session_id?` · conflicting session ${item.other_session_id}`:''}{item.parent_pid?` · parent PID ${item.parent_pid}`:''}{item.reason?` · ${item.reason}`:''} · {new Date(item.ts*1000).toLocaleString()}</span></li>)}</ul></details>}{renderDaemonGroup()}{projectProcessGroups.map(group=><section class="process-project-group" key={group.id}><h2>project::{group.label}</h2>{group.groups.map(renderGroup)}</section>)}{snapshot?.available&&!sessionGroups.length&&<p class="process-empty">No matching live sessions.</p>}</div>
   </section></div>
 }

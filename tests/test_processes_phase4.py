@@ -935,6 +935,204 @@ def test_a_recycled_parent_link_cannot_splice_another_tree_into_a_session(
     assert 900 not in pids and 901 not in pids and 902 not in pids
 
 
+def test_a_foreign_child_that_postdates_the_root_but_predates_its_recycled_parent_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every parent edge must be causal, not merely newer than the session root."""
+    from swe_mux import processes
+
+    # 500 is the old session root. 501 is a new, real child that reused a dead
+    # pid. The foreign long-lived process 900 still names 501 as its parent, but
+    # it predates the current 501 and therefore cannot be its child. A root-only
+    # check accepts all three because both descendants postdate 500.
+    created = {500: 1_000.0, 501: 3_000.0, 900: 2_000.0, 901: 2_001.0}
+
+    class Fake:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def create_time(self) -> float:
+            return created[self.pid]
+
+        def ppid(self) -> int:
+            return 1
+
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(
+            Process=Fake,
+            NoSuchProcess=RuntimeError,
+            AccessDenied=PermissionError,
+            _ppid_map=lambda: {500: 1, 501: 500, 900: 501, 901: 900},
+        ),
+    )
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+    inspector._refresh_tree()
+
+    assert {handle.pid for handle in inspector._tree_handles(500, 256)} == {500, 501}
+    assert inspector._ownership_diagnostics[-1]["kind"] == "causally_impossible_parent_edge"
+
+
+def test_uncorroborated_legacy_ownership_is_retired_without_stopping_the_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from swe_mux import processes
+
+    class LiveProcess:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def create_time(self) -> float:
+            return 10.0
+
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(
+            Process=LiveProcess,
+            NoSuchProcess=RuntimeError,
+            AccessDenied=PermissionError,
+        ),
+    )
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+    item = OwnedProcess(
+        77,
+        1,
+        "session-a",
+        "foreign-server.exe",
+        "",
+        10.0,
+        None,
+        0,
+        0,
+        [listener_record("127.0.0.1", 8384)],
+        [],
+        attribution_version=1,
+        attribution_source="legacy",
+    )
+    inspector.owned[(77, 10.0)] = item
+
+    inspector._revalidate_unseen(set(), {}, 100.0, False)
+
+    assert item.evidence_state == "stale"
+    assert item.evidence_reason == "legacy_attribution_uncorroborated"
+    assert item.exit_evidence == "ownership_rejected"
+    assert item.exited_at == 100.0
+    assert item.listeners == []
+
+
+def test_daemon_sampling_cannot_preserve_a_false_session_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from swe_mux import processes
+
+    class DaemonProcess:
+        pid = 900
+
+        def create_time(self) -> float:
+            return 50.0
+
+        def ppid(self) -> int:
+            return 1
+
+        def oneshot(self) -> DaemonProcess:
+            return self
+
+        def __enter__(self) -> DaemonProcess:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def name(self) -> str:
+            return "swe-mux.exe"
+
+        def cmdline(self) -> list[str]:
+            return ["swe-mux.exe", "--daemon-child"]
+
+        def cpu_times(self) -> Any:
+            return SimpleNamespace(user=0.0, system=0.0)
+
+        def memory_info(self) -> Any:
+            return SimpleNamespace(rss=1024)
+
+    monkeypatch.setattr(processes.os, "getpid", lambda: 900)
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(
+            Process=lambda _pid: DaemonProcess(),
+            NoSuchProcess=RuntimeError,
+            AccessDenied=PermissionError,
+            _ppid_map=lambda: {900: 1},
+            net_connections=lambda **_: [],
+        ),
+    )
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+    false_claim = OwnedProcess(
+        900,
+        1,
+        "session-a",
+        "swe-mux.exe",
+        "",
+        50.0,
+        None,
+        0,
+        1024,
+        [listener_record("127.0.0.1", 8765)],
+        [],
+        attribution_source="parent_walk",
+    )
+    inspector.owned[(900, 50.0)] = false_claim
+
+    inspector._collect_all()
+
+    assert false_claim.evidence_state == "stale"
+    assert false_claim.evidence_reason == "reserved_infrastructure_fingerprint"
+    assert false_claim.exit_evidence == "ownership_rejected"
+    assert false_claim.listeners == []
+
+
+def test_equal_strength_claims_from_two_sessions_are_quarantined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from swe_mux import processes
+
+    monkeypatch.setattr(processes, "psutil", SimpleNamespace(net_connections=lambda **_: []))
+    sessions = SimpleNamespace(
+        sessions={
+            "session-a": SimpleNamespace(record=SimpleNamespace(id="session-a")),
+            "session-b": SimpleNamespace(record=SimpleNamespace(id="session-b")),
+        }
+    )
+    inspector = ProcessInspector(cast(Any, sessions), EventBus())
+
+    def collect(session: Any, _connections: Any) -> list[OwnedProcess]:
+        return [
+            OwnedProcess(
+                77,
+                1,
+                session.record.id,
+                "server.exe",
+                "",
+                10.0,
+                None,
+                0,
+                0,
+                [],
+                [],
+                attribution_source="parent_walk",
+            )
+        ]
+
+    monkeypatch.setattr(inspector, "_collect_session", collect)
+
+    assert inspector._collect_all() == []
+    assert inspector.owned == {}
+    assert inspector._ownership_diagnostics[-1]["kind"] == "ambiguous_session_ownership"
+
+
 def test_an_unreadable_identity_is_retried_rather_than_cached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

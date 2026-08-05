@@ -17,6 +17,7 @@ from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
 from swe_mux.models import SessionRecord
 from swe_mux.operational_telemetry import (
+    TELEMETRY_SCHEMA_VERSION,
     OperationalTelemetryStore,
     command_hash,
     process_identity,
@@ -91,6 +92,10 @@ async def test_process_evidence_survives_restart_without_persisting_command(
                 "confidence": "high",
                 "first_seen": 1200.0,
                 "last_seen": 1300.0,
+                "attribution_version": 2,
+                "attribution_source": "job_membership",
+                "last_attributed_at": 1299.0,
+                "last_job_confirmed_at": 1299.0,
             }
         ]
     )
@@ -102,10 +107,60 @@ async def test_process_evidence_survives_restart_without_persisting_command(
     assert rows[0]["command_hash"] == command_hash("server.exe --secret never-store-this")
     assert rows[0]["state"] == "suspected_orphan"
     assert rows[0]["parent_lineage"] == [{"pid": 10, "creation_time": 1000.0}]
+    assert rows[0]["attribution_version"] == 2
+    assert rows[0]["attribution_source"] == "job_membership"
+    assert rows[0]["last_attributed_at"] == 1299.0
+    assert rows[0]["last_job_confirmed_at"] == 1299.0
     columns = {
         row[1] for row in reopened._db.execute("PRAGMA table_info(process_evidence)").fetchall()
     }
     assert "command" not in columns
+    reopened.close()
+
+
+async def test_duplicate_live_process_owners_are_retired_on_reopen(
+    phase2_path: Path,
+) -> None:
+    store = OperationalTelemetryStore(phase2_path)
+    started = 1234.5
+    await store.record_process_observations(
+        [
+            {
+                "pid": 44,
+                "session_id": session_id,
+                "started_at": started,
+                "evidence_state": "active",
+                "attribution_version": 2,
+                "attribution_source": "parent_walk",
+            }
+            for session_id in ("session-a", "session-b")
+        ]
+    )
+    store.close()
+
+    reopened = OperationalTelemetryStore(phase2_path)
+    rows = [item for item in await reopened.process_candidates() if item["pid"] == 44]
+    assert len(rows) == 2
+    assert {item["state"] for item in rows} == {"stale"}
+    assert {item["reason"] for item in rows} == {"duplicate_fingerprint_ownership"}
+    assert {item["exit_evidence"] for item in rows} == {"ownership_rejected"}
+    assert all(item["exited_at"] is not None for item in rows)
+
+    await reopened.record_process_observations(
+        [
+            {
+                "pid": 44,
+                "session_id": "session-a",
+                "started_at": started,
+                "evidence_state": "active",
+                "attribution_version": 2,
+                "attribution_source": "parent_walk",
+            }
+        ]
+    )
+    rows = [item for item in await reopened.process_candidates() if item["pid"] == 44]
+    assert sum(item["exited_at"] is None for item in rows) == 1
+    assert next(item for item in rows if item["exited_at"] is None)["session_id"] == "session-a"
     reopened.close()
 
 
@@ -403,14 +458,50 @@ def test_legacy_quota_reset_schema_adds_review_columns(phase2_path: Path) -> Non
     assert {"review_status", "reviewed_at"} <= columns
     # Per-store row, not the per-file PRAGMA: several stores share mux.db and
     # each one stamping user_version made the last connect overwrite the rest.
-    assert read_schema_version(store._db, "telemetry") == 3
+    assert read_schema_version(store._db, "telemetry") == TELEMETRY_SCHEMA_VERSION
+    store.close()
+
+
+def test_legacy_process_evidence_schema_adds_attribution_provenance(
+    phase2_path: Path,
+) -> None:
+    connection = sqlite3.connect(phase2_path)
+    connection.execute(
+        "CREATE TABLE process_evidence ("
+        "identity_id TEXT PRIMARY KEY,pid INTEGER NOT NULL,creation_time REAL NOT NULL,"
+        "session_id TEXT NOT NULL,agent_run_id TEXT,project_id TEXT,executable TEXT,"
+        "command_hash TEXT NOT NULL,parent_pid INTEGER,parent_lineage_json TEXT NOT NULL "
+        "DEFAULT '[]',job_assignment TEXT NOT NULL,state TEXT NOT NULL,reason TEXT NOT NULL,"
+        "confidence TEXT NOT NULL,first_seen REAL NOT NULL,last_seen REAL NOT NULL,"
+        "last_verified_at REAL,exited_at REAL,exit_evidence TEXT,inaccessible_count INTEGER "
+        "NOT NULL DEFAULT 0,startup_revalidated INTEGER NOT NULL DEFAULT 0)"
+    )
+    connection.execute(
+        "INSERT INTO process_evidence(identity_id,pid,creation_time,session_id,command_hash,"
+        "job_assignment,state,reason,confidence,first_seen,last_seen) "
+        "VALUES('old',77,10,'session-a','hash','unknown','escaped','old','medium',10,20)"
+    )
+    connection.commit()
+    connection.close()
+
+    store = OperationalTelemetryStore(phase2_path)
+    rows = store._db.execute(
+        "SELECT attribution_version,attribution_source,last_attributed_at,"
+        "last_job_confirmed_at FROM process_evidence WHERE identity_id='old'"
+    ).fetchone()
+    assert dict(rows) == {
+        "attribution_version": 1,
+        "attribution_source": "legacy",
+        "last_attributed_at": None,
+        "last_job_confirmed_at": None,
+    }
     store.close()
 
 
 def test_schema_versions_are_per_store_not_per_file(phase2_path: Path) -> None:
     telemetry = OperationalTelemetryStore(phase2_path)
     tier0 = Tier0Store(phase2_path)
-    assert read_schema_version(telemetry._db, "telemetry") == 3
+    assert read_schema_version(telemetry._db, "telemetry") == TELEMETRY_SCHEMA_VERSION
     assert read_schema_version(telemetry._db, "tier0") == TIER0_SCHEMA_VERSION
     assert read_schema_version(telemetry._db, "telemetry") != read_schema_version(
         telemetry._db, "tier0"

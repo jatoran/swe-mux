@@ -1,5 +1,11 @@
 export type ListenerLike = { host: string; port: number; loopback: boolean; url: string }
-export type ProcessWithListeners = { pid: number; exited_at?: number; listeners?: ListenerLike[] }
+export type ProcessWithListeners = {
+  pid: number
+  exited_at?: number
+  listeners?: ListenerLike[]
+  /** False means the backend retained the process only as rejected/stale evidence. */
+  server_eligible?: boolean
+}
 export type DetectedServer = { pid: number; host: string; port: number; url: string }
 
 /**
@@ -20,7 +26,7 @@ export type DetectedServer = { pid: number; host: string; port: number; url: str
 export function detectedServers<T extends ProcessWithListeners>(processes: T[]): DetectedServer[] {
   const byPort = new Map<number, DetectedServer>()
   for (const process of processes) {
-    if (process.exited_at) continue
+    if (process.exited_at || process.server_eligible === false) continue
     for (const listener of process.listeners || []) {
       if (!listener.loopback) continue
       if (byPort.get(listener.port)?.host === '127.0.0.1') continue

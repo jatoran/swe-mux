@@ -24,6 +24,7 @@ except ImportError:  # pragma: no cover - diagnostics cover an unsynchronized de
 log = logging.getLogger(__name__)
 
 PROCESS_INSPECTOR_LOOP = "process-inspector"
+PROCESS_ATTRIBUTION_VERSION = 2
 # Creation times round-trip through float seconds on both sides; the existing
 # ownership re-check uses the same tolerance.
 _CREATE_TIME_TOLERANCE_SECONDS = 0.01
@@ -95,13 +96,32 @@ class OwnedProcess:
     exit_evidence: str | None = None
     inaccessible_count: int = 0
     startup_revalidated: bool = False
+    # Stable ownership provenance. Evidence state/reason may change as a process
+    # leaves the current walk; these fields preserve how ownership was last
+    # established instead of overwriting the forensic answer with "escaped".
+    attribution_version: int = PROCESS_ATTRIBUTION_VERSION
+    attribution_source: str = "parent_walk"
+    last_attributed_at: float | None = None
+    last_job_confirmed_at: float | None = None
     # When the owning session was first observed to have ended. Stamped once so the
     # orphan grace measures from that moment; deriving it from last_seen could never
     # elapse, because last_seen is refreshed on every pass.
     root_ended_at: float | None = None
 
     def snapshot(self) -> dict[str, Any]:
-        return asdict(self)
+        result = asdict(self)
+        result["server_eligible"] = self.server_eligible()
+        return result
+
+    def server_eligible(self) -> bool:
+        """Whether listeners may be presented as servers owned by this session."""
+        return (
+            self.exited_at is None
+            and self.attribution_version >= PROCESS_ATTRIBUTION_VERSION
+            and self.attribution_source in {"session_root", "parent_walk", "job_membership"}
+            and self.evidence_state
+            in {"active", "escaped", "suspected_orphan"}
+        )
 
 
 class ProcessInspector:
@@ -140,6 +160,10 @@ class ProcessInspector:
         # collection. Reaches detached descendants the parent walk cannot; see
         # _tree_handles and SessionManager.job_process_ids.
         self._job_pids: dict[str, list[int]] = {}
+        # Bounded, deduplicated diagnostics for ownership decisions. These are
+        # intentionally command-free and also go to the durable rolling daemon log.
+        self._ownership_diagnostics: list[dict[str, Any]] = []
+        self._ownership_diagnostic_keys: set[tuple[Any, ...]] = set()
         self._daemon_resources: dict[str, Any] = {
             "pid": os.getpid(),
             "processes": 0,
@@ -191,14 +215,41 @@ class ProcessInspector:
                 last_verified_at=item.get("last_verified_at"),
                 exit_evidence=item.get("exit_evidence"),
                 inaccessible_count=int(item.get("inaccessible_count") or 0),
+                attribution_version=int(item.get("attribution_version") or 1),
+                attribution_source=str(item.get("attribution_source") or "legacy"),
+                last_attributed_at=item.get("last_attributed_at"),
+                last_job_confirmed_at=item.get("last_job_confirmed_at"),
             )
-            self.owned[(process.pid, started)] = process
+            key = (process.pid, started)
+            existing = self.owned.get(key)
+            if existing is None or float(process.last_seen or 0) > float(existing.last_seen or 0):
+                self.owned[key] = process
         if self.available:
             await self.reconcile(startup=True)
 
     @property
     def available(self) -> bool:
         return psutil is not None
+
+    def _diagnose_once(
+        self,
+        kind: str,
+        key: tuple[Any, ...],
+        *,
+        level: int = logging.WARNING,
+        **detail: Any,
+    ) -> None:
+        diagnostic_key = (kind, *key)
+        if diagnostic_key in self._ownership_diagnostic_keys:
+            return
+        if len(self._ownership_diagnostic_keys) >= 1024:
+            self._ownership_diagnostic_keys.clear()
+        self._ownership_diagnostic_keys.add(diagnostic_key)
+        entry = {"ts": time.time(), "kind": kind, **detail}
+        self._ownership_diagnostics.append(entry)
+        self._ownership_diagnostics = self._ownership_diagnostics[-100:]
+        fields = " ".join(f"{name}={value}" for name, value in detail.items())
+        log.log(level, "process ownership diagnostic kind=%s %s", kind, fields)
 
     def start(self) -> None:
         self._task = background.start(PROCESS_INSPECTOR_LOOP, self._run)
@@ -236,10 +287,20 @@ class ProcessInspector:
         async with self._sample_lock:
             snapshots = await asyncio.to_thread(self._collect_all, startup)
         now = time.time()
+        # Escaped processes with current provenance remain owned. They are absent
+        # from the downward walk by definition, but their live listener must agree
+        # across the API, event stream, and Preview lifetime logic.
+        snapshots = [
+            item
+            for item in self.owned.values()
+            if item.exited_at is None
+            and item.attribution_version >= PROCESS_ATTRIBUTION_VERSION
+        ]
         previous_listeners = self._listeners
         current_listeners = {
             (process.session_id, int(listener["port"]), str(listener["host"]))
             for process in snapshots
+            if process.server_eligible()
             for listener in process.listeners
         }
         self._listeners = current_listeners
@@ -391,9 +452,16 @@ class ProcessInspector:
             return [root]
         handles: list[Any] = [root]
         seen: set[int] = {root_pid}
-        stack: list[int] = list(self._children_by_pid.get(root_pid, ()))
+        # Carry the actual parent's creation time down every edge. Comparing only
+        # with the root misses the common Windows failure where a long-lived child
+        # retains a dead parent pid and that pid is later recycled by a newer,
+        # unrelated descendant of the session.
+        stack: list[tuple[int, int, float]] = [
+            (pid, root_pid, root_started)
+            for pid in self._children_by_pid.get(root_pid, ())
+        ]
         while stack and len(handles) < limit:
-            pid = stack.pop()
+            pid, parent_pid, parent_started = stack.pop()
             if pid in seen:
                 continue
             seen.add(pid)
@@ -404,10 +472,22 @@ class ProcessInspector:
                 started = float(handle.create_time())
             except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
                 continue
-            if started < root_started:
+            if started + _CREATE_TIME_TOLERANCE_SECONDS < parent_started:
+                self._diagnose_once(
+                    "causally_impossible_parent_edge",
+                    (root_pid, parent_pid, pid, parent_started, started),
+                    root_pid=root_pid,
+                    parent_pid=parent_pid,
+                    child_pid=pid,
+                    parent_started_at=parent_started,
+                    child_started_at=started,
+                )
                 continue
             handles.append(handle)
-            stack.extend(self._children_by_pid.get(pid, ()))
+            stack.extend(
+                (child_pid, pid, started)
+                for child_pid in self._children_by_pid.get(pid, ())
+            )
         return handles
 
     def _handle(self, pid: int) -> Any | None:
@@ -467,34 +547,116 @@ class ProcessInspector:
             self._static[pid] = entry
         return entry
 
+    def _daemon_fingerprints(self, candidates: list[Any] | None = None) -> set[tuple[int, float]]:
+        if psutil is None:
+            return set()
+        handles = (
+            candidates
+            if candidates is not None
+            else self._tree_handles(os.getpid(), MAX_PROCESSES_PER_SESSION)
+        )
+        result: set[tuple[int, float]] = set()
+        for process in handles:
+            try:
+                result.add((int(process.pid), float(process.create_time())))
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                continue
+        return result
+
     def _collect_all(self, startup: bool = False) -> list[OwnedProcess]:
         result: list[OwnedProcess] = []
-        seen: set[tuple[int, float]] = set()
+        session_seen: set[tuple[int, float]] = set()
+        daemon_seen: set[tuple[int, float]] = set()
         # Enumerate the whole OS socket table once and bucket by owning PID. Calling
         # net_connections() per process would rescan the entire table for every one of
         # potentially hundreds of descendants each tick.
         conn_map = self._connections_by_pid()
         self._refresh_tree()
+        daemon_candidates = (
+            self._tree_handles(os.getpid(), MAX_PROCESSES_PER_SESSION)
+            if psutil is not None and hasattr(psutil, "Process")
+            else []
+        )
+        infrastructure = self._daemon_fingerprints(daemon_candidates)
+        now = time.time()
+        for key in infrastructure:
+            existing = self.owned.get(key)
+            if existing is None or existing.exited_at is not None:
+                continue
+            self._diagnose_once(
+                "persisted_session_claimed_infrastructure",
+                (*key, existing.session_id),
+                pid=key[0],
+                creation_time=key[1],
+                session_id=existing.session_id,
+            )
+            self._invalidate_attribution(key, now, "reserved_infrastructure_fingerprint")
+
+        claims: dict[tuple[int, float], list[OwnedProcess]] = {}
         for session in self.sessions.sessions.values():
             for item in self._collect_session(session, conn_map):
                 key = (item.pid, item.started_at or 0.0)
-                seen.add(key)
-                self.owned[key] = item
-                result.append(item)
+                claims.setdefault(key, []).append(item)
+
+        source_rank = {"session_root": 3, "job_membership": 2, "parent_walk": 1}
+        for key, candidates in claims.items():
+            if key in infrastructure:
+                self._diagnose_once(
+                    "session_claimed_infrastructure",
+                    key,
+                    pid=key[0],
+                    creation_time=key[1],
+                    session_ids=sorted(item.session_id for item in candidates),
+                )
+                self._invalidate_attribution(key, now, "reserved_infrastructure_fingerprint")
+                continue
+            highest = max(source_rank.get(item.attribution_source, 0) for item in candidates)
+            winners = [
+                item
+                for item in candidates
+                if source_rank.get(item.attribution_source, 0) == highest
+            ]
+            if len(winners) != 1:
+                self._diagnose_once(
+                    "ambiguous_session_ownership",
+                    (*key, *(sorted(item.session_id for item in candidates))),
+                    pid=key[0],
+                    creation_time=key[1],
+                    session_ids=sorted(item.session_id for item in candidates),
+                    sources=sorted(item.attribution_source for item in candidates),
+                )
+                self._invalidate_attribution(key, now, "ambiguous_session_ownership")
+                continue
+            winner = winners[0]
+            if len(candidates) > 1:
+                self._diagnose_once(
+                    "session_ownership_conflict_resolved",
+                    (*key, winner.session_id),
+                    level=logging.INFO,
+                    pid=key[0],
+                    creation_time=key[1],
+                    owner_session_id=winner.session_id,
+                    rejected_session_ids=sorted(
+                        item.session_id for item in candidates if item is not winner
+                    ),
+                    source=winner.attribution_source,
+                )
+            session_seen.add(key)
+            self.owned[key] = winner
+            result.append(winner)
         attributed_pids = {item.pid for item in result}
-        attributed_pids.update(item.pid for item in self.owned.values() if item.exited_at is None)
         self._daemon_resources = self._collect_daemon_resources(
-            attributed_pids, seen, conn_map
+            attributed_pids, daemon_seen, conn_map, candidates=daemon_candidates
         )
-        now = time.time()
-        self._revalidate_unseen(seen, conn_map, now, startup)
+        self._revalidate_unseen(session_seen, conn_map, now, startup)
+        sampled = session_seen | daemon_seen
         self._cpu_samples = {
-            key: sample for key, sample in self._cpu_samples.items() if key in seen
+            key: sample for key, sample in self._cpu_samples.items() if key in sampled
         }
         # A handle for a pid that left the tree is dead weight and, worse, would still
         # answer with its memoized identity if that pid were later recycled. Dropping it
         # here means every pid re-enters through _handle's fresh construction.
-        live_pids = {pid for pid, _ in seen}
+        live_pids = {pid for pid, _ in sampled}
         self._handles = {pid: entry for pid, entry in self._handles.items() if pid in live_pids}
         self._static = {pid: entry for pid, entry in self._static.items() if pid in live_pids}
         self._last_collect = time.monotonic()
@@ -505,6 +667,8 @@ class ProcessInspector:
         attributed_pids: set[int],
         seen: set[tuple[int, float]],
         conn_map: dict[int, list[Any]] | None = None,
+        *,
+        candidates: list[Any] | None = None,
     ) -> dict[str, Any]:
         """Sample daemon/infrastructure processes not already owned by a session.
 
@@ -524,7 +688,7 @@ class ProcessInspector:
         }
         if psutil is None or not hasattr(psutil, "Process"):
             return empty
-        candidates = self._tree_handles(os.getpid(), MAX_PROCESSES_PER_SESSION)
+        candidates = candidates or self._tree_handles(os.getpid(), MAX_PROCESSES_PER_SESSION)
         if not candidates:
             return empty
         sampled_at = time.monotonic()
@@ -600,6 +764,23 @@ class ProcessInspector:
             "members": members,
         }
 
+    def _invalidate_attribution(
+        self, key: tuple[int, float], now: float, reason: str
+    ) -> None:
+        """Retire a live process claim without asserting that the OS process exited."""
+        item = self.owned.get(key)
+        if item is None or item.exited_at is not None:
+            return
+        item.exited_at = now
+        item.evidence_state = "stale"
+        item.evidence_reason = reason
+        item.exit_evidence = "ownership_rejected"
+        item.confidence = "high"
+        item.last_verified_at = now
+        item.listeners = []
+        item.connections = []
+        item.conditions = sorted(set([*item.conditions, "ownership_rejected"]))
+
     def _revalidate_unseen(
         self,
         seen: set[tuple[int, float]],
@@ -612,6 +793,23 @@ class ProcessInspector:
         process_factory = getattr(psutil, "Process", None)
         for key, item in list(self.owned.items()):
             if key in seen or item.exited_at is not None:
+                continue
+            # Version 1 trusted only root-relative time. It could therefore retain
+            # an unrelated listener forever after a recycled intermediate pid
+            # spliced that process into one sample. Current tree/job evidence has
+            # already replaced every legitimate live row with version 2; anything
+            # still unseen here is uncorroborated legacy ownership.
+            if item.attribution_version < PROCESS_ATTRIBUTION_VERSION:
+                self._diagnose_once(
+                    "legacy_attribution_retired",
+                    (item.session_id, item.pid, item.started_at),
+                    level=logging.INFO,
+                    session_id=item.session_id,
+                    pid=item.pid,
+                    creation_time=item.started_at,
+                    prior_state=item.evidence_state,
+                )
+                self._invalidate_attribution(key, now, "legacy_attribution_uncorroborated")
                 continue
             if process_factory is None:
                 item.exited_at = now
@@ -815,6 +1013,7 @@ class ProcessInspector:
         result: list[OwnedProcess] = []
         for process in processes:
             pid = int(process.pid)
+            observed_at = time.time()
             # Only cpu_times and memory_info actually move between passes. Name and
             # command line are fixed for the life of a process, so they come from the
             # identity cache instead of a per-tick remote-PEB read.
@@ -849,6 +1048,13 @@ class ProcessInspector:
             if listeners and time.time() - session.record.last_activity_ts >= NO_OUTPUT_SECONDS:
                 conditions.append("no_pty_output")
             existing = self.owned.get((pid, started_at))
+            attribution_source = (
+                "session_root"
+                if pid == session.record.pid
+                else "job_membership"
+                if pid in job_only_pids
+                else "parent_walk"
+            )
             observed = OwnedProcess(
                 pid,
                 parent_pid,
@@ -867,10 +1073,20 @@ class ProcessInspector:
                 identity_id=process_identity(session.record.id, pid, started_at),
                 command_hash=identity_hash,
                 job_assignment=session.record.process_job_assignment,
-                first_seen=existing.first_seen if existing else time.time(),
-                last_seen=time.time(),
-                last_verified_at=time.time(),
+                first_seen=existing.first_seen if existing else observed_at,
+                last_seen=observed_at,
+                last_verified_at=observed_at,
                 startup_revalidated=existing.startup_revalidated if existing else False,
+                attribution_version=PROCESS_ATTRIBUTION_VERSION,
+                attribution_source=attribution_source,
+                last_attributed_at=observed_at,
+                last_job_confirmed_at=(
+                    observed_at
+                    if attribution_source == "job_membership"
+                    else existing.last_job_confirmed_at
+                    if existing
+                    else None
+                ),
             )
             if pid in job_only_pids:
                 # Same state and confidence as a walked descendant -- the process
@@ -970,6 +1186,7 @@ class ProcessInspector:
                     else None
                 ),
                 "processes": [],
+                "ownership_diagnostics": list(self._ownership_diagnostics),
             }
         await self._ensure_sampled(force=force)
         processes = [
@@ -1000,6 +1217,7 @@ class ProcessInspector:
                 else None
             ),
             "processes": processes[:MAX_PROCESSES_PER_SESSION],
+            "ownership_diagnostics": list(self._ownership_diagnostics),
         }
 
     async def snapshot_all(
@@ -1028,6 +1246,7 @@ class ProcessInspector:
                     "connections": 0,
                 },
                 "daemon": self._daemon_resources,
+                "ownership_diagnostics": list(self._ownership_diagnostics),
             }
         await self._ensure_sampled()
         groups: list[dict[str, Any]] = []
@@ -1110,6 +1329,7 @@ class ProcessInspector:
             "sessions": groups,
             "daemon": daemon,
             "totals": totals,
+            "ownership_diagnostics": list(self._ownership_diagnostics),
         }
 
     def _owned_live(
@@ -1125,6 +1345,10 @@ class ProcessInspector:
         if len(matches) != 1:
             raise ValueError("process is not owned by this session")
         item = matches[0]
+        if item.attribution_version < PROCESS_ATTRIBUTION_VERSION:
+            raise ValueError("process ownership evidence is obsolete; refresh before acting")
+        if (item.pid, float(item.started_at or 0)) in self._daemon_fingerprints():
+            raise ValueError("process is swe-mux infrastructure, not session-owned")
         if identity_id and item.identity_id != identity_id:
             raise ValueError("process fingerprint changed; refresh before acting")
         try:

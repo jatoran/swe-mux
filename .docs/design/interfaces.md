@@ -913,6 +913,8 @@ reported rather than raised and never unwinds it.
 Process snapshots expose bounded observational states `active | exited | escaped |
 suspected_orphan | stale | inaccessible`. Actions revalidate PID, creation-time identity,
 and ownership immediately before signaling; no state triggers automatic termination.
+Each process carries stable `attribution_version`, `attribution_source`, `last_attributed_at`, nullable `last_job_confirmed_at`, and derived `server_eligible`.
+Fleet and session responses carry a bounded command-free `ownership_diagnostics` list for rejected causal edges, infrastructure claims, ownership conflicts, and legacy repair.
 `GET /processes` returns running processes only; `include_ended=1` adds records that ended
 during the current daemon run. Ended records never contribute to resource totals.
 `memory_bytes` is RSS (the working set), which counts shared pages once per mapping process
