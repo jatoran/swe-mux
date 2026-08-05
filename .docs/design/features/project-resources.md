@@ -104,10 +104,13 @@ The file tree and notes collection are utility-drawer tabs.
   anything composing, so a mid-line split lost its bullet), and the touch selection action bar
   stays on screen for a selection taller than the viewport. Both are shadow-root behavior with
   no host workaround: the action bar in particular exposes no part.
-- The parts the editor *does* expose (`selection-handle`, `command-rail`,
-  `command-rail-button`, `command-rail-settings`) are themed alongside the `--continuity-*`
-  custom properties, since the properties reach its text and surfaces but not the chrome it
-  draws itself.
+- The parts the editor exposes (`selection-handle`, `command-rail`, `command-rail-button`,
+  `command-rail-settings`) are deliberately left unstyled by the host. They already draw from
+  the same `--continuity-*` properties the app maps onto its palette, so the mapping themes
+  them on its own and a `::part()` override only fights it. The selection handle is the
+  cautionary case: the part is a transparent 44px touch target whose visible stem and knob are
+  `::before`/`::after` fills of `--continuity-accent`, so giving the part a background paints a
+  solid block across the hit area instead of the handle graphic.
 - The editor is remounted whenever a different document loads so a new engine cannot leak text
   between documents. Ordinary edits do not remount it, so cursor and undo history survive. A
   host replacement is an echo of pushed text and is never committed back.

@@ -1498,14 +1498,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   --continuity-indent-guide-active:color-mix(in srgb,var(--accent) 55%,transparent);
   --continuity-decoration:color-mix(in srgb,var(--amber) 34%,transparent);
   --continuity-decoration-active:color-mix(in srgb,var(--amber) 68%,transparent)}
-/* Shadow chrome Continuity draws itself. The custom properties above reach its text and
-   surfaces but not these, which ship with its own palette and read as foreign inside the app
-   theme. Only the parts it documents are addressable: everything else in the shadow root
-   (the touch selection action bar in particular) is closed to us. */
-continuity-editor.note-editor::part(selection-handle){background:var(--accent);border-color:var(--bg)}
-continuity-editor.note-editor::part(command-rail){background:var(--panel);border-color:var(--line)}
-continuity-editor.note-editor::part(command-rail-button){background:var(--panel2);color:var(--text);border-color:var(--line)}
-continuity-editor.note-editor::part(command-rail-settings){background:var(--panel2);color:var(--muted);border-color:var(--line)}
+/* Deliberately no `::part()` rules. Continuity's exposed parts (selection-handle,
+   command-rail, command-rail-button, command-rail-settings) already draw from the same
+   --continuity-* properties mapped above, so they are themed by that mapping alone and an
+   override only fights it. The selection handle in particular is a transparent 44px touch
+   target whose visible stem and knob are ::before/::after fills of --continuity-accent:
+   giving the part itself a background paints a solid block over the whole hit area instead
+   of the handle graphic. */
 .note-conflict{position:absolute;left:0;right:0;top:calc(42px*var(--ui-scale));z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 18px #0009}.note-conflict-actions{display:flex;gap:6px}.note-conflict-actions button{min-height:26px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;padding:0 8px;cursor:pointer}
 /* Notes tab: a persistent per-Project tab rail with a searchable management browser. */
 .notes-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,220px);gap:6px;padding:8px 9px;border-bottom:1px solid var(--line)}
