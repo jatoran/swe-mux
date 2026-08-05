@@ -135,3 +135,50 @@ def test_worktree_porcelain_parser_preserves_registration_metadata() -> None:
         {"worktree": "C:/repo", "HEAD": "abc123", "branch": "refs/heads/main"},
         {"worktree": "C:/repo-feature", "HEAD": "def456", "detached": True},
     ]
+
+
+@pytest.mark.asyncio
+async def test_repository_reads_never_write_the_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A monitor must not mutate what it monitors.
+
+    `git status` and `git diff` refresh the index and write it back whenever a tracked
+    file's mtime has moved. In a repository where agents are editing files that is
+    every poll, so a 5-second read of the branch name was writing to the user's
+    repository and taking `.git/index.lock` to do it. Verified 2026-08-05 by touching
+    a tracked file and comparing `.git/index` mtime: plain `status` rewrote it,
+    `--no-optional-locks status` did not, with byte-identical output.
+
+    The failure this prevents is worse than the waste: a write in flight when the
+    daemon is killed strands `index.lock`, which blocks every git operation in that
+    repository, for every agent, until someone removes it by hand.
+    """
+    from swe_mux import git_monitor, git_review
+
+    seen: list[tuple[str, ...]] = []
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def fake_exec(*args: str, **_kwargs: object) -> FakeProcess:
+        seen.append(args)
+        return FakeProcess()
+
+    monkeypatch.setattr(git_monitor.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(git_review.asyncio, "create_subprocess_exec", fake_exec)
+
+    await git_monitor._git("D:/repo", "status", "--porcelain")
+    await git_review._run_git_bytes("D:/repo", "diff", "--numstat")
+
+    assert seen, "no git invocation was captured"
+    for invocation in seen:
+        assert invocation[0] == "git"
+        assert "--no-optional-locks" in invocation, (
+            f"read-only git call may not take the index lock: {invocation}"
+        )
+        # The flag is global and must precede the subcommand to apply at all.
+        assert invocation.index("--no-optional-locks") < invocation.index("-C")

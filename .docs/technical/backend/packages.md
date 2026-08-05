@@ -187,6 +187,20 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   pid younger than that refresh and nothing else. Iteration-count health could never have shown
   this — `process-inspector` ticks about every 6.5 s, making it one of the *least* frequent
   loops in the daemon.
+- **A monitor must not mutate what it monitors: every read-only Git call passes
+  `--no-optional-locks`.** `git status` and `git diff` refresh the index and *write it
+  back* whenever a tracked file's mtime has moved, taking `.git/index.lock` to do so. In a
+  repository where agents are editing files that is every poll, so a 5-second read of the
+  branch name was writing to the user's repository and contending with the agents it was
+  watching. Verified 2026-08-05 by touching a tracked file and comparing `.git/index` mtime
+  across both forms: plain `status` rewrote it, `--no-optional-locks status` did not, with
+  byte-identical output. Effect on `git-monitor`, measured over 133 polls before and after:
+  p50 321 ms to 73 ms, **p95 4,415 ms to 83 ms**, worst 5,629 ms to 169 ms, `busy_share`
+  9.1% to 1.5%. The failure mode this removes is worse than the waste: a write in flight
+  when the daemon is killed strands `index.lock`, which blocks *every* Git operation in
+  that repository for every agent until someone removes it by hand — one such lock was
+  found stranded here, created within seconds of a daemon restart. The flag is global and
+  must precede the subcommand; `tests/test_git_phase4.py` pins both facts.
 - **Directory walks read mtime from the walk, not from a second syscall.** Windows fills a
   `DirEntry`'s stat fields during enumeration, so `os.scandir` answers for free what
   `Path.glob` + `path.stat()` pays a syscall per file to re-fetch. Codex rollout discovery

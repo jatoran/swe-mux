@@ -22,14 +22,34 @@ T = TypeVar("T")
 async def _git(
     cwd: str, *args: str, timeout_seconds: float = GIT_TIMEOUT_SECONDS
 ) -> tuple[int, str]:
-    """Run one bounded Git query and always reap the subprocess.
+    """Run one bounded, **read-only** Git query and always reap the subprocess.
 
     Code 124 is reserved for a timeout so API callers can return a typed diagnostic
     instead of hanging a terminal-facing request indefinitely.
+
+    `--no-optional-locks` is what makes this read-only, and it is not a tuning knob.
+    `git status` refreshes the index and *writes it back* whenever any tracked file's
+    mtime has moved, taking `.git/index.lock` to do so. In a repository where agents
+    are editing files that is every single poll, so a monitor that merely wanted to
+    read the branch name was writing to the user's repository every 5 seconds and
+    contending for the lock with the agents it was watching. Verified 2026-08-05 by
+    touching a tracked file and comparing `.git/index` mtime across both forms: plain
+    `status` rewrote it, `--no-optional-locks status` did not, with byte-identical
+    output.
+
+    The failure mode that makes this more than waste: a write in flight when the
+    daemon is killed can strand `index.lock`, which blocks *every* git operation in
+    that repository for every agent until someone removes it by hand. One such lock
+    was found stranded in this repo, created within seconds of a daemon restart.
+
+    Git documents this flag for exactly this caller: tools that poll a repository for
+    display. Latency is unaffected (measured 15.1ms against 14.8ms); the point is that
+    a monitor must not mutate what it monitors.
     """
     try:
         process = await asyncio.create_subprocess_exec(
             "git",
+            "--no-optional-locks",
             "-C",
             cwd,
             *args,

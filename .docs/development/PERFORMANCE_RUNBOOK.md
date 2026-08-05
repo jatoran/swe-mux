@@ -19,6 +19,18 @@ ticked once every ~6.5 seconds — the second-least frequent loop in the daemon.
 Reading is not measuring.
 Start with the numbers.
 
+## The short version
+
+```
+uv run python tools/perf_snapshot.py                  # loops, lag, process cost
+uv run python tools/perf_snapshot.py --profile 45     # also sample the daemon
+uv run python tools/perf_snapshot.py --json before.json
+```
+
+`tools/perf_snapshot.py` runs steps 1 through 4 in order and is read-only.
+Use `--json` on both sides of a change so a before/after is a diff rather than a memory.
+The rest of this document is what the tool is doing and how to read it.
+
 ## Order of investigation
 
 ### 1. Establish what the daemon costs at rest

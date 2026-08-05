@@ -120,6 +120,13 @@ async def _run_git_bytes(
     try:
         process = await asyncio.create_subprocess_exec(
             "git",
+            # Read-only by contract (this module performs no Git mutations), and this
+            # is what makes that true of the *repository* rather than only of the
+            # caller's intent: `status` and `diff` refresh the index and write it back
+            # whenever a tracked file's mtime has moved, taking `.git/index.lock` to do
+            # it. See `git_monitor._git` for the measurement and the stranded-lock
+            # failure that causes. Output is unaffected.
+            "--no-optional-locks",
             "-C",
             str(cwd),
             *args,
@@ -150,6 +157,13 @@ async def _run_patch(
     try:
         process = await asyncio.create_subprocess_exec(
             "git",
+            # Read-only by contract (this module performs no Git mutations), and this
+            # is what makes that true of the *repository* rather than only of the
+            # caller's intent: `status` and `diff` refresh the index and write it back
+            # whenever a tracked file's mtime has moved, taking `.git/index.lock` to do
+            # it. See `git_monitor._git` for the measurement and the stranded-lock
+            # failure that causes. Output is unaffected.
+            "--no-optional-locks",
             "-C",
             str(cwd),
             *args,
