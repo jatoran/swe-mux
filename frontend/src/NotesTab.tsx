@@ -1,16 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import type { JSX } from 'preact'
+import type { ComponentChildren, JSX } from 'preact'
 import { api } from './api'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { useModalFocus } from './modalFocus'
+import { OverflowRail } from './RailScroller'
+import {
+  SCRATCHPAD_TAB_ID,
+  canonicalNoteTabId,
+  fallbackNoteTab,
+  noteTabAfterDelete,
+  projectNoteTabId,
+  stableProjectNoteTabs,
+} from './noteTabs'
 import type { Project } from './types'
 
-// The drawer's Notes tab: the index half of the Notes surface.
-//
-// Selecting a row opens that note **in the drawer**, which is the point of the tab on a
-// phone: reading or adding to a note without leaving the session you are watching. The `⇥`
-// on each row is the other half, opening it as an ordinary workspace tab instead — better on
-// desktop, where a pane is wider than a 380 px column and two notes can be on screen at once.
+// The drawer's persistent Notes workspace. Scratchpad and every note in the active Project
+// are non-closeable tabs; the selected resource is remembered per Project by `App`.
 //
 // The two are mutually exclusive per browser and the drawer host enforces it; `drawerNotes.ts`
 // explains why that is a correctness rule rather than tidiness (one save queue per note, so a
@@ -36,6 +41,9 @@ type Props={
   onOpenNote:(projectId:string,noteId:string,title:string,place:NotePlacement)=>void
   onOpenScratchpad:(place:NotePlacement)=>void
   onDone:()=>void
+  selectedResourceId:string|null
+  editor:ComponentChildren
+  onPopSelected:()=>void
 }
 
 const sizeLabel=(bytes:number)=>bytes>=1024?`${Math.round(bytes/1024)} KiB`:`${bytes} B`
@@ -44,7 +52,7 @@ const noteKey=(note:Pick<ProjectNoteSummary,'project_id'|'note_id'>)=>`${note.pr
 type NoteMenu={note:ProjectNoteSummary;x:number;y:number}
 type NoteTitlePrompt={mode:'create'|'rename';title:string;note?:ProjectNoteSummary}
 
-export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScratchpad,onDone}:Props){
+export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScratchpad,onDone,selectedResourceId,editor,onPopSelected}:Props){
   const [items,setItems]=useState<ProjectNoteSummary[]|null>(null)
   const [query,setQuery]=useState('')
   const [error,setError]=useState('')
@@ -54,6 +62,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
   const [titlePrompt,setTitlePrompt]=useState<NoteTitlePrompt|null>(null)
   const [titleBusy,setTitleBusy]=useState(false)
   const [titleError,setTitleError]=useState('')
+  const [browseOpen,setBrowseOpen]=useState(false)
   const scopeId=allProjects?'':project?.id||''
   // A generation guard rather than a cancel flag: a refresh fired by a note-changed
   // event can land after a scope change, and the newest request must win.
@@ -146,14 +155,36 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     return [...buckets.entries()]
   },[shown,allProjects])
 
-  // Opening into the drawer replaces this index in place, so `onDone` (which closes the whole
-  // panel on mobile) would hide the note it was just asked to show. Only a pane placement
-  // hands the screen back.
+  const projectItems=useMemo(()=>stableProjectNoteTabs(
+    (items||[]).filter(item=>item.project_id===project?.id)
+  ),[items,project?.id])
+  const selectedTabId=canonicalNoteTabId(selectedResourceId)
+
+  // A stale remembered id can follow a deletion or an older on-disk build. Resolve it only
+  // after the scoped collection loads, then persist the replacement through the same callback
+  // as an explicit tab click.
+  useEffect(()=>{
+    if(allProjects||!project||!items)return
+    const fallback=fallbackNoteTab(selectedResourceId,projectItems)
+    if(fallback===selectedTabId)return
+    if(fallback===SCRATCHPAD_TAB_ID)onOpenScratchpad('drawer')
+    else{
+      const note=projectItems.find(item=>projectNoteTabId(item.note_id)===fallback)
+      if(note)onOpenNote(note.project_id,note.note_id,note.title,'drawer')
+    }
+  },[allProjects,items,project?.id,projectItems,selectedResourceId,selectedTabId])
+
+  // Selecting a drawer sub-tab keeps the panel visible. Moving a note to a workspace tab
+  // hands the screen back on mobile.
   const openNote=(note:ProjectNoteSummary,place:NotePlacement)=>{
+    setBrowseOpen(false)
+    if(allProjects)onAllProjects(false)
     onOpenNote(note.project_id,note.note_id,note.title,place)
     if(place==='tab')onDone()
   }
   const openScratchpad=(place:NotePlacement)=>{
+    setBrowseOpen(false)
+    if(allProjects)onAllProjects(false)
     onOpenScratchpad(place)
     if(place==='tab')onDone()
   }
@@ -195,11 +226,19 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
   const deleteProjectNote=async(note:ProjectNoteSummary)=>{
     const key=noteKey(note)
     if(deleteConfirm!==key){setDeleteConfirm(key);return}
+    const fallback=note.project_id===project?.id
+      ?noteTabAfterDelete(selectedResourceId,note.note_id,projectItems)
+      :null
     setDeleting(key)
     try{
       await api('DELETE',`/api/projects/${note.project_id}/notes/${encodeURIComponent(note.note_id)}`,{revision:note.revision})
       setItems(current=>current?.filter(item=>noteKey(item)!==key)||current)
       setDeleteConfirm('');setMenu(null);setError('')
+      if(fallback===SCRATCHPAD_TAB_ID)openScratchpad('drawer')
+      else if(fallback){
+        const next=projectItems.find(item=>projectNoteTabId(item.note_id)===fallback)
+        if(next)openNote(next,'drawer')
+      }
       window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{scope:'project',projectId:note.project_id,kind:'note',noteId:note.note_id,revision:'missing'}}))
     }catch(cause){
       setDeleteConfirm('');setError(cause instanceof Error?cause.message:String(cause));void load()
@@ -260,53 +299,96 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     {noteActions(note)}
   </article>
 
+  const focusAdjacentTab=(event:JSX.TargetedKeyboardEvent<HTMLButtonElement>,offset:number)=>{
+    const buttons=[...event.currentTarget.closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]')||[]]
+    const index=buttons.indexOf(event.currentTarget)
+    const next=buttons[(index+offset+buttons.length)%buttons.length]
+    if(!next)return
+    event.preventDefault();next.click();next.focus()
+  }
+  const browserVisible=allProjects||browseOpen
+
   return <div class="notes-tab">
-    <section class="notes-global" aria-label="Global notes">
-      <h3>global<span>1</span></h3>
-      <article class="project-note-row global-note-row">
-        <button onClick={()=>openScratchpad('drawer')} title="Open Scratchpad in this panel">
-          <strong>Scratchpad</strong>
-          <span>Available in every Project</span>
-          <small>Quick notes that do not belong to a Project.</small>
-        </button>
-        <button class="note-open-as-tab" aria-label="Open Scratchpad as a workspace tab" title="Open as a workspace tab instead" onClick={()=>openScratchpad('tab')}>⇥</button>
-      </article>
-    </section>
-    <div class="notes-filters">
-      <input
-        aria-label="Search notes"
-        placeholder="Search notes…"
-        value={query}
-        spellcheck={false}
-        onInput={event=>setQuery(event.currentTarget.value)}
-      />
-      <select aria-label="Filter notes by project" value={allProjects?'':scopeId} onChange={event=>onAllProjects(!event.currentTarget.value)}>
-        <option value={project?.id||''} disabled={!project}>{project?project.name:'No project'}</option>
-        <option value="">All projects</option>
-      </select>
-      <button class="notes-new" disabled={!project} onClick={()=>{setTitleError('');setTitlePrompt({mode:'create',title:'Untitled note'})}}>+ New note</button>
+    <div class="notes-subtabs-row">
+      <OverflowRail
+        className="notes-subtabs"
+        itemLabel="notes"
+        wrapperClassName="notes-subtabs-rail"
+        activeKey={selectedTabId||''}
+        touchDrag
+        stripProps={{role:'tablist','aria-label':'Notes in this Project'}}
+      >
+        <button
+          role="tab"
+          aria-selected={selectedTabId===SCRATCHPAD_TAB_ID}
+          tabIndex={selectedTabId===SCRATCHPAD_TAB_ID?0:-1}
+          class={selectedTabId===SCRATCHPAD_TAB_ID?'active':''}
+          title="Global Scratchpad"
+          disabled={!project}
+          onClick={()=>openScratchpad('drawer')}
+          onKeyDown={event=>{if(event.key==='ArrowLeft'||event.key==='ArrowRight')focusAdjacentTab(event,event.key==='ArrowLeft'?-1:1)}}
+        >Scratchpad</button>
+        {projectItems.map(note=>{
+          const resourceId=projectNoteTabId(note.note_id)
+          const active=selectedTabId===resourceId
+          return <button
+            key={resourceId}
+            role="tab"
+            aria-selected={active}
+            tabIndex={active?0:-1}
+            class={active?'active':''}
+            title={note.title}
+            onClick={()=>openNote(note,'drawer')}
+            onKeyDown={event=>{if(event.key==='ArrowLeft'||event.key==='ArrowRight')focusAdjacentTab(event,event.key==='ArrowLeft'?-1:1)}}
+          >{note.title}</button>
+        })}
+      </OverflowRail>
+      <button class="notes-browse" aria-label="Search and manage notes" aria-expanded={browserVisible} title="Search and manage notes" onClick={()=>setBrowseOpen(value=>!value)}>⌕</button>
+      <button class="notes-new" aria-label="Create a Project note" disabled={!project} title="Create a Project note" onClick={()=>{setTitleError('');setTitlePrompt({mode:'create',title:'Untitled note'})}}>+</button>
+      <button class="notes-pop" aria-label="Move the selected note into a workspace tab" disabled={!selectedResourceId} title="Move the selected note into a workspace tab" onClick={onPopSelected}>⇥</button>
     </div>
-    <div class="notes-body notes-tab-body">
-      {error&&<p class="notes-state error" role="alert">{error}</p>}
-      {!items&&!error&&<p class="notes-state">Reading notes…</p>}
-      {items&&!error&&!shown.length&&<p class="notes-state">
-        {items.length
-          ?'No note matches this search.'
-          :'No notes yet. Create one for this Project.'}
-      </p>}
-      {!!shown.length&&<div class="notes-listing">
-        {allProjects
-          ?grouped.map(([id,bucket])=><section class="notes-group" key={id}>
-            <h3>project::{bucket.label}<span>{bucket.notes.length}</span></h3>
-            {bucket.notes.map(noteRow)}
-          </section>)
-          :<section class="notes-group">
-            <h3>notes<span>{shown.length}</span></h3>
-            {shown.map(noteRow)}
-          </section>}
-      </div>}
+    <div class="notes-editor-host">
+      {editor||<p class="notes-state">{project?'Reading notes…':'Select a Project to open Notes.'}</p>}
     </div>
-    <p class="notes-footnote">Scratchpad is global. Other notes belong to Projects. Select to open here; <b>⇥</b> opens a pane.</p>
+    {browserVisible&&<section class="notes-browser" aria-label="Browse notes">
+      <div class="notes-browser-heading">
+        <strong>{allProjects?'All Project notes':project?.name||'Project notes'}</strong>
+        <button onClick={()=>{setBrowseOpen(false);if(allProjects)onAllProjects(false)}}>Done</button>
+      </div>
+      <div class="notes-filters">
+        <input
+          autoFocus
+          aria-label="Search notes"
+          placeholder="Search notes…"
+          value={query}
+          spellcheck={false}
+          onInput={event=>setQuery(event.currentTarget.value)}
+        />
+        <select aria-label="Filter notes by project" value={allProjects?'':scopeId} onChange={event=>onAllProjects(!event.currentTarget.value)}>
+          <option value={project?.id||''} disabled={!project}>{project?project.name:'No project'}</option>
+          <option value="">All projects</option>
+        </select>
+      </div>
+      <div class="notes-body notes-tab-body">
+        {error&&<p class="notes-state error" role="alert">{error}</p>}
+        {!items&&!error&&<p class="notes-state">Reading notes…</p>}
+        {items&&!error&&!shown.length&&<p class="notes-state">
+          {items.length?'No note matches this search.':'No notes yet. Create one for this Project.'}
+        </p>}
+        {!!shown.length&&<div class="notes-listing">
+          {allProjects
+            ?grouped.map(([id,bucket])=><section class="notes-group" key={id}>
+              <h3>project::{bucket.label}<span>{bucket.notes.length}</span></h3>
+              {bucket.notes.map(noteRow)}
+            </section>)
+            :<section class="notes-group">
+              <h3>notes<span>{shown.length}</span></h3>
+              {shown.map(noteRow)}
+            </section>}
+        </div>}
+      </div>
+      <p class="notes-footnote">Scratchpad is global. Project notes stay in creation order and remain in the tab rail.</p>
+    </section>}
     {menu&&<div
       class="context-menu note-row-menu"
       ref={el=>{menuPanel.current=el;fitMenuInViewport(el)}}

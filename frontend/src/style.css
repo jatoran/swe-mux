@@ -1477,28 +1477,41 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   --continuity-decoration:color-mix(in srgb,var(--amber) 34%,transparent);
   --continuity-decoration-active:color-mix(in srgb,var(--amber) 68%,transparent)}
 .note-conflict{position:absolute;left:0;right:0;top:calc(42px*var(--ui-scale));z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 8px 18px #0009}.note-conflict-actions{display:flex;gap:6px}.note-conflict-actions button{min-height:26px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;padding:0 8px;cursor:pointer}
-/* Notes tab: a Project-owned collection and navigator. */
-.notes-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,220px) auto;gap:6px;padding:8px 9px;border-bottom:1px solid var(--line)}
+/* Notes tab: a persistent per-Project tab rail with a searchable management browser. */
+.notes-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,220px);gap:6px;padding:8px 9px;border-bottom:1px solid var(--line)}
 .notes-filters>*{min-width:0}
 .notes-body{flex:1;min-height:0;overflow:auto}
 .notes-state{padding:18px 12px;color:var(--muted);text-align:center}
 .notes-state.error{color:var(--error,#f07178)}
-.notes-group>h3,.notes-global>h3{display:flex;justify-content:space-between;align-items:center;gap:8px;position:sticky;top:0;margin:0;padding:6px 9px;background:var(--panel2);color:var(--muted);font-size:11px;font-weight:600;letter-spacing:.04em}
+.notes-group>h3{display:flex;justify-content:space-between;align-items:center;gap:8px;position:sticky;top:0;margin:0;padding:6px 9px;background:var(--panel2);color:var(--muted);font-size:11px;font-weight:600;letter-spacing:.04em}
 .project-note-row>button:first-child{width:100%;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:3px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--text);padding:8px 9px;text-align:left;cursor:pointer}
 .project-note-row>button:first-child:hover,.project-note-row>button:first-child:focus-visible{background:var(--panel2)}
 .project-note-row strong{display:flex;align-items:center;gap:6px;min-width:0}
 .project-note-row span{color:var(--muted);font-size:11px}
 .project-note-row small{color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.notes-tab{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
-.notes-global{flex:none;border-bottom:1px solid var(--line)}
-.global-note-row{grid-template-columns:minmax(0,1fr) auto;background:color-mix(in srgb,var(--accent) 7%,transparent);box-shadow:inset 3px 0 color-mix(in srgb,var(--accent) 72%,transparent)}
-.notes-tab .notes-filters{flex:none;grid-template-columns:minmax(0,1fr) minmax(0,116px) auto}
+.notes-tab{position:relative;flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.notes-subtabs-row{flex:none;min-width:0;display:flex;height:calc(31px*var(--ui-scale));border-bottom:1px solid var(--line);background:var(--panel2)}
+.notes-subtabs-rail{--overflow-rail-bg:var(--panel2);--overflow-rail-accent:var(--green);flex:1 1 auto;min-width:0}
+.notes-subtabs{height:100%;display:flex;overflow-x:auto;overflow-y:hidden}
+.notes-subtabs>button{flex:0 0 auto;min-width:72px;max-width:154px;height:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 10px;border:0;border-right:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;font-size:9px;cursor:pointer}
+.notes-subtabs>button:hover,.notes-subtabs>button:focus-visible{background:var(--panel);color:var(--text)}
+.notes-subtabs>button.active{background:var(--bg);color:var(--text);box-shadow:inset 0 -2px var(--green)}
+.notes-subtabs>button:disabled{opacity:.4;cursor:not-allowed}
+.notes-subtabs-row>.notes-browse,.notes-subtabs-row>.notes-new,.notes-subtabs-row>.notes-pop{flex:none;width:31px;height:100%;padding:0;border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;font-size:13px;cursor:pointer}
+.notes-subtabs-row>.notes-browse:hover,.notes-subtabs-row>.notes-browse:focus-visible,.notes-subtabs-row>.notes-new:hover,.notes-subtabs-row>.notes-new:focus-visible,.notes-subtabs-row>.notes-pop:hover,.notes-subtabs-row>.notes-pop:focus-visible{background:var(--panel);color:var(--text)}
+.notes-subtabs-row>button:disabled{opacity:.4;cursor:not-allowed}
+.notes-editor-host{flex:1 1 auto;min-height:0;display:flex;overflow:hidden}
+.notes-editor-host>.project-resource{flex:1 1 auto;height:auto;min-height:0}
+.notes-browser{position:absolute;z-index:5;inset:calc(31px*var(--ui-scale)) 0 0;display:flex;flex-direction:column;min-height:0;background:var(--bg);box-shadow:0 -1px var(--line)}
+.notes-browser-heading{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:31px;padding-left:9px;border-bottom:1px solid var(--line);background:var(--panel2);font-size:9px}
+.notes-browser-heading strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.notes-browser-heading button{align-self:stretch;padding:0 9px;border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;cursor:pointer}
+.notes-browser-heading button:hover,.notes-browser-heading button:focus-visible{background:var(--panel);color:var(--text)}
+.notes-tab .notes-filters{flex:none;grid-template-columns:minmax(0,1fr) minmax(0,116px)}
 .notes-tab .notes-filters input,.notes-tab .notes-filters select{min-width:0;height:calc(30px*var(--ui-scale));padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
 .notes-tab .notes-filters input:focus,.notes-tab .notes-filters select:focus{outline:0;border-color:var(--green)}
-.notes-tab .notes-new{min-height:calc(30px*var(--ui-scale));padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;white-space:nowrap;cursor:pointer}
-.notes-tab .notes-new:disabled{opacity:.45;cursor:not-allowed}
 .notes-tab .notes-state{padding:14px 10px;font-size:9px;line-height:1.45}
-.notes-tab .notes-group>h3,.notes-tab .notes-global>h3,.notes-tab .project-note-row span,.notes-tab .project-note-row small{font-size:8px}
+.notes-tab .notes-group>h3,.notes-tab .project-note-row span,.notes-tab .project-note-row small{font-size:8px}
 .notes-tab .project-note-row strong{font-size:10px}
 /* Every note row selects into the panel; this is the escape hatch to a pane. Kept to a glyph
    so the row's own text keeps the width — the label lives in the title and the aria-label. */
@@ -1513,14 +1526,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .note-row-menu button.confirming{width:100%}
 .notes-footnote{flex:none;margin:0;padding:6px 9px;border-top:1px solid var(--line);color:var(--muted);font-size:8px;line-height:1.4}
 .note-title-layer{z-index:95}.note-title-modal{width:min(430px,calc(100% - 24px))}
-/* The drawer's note editor. Kept mounted while another tab is showing (cursor, undo, and the
+/* The drawer's Notes workspace. Kept mounted while another tab is showing (cursor, undo, and the
    insert-routing handle all die with it), so `hidden` has to beat this rule's own display. */
 .drawer-note-host{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
 .drawer-note-host[hidden]{display:none}
-.drawer-note-bar{flex:none;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:6px;border-bottom:1px solid var(--line);background:var(--panel2)}
-.drawer-note-bar button{min-height:28px;padding:0 8px;border:0;background:transparent;color:var(--muted);font:inherit;cursor:pointer;white-space:nowrap}
-.drawer-note-bar button:hover,.drawer-note-bar button:focus-visible{background:var(--panel);color:var(--text)}
-.drawer-note-kind{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px;text-align:center}
 /* The editor's own header repeats the Project and save state, which at column width is the
    only thing that fits beside the identity the bar above already gives. */
 .utility-drawer .drawer-note-host .project-resource{flex:1 1 auto;height:auto;min-height:0}
@@ -1572,13 +1581,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .utility-drawer .project-resource.file-browser>header{min-height:26px;padding:4px 9px}
 .utility-drawer .project-resource.file-browser>header strong{color:var(--muted);font-size:8px;font-weight:400}
 @media(max-width:760px){
-  .notes-tab .notes-filters{grid-template-columns:minmax(0,1fr) auto}
-  .notes-tab .notes-filters input{grid-column:1/-1}
+  .notes-tab .notes-filters{grid-template-columns:minmax(0,1fr)}
   .notes-tab .notes-filters input,.notes-tab .notes-filters select{height:calc(38px*var(--ui-scale));font-size:16px}
-  .notes-tab .notes-new{min-height:calc(38px*var(--ui-scale))}
+  .notes-subtabs-row{height:calc(40px*var(--ui-scale))}
+  .notes-browser{inset:calc(40px*var(--ui-scale)) 0 0}
+  .notes-subtabs-row>.notes-browse,.notes-subtabs-row>.notes-new,.notes-subtabs-row>.notes-pop{width:40px}
   /* Touch targets: the glyph is narrow by design on desktop, but it is a real destination. */
   .note-open-as-tab,.note-delete{min-width:44px}
-  .drawer-note-bar button{min-height:40px}
 }
 .history-layer{z-index:85}
 .history-modal{width:min(1200px,calc(100vw - 24px));height:min(88vh,900px);max-height:calc(100dvh - 24px);display:flex;flex-direction:column;padding:0}
@@ -1711,7 +1720,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-panel-title{position:absolute;z-index:8;top:3px;left:7px;width:var(--drawer-panel-title-width);max-width:calc(100% - 14px);height:18px;margin:0;padding:0 6px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid color-mix(in srgb,var(--accent) 58%,var(--line));background:color-mix(in srgb,var(--accent) 13%,var(--panel2));box-shadow:inset 2px 0 color-mix(in srgb,var(--accent) 82%,transparent);color:var(--text);font:600 8px/16px 'Cascadia Mono',Consolas,monospace;letter-spacing:.035em;cursor:help}
 .drawer-panel-title:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 20%,var(--panel2))}
 .drawer-body-clipboard>.drawer-status,.drawer-body-commands>.drawer-status,.drawer-body-prompts>.drawer-status,.drawer-body-git>.drawer-status,.drawer-body-notifications>.drawer-status,.drawer-body-context>.drawer-status{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
-.drawer-body-files>.project-resource.file-browser>header,.drawer-body-context .agent-context-header,.drawer-body-processes .processes-filters,.drawer-body-notes .notes-filters,.drawer-body-notes .drawer-note-bar,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
+.drawer-body-files>.project-resource.file-browser>header,.drawer-body-context .agent-context-header,.drawer-body-processes .processes-filters,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
 .drawer-body-transcript .transcript-tab-meta{padding-left:calc(var(--drawer-panel-title-width) + 4px)}
 .drawer-body-context .agent-context-header>div>strong{display:none}
 .drawer-body-files>.drawer-empty:first-of-type,.drawer-body-transcript>.drawer-empty:first-of-type{padding-top:38px}

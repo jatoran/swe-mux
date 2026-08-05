@@ -1,5 +1,5 @@
 /**
- * Which note this device is editing *inside the drawer* rather than in a pane.
+ * Which Notes sub-tab this device last selected in each Project.
  *
  * A note has exactly one live editor per browser, and that is a correctness rule rather than
  * a tidiness one. `noteSaveQueue` keys one entry per `(project, resource)` at module scope, so
@@ -17,14 +17,14 @@
  * would rearrange the desktop's panes — which is the opposite of the point. The leaf stays
  * exactly where it is and renders a placeholder while this device's drawer holds the note.
  *
- * Keyed by Project because the drawer is Project-scoped: switching Projects shows that
- * Project's notes, and switching back has to restore what the drawer was holding rather than
- * silently dropping it.
+ * While the drawer is open this selection also identifies the editor it owns. Closing the
+ * drawer ends that temporary ownership but retains the selection, so reopening Notes returns
+ * to the same tab. Keying by Project gives Project switches the same continuity.
  *
  * Pure and dependency-free so the rules are testable without a DOM.
  */
 
-/** Project id → the note resource id its drawer is editing. */
+/** Project id to the remembered note resource id for that Project's Notes rail. */
 export type DrawerNoteMap = Readonly<Record<string, string>>
 
 export const DRAWER_NOTE_KEY = 'mux.drawer.note.v1'
@@ -56,19 +56,19 @@ export function serializeDrawerNotes(map: DrawerNoteMap): string {
   return JSON.stringify(map)
 }
 
-/** The note this Project's drawer is editing, or null. */
+/** The note this Project last selected in the drawer, or null. */
 export function drawerNoteFor(map: DrawerNoteMap, projectId: string): string | null {
   return (projectId && map[projectId]) || null
 }
 
-/** Move a note into the drawer. One per Project: claiming replaces any previous claim. */
+/** Select a note in the drawer. One per Project: selecting replaces the previous value. */
 export function claimDrawerNote(map: DrawerNoteMap, projectId: string, resourceId: string): DrawerNoteMap {
   if (!projectId || !resourceId) return map
   if (map[projectId] === resourceId) return map
   return { ...map, [projectId]: resourceId }
 }
 
-/** Hand the note back to the workspace. */
+/** Forget a Project's remembered selection. Normal drawer close does not call this. */
 export function releaseDrawerNote(map: DrawerNoteMap, projectId: string): DrawerNoteMap {
   if (!projectId || !(projectId in map)) return map
   const next = { ...map }

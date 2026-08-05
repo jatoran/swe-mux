@@ -50,12 +50,12 @@ The file tree and notes collection are utility-drawer tabs.
   editor's load then calls `reset`, discarding whatever the first had pending. Two devices are
   safe by contrast — separate queues and revisions, so the second write 409s into the conflict
   banner — which is why only same-browser duplication has to be structurally prevented.
-- The drawer's claim is therefore exclusive: while it holds a note, that note's pane leaf keeps
-  its place in the layout but renders an "open in the panel" placeholder, and every pane placement
-  releases the claim first so it cannot land on that placeholder. The claim is **device-local** and stored per
-  Project (`mux.drawer.note.v1`), never in `project.layout`, which is shared: a phone must not be
-  able to rearrange the desktop's panes.
-  Closing the complete drawer releases the claim and hands the note back to its pane.
+- The selected Notes sub-tab is **device-local** and stored per Project under
+  `mux.drawer.note.v1`, never in `project.layout`, which is shared.
+  Closing the drawer retains that selection while ending the drawer's temporary editor ownership.
+  Reopening Notes, switching utility tabs, switching sessions, switching Projects, and reloading all restore the selected note for that Project.
+  While the drawer is open, a matching pane leaf keeps its place but renders an "open in the panel" placeholder.
+  Moving that selected note to a pane closes the drawer, so the pane becomes the only mounted editor without erasing the remembered Notes tab.
 - Moving between hosts unmounts one editor and mounts the other, which is lossless because the
   save queue outlives both. The unmount flushes, and the arriving editor adopts any text the
   daemon has not acknowledged yet (`noteSaveQueue.pendingText`, which covers both debounced typing
@@ -66,6 +66,12 @@ The file tree and notes collection are utility-drawer tabs.
   editor and would otherwise route a Clipboard paste into a terminal).
 - The collection is reached from a Project's sidebar context menu, the main menu, the
   `notes.open`/`notes.browse`/`notes.browseProject` commands, and the desktop launcher.
+- The main Notes surface is a non-wrapping sub-tab rail followed by the selected editor.
+  Scratchpad is the fixed first tab and every note in the active Project is a non-closeable tab in stable creation order.
+  The active tab scrolls into view automatically.
+  New notes become selected tabs immediately.
+  Deleting the selected note chooses the next surviving tab, then the previous one, and uses Scratchpad only when no Project notes remain.
+  A separate searchable browser provides Project and all-Project discovery plus rename, delete, and open-in-workspace actions without turning the browser into the normal landing page.
 - Scope follows how you arrived, the same rule the rest of the app's browsers use. Reaching the
   tab from the rail icon, the tab strip, or `drawer.notes` says nothing about scope, so it means
   *this Project* — the drawer sits beside that Project's workspace. Only the app menu's

@@ -60,7 +60,7 @@ import {
 import { normalizeDrawerTabOrder } from './drawerTabOrder'
 import {
   DRAWER_NOTE_KEY, claimDrawerNote, drawerNoteFor, isDrawerOwned, parseDrawerNotes,
-  pruneDrawerNotes, releaseDrawerNote, serializeDrawerNotes, type DrawerNoteMap,
+  pruneDrawerNotes, serializeDrawerNotes, type DrawerNoteMap,
 } from './drawerNotes'
 import type { WatchScope } from './processWatch'
 import { DRAWER_TAB_ICONS, SidePanelIcon } from './railIcons'
@@ -353,10 +353,11 @@ export function App() {
   // entry point flips it to every Project. Device-local UI state, not a modal.
   const [notesAllProjects,setNotesAllProjects]=useState(false)
   const [noteTitles,setNoteTitles]=useState<Record<string,string>>({})
-  // Which note each Project's drawer is editing instead of a pane. Device-local, because the
-  // layout it would otherwise mutate is shared: a phone claiming a note must not rearrange the
-  // desktop's panes. See `drawerNotes.ts` for why one editor per note per browser is a
-  // correctness rule and not a preference.
+  // Which Notes sub-tab each Project last selected. Device-local, because the active drawer
+  // editor also claims that note instead of its pane while the drawer is open. The remembered
+  // selection survives closing the drawer and switching Projects.
+  // The shared layout is never mutated merely by selecting a drawer tab. See `drawerNotes.ts`
+  // for why one editor per note per browser is a correctness rule and not a preference.
   const [drawerNotes,setDrawerNotes]=useState<DrawerNoteMap>(()=>parseDrawerNotes(localStorage.getItem(DRAWER_NOTE_KEY)))
   const [folderPickerOpen,setFolderPickerOpen]=useState(false)
   const [groupEdit,setGroupEdit]=useState<{id?:string;name:string}|null>(null)
@@ -505,10 +506,9 @@ export function App() {
     })
   }
   const setClipboardOpen=(next:OpenState,targetProject=projectId)=>{
-    const closeOwnedNote=()=>{if(targetProject)setDrawerNotes(current=>releaseDrawerNote(current,targetProject))}
     if(mobileWorkspace){
       const open=typeof next==='function'?next(mobileDrawerOpen):next
-      if(!open){activePointerDragCancelRef.current?.();closeOwnedNote()}
+      if(!open)activePointerDragCancelRef.current?.()
       setMobileDrawerOpen(open)
       if(open){setSidebarOpenState(false);dismissSoftKeyboard()}
       return
@@ -516,7 +516,7 @@ export function App() {
     if(!targetProject){
       const current=normalizeDrawerProjectPresentation(unscopedDrawerPresentation,drawerLayoutRef.current)
       const open=typeof next==='function'?next(current.desktop_expanded):next
-      if(!open){activePointerDragCancelRef.current?.();closeOwnedNote()}
+      if(!open)activePointerDragCancelRef.current?.()
       updateDrawerPresentation('',current=>updateDrawerProjectPresentation(current,drawerLayoutRef.current,{
         desktop_expanded:open,
       }))
@@ -524,7 +524,7 @@ export function App() {
     }
     const current=drawerProjectPresentationFor(drawerProjectPresentations,targetProject,drawerLayoutRef.current)
     const open=typeof next==='function'?next(current.desktop_expanded):next
-    if(!open){activePointerDragCancelRef.current?.();closeOwnedNote()}
+    if(!open)activePointerDragCancelRef.current?.()
     updateDrawerPresentation(targetProject,presentation=>updateDrawerProjectPresentation(presentation,drawerLayoutRef.current,{
       desktop_expanded:open,
     }))
@@ -610,17 +610,11 @@ export function App() {
     })
   },[projectId,drawerLegacySettingsReady])
   useEffect(()=>{localStorage.setItem(DRAWER_NOTE_KEY,serializeDrawerNotes(drawerNotes))},[drawerNotes])
-  /**
-   * Putting a note in a pane always takes it out of the drawer.
-   *
-   * Every pane placement funnels through here rather than each caller remembering to do it,
-   * because the ones that would forget are exactly the ones that look broken when they do: a
-   * sidebar row, the pane `note` chip, or the tab menu's "Open in focused pane" would open
-   * onto the stand-down placeholder and read as having done nothing at all. Only the note the
-   * pane is claiming is released — an unrelated note the drawer is holding stays put.
-   */
-  const releaseIfDrawerHolds=(targetProject:string,resourceId:string)=>setDrawerNotes(current=>
-    drawerNoteFor(current,targetProject)===resourceId?releaseDrawerNote(current,targetProject):current)
+  /** A pane placement of the selected drawer note closes the drawer, ending its temporary
+   * editor ownership without erasing the remembered Notes sub-tab. */
+  const releaseIfDrawerHolds=(targetProject:string,resourceId:string)=>{
+    if(drawerNoteFor(drawerNotes,targetProject)===resourceId)setClipboardOpen(false)
+  }
   // A deleted Project must not keep a slot in device-local storage forever. Guarded on a
   // non-empty list because `projects` is empty until the first load answers, and pruning
   // against that would drop every claim on boot.
@@ -2138,7 +2132,7 @@ export function App() {
     return persisted
   }
 
-  const showResourceForTarget = async (target:NoteTarget,targetViewId?:string) => {
+  const showResourceForTarget = async (target:NoteTarget,targetViewId?:string,preserveDrawerSelection=false) => {
     const resourceId=noteIdForTarget(target)
     const targetProject=projects.some(project=>project.id===target.projectId)?target.projectId:(activeProject?.id||projects[0]?.id)
     if(!resourceId||!targetProject){setError('A live Project is required to open this resource.');return}
@@ -2150,7 +2144,7 @@ export function App() {
     const focused=targetViewId||openAnchorId(current,preferredAnchor)
     setProjectId(targetProject);setFocusedViewId(resourceId)
     setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setMainMenuOpen(false);setEmptyMenu(null)
-    releaseIfDrawerHolds(targetProject,resourceId)
+    if(!preserveDrawerSelection)releaseIfDrawerHolds(targetProject,resourceId)
     // Every resource opens the same way: a tab in the anchor's pane. Notes previously
     // split a pane off to sit beside their terminal, which spent workspace geometry on a
     // guess — splitting is an explicit action (the tab menu, a drag), not something an
@@ -2170,7 +2164,7 @@ export function App() {
   // holds why (one live editor per note per browser is a correctness rule: the save queue is
   // shared per note, so a second mounted editor clobbers the first with no conflict the
   // daemon can see) and why the claim is device-local rather than layout state.
-  /** The note this Project's drawer is editing, or null. */
+  /** The note selected in this Project's persistent Notes sub-tab rail, or null. */
   const drawerNoteId=drawerNoteFor(drawerNotes,projectId)
   const openNoteInDrawer=(resourceId:string,targetProject:string)=>{
     setProjectId(targetProject)
@@ -2183,13 +2177,12 @@ export function App() {
     if(!resourceId){setError('This resource is no longer linked to a durable owner.');return}
     openNoteInDrawer(resourceId,target.projectId)
   }
-  /** Hand the note back to the workspace. A pane leaf that was standing down resumes on the
-   *  next render; a note with no leaf simply stops being shown. */
-  const closeDrawerNote=(targetProject:string)=>setDrawerNotes(current=>releaseDrawerNote(current,targetProject))
-  /** Release and put it in a pane, focused — the pop-out half of the move. */
+  /** Put the selected note in a pane without forgetting the Notes sub-tab. The drawer closes,
+   *  so editor ownership ends while the remembered selection remains available on reopen. */
   const popDrawerNoteToTab=(resourceId:string,targetProject:string)=>{
-    closeDrawerNote(targetProject)
-    showNoteResource(resourceId,targetProject)
+    const target=noteTargetForResource(resourceId,targetProject)
+    if(!target){setError('This resource is no longer linked to a durable owner.');return}
+    void showResourceForTarget(target,undefined,true)
   }
   const placeNoteResourceInFocusedPane=async(resourceId:string,targetProject:string)=>{
     const identity=noteTargetForResource(resourceId,targetProject)
@@ -3686,7 +3679,6 @@ export function App() {
         }}
         onOpenScratchpad={openScratchpad}
         drawerNoteId={drawerNoteId}
-        onCloseDrawerNote={()=>closeDrawerNote(projectId)}
         onPopDrawerNoteToTab={resourceId=>popDrawerNoteToTab(resourceId,projectId)}
         tabDisplay={drawerTabDisplay}
         onTabDragStart={beginDrawerTabDrag}

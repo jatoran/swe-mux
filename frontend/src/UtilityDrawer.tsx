@@ -92,12 +92,10 @@ type Props = {
   onOpenPreview: (sessionId: string, url: string) => void
   /** Escape hatch to the modal inspector, prefiltered to the tab's current scope. */
   onOpenInspector: (projectId: string | null) => void
-  /** Notes: the note this Project's drawer is editing, or null to show the index. A note has
+  /** Notes: the note selected for this Project's persistent sub-tab rail. A note has
    *  one live editor per browser (see `drawerNotes.ts`), so this is also what tells the
    *  matching pane leaf to stand down. */
   drawerNoteId: string | null
-  /** Give the note back to the workspace and return to the index. */
-  onCloseDrawerNote: () => void
   /** Give it back and put it in a pane, focused. */
   onPopDrawerNoteToTab: (resourceId: string) => void
   onTabDragStart: (event: JSX.TargetedPointerEvent<HTMLElement>, id: DrawerTabId) => void
@@ -140,8 +138,6 @@ export function UtilityDrawer(props: Props) {
   const drawerNote = props.drawerNoteId && project && noteIdentity && noteIdentity.kind !== 'file' && noteIdentity.kind !== 'worktree-file'
     ? { resourceId: props.drawerNoteId, identity: noteIdentity }
     : null
-  const drawerNoteLabel = noteIdentity?.kind === 'global-note' ? 'Scratchpad' : 'Note'
-
   // Where the last Clipboard insert landed. `ClipboardTab` reports its own outcome to
   // `onInsert` and then calls `onDone` with nothing, so the two are joined here rather than by
   // widening that contract for one caller.
@@ -178,26 +174,31 @@ export function UtilityDrawer(props: Props) {
    * (`.drawer-note-host[hidden]` must stay `display:none` even though the class sets a flex
    * layout, since a class rule would otherwise beat the UA default).
    */
-  const renderNoteHost = (visible: boolean) => drawerNote && project
-    ? <div class="drawer-note-host" hidden={!visible}>
-      <div class="drawer-note-bar">
-        <button class="drawer-note-back" title="Back to the note index" onClick={props.onCloseDrawerNote}>‹ Notes</button>
-        <span class="drawer-note-kind">{drawerNoteLabel}</span>
-        <button
-          class="drawer-note-pop"
-          title="Move this note into a workspace tab. A note is only ever open in one place, so it leaves the panel."
-          onClick={() => { props.onPopDrawerNoteToTab(drawerNote.resourceId); onDone() }}
-        >⇥ tab</button>
-      </div>
-      <ProjectResource
-        key={`drawer-note:${project.id}:${drawerNote.resourceId}`}
+  const renderNoteHost = (visible: boolean) => <div class="drawer-note-host" hidden={!visible}>
+      <NotesTab
         project={project}
-        resource={drawerNote.identity}
-        onOpenFile={path => { props.onOpenFile(path); onDone() }}
-        onSendToAgent={props.onSendToAgent}
+        allProjects={props.notesAllProjects}
+        onAllProjects={props.onNotesAllProjects}
+        onOpenNote={props.onOpenNote}
+        onOpenScratchpad={props.onOpenScratchpad}
+        onDone={onDone}
+        selectedResourceId={props.drawerNoteId}
+        onPopSelected={() => {
+          if (!drawerNote) return
+          props.onPopDrawerNoteToTab(drawerNote.resourceId)
+          onClose()
+        }}
+        editor={drawerNote && project
+          ? <ProjectResource
+            key={`drawer-note:${project.id}:${drawerNote.resourceId}`}
+            project={project}
+            resource={drawerNote.identity}
+            onOpenFile={path => { props.onOpenFile(path); onDone() }}
+            onSendToAgent={props.onSendToAgent}
+          />
+          : null}
       />
     </div>
-    : null
 
   // One body per tab. A flat dispatch rather than the nested ternary this grew out of:
   // several branches deep, every added surface used to reindent the ones below it.
@@ -237,18 +238,9 @@ export function UtilityDrawer(props: Props) {
           />
           : <p class="drawer-empty">Select a Project to browse its files.</p>
       case 'notes':
-        // `noteHost` is rendered outside this switch and covers the tab when a note is
-        // claimed, so the index only draws when there is none.
-        return drawerNote
-          ? null
-          : <NotesTab
-            project={project}
-            allProjects={props.notesAllProjects}
-            onAllProjects={props.onNotesAllProjects}
-            onOpenNote={props.onOpenNote}
-            onOpenScratchpad={props.onOpenScratchpad}
-            onDone={onDone}
-          />
+        // The persistent Notes workspace is rendered outside this switch so its editor,
+        // cursor, and undo history survive visits to other utility tabs.
+        return null
       case 'context':
         return <AgentContextTab project={project} session={session} />
       case 'git':
@@ -366,7 +358,7 @@ export function UtilityDrawer(props: Props) {
           <span class="drawer-scope-context">{scopeContext(selected)}</span>
         </div>
         {notesHere && renderNoteHost(selected === 'notes')}
-        {!(selected === 'notes' && drawerNote) && renderBody(selected)}
+        {selected !== 'notes' && renderBody(selected)}
       </div>
     </section>
   }

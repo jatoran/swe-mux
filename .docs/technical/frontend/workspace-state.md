@@ -53,7 +53,8 @@ The underlying tablist remains the native horizontal touch and trackpad scroller
 
 Notes is the only inactive drawer body kept mounted.
 Its singleton host is derived from the unique Notes tab's owner stack, remains hidden while another tab is selected there, and preserves cursor, undo, save-queue ownership, and editor insert targeting.
-Closing the complete drawer releases its note claim so a workspace placeholder never targets a hidden host.
+The per-Project selected note survives drawer close in `mux.drawer.note.v1`.
+Editor ownership is derived from that selection plus drawer visibility, so closing the drawer restores any matching workspace editor without erasing the Notes sub-tab.
 
 ## Warm terminal panes
 

@@ -860,16 +860,19 @@ responsive controls.
   dragged onto any pane.
   Files can remain visible beside Clipboard or another utility body when the user places them in separate drawer panes.
 - **Notes** is a flat Project-owned collection *and* an editor, and a note is open in exactly one of the two hosts at a time.
-  A fixed `GLOBAL` section pins Scratchpad before the filters, so Project scope and search never hide it.
+  A non-wrapping sub-tab rail pins Scratchpad first and then shows every note in the active Project in stable creation order.
+  These tabs are the primary navigation and cannot be closed.
+  The selected tab scrolls into view automatically, and compact scroll controls handle ordinary overflow.
+  A separate searchable browser handles large collections, all-Project discovery, and note management.
   Scratchpad is global, has no rename/delete controls, and uses the same drawer and workspace-tab placements as Project notes.
-  The tab lists explicit notes, including empty notes, searchable over title, Project, and excerpt and scoped to this Project or to all Projects.
+  The browser lists explicit notes, including empty notes, searchable over title, Project, and excerpt and scoped to this Project or to all Projects.
   It creates and renames notes through title prompts.
-  Selecting a row opens that note **in the drawer**; the `⇥` on each row opens it as a workspace tab instead.
+  Selecting a rail tab or browser row opens that note **in the drawer**; `⇥` moves it to a workspace tab instead.
   Each note row places a two-click inline delete control immediately before `⇥`.
   Desktop right-click and guarded mobile long-press expose open, rename, and revision-checked delete actions.
   Deletion submits the revision carried by the listing, refuses a concurrent edit with `409 revision_conflict`, logs the user action, and emits the normal note-change event with revision `missing`.
   An open clean editor follows that event to a deleted state; an editor with unsaved local work keeps its text and reaches the existing revision-conflict path instead of being silently cleared.
-  From inside the drawer editor, `‹ Notes` returns to the index and `⇥ tab` moves the note into a pane.
+  Deleting the selected note selects the next Project note, then the previous note if needed, and falls back to Scratchpad only when none remain.
   Terminals and History do not create or own notes.
 - **Why one host at a time is a rule and not a preference.** `noteSaveQueue` keys one entry per
   `(scope, resource)` at module scope, so two mounted editors on one note share it: each submits
@@ -877,20 +880,21 @@ responsive controls.
   to detect, since the revision each holds is correct. Mounting the second is worse — its load
   calls `reset`, which discards whatever the first had pending. Two *devices* are safe by
   contrast (separate queues, separate revisions, so the second write 409s into the ordinary
-  conflict banner); only same-browser duplication is silent. So claiming a note for the drawer
-  makes its pane leaf render an "open in the panel" placeholder, and **every** pane placement —
-  a sidebar row, the pane `note` chip, the tab menu's open/split rows, a drag — releases the claim
-  first, because a placement that landed on the placeholder would look like it did nothing.
-- **The claim is device-local and never touches the layout.** `project.layout` is persisted
+  conflict banner); only same-browser duplication is silent.
+  Selecting a note for the open drawer makes its pane leaf render an "open in the panel" placeholder.
+  Placing that note in a pane closes the drawer before the pane editor takes ownership, while retaining the remembered Notes sub-tab.
+- **The selection and temporary ownership are device-local and never touch the layout.** `project.layout` is persisted
   server-side and shared, so removing the leaf would let a phone rearrange the desktop's panes.
   The leaf keeps its slot and only stands down while the drawer owns the note.
-  The claim is stored per Project under `mux.drawer.note.v1` so switching Projects and back preserves it while the drawer remains open.
-  Closing the complete drawer releases the claim and hands the note back to its pane, so a placeholder never points at a hidden panel.
+  The selected sub-tab is stored per Project under `mux.drawer.note.v1`.
+  It survives drawer close, utility-tab and session changes, Project switches, and reloads.
+  Closing the drawer ends editor ownership but does not erase the selection, so a placeholder never points at a hidden panel and reopening resumes the same tab.
+  Moving the selected note to a pane also closes the drawer and retains the selection.
 - **The Notes body is the one drawer body kept mounted across tab switches**, hidden rather than
   unmounted. Both reasons are load-bearing: an editor unmounted on every switch loses cursor and
   undo history, and `insertTarget` refuses a detached editor handle, so switching to Clipboard to
   paste *into the note* would route the paste to a terminal instead — silently, into an agent's
-  prompt. That failure is why this tab was an index only for as long as it was; keeping the body
+  prompt. Keeping the body
   mounted is what makes hosting an editor safe. No other tab needs it, so no other tab gets it.
   Moving a note between hosts is still an unmount and a remount, which is lossless because the
   save queue outlives both: the arriving editor adopts any text the daemon has not acknowledged

@@ -177,12 +177,14 @@ def test_notes_tab_manages_the_project_owned_collection() -> None:
     assert "Filter notes by project" in notes
     assert "Search notes" in notes
     assert "All projects" in notes
-    assert ".project-note-row" in css and ".notes-tab" in css
-    assert "+ New note" in notes
+    assert ".project-note-row" in css and ".notes-subtabs" in css
+    assert 'class="notes-new"' in notes
     assert "mode:'rename'" in notes
     assert "onOpenNote" in drawer
-    assert 'class="notes-global"' in notes
-    assert "Available in every Project" in notes
+    assert 'role="tab"' in notes
+    assert "SCRATCHPAD_TAB_ID" in notes
+    assert "stableProjectNoteTabs" in notes
+    assert 'class="notes-browser"' in notes
     assert "onOpenScratchpad" in drawer
     assert "kind:'global-note',resourceId:'scratchpad'" in app
     assert "id: 'notes.scratchpad'" in app
@@ -195,6 +197,13 @@ def test_notes_tab_manages_the_project_owned_collection() -> None:
     assert "id: 'notes.browse'" in app
     assert "runNamedCommand('notes.browse')" in app
     assert "openBrowsedNote" in app
+
+    # The note selection is remembered separately from temporary editor ownership. Closing
+    # the drawer leaves the per-Project selection intact; the editor host is merely unmounted.
+    set_open = app[app.index("const setClipboardOpen=") : app.index("const selectDrawerTab=")]
+    assert "releaseDrawerNote" not in set_open
+    assert "selectedResourceId={props.drawerNoteId}" in drawer
+    assert "selected !== 'notes' && renderBody(selected)" in drawer
 
     # Scope follows how you arrived. Every scope-less entry point (rail, strip, drawer.notes)
     # goes through showDrawerTab and means "this Project"; only the app menu's unscoped

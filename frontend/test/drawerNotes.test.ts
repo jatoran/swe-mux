@@ -55,7 +55,7 @@ test('a pane leaf stands down only for the note the open drawer is holding', () 
 test('a closed drawer owns nothing, so the pane takes its note back', () => {
   const map = claimDrawerNote(EMPTY_DRAWER_NOTES, 'p1', 'note:p1')
   // The drawer unmounts with the panel, so there is no editor to defer to. The claim is
-  // kept, which is why reopening resumes rather than reverting to the index.
+  // kept, which is why reopening resumes the same Notes sub-tab.
   assert.equal(isDrawerOwned(map, 'p1', 'note:p1', false), false)
   assert.equal(drawerNoteFor(map, 'p1'), 'note:p1')
 })
