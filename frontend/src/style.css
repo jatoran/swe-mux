@@ -690,6 +690,24 @@ body {
 .terminal-find button:hover,.terminal-find button.active,.note-find button:hover,.note-find button.active { background:var(--panel2);color:var(--text) }
 .terminal-find span,.note-find span { min-width:54px;padding:0 7px;color:var(--muted) }
 .terminal-find span.missing,.note-find span.missing { color:var(--red) }
+/* Heading trail over the reading position. It hovers on the note's first row rather than
+   taking a band of its own, so a long note loses no height to it. `pointer-events:none` on
+   the strip is what keeps that honest: scrolling and selecting the text underneath still
+   work, and only the crumbs themselves take a tap. Wraps when the chain outgrows a row. */
+.note-trail {
+  position:absolute;left:0;right:0;top:46px;z-index:6;
+  display:flex;flex-wrap:wrap;align-items:center;gap:1px 5px;padding:3px 10px;
+  pointer-events:none;background:color-mix(in srgb,var(--bg) 84%,transparent)
+}
+.note-trail button {
+  pointer-events:auto;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  border:0;padding:0;background:transparent;color:var(--muted);
+  font:8px 'Cascadia Mono',Consolas,monospace;text-transform:uppercase;cursor:pointer
+}
+.note-trail button:hover,.note-trail button:focus-visible { color:var(--accent) }
+.note-trail button:not(:first-child)::before {
+  content:'\203A\00a0';color:color-mix(in srgb,var(--muted) 65%,transparent)
+}
 /* Heading outline. Same anchor as the find bar (a note has one header to clear), but a list
    rather than a row, so it is bounded and scrolls instead of growing off the pane. */
 .note-outline {
@@ -723,6 +741,10 @@ body {
   /* Reached from the command rail here, not the header, so it spans the pane. */
   .note-outline { left:5px;right:5px;width:auto;max-height:min(56vh,380px) }
   .note-outline button { min-height:38px }
+  /* Crumbs are the one tap target in a strip that otherwise passes touches through, so they
+     get real padding here without giving the strip a taller band. */
+  .note-trail { gap:2px 4px;padding:4px 8px }
+  .note-trail button { padding:3px 2px }
 }
 
 /* Phase 4 owned-process inspection and preview leaves. */

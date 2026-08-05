@@ -121,6 +121,33 @@ export function headingIndexAt(
 }
 
 /**
+ * The ancestor chain ending at `index`, outermost first: what a breadcrumb over the reading
+ * position shows.
+ *
+ * Walking back and keeping only strictly shallower headings is what makes a sibling replace
+ * rather than append. Two headings of the same level are alternatives, not a nesting, so a
+ * second `#` truncates the trail to itself instead of extending it.
+ *
+ * Levels are used as written rather than through the depth ladder: the ladder exists to keep
+ * the outline from indenting a whole note that starts at `##`, whereas a trail has to respect
+ * the document's real nesting or it would claim a `###` sits inside an unrelated `##`.
+ */
+export function headingTrail(
+  headings: readonly OutlineHeading[],
+  index: number,
+): OutlineHeading[] {
+  if (index < 0 || index >= headings.length) return []
+  const trail = [headings[index]]
+  let level = headings[index].level
+  for (let cursor = index - 1; cursor >= 0 && level > 1; cursor--) {
+    if (headings[cursor].level >= level) continue
+    trail.unshift(headings[cursor])
+    level = headings[cursor].level
+  }
+  return trail
+}
+
+/**
  * How far to indent each row, relative to the shallowest heading present.
  *
  * Depth counts distinct levels rather than hashes: a note whose top level is `##` should not

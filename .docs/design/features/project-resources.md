@@ -94,7 +94,7 @@ The file tree and notes collection are utility-drawer tabs.
   note endpoint (`{markdown, revision}`); Markdown files PUT the file endpoint
   (`{path, text, revision}`). The queue's debounce, in-flight coalescing, 409 conflict banner,
   retry, and teardown beacon are identical for both.
-- The vendored Continuity 0.2.19 editor owns mobile touch arbitration. `pointerdown` does not
+- The vendored Continuity 0.2.20 editor owns mobile touch arbitration. `pointerdown` does not
   focus its textarea; a resolved tap projects the caret and focuses synchronously, while scroll,
   cancellation, and long-press paths leave the keyboard closed. swe-mux does not inspect the
   editor's shadow DOM or duplicate caret hit-testing for this behavior.
@@ -220,6 +220,28 @@ The file tree and notes collection are utility-drawer tabs.
   room to spare), and a `note.outline` command for the palette, a gesture, or a chord.
 - Unlike find, the outline paints no decorations, so there is nothing to keep in step with an
   edit; the list is re-derived when the panel opens and refreshed on commits while it is open.
+
+### The heading trail
+
+- A muted breadcrumb of the enclosing heading chain hovers over the note's first row and
+  follows the reader down, so the current section is visible without opening the outline.
+  Each crumb jumps to its heading.
+- The reading position comes from the editor's visible source-line window, which is the one
+  fact the host cannot derive: line geometry is not exported (headings render larger, wrapped
+  rows use a measured hanging indent), the scroll surface lives in the shadow root and differs
+  between fine and coarse pointers, and `scroll` does not cross a shadow boundary. Continuity
+  0.2.20 reports the window; the chain, the styling, and the jump are ours.
+- Only crumbs that have actually scrolled off the top are shown. Filtering the chain rather
+  than hiding it whole is deliberate: when the current heading sits exactly at the top edge,
+  hiding everything would blink the trail out for that single line of scrolling.
+- Siblings replace rather than append, because two headings of the same level are alternatives
+  and not a nesting. Trail depth uses levels as written rather than the outline's depth ladder,
+  which would let a `###` claim to sit inside an unrelated `##`.
+- The strip passes pointer events through to the text underneath, so hovering over the first
+  row costs the note no height and blocks neither scrolling nor selection; only the crumbs
+  themselves take a tap.
+- A crumb jump deliberately does not take focus, unlike an outline pick. The trail is tapped
+  while reading, and on touch taking focus would raise the keyboard over the note.
 
 ### Sending a selection to an agent
 

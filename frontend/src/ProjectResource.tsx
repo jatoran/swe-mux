@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
-import { Editor, type ContinuityEditorElement, type RailAction } from '@continuity-editor/editor'
+import { Editor, type ContinuityEditorElement, type ContinuityViewportDetail, type RailAction } from '@continuity-editor/editor'
 import { api } from './api'
 import { insertEditorTab } from './editorText'
 import { copyPreparedText } from './terminalClipboard'
@@ -12,7 +12,7 @@ import { useModalFocus } from './modalFocus'
 import { composeAgentMessage, selectionText } from './noteSelection'
 import type { EditorSnapshot } from './noteSelection'
 import { findMatches, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
-import { headingIndexAt, outlineDepths, outlineHeadings, type OutlineHeading } from './noteOutline'
+import { headingIndexAt, headingTrail, outlineDepths, outlineHeadings, type OutlineHeading } from './noteOutline'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
 import { projectResourceCreationParent } from './projectResourceCreate'
@@ -683,6 +683,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const [outlineAt,setOutlineAt]=useState(-1)
   const outlinePanel=useRef<HTMLDivElement>(null)
   const outlineDepthList=useMemo(()=>outlineDepths(outline),[outline])
+  /** First visible source line, from Continuity 0.2.20's viewport window. */
+  const [viewportLine,setViewportLine]=useState(0)
 
   /** Re-read the note and rebuild the list. Cheap enough to redo on every change while open. */
   const readOutline=()=>{
@@ -697,13 +699,58 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     readOutline()
     setOutlineOpen(true)
   }
+
+  /**
+   * Keep the heading list and the reading position live for the trail, which is always on
+   * rather than only while the outline panel is open. The list costs one text scan per
+   * commit, the same scan the find bar already pays while its bar is open.
+   *
+   * Both a `continuity-ready` listener and an immediate read are needed: the engine boots
+   * asynchronously, so an editor mounted with this resource is not ready yet, while an editor
+   * that survived a re-render already is and will never fire `ready` again.
+   */
+  useEffect(()=>{
+    if(!autosaved)return
+    const element=editorElement.current
+    if(!element)return
+    const seedViewport=()=>{
+      const window=element.visibleLineRange()
+      if(window)setViewportLine(window.startLine)
+    }
+    const onReady=()=>{readOutline();seedViewport()}
+    const onViewport=(event:Event)=>
+      setViewportLine((event as CustomEvent<ContinuityViewportDetail>).detail.firstLine)
+    onReady()
+    element.addEventListener('continuity-ready',onReady)
+    element.addEventListener('continuity-change',readOutline)
+    element.addEventListener('continuity-viewport',onViewport)
+    return()=>{
+      element.removeEventListener('continuity-ready',onReady)
+      element.removeEventListener('continuity-change',readOutline)
+      element.removeEventListener('continuity-viewport',onViewport)
+    }
+  },[autosaved,project.id,resource.kind,resource.id,loadGeneration])
+
+  /**
+   * The heading chain over the reading position, outermost first.
+   *
+   * Only crumbs that have actually scrolled off are kept. A heading still on screen needs no
+   * reminder, and filtering the chain (rather than hiding it whole while the current heading
+   * sits at the top edge) is what stops it blinking out for the single line where those
+   * coincide.
+   */
+  const trail=useMemo(()=>{
+    const index=headingIndexAt(outline,{line:viewportLine,byteInLine:0})
+    if(index<0)return []
+    return headingTrail(outline,index).filter(heading=>heading.line<viewportLine)
+  },[outline,viewportLine])
   /**
    * Centre the heading rather than revealing it minimally: `align:'nearest'` scrolls as little
    * as it can, which for a deliberate jump leaves the target wherever it happened to land.
    * The caret is collapsed to the line start so the next keystroke edits the heading, and
    * focus goes back to the editor because the panel button took it on click.
    */
-  const jumpToHeading=(heading:OutlineHeading)=>{
+  const jumpToHeading=(heading:OutlineHeading,options:{focus?:boolean}={})=>{
     setOutlineOpen(false)
     const element=editorElement.current
     if(!element)return
@@ -713,7 +760,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       element.revealRange({start:heading.start,end:heading.end},{align:'center'})
       element.setSelections([{anchor:heading.start,head:heading.start,kind:'caret'}])
     }catch{/* ignored */}
-    element.focus()
+    // The trail is tapped while reading, so it opts out of taking focus: on touch that would
+    // raise the keyboard over the note the tap was meant to navigate.
+    if(options.focus!==false)element.focus()
   }
   const outlineRef=useRef(openOutline)
   outlineRef.current=openOutline
@@ -1161,6 +1210,11 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       <button class={findCase?'active':''} title="Match case" aria-pressed={findCase} onClick={()=>setFindCase(value=>!value)}>Aa</button>
       <span class={findQuery&&!findCount?'missing':''} aria-live="polite">{!findQuery?'':findCount?`${findIndex+1}/${findCount}`:'no match'}</span>
       <button title="Close find" aria-label="Close find" onClick={closeFind}>×</button>
+    </div>}
+    {autosaved&&trail.length>0&&<div class="note-trail" role="navigation" aria-label="Heading trail">
+      {trail.map(heading=><button key={heading.line} type="button"
+        title={`Jump to ${heading.text||'this heading'}`}
+        onClick={()=>jumpToHeading(heading,{focus:false})}>{heading.text||'(untitled)'}</button>)}
     </div>}
     {outlineOpen&&<div class="note-outline" ref={outlinePanel} role="menu" aria-label="Note headings"
       onMouseDown={event=>event.stopPropagation()}>

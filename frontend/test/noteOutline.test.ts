@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { headingIndexAt, outlineDepths, outlineHeadings } from '../src/noteOutline.ts'
+import { headingIndexAt, headingTrail, outlineDepths, outlineHeadings } from '../src/noteOutline.ts'
 
 test('ATX headings are collected in document order with their level and line', () => {
   const headings = outlineHeadings('# One\nbody\n## Two\n### Three\ntail')
@@ -92,6 +92,53 @@ test('the caret maps to the heading it sits under', () => {
 test('a caret above the first heading belongs to no heading', () => {
   const headings = outlineHeadings('preamble\n# One')
   assert.equal(headingIndexAt(headings, { line: 0, byteInLine: 0 }), -1)
+})
+
+const trailOf = (text: string, index: number) =>
+  headingTrail(outlineHeadings(text), index).map(heading => heading.text)
+
+test('a deeper heading appends to the trail', () => {
+  const text = '# One\n## Two\n### Three'
+  assert.deepEqual(trailOf(text, 0), ['One'])
+  assert.deepEqual(trailOf(text, 1), ['One', 'Two'])
+  assert.deepEqual(trailOf(text, 2), ['One', 'Two', 'Three'])
+})
+
+test('a sibling replaces rather than appends', () => {
+  // Two "#" headings are alternatives, not a nesting: the second is the whole trail.
+  assert.deepEqual(trailOf('# One\n# Two', 1), ['Two'])
+  assert.deepEqual(trailOf('# One\n## A\n## B', 2), ['One', 'B'])
+})
+
+test('a shallower heading truncates the trail to its own level', () => {
+  const text = '# One\n## Two\n### Three\n## Four'
+  assert.deepEqual(trailOf(text, 3), ['One', 'Four'])
+})
+
+test('a skipped level does not invent the missing ancestor', () => {
+  assert.deepEqual(trailOf('# One\n### Three', 1), ['One', 'Three'])
+})
+
+test('a trail can start below level 1', () => {
+  // A note whose shallowest heading is "##" still reports a complete chain.
+  assert.deepEqual(trailOf('## Two\n### Three', 1), ['Two', 'Three'])
+})
+
+test('an out-of-range index is an empty trail, not a crash', () => {
+  const headings = outlineHeadings('# One')
+  assert.deepEqual(headingTrail(headings, -1), [])
+  assert.deepEqual(headingTrail(headings, 5), [])
+  assert.deepEqual(headingTrail([], 0), [])
+})
+
+test('the trail follows the line reported by the viewport', () => {
+  // The scroll position arrives as a line number, so it is looked up the same way a caret is.
+  const headings = outlineHeadings('# One\nbody\n## Two\nbody\nbody')
+  const at = (line: number) => headingIndexAt(headings, { line, byteInLine: 0 })
+  assert.deepEqual(headingTrail(headings, at(1)).map(h => h.text), ['One'])
+  // A heading exactly at the top edge is the section you are in, not the one above it.
+  assert.deepEqual(headingTrail(headings, at(2)).map(h => h.text), ['One', 'Two'])
+  assert.deepEqual(headingTrail(headings, at(4)).map(h => h.text), ['One', 'Two'])
 })
 
 test('depth counts distinct levels, not hashes', () => {

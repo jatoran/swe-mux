@@ -1063,7 +1063,7 @@ responsive controls.
   available). Depth is capped so a malformed tree cannot spin a handler that runs on every gesture.
 - The panels also dismiss any keyboard already visible at **touchstart, as soon as a second
   finger lands**, rather than waiting for the resolved command at touchend. Two fingers are never
-  text entry, so the early blur is safe. Continuity 0.2.19 separately owns note-touch
+  text entry, so the early blur is safe. Continuity 0.2.20 separately owns note-touch
   arbitration: pointerdown does not focus, a resolved tap places the caret and focuses, and
   scroll/cancel/long-press paths leave the keyboard closed. swe-mux adds no shadow-DOM or caret
   hit-testing workaround; single-finger touches pass to the editor unchanged.
