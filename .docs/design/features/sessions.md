@@ -51,9 +51,12 @@ and reattachable browser viewports.
   reconnect never change process state, and neither does losing an ownership race: refused
   input is echoed back for one replay instead of dropped. Rules, frames and diagnostics:
   `features/terminal-input.md`.
-- Desktop shell and Claude terminals default to WebGL with DOM fallback. Codex terminals always
-  use the built-in DOM renderer because its full-screen redraws can corrupt off-tail WebGL
-  scrollback. The pinned xterm 6 WebGL addon carries
+- Desktop shell and Claude terminals default to WebGL with DOM fallback. Codex terminals use the
+  built-in DOM renderer under the `auto` preference, because its full-screen redraws can corrupt
+  off-tail WebGL scrollback, and its rich renderer still reflows the transcript on resize. An
+  explicit `webgl` preference now reaches Codex, which it previously did not: the setting was a
+  silent no-op for the one backend whose repaint cost makes the renderer worth choosing. The
+  pinned xterm 6 WebGL addon carries
   the upstream missing-buffer-line guard in its runtime bundles, preventing a resize/trim race
   from aborting a model update and leaving stale glyphs. Mobile remains DOM-only.
 - Agent startup state uses semantic evidence first. Claude and trusted Codex lifecycle hooks

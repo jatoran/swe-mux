@@ -91,3 +91,18 @@ test('an unstyled Codex composer resolves against xterm buffer cells',async({pag
   expect(result.current).not.toBeNull()
   expect(result.target).toEqual({column:4,row:result.current!.row})
 })
+
+test('restoring the font is enough to leave a letterbox; no renderer reflow is needed', async ({ page }) => {
+  // Pins the reason `applyGeometry` does not call `reflowVisibleTerminalRenderer` when it
+  // drops a letterbox. The stale-surface repair above is real, but it is for a surface
+  // resized underneath xterm — a *font* change re-measures on its own, at an unchanged
+  // grid. Adding the reflow there is a no-op that reads like a fix; if an xterm upgrade
+  // ever makes the font path stop self-repairing, this fails and the call belongs back.
+  await page.goto('/renderer-harness.html')
+  const result = await page.evaluate(() => window.runLetterboxExitRepair())
+
+  expect(result.cols).toBeGreaterThan(0)
+  expect(result.letterboxed).not.toEqual(result.base)
+  expect(result.afterFontRestore).toEqual(result.base)
+  expect(result.afterReflow).toEqual(result.afterFontRestore)
+})

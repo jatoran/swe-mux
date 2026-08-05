@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-_SCROLLBACK_DEFAULTS = (
-    ("tui.alternate_screen", '"never"'),
-    ("tui.raw_output_mode", "true"),
-)
+# The screen buffer, and only the screen buffer. `tui.raw_output_mode=true` was
+# set here alongside it and is deliberately not: it makes Codex stop rendering a
+# rich transcript and echo tool output verbatim instead, which is presentation
+# rather than anything mux depends on. Every consequence the rest of the codebase
+# attributes to "raw scrollback mode" follows from the alternate-screen key alone:
+# the prompt living on the normal screen (`delivery_readiness`), the transcript
+# being real scrollback lines rather than repaints of one fixed screen
+# (`scrollback`, `config.attach_replay_bytes`), and xterm owning every scroll so
+# jump-to-latest works (`terminalViewport.appOwnsTail`). Raw output is off in
+# Codex's own defaults, so leaving it out puts `~/.codex/config.toml` in charge
+# of it rather than forcing the opposite of what the CLI ships.
+_SCROLLBACK_DEFAULTS = (("tui.alternate_screen", '"never"'),)
 _CONFIG_FLAGS = {"-c", "--config"}
 
 

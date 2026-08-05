@@ -17,6 +17,15 @@ type DomDimensionRepairResult = {
   rows: number
 }
 
+type LetterboxExitRepairResult = {
+  base: { width: string; height: string }
+  letterboxed: { width: string; height: string }
+  afterFontRestore: { width: string; height: string }
+  afterReflow: { width: string; height: string }
+  cols: number
+  rows: number
+}
+
 type MobileCursorInitializationResult = {
   beforeInitialized: boolean
   afterInitialized: boolean
@@ -39,6 +48,7 @@ declare global {
   interface Window {
     runTerminalRendererStress: () => Promise<{ renderer: 'dom' | 'webgl'; cols: number; rows: number }>
     runTerminalDomDimensionRepair: () => Promise<DomDimensionRepairResult>
+    runLetterboxExitRepair: () => Promise<LetterboxExitRepairResult>
     runTerminalMobileCursorInitialization: () => Promise<MobileCursorInitializationResult>
     runTerminalSyntheticMouseTap: () => Promise<SyntheticMouseTapResult>
     runUnstyledCodexCaretResolution: () => Promise<UnstyledCodexCaretResult>
@@ -128,6 +138,57 @@ window.runTerminalDomDimensionRepair = async () => {
   await frame()
   const afterReflow = dimensions()
   const result = { before, afterFit, afterReflow, cols: domTerm.cols, rows: domTerm.rows }
+  domTerm.dispose()
+  return result
+}
+
+/**
+ * The production letterbox-exit sequence, which `runTerminalDomDimensionRepair` does not
+ * cover: it shrinks the *surface* directly, whereas leaving a letterbox restores the
+ * **font** at a grid that has not changed. Whether xterm re-measures the surface on a font
+ * change alone is the question that decides whether the exit path needs an explicit reflow
+ * at all, so this reports every stage rather than asserting one.
+ */
+window.runLetterboxExitRepair = async () => {
+  host.style.display = 'none'
+  const domHost = document.querySelector<HTMLDivElement>('#dom-terminal')!
+  domHost.style.display = 'block'
+  const domTerm = new Terminal({
+    cursorBlink: false,
+    fontFamily: 'Consolas, monospace',
+    fontSize: 12,
+    theme: { background: '#090a0c', foreground: '#d9dde2' },
+  })
+  const domFit = new FitAddon()
+  domTerm.loadAddon(domFit)
+  domTerm.open(domHost)
+  domFit.fit()
+  await writeTo(domTerm, `${'letterbox exit surface\r\n'.repeat(20)}`)
+  await frame()
+
+  const screen = domHost.querySelector<HTMLElement>('.xterm-screen')!
+  const dimensions = () => ({ width: screen.style.width, height: screen.style.height })
+  const base = dimensions()
+  const grid = { cols: domTerm.cols, rows: domTerm.rows }
+
+  // Enter a letterbox: another device's grid drawn at a reduced font.
+  domTerm.options.fontSize = 7
+  await frame()
+  const letterboxed = dimensions()
+
+  // Leave it the way `applyGeometry` does: restore the base font at the same grid, then
+  // refit. FitAddon skips `term.resize` because cols/rows are unchanged.
+  domTerm.resize(grid.cols, grid.rows)
+  domTerm.options.fontSize = 12
+  domFit.fit()
+  await frame()
+  const afterFontRestore = dimensions()
+
+  reflowVisibleTerminalRenderer(domTerm, domHost)
+  await frame()
+  const afterReflow = dimensions()
+
+  const result = { base, letterboxed, afterFontRestore, afterReflow, cols: domTerm.cols, rows: domTerm.rows }
   domTerm.dispose()
   return result
 }

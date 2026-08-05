@@ -171,7 +171,7 @@ def test_agent_launchers_inject_mux_wiring(tmp_path: Path, monkeypatch: pytest.M
     assert any(arg.startswith("hooks.SessionStart=") for arg in args)
     assert any(arg.startswith("hooks.UserPromptSubmit=") for arg in args)
     assert 'tui.alternate_screen="never"' in args
-    assert "tui.raw_output_mode=true" in args
+    assert not any("tui.raw_output_mode" in arg for arg in args)
     assert args[-2:] == ["resume", "codex-native"]
     assert native_id == "codex-native"
 

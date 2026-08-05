@@ -25,10 +25,19 @@ test('mobile viewports always use the built-in DOM renderer', () => {
   assert.equal(shouldLoadWebgl('dom', true, 'codex'), false)
 })
 
-test('Codex always uses the DOM renderer so off-tail scrollback stays stable', () => {
+test('Codex stays on the DOM renderer under auto so off-tail scrollback stays stable', () => {
   assert.equal(shouldLoadWebgl('auto', false, 'codex'), false)
-  assert.equal(shouldLoadWebgl('webgl', false, 'codex'), false)
   assert.equal(shouldLoadWebgl('dom', false, 'codex'), false)
+})
+
+test('an explicit webgl preference reaches Codex, which is the one backend it was silently skipping', () => {
+  // The setting existed and the user could select it, but the backend whose repaint
+  // cost makes the renderer worth choosing ignored it. Opting in has a visible failure
+  // mode and is the only way to find out whether the exclusion still earns its place.
+  assert.equal(shouldLoadWebgl('webgl', false, 'codex'), true)
+  // Never on a phone, whatever the preference says: Chromium device emulation can keep
+  // a live context while changing pixel ratio and leave the pane blank.
+  assert.equal(shouldLoadWebgl('webgl', true, 'codex'), false)
 })
 
 test('attach readiness carries fitted dimensions, renderer, and visibility', () => {

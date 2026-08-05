@@ -63,8 +63,9 @@ A stack renders its active child **plus** its most recently shown terminal sibli
 `display:none` (`.terminal-pane.pane-warm`). Unmounting them instead made every tab switch a cold
 attach: xterm disposed, the PTY socket dropped, and on return the daemon replays the retained
 buffer while xterm parses it in time-sliced chunks, so a long session is watched redrawing. Worst
-for Codex, launched in raw scrollback mode (`codex_tui.py`), whose retained bytes are real lines
-that each allocate and scroll rather than repaints of one alternate screen.
+for Codex, whose transcript lives in scrollback (`tui.alternate_screen="never"`, `codex_tui.py`)
+and whose retained bytes are therefore real lines that each allocate and scroll rather than
+repaints of one alternate screen.
 
 `warmPanes.ts` owns the policy, pure and unit-tested: `recordPaneVisits` moves the currently
 shown panes to the front of a capped recency list, and `warmPaneIds` returns the hidden set —

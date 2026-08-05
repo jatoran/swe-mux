@@ -139,7 +139,7 @@ def test_codex_spawn_resume_and_notify_are_structured(tmp_path: Path) -> None:
         "command_windows" in value and "swe_mux.hook_client" in value for value in hook_values
     )
     assert 'tui.alternate_screen="never"' in spawned.argv
-    assert "tui.raw_output_mode=true" in spawned.argv
+    assert not any("tui.raw_output_mode" in value for value in spawned.argv)
     assert spawned.argv[-2:] == ("--model", "o3 pro")
     assert resumed.argv[-2:] == ("resume", "native-id")
 
@@ -162,9 +162,20 @@ def test_codex_defaults_to_scrollback_safe_tui(tmp_path: Path) -> None:
     assert CodexAdapter().spawn_spec("ignored", SpawnOptions(tmp_path)).argv == (
         "-c",
         'tui.alternate_screen="never"',
-        "-c",
-        "tui.raw_output_mode=true",
     )
+
+
+def test_codex_leaves_raw_output_mode_to_the_cli(tmp_path: Path) -> None:
+    """Mux pins the screen buffer, never the transcript renderer.
+
+    Forcing `tui.raw_output_mode=true` cost Codex panes their colour, their tool-output
+    folding, and any visual break between working and answering, for no behaviour mux
+    reads. Nothing about the scrollback contract needs it, so a user who wants raw
+    output asks the CLI for it.
+    """
+    spec = CodexAdapter().spawn_spec("ignored", SpawnOptions(tmp_path))
+
+    assert not any("tui.raw_output_mode" in value for value in spec.argv)
 
 
 def test_codex_explicit_tui_config_overrides_scrollback_defaults(tmp_path: Path) -> None:
@@ -174,13 +185,13 @@ def test_codex_explicit_tui_config_overrides_scrollback_defaults(tmp_path: Path)
 
     spec = adapter.spawn_spec(
         "ignored",
-        SpawnOptions(tmp_path, args=["--config=tui.raw_output_mode=false"]),
+        SpawnOptions(tmp_path, args=["--config=tui.raw_output_mode=true"]),
     )
 
     assert spec.argv == (
         "--config",
         'tui.alternate_screen="always"',
-        "--config=tui.raw_output_mode=false",
+        "--config=tui.raw_output_mode=true",
     )
 
 

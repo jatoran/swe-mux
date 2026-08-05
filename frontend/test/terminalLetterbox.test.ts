@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  adoptsOwnGeometryOnReveal,
   geometryMatchesFit,
   letterboxFontSize,
   MIN_LETTERBOX_FONT_PX,
@@ -36,4 +37,21 @@ test('a pane letterboxes exactly when the shared size is not its own fit', () =>
   // Nothing to compare yet: render normally rather than flashing a letterbox.
   assert.equal(geometryMatchesFit(null, { cols: 80, rows: 24 }), true)
   assert.equal(geometryMatchesFit({ cols: 80, rows: 24 }, null), true)
+})
+
+test('a revealed pane that owns input trusts the fit it just measured', () => {
+  // The owner's viewport is taken verbatim by the daemon, so the confirmation this
+  // pane is waiting for can only agree with what it measured. Waiting for it is what
+  // drew one frame at the pre-hide grid and then snapped.
+  assert.equal(adoptsOwnGeometryOnReveal(true, { cols: 120, rows: 40 }), true)
+})
+
+test('a revealed pane that does not own input still letterboxes', () => {
+  // Its fit is a proposal arbitration may reduce. Rendering it as settled is how a
+  // background desktop pane rewraps an agent TUI to desktop width on a phone.
+  assert.equal(adoptsOwnGeometryOnReveal(false, { cols: 120, rows: 40 }), false)
+})
+
+test('a revealed pane with no fit yet has nothing to adopt', () => {
+  assert.equal(adoptsOwnGeometryOnReveal(true, null), false)
 })

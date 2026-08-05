@@ -57,12 +57,21 @@
   inherited `MUX_HOOK_*` environment. Codex asks once to trust the exact command definitions for
   non-managed hooks. swe-mux does not bypass that review or a user/admin hook disable. The older
   `notify` program remains a completion and identity fallback, and resume uses `codex resume`.
-  Direct and shim-launched Codex sessions default `tui.alternate_screen="never"` and
-  `tui.raw_output_mode=true`, keeping the transcript in native xterm scrollback instead of
-  asking its full-screen TUI to repaint history while the viewport is off-tail. An explicit
-  `codex_args` or per-launch config value wins for either key. The Project Run menu and custom
-  launcher both use this same direct adapter spawn path; neither types an agent command into an
-  intermediate shell.
+  Direct and shim-launched Codex sessions default `tui.alternate_screen="never"`, keeping the
+  transcript in native xterm scrollback instead of asking its full-screen TUI to repaint history
+  while the viewport is off-tail. An explicit `codex_args` or per-launch config value wins for
+  that key. The Project Run menu and custom launcher both use this same direct adapter spawn
+  path; neither types an agent command into an intermediate shell.
+- **`tui.raw_output_mode` is the CLI's to decide, not mux's.** It was previously forced to
+  `true` alongside the screen-buffer default and is no longer set at all. Raw output suppresses
+  Codex's rich transcript rendering, which cost panes their colour (measured 2026-08-05 over a
+  512 KB replay window: 26 colour escapes against 6,353 in a Claude pane), their tool-output
+  folding, and any visual break between working and answering. Nothing mux reads depends on it:
+  the normal-screen prompt (`delivery-readiness.md`), scrollback holding real lines rather than
+  repaints of one fixed screen, and xterm owning every scroll all follow from
+  `tui.alternate_screen="never"` alone. Codex ships raw output off, so omitting it restores the
+  CLI default and leaves `~/.codex/config.toml` in charge. `/raw` toggles it for one live
+  session; `codex_args` pins it for new ones.
 - Hooks provide low-latency state changes. Native transcripts are authoritative fallbacks,
   including when an agent is launched outside a shim or an agent mode omits a hook. Source
   priority arbitrates conflicting evidence within one root turn and is released at the next

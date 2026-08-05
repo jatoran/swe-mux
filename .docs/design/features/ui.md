@@ -336,8 +336,12 @@ responsive controls.
     size while everything around it grew is not what the setting is asked for, and the
     arbitration consequence turned out to be the correct behaviour rather than the objection.
 - Terminals exposes `auto | webgl | dom` renderer selection. `auto` preserves accelerated WebGL
-  on desktop with automatic DOM fallback; mobile and Codex terminals always use DOM regardless
-  of the preference so their scrollback remains stable.
+  on desktop with automatic DOM fallback, and keeps Codex on DOM so its scrollback remains
+  stable. Mobile is DOM-only regardless of the preference, because Chromium device emulation can
+  keep a live context across a pixel-ratio change and leave the pane blank. An explicit `webgl`
+  preference does reach Codex: the exclusion belongs to the default, not to a user who has
+  chosen otherwise, and opting in is the only way to measure whether it still earns its place.
+  Its failure mode is visible (torn or blank scrollback) and reversible by selecting `dom`.
 - The WebGL addon is constructed with `preserveDrawingBuffer: true`, and that is load-bearing
   rather than a tuning choice. `WebglRenderer._updateModel` skips any cell whose code, fg, bg
   and ext match its model, so a frame re-uploads only what changed and every other pixel is
@@ -1059,7 +1063,7 @@ responsive controls.
   available). Depth is capped so a malformed tree cannot spin a handler that runs on every gesture.
 - The panels also dismiss any keyboard already visible at **touchstart, as soon as a second
   finger lands**, rather than waiting for the resolved command at touchend. Two fingers are never
-  text entry, so the early blur is safe. Continuity 0.2.18 separately owns note-touch
+  text entry, so the early blur is safe. Continuity 0.2.19 separately owns note-touch
   arbitration: pointerdown does not focus, a resolved tap places the caret and focuses, and
   scroll/cancel/long-press paths leave the keyboard closed. swe-mux adds no shadow-DOM or caret
   hit-testing workaround; single-finger touches pass to the editor unchanged.

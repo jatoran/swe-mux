@@ -4,9 +4,9 @@
  * Switching tabs used to unmount the pane, which disposes xterm, drops the PTY
  * socket, and makes the next visit a cold attach: the daemon replays the retained
  * buffer and xterm parses it in time-sliced chunks, so returning to a long session
- * is *watched* redrawing. Worst for a CLI in raw scrollback mode (how mux launches
- * Codex), whose retained bytes are real lines that each allocate and scroll rather
- * than repaints of one alternate screen.
+ * is *watched* redrawing. Worst for a CLI whose transcript lives in scrollback (how
+ * mux launches Codex, `tui.alternate_screen="never"`), whose retained bytes are real
+ * lines that each allocate and scroll rather than repaints of one alternate screen.
  *
  * Keeping a pane mounted removes the work instead of hiding it — there is no replay
  * at all — but a live pane costs a socket, an xterm instance, and its scrollback, so

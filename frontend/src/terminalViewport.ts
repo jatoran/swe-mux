@@ -141,6 +141,21 @@ export const EXPENSIVE_VIEWPORT_PASS_MS = 8
 export const VIEWPORT_SETTLE_MS = 120
 
 /**
+ * How many frames a revealed pane may wait for its host to have layout.
+ *
+ * A pass whose host measures zero cannot fit, and returning was a silent dead end: the
+ * pane kept whatever grid it had before it was hidden, and nothing rescheduled. The
+ * ResizeObserver looks like the safety net and is not a reliable one — it fires
+ * `scheduleBurstFit`, which on a pane expensive enough to matter is exactly the case the
+ * scheduler coalesces, and it only fires at all if the box changes size again.
+ *
+ * Bounded rather than a loop: a few frames covers layout settling after `display:none`
+ * is lifted, and anything longer is a pane that is not coming back, which the hidden
+ * check ahead of this already handles.
+ */
+export const VIEWPORT_MEASURE_RETRY_FRAMES = 5
+
+/**
  * Hard cap on coalescing, so a continuous gesture still updates.
  *
  * A soft keyboard animates for ~250-400 ms and then stops, so the settle above ends

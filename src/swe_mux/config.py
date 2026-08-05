@@ -257,9 +257,10 @@ class Config:
     # What a *fresh attach* replays, as opposed to what the daemon retains. The
     # client has to parse every replayed byte before it can render anything, and
     # xterm time-slices that across render frames, so a full-buffer replay is
-    # visibly watched happening — worst on a CLI in raw scrollback mode (Codex),
-    # whose bytes are real lines that each allocate and scroll rather than
-    # repaints of one alternate screen. Retention is unchanged: scrolling back
+    # visibly watched happening — worst on a CLI whose transcript lives in
+    # scrollback (Codex, `tui.alternate_screen="never"`), whose bytes are real
+    # lines that each allocate and scroll rather than repaints of one alternate
+    # screen. Retention is unchanged: scrolling back
     # further is a client concern, reconnect latency is everyone's.
     attach_replay_bytes: int = 512 * 1024
     # Session-preserving reload: spawn PTYs in the out-of-process supervisor so

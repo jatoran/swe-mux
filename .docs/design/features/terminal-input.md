@@ -71,6 +71,35 @@ reshape the PTY for the device in use. Every client is told the result and any c
 own fit differs LETTERBOXES: shrink the font, never re-fit, because re-fitting is what put
 two devices into a resize loop.
 
+**A pane returning to screen adopts its own fit instead of waiting to be told**
+(`adoptsOwnGeometryOnReveal`). `serverGeometry` is one round trip stale by construction, and a
+warm pane has usually just measured a box that changed while it was `display:none` (the window
+was resized, the drawer opened, the UI scale moved). Comparing the two on the reveal is
+therefore guaranteed to disagree, so the pane letterboxed to its pre-hide grid, rendered at
+that size, and snapped when the daemon confirmed the size the pane itself had just reported.
+The input owner is the one client entitled to skip that wait: `effective_geometry` takes the
+owner's viewport verbatim, so the confirmation can only agree. Non-owners still letterbox,
+because their fit is a proposal arbitration may reduce, and rendering it as settled is the
+resize loop this design exists to prevent. The licence is a single pass, armed by the
+visibility transition and consumed by the next geometry application; every later resize
+letterboxes normally.
+
+**Leaving a letterbox needs no renderer reflow.** Restoring the base font re-measures xterm's
+surface on its own, even at an unchanged grid, so the stale-dimension repair
+`reflowVisibleTerminalRenderer` exists for does not apply to this path. Measured in
+`runLetterboxExitRepair`, which asserts it so that an xterm upgrade regressing the font path
+fails loudly rather than silently reinstating the symptom.
+
+**A viewport pass whose host measures zero retries instead of dropping**
+(`VIEWPORT_MEASURE_RETRY_FRAMES`). A pane revealed from `display:none` can measure zero for a
+frame or two while layout settles, and that pass is the only thing that would register its
+real viewport. Returning silently left the pane on its pre-hide grid indefinitely, because the
+daemon broadcasts a `geometry` frame only when the arbitrated size actually *changes*
+(`Session.apply_geometry`) — an unchanged arbitration is silence, not confirmation, so nothing
+corrected the client. The ResizeObserver is not the safety net it appears to be: it triggers
+the coalescing burst path, which is deferred on exactly the panes expensive enough for this to
+matter, and it fires only if the box changes size again.
+
 A client registers a viewport only when it fitted itself *while on screen*
 (`attachRegistersViewport`). Both halves are load-bearing, and getting either wrong pins a
 session to a size nobody chose: a pane's own visibility is not `document.hidden` (a warm
@@ -144,6 +173,7 @@ Opt-in terminal diagnostics also record `caret_placement_started` and `caret_pla
 `MIN_LETTERBOX_FONT_PX` (4) in `frontend/src/terminalLetterbox.ts`,
 `LETTERBOX_NOTICE_DELAY_MS` (1500) in `frontend/src/TerminalPane.tsx` — every ordinary
 resize letterboxes for one round trip, so only a letterbox that outlives this is stated.
+`VIEWPORT_MEASURE_RETRY_FRAMES` (5) in `frontend/src/terminalViewport.ts`.
 None user-facing.
 
 ## Key files
@@ -153,7 +183,7 @@ None user-facing.
 - Frame handling, claim decisions, decision log: `src/swe_mux/server.py` (`pty_ws`,
   `_claim_terminal_input`, `_handle_terminal_input`, `_apply_client_viewport`)
 - Client ownership model (pure): `frontend/src/inputOwnership.ts`
-- Letterbox math (pure): `frontend/src/terminalLetterbox.ts`
+- Letterbox math and the reveal-adoption rule (pure): `frontend/src/terminalLetterbox.ts`
 - Socket, DOM, take-over strip: `frontend/src/TerminalPane.tsx`
 - Provider-aware pointer targeting and steering math: `frontend/src/terminalCaretPlacement.ts`
 

@@ -36,8 +36,8 @@ import { activatePromptRailItem } from './promptRail'
 import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
 import { currentProfile, loadRailItems } from './deviceSettings'
-import { APP_TAIL_KEY, VIEWPORT_SETTLE_MS, appOwnsTail, attachRegistersViewport, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, reflowVisibleTerminalRenderer, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
-import { geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
+import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOwnsTail, attachRegistersViewport, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, reflowVisibleTerminalRenderer, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
+import { adoptsOwnGeometryOnReveal, geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
 import { scaledFontSize } from './uiScale'
 import {
   applyOwnerFrame,
@@ -742,6 +742,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let serverGeometry: { cols: number; rows: number } | null = null
     let sentViewport: { cols: number; rows: number; hidden: boolean } | null = null
     let letterboxed = false
+    // Armed by the visibility transition, consumed by the next `applyGeometry`. A single
+    // pass, not a mode: the licence covers the one measurement taken as the pane comes
+    // back, and everything after it is an ordinary resize that must letterbox normally.
+    let adoptOwnFitOnReveal = false
+    // Consecutive frames this pass has waited for a revealed host to gain layout.
+    let measureRetries = 0
     const sendViewport = (cols: number, rows: number, force = false) => {
       if (socket?.readyState !== WebSocket.OPEN) return
       const hidden = paneIsHidden()
@@ -812,6 +818,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       term.options.fontSize = baseFontRef.current
     }
     const applyGeometry = () => {
+      // Consume the reveal's licence to trust its own measurement before comparing, so
+      // a pane the daemon has not answered yet draws the grid it is actually going to
+      // keep instead of one frame of the size it had before it was hidden.
+      if (adoptOwnFitOnReveal) {
+        adoptOwnFitOnReveal = false
+        if (adoptsOwnGeometryOnReveal(ownsInput, localFit)) serverGeometry = localFit
+      }
       if (serverGeometry && !geometryMatchesFit(serverGeometry, localFit)) {
         letterboxed = true
         // Set every pass, not only on the transition: the arbitrated size can change
@@ -824,6 +837,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (letterboxed) {
         letterboxed = false
         setLetterboxSize('')
+        // No renderer reflow here, deliberately. Restoring the font is enough: xterm
+        // re-measures its surface on a font change even when the grid is unchanged, so
+        // the stale-dimension repair `reflowVisibleTerminalRenderer` exists for does not
+        // apply to this path. Measured in `runLetterboxExitRepair`, which asserts it.
         term.options.fontSize = baseFontRef.current
       }
       refitVisibleTerminal(fit, host.current)
@@ -837,7 +854,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // pane has layout of its own (it is only `display:none`), so without this it
         // would keep the PTY sized for a tab nobody is looking at.
         if (paneIsHidden()) sendViewport(localFit?.cols ?? term.cols, localFit?.rows ?? term.rows)
-        if (!terminalHostIsVisible(host.current)) return
+        if (!terminalHostIsVisible(host.current)) {
+          // A pane revealed this frame can still measure zero while layout settles, and
+          // this pass is the only thing that would register its real viewport. Retry a
+          // bounded number of frames instead of dropping it: see
+          // VIEWPORT_MEASURE_RETRY_FRAMES for why the ResizeObserver is not the net it
+          // looks like. A pane that is genuinely hidden stopped at the check above.
+          if (!paneIsHidden() && measureRetries < VIEWPORT_MEASURE_RETRY_FRAMES) {
+            measureRetries += 1
+            runViewportPass()
+          }
+          return
+        }
+        measureRetries = 0
         // A resize moves `baseY` (a ConPTY-backed buffer gains blank rows rather than
         // pulling scrollback back down), so a viewport that was on the newest line no
         // longer is. Remembered before the fit and restored after, because "was the
@@ -954,6 +983,17 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // after the scheduled fit. The tail scroll is the same repair `finishReplay`
       // does: output that arrived while the pane was hidden moved `baseY` without
       // moving a viewport nobody was watching.
+      //
+      // The measurement that pass is about to take is also the one that must not be
+      // second-guessed against a `serverGeometry` predating the hide: see
+      // `adoptsOwnGeometryOnReveal`. Armed here rather than inside the pass because
+      // only the reveal knows the next measurement is the reveal's.
+      adoptOwnFitOnReveal = true
+      // A pane that letterboxed on the way out is rendering at a shrunk font, and the
+      // cached fit was measured in that state. Dropping both makes the reveal's pass a
+      // real measurement of the box the user is now looking at instead of a cache hit
+      // on `localFitBox`, which is what let a stale grid survive the whole transition.
+      localFitBox = null
       scheduleFullRedraw()
       visibilityFrame = window.requestAnimationFrame(() => {
         if (paneIsHidden()) return
@@ -968,7 +1008,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const mobileRenderer = window.matchMedia('(max-width:760px)').matches
     // Codex's full-screen redraws can corrupt WebGL scrollback while the
     // viewport is off-tail. Its DOM renderer remains stable for old sessions;
-    // new sessions also start Codex in raw scrollback mode on the backend.
+    // new sessions also keep their transcript in scrollback on the backend
+    // (`tui.alternate_screen="never"`), so they no longer make those redraws.
+    // The exclusion predates both that default and the `preserveDrawingBuffer`
+    // fix below, and is worth re-measuring rather than assuming still needed.
     if (shouldLoadWebgl(rendererPreference, mobileRenderer, session.backend)) {
       try {
         // `preserveDrawingBuffer: true`, and it is not optional here.

@@ -51,3 +51,31 @@ export function geometryMatchesFit(
   if (!geometry || !fit) return true
   return geometry.cols === fit.cols && geometry.rows === fit.rows
 }
+
+/**
+ * Whether a pane returning to screen may treat its own fresh fit as the session's size.
+ *
+ * `serverGeometry` is one round trip stale by construction, and a pane coming back from
+ * `display:none` has usually just measured a box that changed while it was hidden (the
+ * window was resized, the drawer opened, the UI scale moved). Comparing the two then is
+ * guaranteed to disagree, so the pane letterboxes to the grid it had *before* it was
+ * hidden, renders a frame or two at that size, and snaps when the daemon confirms the
+ * size it already reported. That snap is the whole "it comes back smaller and then
+ * resizes itself" report.
+ *
+ * The owner is the one client allowed to skip that wait: the daemon takes the input
+ * owner's viewport verbatim (`terminal_arbitration.effective_geometry`), so the fit this
+ * pane just measured *is* what the confirmation will say. Adopting it early is not a
+ * guess.
+ *
+ * Non-owners must still letterbox. Their fit is a proposal that arbitration can reduce,
+ * and rendering it as though it were settled is the fight this whole module exists to
+ * prevent: a background desktop pane rewrapping an agent TUI to desktop width on a
+ * phone. A pane with no fit yet has nothing to adopt.
+ */
+export function adoptsOwnGeometryOnReveal(
+  ownsInput: boolean,
+  fit: { cols: number; rows: number } | null,
+): boolean {
+  return ownsInput && fit !== null
+}
