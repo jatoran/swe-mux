@@ -36,7 +36,7 @@ import { activatePromptRailItem } from './promptRail'
 import { AttachIcon, BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
 import { currentProfile, loadRailItems } from './deviceSettings'
-import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOwnsTail, attachRegistersViewport, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, refitVisibleTerminal, reflowVisibleTerminalRenderer, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
+import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, refitVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, trackAppTailDistance, type TerminalSurface } from './terminalViewport'
 import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
 import { adoptsOwnGeometryOnReveal, geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
 import { scaledFontSize } from './uiScale'
@@ -71,6 +71,7 @@ import {
   recordTerminalRenderDiagnostic,
   terminalRenderDiagnosticsEnabled,
 } from './terminalRenderDiagnostics'
+import { holdSoftKeyboard, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
 import {
   caretSteerCommand,
   dispatchTerminalMouseTap,
@@ -270,11 +271,28 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const offTailRef=useRef(false)
   // The same question about the *application's* viewport, which xterm cannot answer. A TUI
   // holding the mouse (Claude) receives a phone's drags as wheel events and scrolls itself,
-  // so xterm's buffer never leaves its tail and `offTail` above stays false forever — which
+  // so xterm's buffer never leaves its tail and `offTail` above stays false forever - which
   // is why the chip has only ever appeared in Codex sessions. Nothing reports that scroll
-  // back to us, so the pane remembers having forwarded one, and the jump clears it.
+  // back, so the pane totals the scroll it forwards and reads the total as the distance from
+  // that viewport's newest line (`trackAppTailDistance`), in the pixels the wheel events
+  // carry. Dragging back down spends the same total, which is what takes the chip away for a
+  // reader who scrolled their own way back rather than tapping it.
   const [appOffTail,setAppOffTail]=useState(false)
   const appOffTailRef=useRef(false)
+  const appTailDistanceRef=useRef(0)
+  // Forget that estimate: the application's viewport is on its newest line again, or the
+  // viewport the estimate described no longer exists. `reason` is recorded because the
+  // estimate is the one part of the chip nothing on screen can be checked against - a chip
+  // that outstays the scroll it was raised for, or leaves before it, is only diagnosable
+  // from the sequence of distances and the event that reset them.
+  const clearAppTail=(reason:string)=>{
+    const distance=appTailDistanceRef.current
+    appTailDistanceRef.current=0
+    if(!appOffTailRef.current)return
+    appOffTailRef.current=false
+    setAppOffTail(false)
+    recordTerminalRenderDiagnostic(session.id,'app_tail_cleared',{reason,distance})
+  }
   // Which device may type into this session. Mirrored out of the mount effect so the
   // pane can say "input is on your phone" instead of silently swallowing keystrokes.
   const [inputOwnership,setInputOwnership]=useState<OwnershipView>(UNOWNED)
@@ -325,8 +343,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setKillArmed(false)
     setInputOwnership(UNOWNED)
     setLetterboxSize('')
-    appOffTailRef.current=false
-    setAppOffTail(false)
+    clearAppTail('session_switch')
   },[session.id])
   useEffect(()=>{
     const on=(event:Event)=>setKillArmed((event as CustomEvent<string|null>).detail===session.id)
@@ -719,6 +736,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const bufferChange = term.buffer.onBufferChange(() => {
       cancelCaretPlacement()
       reportTerminalState()
+      // An alternate-screen switch is the application that owned the tracked viewport
+      // starting or exiting, so the estimate describes a viewport that is no longer on
+      // screen. `syncTail` answers for whatever replaced it.
+      clearAppTail('buffer_switch')
     })
     // Jump-to-latest state. Scrolling up on a phone leaves no cheap way back to
     // the tail, and output arriving while scrolled up moves `baseY` without
@@ -878,6 +899,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // user reading the tail" is not answerable once the grid has changed — and
         // yanking someone who had deliberately scrolled up is worse than not.
         const wasAtTail = !offTailRef.current
+        // Where a reader who had scrolled up was, so the same text can be put back under
+        // them. Only the at-tail case used to be preserved, which left every other
+        // position to whatever the resize and the scroller's stale range did with it.
+        const rowsAboveTail = wasAtTail ? 0 : terminalRowsAboveTail(term)
         const startedAt = performance.now()
         viewportResizeSent = false
         measureFit()
@@ -891,6 +916,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           effectiveViewportCost(performance.now() - startedAt, viewportResizeSent),
         )
         if (wasAtTail) scrollTerminalToTail(term)
+        else restoreTerminalScrollAnchor(term, rowsAboveTail)
         // DOM/WebGL pixels can be discarded while a pane or browser tab is hidden.
         // Repaint one frame after layout settles so every terminal row is invalidated.
         redrawFrame = window.requestAnimationFrame(() => {
@@ -906,7 +932,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
             })
           }
           redrawVisibleTerminal(term, host.current)
-          armSurfaceConfirmation(fullRedraw)
+          armSurfaceConfirmation(fullRedraw || terminalSurfaceChanged(confirmedSurface, terminalSurface(term, host.current)))
         })
       })
     }
@@ -935,7 +961,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       surfaceFrame = window.requestAnimationFrame(() => {
         if (!terminalHostIsVisible(host.current)) return
         webgl?.clearTextureAtlas()
+        // Renderer dimensions first, then pixels. A pass whose box moved without its grid
+        // changing leaves the renderer sized for the old box, and refreshing rows into a
+        // surface that is still the wrong size repaints exactly the region that was
+        // already right. FitAddon's same-grid early return is what makes this reachable —
+        // see `reflowVisibleTerminalRenderer`. Free when nothing is stale.
+        reflowVisibleTerminalRenderer(term, host.current)
         redrawVisibleTerminal(term, host.current)
+        confirmedSurface = terminalSurface(term, host.current)
         diagnoseRender?.('surface_redraw_confirmed', {
           cols: term.cols,
           rows: term.rows,
@@ -943,11 +976,23 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         })
       })
     }
-    // A full redraw races the compositor: the frame it lands on may be one where this pane's
+    // The surface this pane last confirmed it had drawn, so a pass can tell whether the one
+    // it just painted is a different shape. Written only by the confirmation, never by the
+    // pass that requests it: a pass that painted into a moving layout is precisely the one
+    // whose result must not be believed.
+    let confirmedSurface: TerminalSurface | null = null
+    // A redraw races the compositor: the frame it lands on may be one where this pane's
     // canvas is not being presented at its final size yet, and the render is then simply lost
     // — xterm's RenderService fires `onRender` whether or not the renderer drew anything, so
     // nothing anywhere retries it. One confirmation after the burst has settled costs an atlas
     // clear and covers that, and unlike the redraw itself it cannot be raced by layout.
+    //
+    // Armed for any pass that reshaped the surface, not only for the atlas-invalidating ones.
+    // Gating it on the atlas left the single resize path most exposed to that race as the one
+    // path with no confirmation at all: a soft keyboard animates for ~250-400 ms and refits
+    // this pane throughout, so the settling pass reliably paints into a layout still in
+    // motion. What the reader sees is the strip the keyboard just vacated staying blank, with
+    // nothing to retry it — the pane is only asked to redraw again when something else happens.
     const armSurfaceConfirmation = (issued: boolean) => {
       if (!issued) return
       window.clearTimeout(surfaceConfirmTimer)
@@ -1010,7 +1055,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if (paneIsHidden()) return
         reflowVisibleTerminalRenderer(term, host.current)
         runSurfaceRedraw()
-        scrollTerminalToTail(term)
+        // Only for a viewport that was on the tail when the pane went away. A reader who
+        // had deliberately scrolled up is not asking to be taken to the newest output every
+        // time they visit another tab, and the pass above has already put their anchor back.
+        if (!offTailRef.current) scrollTerminalToTail(term)
       })
     }
     // Chromium device emulation can preserve a live WebGL context while changing
@@ -1675,11 +1723,25 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // Focus (and the soft keyboard) is deferred to release: only a still tap sets this,
     // so a scroll or selection drag never raises the keyboard mid-gesture.
     let focusOnMouseClaim=false
+    // What was holding the soft keyboard up when this touch landed, so a gesture that
+    // turns out not to be typing can hand it back. Not raising the keyboard is only half
+    // of leaving it alone: every touch here lands on non-editable content (the live input
+    // is a 1px `pointer-events:none` bridge), and Android lowers the keyboard whenever a
+    // touch resolves against something that is not the focused field. That is what took
+    // the keyboard away mid long-press-and-drag, with nothing in this file asking for it.
+    let softKeyboardBeforeGesture:HTMLElement|null=null
+    // The dismissal count when this touch landed, so a restore can tell "the platform took
+    // the keyboard" from "the user asked for it to go".
+    let softKeyboardDismissalsBeforeGesture=0
     let forwardingTerminalMouse=false
     let selectionScrollTimer:number|undefined
     let selectionScrollDir=0
     const stopSelectionScroll=()=>{if(selectionScrollTimer!==undefined){window.clearInterval(selectionScrollTimer);selectionScrollTimer=undefined}selectionScrollDir=0}
     const cancelLongPress = () => { if (longPress !== null) window.clearTimeout(longPress); longPress = null }
+    // One rendered row, in pixels: the unit both drag targets are measured in - the scroll
+    // xterm's own viewport takes, and the scroll an application receives as whole wheel
+    // reports. Falls back to xterm's default cell height for a pane with no element yet.
+    const paneRowHeight = () => (term.element?.getBoundingClientRect().height??term.rows*13)/Math.max(term.rows,1)
     const cellAt = (clientX:number,clientY:number) => {
       const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
       if (!screen) return null
@@ -1739,6 +1801,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       if (event.pointerType === 'touch') {
         lastTouchAt = Date.now()
+        softKeyboardBeforeGesture=softKeyboardHolder()
+        softKeyboardDismissalsBeforeGesture=softKeyboardDismissals()
         touch={pointerId:event.pointerId,lastY:event.clientY,startX:event.clientX,startY:event.clientY,px:event.clientX,py:event.clientY,moved:false,selecting:null}
         cancelLongPress()
         if(mobileInput.longPress==='context_menu')longPress = window.setTimeout(() => {
@@ -1788,16 +1852,23 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if(dragTarget==='disabled')return
       event.preventDefault()
       if(dragTarget==='terminal'){
-        const rowHeight=(term.element?.getBoundingClientRect().height??term.rows*13)/Math.max(term.rows,1)
-        term.scrollLines(terminalScrollLines(delta,rowHeight))
+        term.scrollLines(terminalScrollLines(delta,paneRowHeight()))
         return
       }
       // This scroll belongs to the application, so nothing in xterm's buffer will ever record
-      // it. A drag back through the history is the pane's only evidence that the user is no
-      // longer looking at the newest output, and it is what raises the chip. Only a drag
-      // back: reaching the newest line again is a thing only the application knows, so the
-      // chip stays up until the jump is taken, rather than guessing and vanishing early.
-      if(delta<0&&!appOffTailRef.current){appOffTailRef.current=true;setAppOffTail(true)}
+      // it. The drags this pane forwards are its only evidence of where that viewport is, so
+      // it totals them: a drag back through the history raises the chip, and a drag toward
+      // the newest output spends the same total back down to zero and takes it away again.
+      // Both halves matter - a reader who scrolls their own way back to the newest output is
+      // otherwise left with a chip that only a tap can dismiss, on a viewport already sitting
+      // exactly where the tap would send it.
+      const rowHeight=paneRowHeight()
+      appTailDistanceRef.current=trackAppTailDistance(appTailDistanceRef.current,delta)
+      const off=appOffTailByDistance(appTailDistanceRef.current,rowHeight)
+      if(off!==appOffTailRef.current){
+        appOffTailRef.current=off;setAppOffTail(off)
+        recordTerminalRenderDiagnostic(session.id,'app_tail_estimate',{off,distance:appTailDistanceRef.current,rowHeight})
+      }
       term.element?.dispatchEvent(new WheelEvent('wheel',{
         bubbles:true,cancelable:true,clientX:event.clientX,clientY:event.clientY,
         deltaY:delta,deltaMode:WheelEvent.DOM_DELTA_PIXEL,
@@ -1848,11 +1919,26 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       if(focusOnMouseClaim)focusTerminalInput()
       stopSelectionScroll();cancelLongPress();touch=null
-      requestAnimationFrame(autoCopySelection)
+      // A gesture that was not a typing tap gives the keyboard back exactly as it found
+      // it — up if it was up, down if it was down. Deferred a frame, and ordered after
+      // the copy, because the platform makes its own focus decision as the tap resolves:
+      // restoring inside this handler would be undone by it. `focusOnMouseClaim` already
+      // owns the other case, so the two never both act.
+      const restoreKeyboard=focusOnMouseClaim?null:softKeyboardBeforeGesture
+      const dismissalsAtStart=softKeyboardDismissalsBeforeGesture
+      softKeyboardBeforeGesture=null
+      requestAnimationFrame(()=>{autoCopySelection();restoreSoftKeyboard(restoreKeyboard,dismissalsAtStart)})
     }
     const pointerCancel=(event:PointerEvent)=>{
       if(activePointerId!==event.pointerId)return
       activePointerId=null;tap=null;focusOnMouseClaim=false;stopSelectionScroll();cancelLongPress();touch=null
+      // A cancelled pointer is the platform taking the gesture over, which is precisely
+      // when it lowers the keyboard without anything here asking. Nothing typed, so the
+      // keyboard state before the touch is the one to keep.
+      const restoreKeyboard=softKeyboardBeforeGesture
+      const dismissalsAtStart=softKeyboardDismissalsBeforeGesture
+      softKeyboardBeforeGesture=null
+      requestAnimationFrame(()=>restoreSoftKeyboard(restoreKeyboard,dismissalsAtStart))
     }
     const openMenu = (event: MouseEvent) => {
       // The terminal body has no context menu: right-click stays out of the
@@ -2068,7 +2154,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     scrollTerminalToTail(termRef.current)
     // The rail's own `^End` reaches the same place the chip does, so it takes the chip down
     // with it. Only this one sequence: typing does not move an application's viewport.
-    if(sequence===APP_TAIL_KEY&&appOffTailRef.current){appOffTailRef.current=false;setAppOffTail(false)}
+    if(sequence===APP_TAIL_KEY)clearAppTail('rail_tail_key')
     if(!keyboardOffRef.current)focusTerminalInputRef.current()
   }
   const railKeySendRef=useRef(sendKey)
@@ -2095,6 +2181,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // Jump-to-latest, for both viewports rather than only xterm's (see `appOwnsTail`). Scrolling
   // the terminal alone is what left this dead on a phone in a Claude session while the rail's
   // `^End` — which happens to send the same key on its way past — kept working.
+  //
+  // Moves the viewport and nothing else: it raises no keyboard (it never focuses) and lowers
+  // none either (the chip's `holdSoftKeyboard` keeps the press from taking focus off the live
+  // input). The chip is a sibling of the terminal host rather than a child, so the host's own
+  // `mobileMouseClaim` guard never covered it — which is why reaching the newest line used to
+  // close the keyboard and resize the pane out from under the line it had just jumped to.
   const jumpToLatest=()=>{
     const term=termRef.current
     // A pane that has been forwarding drags counts as much as a live mouse mode: whatever the
@@ -2102,8 +2194,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const appReceivesScroll=appOffTailRef.current||term?.modes.mouseTrackingMode!=='none'
     if(term&&appOwnsTail(session.backend,appReceivesScroll))sendViewKeyRef.current(APP_TAIL_KEY)
     scrollTerminalToTail(term)
-    appOffTailRef.current=false
-    setAppOffTail(false)
+    clearAppTail('jump_to_latest')
   }
   const toggleKeyboard=()=>{
     const next=!keyboardOffRef.current
@@ -2227,7 +2318,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   }
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
-  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><RailScroller>{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}>Send</button>}</div>{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><RailScroller>{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}>Send</button>}</div>{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }

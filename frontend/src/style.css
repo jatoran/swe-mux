@@ -1330,7 +1330,44 @@ body {
 .manual-terminal-paste{position:absolute;z-index:17;right:6px;bottom:40px;left:6px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:7px;border:1px solid var(--amber);background:var(--panel);box-shadow:4px 5px #0008}.manual-terminal-paste span{grid-column:1/-1;color:var(--amber)}.manual-terminal-paste textarea{min-height:68px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:16px/1.4 inherit;resize:vertical;user-select:text;-webkit-user-select:text}.manual-terminal-paste button{min-width:34px;border:1px solid var(--line);background:var(--panel2);color:var(--text)}
 
 @media(max-width:760px){
-  .app-shell{height:var(--app-height,100dvh);min-height:0}
+  .app-shell{height:var(--app-height,100dvh);min-height:0;overflow:hidden}
+  /* The soft keyboard overlays the layout viewport instead of resizing it, so nothing here
+     reflows and every terminal keeps its grid and its PTY size. What is left is that the
+     bottom of the terminal — the agent composer and the command rail — sits behind the
+     keyboard, so the terminal *surface* slides up by exactly what the keyboard covers.
+     The surface and nothing above it: the pane's own header row and the tab rail are
+     navigation, not content, and sliding the whole workspace took them off the top of the
+     screen and drew the terminal over where they had been. The pane clips, so the part of
+     the surface that rides up past its header is hidden rather than painted over it.
+     What is lost is the top of the terminal, which is the half nobody is looking at while
+     typing, and it comes back the moment the keyboard closes.
+     Scoped to `.soft-keyboard-open` rather than always translating by a variable that is
+     usually zero, because a transform makes an element the containing block for its
+     `position:fixed` descendants even at zero, which would re-anchor the sidebar and drawer
+     overlays. Both of those dismiss the keyboard when they open, so the two never coincide. */
+  :root.soft-keyboard-open .terminal-pane{overflow:hidden}
+  :root.soft-keyboard-open .terminal-surface{transform:translateY(calc(-1*var(--keyboard-inset,0px)))}
+  /* The pane's clip protects everything above the pane — the tab rail and the toolbar are
+     outside its box — but the pane's own header and read-aloud strip are inside it, and the
+     surface is a later sibling, so a translated surface paints straight over them. They are
+     still laid out and still hit-testable underneath, which is the worst version of hidden:
+     `getBoundingClientRect` reports them exactly where they should be while `elementFromPoint`
+     returns the terminal. A stacking layer of their own is what actually keeps them on top. */
+  :root.soft-keyboard-open .terminal-pane>.pane-bar,
+  :root.soft-keyboard-open .terminal-pane>.voice-strip{position:relative;z-index:2}
+  /* Every other mobile surface shortens instead of sliding, and the difference is not a
+     stylistic one. The terminal must not resize because shrinking an alternate-screen PTY
+     destroys the rows that no longer fit. A note editor, a file view, or the drawer reflows
+     losslessly, and shortening is strictly better there: the whole surface stays reachable
+     and scrollable rather than having its top pushed off screen.
+     This is what the note editor's own command rail needs. Continuity pins that rail to the
+     bottom of the element the host gives it, so a box that still runs to the bottom of the
+     layout viewport puts the rail behind the keyboard however the editor is scrolled — the
+     host owns the box, so the host owns the fix. */
+  :root.soft-keyboard-open .mobile-unified-active>.project-resource,
+  :root.soft-keyboard-open .mobile-unified-active>.preview-pane{height:calc(100% - var(--keyboard-inset,0px))}
+  :root.soft-keyboard-open .utility-drawer.overlay,
+  :root.soft-keyboard-open .sidebar.open{bottom:var(--keyboard-inset,0px)}
   /* [nav] [quota] [project name] [Run] [drawer]. Flex, not grid: only the title flexes and
      the rest are content-sized, which grid expressed poorly here — an `auto` track next to
      the title's `1fr` absorbed the slack and left the quota chips floating mid-bar. `nowrap`

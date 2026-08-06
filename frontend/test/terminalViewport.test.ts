@@ -5,6 +5,7 @@ import {
   EXPENSIVE_VIEWPORT_PASS_MS,
   VIEWPORT_SETTLE_MAX_MS,
   VIEWPORT_SETTLE_MS,
+  appOffTailByDistance,
   appOwnsTail,
   attachRegistersViewport,
   createViewportScheduler,
@@ -12,8 +13,13 @@ import {
   redrawVisibleTerminal,
   refitVisibleTerminal,
   reflowVisibleTerminalRenderer,
+  restoreTerminalScrollAnchor,
   scrollTerminalToTail,
   terminalHostIsVisible,
+  terminalRowsAboveTail,
+  terminalSurface,
+  terminalSurfaceChanged,
+  trackAppTailDistance,
 } from '../src/terminalViewport.ts'
 
 /**
@@ -35,6 +41,96 @@ function clampedTerminal(viewportY: number, baseY: number, clampedTo: number) {
   }
   return term
 }
+
+/**
+ * A terminal whose `scrollLines` is clamped the way xterm's is mid-resize burst: the DOM
+ * scroller advertises a stale maximum, so the first move lands short and only the scroll it
+ * fired republishes the real range. Same shape as `clampedTerminal`, for the off-tail path.
+ */
+function clampedScroller(viewportY: number, baseY: number, ceiling: number) {
+  let range = ceiling
+  const term = {
+    calls: 0,
+    buffer: { active: { viewportY, baseY } },
+    scrollToBottom() { term.buffer.active.viewportY = term.buffer.active.baseY },
+    scrollLines(amount: number) {
+      term.calls += 1
+      const wanted = term.buffer.active.viewportY + amount
+      term.buffer.active.viewportY = Math.max(0, Math.min(range, wanted))
+      range = term.buffer.active.baseY
+    },
+  }
+  return term
+}
+
+test('the scroll anchor is the distance from the tail, not an absolute row', () => {
+  // A reader 40 rows above the newest line. Growing the grid moves `baseY` (a ConPTY buffer
+  // gains blank rows), and it is the distance that has to survive that, not `viewportY`.
+  assert.equal(terminalRowsAboveTail({ buffer: { active: { viewportY: 960, baseY: 1000 } }, scrollToBottom() {} }), 40)
+  // At the tail there is no anchor to take: `scrollTerminalToTail` owns that case.
+  assert.equal(terminalRowsAboveTail({ buffer: { active: { viewportY: 1000, baseY: 1000 } }, scrollToBottom() {} }), 0)
+  // Past the tail cannot go negative and become a scroll in the wrong direction.
+  assert.equal(terminalRowsAboveTail({ buffer: { active: { viewportY: 1010, baseY: 1000 } }, scrollToBottom() {} }), 0)
+  assert.equal(terminalRowsAboveTail(null), 0)
+})
+
+test('an off-tail viewport is restored to the same distance from a moved tail', () => {
+  // The resize added 12 rows to the buffer: baseY 1000 -> 1012. Staying 40 rows above the
+  // tail means landing on 972, which keeps the same text under the reader.
+  const term = clampedScroller(960, 1012, 10_000)
+  assert.equal(restoreTerminalScrollAnchor(term, 40), true)
+  assert.equal(term.buffer.active.viewportY, 972)
+  assert.equal(term.calls, 1)
+})
+
+test('a clamped anchor restore re-issues until it lands', () => {
+  // The scroller still advertises the pre-resize maximum, so the first move stops short.
+  const term = clampedScroller(300, 1000, 800)
+  assert.equal(restoreTerminalScrollAnchor(term, 40), true)
+  assert.equal(term.buffer.active.viewportY, 960)
+  assert.ok(term.calls > 1, 'one clamped call is not enough')
+})
+
+test('an anchor the buffer can no longer reach stops instead of spinning', () => {
+  // Scrollback has since been trimmed past the anchor: no call makes progress, so the retry
+  // has to give up rather than re-issue forever.
+  const stuck = {
+    calls: 0,
+    buffer: { active: { viewportY: 0, baseY: 1000 } },
+    scrollToBottom() {},
+    scrollLines() { stuck.calls += 1 },
+  }
+  assert.equal(restoreTerminalScrollAnchor(stuck, 40), false)
+  assert.equal(stuck.calls, 1)
+  // Nothing to restore is not a failure to restore.
+  assert.equal(restoreTerminalScrollAnchor(stuck, 0), false)
+  assert.equal(restoreTerminalScrollAnchor(null, 40), false)
+})
+
+test('a surface that changed shape owes a confirmation repaint', () => {
+  const host = { isConnected: true, clientWidth: 390, clientHeight: 700 }
+  const grown = { isConnected: true, clientWidth: 390, clientHeight: 1000 }
+  const term = { cols: 80, rows: 24 }
+  const before = terminalSurface(term, host)
+  // The keyboard closed: same grid so far, bigger box. FitAddon skips `term.resize` when the
+  // grid is unchanged, so this is exactly the case whose renderer holds the old dimensions.
+  assert.equal(terminalSurfaceChanged(before, terminalSurface(term, grown)), true)
+  // The grid changed on the same box — a font or scale change.
+  assert.equal(terminalSurfaceChanged(before, terminalSurface({ cols: 80, rows: 40 }, host)), true)
+  // Nothing moved: no repaint owed, which is what keeps this off every idle pass.
+  assert.equal(terminalSurfaceChanged(before, terminalSurface(term, host)), false)
+})
+
+test('a surface with nothing confirmed yet always owes one, and a hidden pane never does', () => {
+  const host = { isConnected: true, clientWidth: 390, clientHeight: 700 }
+  const term = { cols: 80, rows: 24 }
+  assert.equal(terminalSurfaceChanged(null, terminalSurface(term, host)), true)
+  // A pane with no layout cannot be measured, so it cannot be judged stale either — and
+  // arming a confirmation for it would repaint into a box that does not exist.
+  assert.equal(terminalSurface(term, { isConnected: true, clientWidth: 0, clientHeight: 0 }), null)
+  assert.equal(terminalSurfaceChanged(terminalSurface(term, host), null), false)
+  assert.equal(terminalSurfaceChanged(null, null), false)
+})
 
 test('hidden terminal panes do not fit or redraw at zero size', () => {
   let fits = 0
@@ -132,6 +228,42 @@ test('jump-to-latest asks the application too, but only one that owns a viewport
   // A shell owns no viewport, so the bytes would only land in a half-typed command line.
   assert.equal(appOwnsTail('shell', true), false)
   assert.equal(APP_TAIL_KEY, '\x1b[1;5F')
+})
+
+// The other half of that: an application scrolling its own viewport also reports nothing when
+// the reader drags their way back to it, so the pane has to total the scroll it forwards in
+// both directions. Totalling only the drag back is what left a chip up over a viewport already
+// sitting exactly where tapping it would have sent them.
+test('the application-tail estimate is spent by dragging back toward the newest output', () => {
+  const rowHeight = 17
+  // A drag back through the history: five touch moves' worth of forwarded wheel pixels.
+  let distance = 0
+  for (let move = 0; move < 5; move += 1) distance = trackAppTailDistance(distance, -40)
+  assert.equal(distance, 200)
+  assert.equal(appOffTailByDistance(distance, rowHeight), true)
+  // Dragging the other way spends the same total, and the chip goes with the last of it.
+  for (let move = 0; move < 4; move += 1) distance = trackAppTailDistance(distance, 40)
+  assert.equal(appOffTailByDistance(distance, rowHeight), true)
+  distance = trackAppTailDistance(distance, 40)
+  assert.equal(distance, 0)
+  assert.equal(appOffTailByDistance(distance, rowHeight), false)
+})
+
+test('the application-tail estimate banks nothing past the tail and ignores a resting finger', () => {
+  // The application clamps at its newest line, so scrolling down there moves nothing. Credit
+  // for it would have to be spent again before the next drag back could raise the chip.
+  assert.equal(trackAppTailDistance(0, 600), 0)
+  assert.equal(trackAppTailDistance(50, 600), 0)
+  // Sub-row jitter - a finger resting on the glass between touch events - is less than xterm
+  // turns into a wheel report, so the application never moves and the chip must not appear.
+  const jitter = trackAppTailDistance(0, -2)
+  assert.equal(jitter, 2)
+  assert.equal(appOffTailByDistance(jitter, 17), false)
+  // A whole row of it does, since that is one wheel report the application acts on.
+  assert.equal(appOffTailByDistance(trackAppTailDistance(jitter, -15), 17), true)
+  // A pane with no measurable row still has to mean something by "scrolled".
+  assert.equal(appOffTailByDistance(0, 0), false)
+  assert.equal(appOffTailByDistance(1, 0), true)
 })
 
 // --- Adaptive viewport scheduling -------------------------------------------

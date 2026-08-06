@@ -1,16 +1,28 @@
-// Dismissing the soft keyboard when a full-height mobile panel slides in.
+// Deciding what the soft keyboard does, on the one platform that will not say.
 //
-// On a phone the sidebar and the utility drawer cover the workspace, but the
-// on-screen keyboard raised by whatever was focused behind them does not go
-// away on its own — it keeps up to half the screen, so the panel that just
-// opened is the half the user cannot see. Blurring the focused field is the
-// only way to lower it: there is no API for "hide the keyboard".
+// Android exposes no "show/hide the keyboard" API. Its visibility is a function
+// of which element has focus: a field that accepts text raises it, and focus
+// leaving that field lowers it. Every operation here is therefore expressed as a
+// focus move, and the two directions have different callers:
 //
-// This is not the terminal's read/select mode (`terminal.keyboardToggle`),
-// which is a sticky per-pane mode. Nothing here is sticky — tapping the
-// terminal (or any field) after closing the panel raises the keyboard again.
+//   - Lowering it. On a phone the sidebar and the utility drawer cover the
+//     workspace, but the keyboard raised by whatever was focused behind them does
+//     not go away on its own — it keeps up to half the screen, so the panel that
+//     just opened is the half the user cannot see. `dismissSoftKeyboard` blurs
+//     the field holding it up.
+//   - Leaving it alone. A control that is not a text field still takes focus when
+//     it is pressed, which lowers the keyboard as a side effect of using it — an
+//     overlay button (jump-to-latest), or the platform's own handling of a
+//     long-press over non-editable content. `holdSoftKeyboard` prevents the focus
+//     move before it happens; `restoreSoftKeyboard` puts it back when a gesture
+//     already took it. Between them a gesture that was not typing leaves the
+//     keyboard exactly as open or closed as it found it.
 //
-// The predicate and the shadow walk are duck-typed rather than written against
+// None of this is the terminal's read/select mode (`terminal.keyboardToggle`),
+// which is a sticky per-pane mode. Nothing here is sticky — tapping the terminal
+// (or any field) raises the keyboard again.
+//
+// The predicates and the shadow walk are duck-typed rather than written against
 // `HTMLInputElement`/`ShadowRoot` so they can be unit-tested without a DOM.
 
 export type FocusedField = {
@@ -79,9 +91,107 @@ export function softKeyboardHolder():HTMLElement|null {
   return active instanceof HTMLElement&&raisesSoftKeyboard(active)?active:null
 }
 
+/**
+ * How many dismissals have been asked for. Not a timestamp: the only question a caller
+ * has is "did someone deliberately lower the keyboard since I started", and a counter
+ * answers it without any clock or tolerance window.
+ */
+let dismissals = 0
+
+/** The dismissal count, to compare against later. See `restoreSoftKeyboard`. */
+export function softKeyboardDismissals():number {
+  return dismissals
+}
+
 /** Lower the soft keyboard, if a field is what is holding it up. Focus on anything
  *  else (a button, the body) is left alone: blurring it would cost the tab order
- *  its place for no gain. */
+ *  its place for no gain. Counted even when nothing was focused: the *intent* is what
+ *  a concurrent gesture has to respect, and whether a field happened to hold the
+ *  keyboard at that instant is a race, not a decision. */
 export function dismissSoftKeyboard():void {
+  dismissals += 1
   softKeyboardHolder()?.blur()
+}
+
+/**
+ * The height of the layout viewport the soft keyboard is covering.
+ *
+ * Meaningful only because the viewport meta is `interactive-widget=resizes-visual`: the
+ * layout viewport keeps its full height when the keyboard opens, and the visual viewport
+ * shrinks to what is still on screen, so the difference is the keyboard.
+ *
+ * Thresholded because that difference is not always a keyboard. Collapsing browser chrome
+ * moves it by ~50-60 px, and pinch-zoom and rounding move it by a few, while no soft
+ * keyboard is anywhere near that small. Treating those as a keyboard would slide the
+ * workspace up by a sliver every time the address bar hid.
+ */
+export const SOFT_KEYBOARD_MIN_INSET_PX = 120
+
+export function softKeyboardInset(layoutHeight:number, visualHeight:number):number {
+  if(!Number.isFinite(layoutHeight)||!Number.isFinite(visualHeight))return 0
+  const inset = Math.round(layoutHeight - visualHeight)
+  return inset >= SOFT_KEYBOARD_MIN_INSET_PX ? inset : 0
+}
+
+/**
+ * Whether a gesture cost the keyboard that was up when it started.
+ *
+ * Both halves are load-bearing, and the second is what keeps this from being a
+ * blunt "focus moved" check. Focus landing on *another* text field is a move the
+ * gesture made on purpose and the keyboard never went down, so there is nothing to
+ * repair and restoring would yank the user back out of the field they just reached.
+ * Only focus that now sits somewhere raising no keyboard is a loss.
+ *
+ * Split from the DOM so the decision is testable without one.
+ */
+export function softKeyboardLost(
+  holder:FocusedField|null|undefined,
+  active:FocusedField|null|undefined,
+):boolean {
+  return !!holder&&active!==holder&&!raisesSoftKeyboard(active)
+}
+
+/**
+ * Keep the soft keyboard up while a control that is not a text field is pressed.
+ *
+ * Bind to `mousedown`, whose default action is the focus move: cancel it and focus
+ * never leaves the field, so Android never lowers the keyboard and the control still
+ * activates (`click` is unaffected by a cancelled `mousedown`). `pointerdown` would
+ * be the tidier event and is not usable — cancelling it suppresses the compatibility
+ * mouse events, which is how a phone delivers the press at all.
+ *
+ * A no-op when no field is holding the keyboard up, so pressing the control with the
+ * keyboard already down behaves exactly as it did before, focus ring included.
+ */
+export function holdSoftKeyboard(event:{preventDefault:()=>void}):void {
+  if(softKeyboardHolder())event.preventDefault()
+}
+
+/**
+ * Put the keyboard back on the field a non-typing gesture took it from.
+ *
+ * The backstop for the focus moves `holdSoftKeyboard` cannot reach, because they are
+ * the platform's rather than a control's: Android lowers the keyboard when a touch
+ * resolves against non-editable content, which is what every drag and long-press over
+ * a terminal is. Cheaper to re-raise than to fight, and it costs nothing in the common
+ * case — a gesture that never moved focus restores nothing.
+ *
+ * `preventScroll` because the field is the terminal's off-screen IME bridge: scrolling
+ * it into view would drag the workspace sideways.
+ */
+export function restoreSoftKeyboard(
+  holder:HTMLElement|null|undefined,
+  dismissalsAtGestureStart:number,
+):boolean {
+  // Somebody lowered the keyboard on purpose while this gesture was running, and that
+  // outranks putting it back. The case is not hypothetical: the mobile panels dismiss on
+  // open, and the swipe that opens the left sidebar crosses the terminal, so the pane saw
+  // a gesture whose focus had "gone missing" and handed the keyboard straight back — the
+  // sidebar slid in over a keyboard it had just closed. Opening the same panel with a
+  // swipe that starts on the top bar never reached this code, which is exactly why it
+  // behaved and the swipe across the session did not.
+  if(softKeyboardDismissals()!==dismissalsAtGestureStart)return false
+  if(!holder||!softKeyboardLost(holder,deepActiveElement(document)))return false
+  holder.focus({preventScroll:true})
+  return true
 }

@@ -20,6 +20,9 @@
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
   `design/features/ui.md`, `technical/frontend/packages.md`
+- Changing what shows or hides the mobile soft keyboard: `design/features/ui.md`,
+  `technical/frontend/packages.md`; open ask against the vendored note editor:
+  `development/CONTINUITY_TOUCH_KEYBOARD_ASK.md`
 - Changing terminal input ownership across devices, the PTY WebSocket frames, or how a
   shared PTY is sized: `design/features/terminal-input.md`, `design/interfaces.md`,
   `design/features/sessions.md`, `design/features/ui.md`,
