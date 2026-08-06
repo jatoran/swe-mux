@@ -66,14 +66,20 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   activity of any Project in it, so a Group ranks on the work inside it rather than its age; an
   empty Group reads as unmeasured and sorts last.
 - Manual order is the default and the tie-break at both levels, so a sort never discards the
-  arrangement underneath it. Placing something by hand returns *that level* to Manual and writes
-  the order that was on screen, so the move survives instead of being re-sorted away: dragging a
-  Project row (or Move up/down, the same persisted reorder contract) for Projects, dragging a
-  section header for sections.
-- A section header is also its collapse toggle — press and move to reorder, press and release to
-  fold, disambiguated by the drag swallowing the click it ends with, exactly as a Project row
-  resolves drag-versus-select. Collapsing is presentation only: the folded Projects keep their
-  place in the collapsed rail, the numbered shortcuts, and every order.
+  arrangement underneath it.
+  Placing something by hand returns *that level* to Manual and writes the order that was on screen, so the move survives instead of being re-sorted away.
+  Desktop pointer dragging and Project-menu Move up/down use the same persisted reorder contract.
+  Mobile Project rows require a 325 ms hold before pickup; movement beyond the 8 px hold slop remains sidebar scrolling and never previews a reorder.
+- Desktop section headers combine collapse and reorder: press and move reorders, while press and release folds.
+  Mobile section headers only fold because Project rows are the sidebar's sole mobile reorder target.
+  The desktop drag swallows the click it ends with.
+  Collapsing is presentation only: the folded Projects keep their place in the collapsed rail, numbered shortcuts, and every order.
+- Mobile Project pickup closes open menus, gives short haptic feedback, previews one insertion inside the current section, and edge-scrolls the tree until release.
+  Releasing commits one order write; cancellation preserves the original order.
+  Project Group assignment remains an explicit Project-menu or registry action rather than a cross-section drop side effect.
+- Mobile Project rows expose `⋮` immediately left of Run for the Project context menu.
+  Project long-press is reserved for reorder; desktop right-click remains the pointer context-menu route.
+  Mobile session long-press remains context-menu-only and never starts sidebar grouping or reorder.
 - A section header's only button is `✎` (rename). It carried a `×` that deleted the Group and
   ungrouped its Projects; that sat a pixel from the fold toggle and dissolved a Group on a stray
   click, so the sidebar no longer deletes Groups at all. Emptying one has the same visible effect,

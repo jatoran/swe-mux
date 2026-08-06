@@ -2,6 +2,31 @@ export type DropSide='before'|'after'
 export type ReorderAxis='horizontal'|'vertical'
 export type ReorderRect={id:string;start:number;end:number}
 export type ReorderTarget={id:string;side:DropSide}
+export type PointerDragActivation=
+  | {mode:'movement';threshold:number}
+  | {mode:'hold';delayMs:number;slop:number}
+export type PointerDragMoveDecision='wait'|'activate'|'cancel'
+
+export const POINTER_MOVE_DRAG:PointerDragActivation={mode:'movement',threshold:5}
+export const MOBILE_PROJECT_HOLD_DRAG:PointerDragActivation={mode:'hold',delayMs:325,slop:8}
+
+export function pointerDragMoveDecision(activation:PointerDragActivation,distance:number):PointerDragMoveDecision{
+  if(activation.mode==='movement')return distance<activation.threshold?'wait':'activate'
+  return distance<=activation.slop?'wait':'cancel'
+}
+
+export function edgeAutoScrollDelta(point:number,start:number,end:number,edgeSize=56,maxSpeed=18):number{
+  if(edgeSize<=0||maxSpeed<=0||end<=start)return 0
+  if(point<start+edgeSize){
+    const strength=Math.min(1,Math.max(0,(start+edgeSize-point)/edgeSize))
+    return -maxSpeed*strength*strength
+  }
+  if(point>end-edgeSize){
+    const strength=Math.min(1,Math.max(0,(point-(end-edgeSize))/edgeSize))
+    return maxSpeed*strength*strength
+  }
+  return 0
+}
 
 export function reorderForHover(ids:string[],draggedId:string,targetId:string,side:DropSide):string[]{
   if(draggedId===targetId||!ids.includes(draggedId)||!ids.includes(targetId))return ids

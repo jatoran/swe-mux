@@ -96,7 +96,10 @@ import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
 import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
-import { reorderForHover, reorderTargetFromContainer, type DropSide, type ReorderAxis } from './dragReorder'
+import {
+  edgeAutoScrollDelta, MOBILE_PROJECT_HOLD_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
+  reorderForHover, reorderTargetFromContainer, type DropSide, type PointerDragActivation, type ReorderAxis,
+} from './dragReorder'
 import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from './pointerDragClaim'
 import { relativeStackTab } from './workspaceTabs'
 import {
@@ -328,7 +331,7 @@ export function App() {
   const [noteMenu,setNoteMenu]=useState<NoteContext>(null)
   const [tabMenu,setTabMenu]=useState<TabContext>(null)
   const [emptyMenu, setEmptyMenu] = useState<{x:number;y:number} | null>(null)
-  const [drawerDisplayMenu,setDrawerDisplayMenu]=useState<{x:number;y:number}|null>(null)
+  const [drawerDisplayMenu,setDrawerDisplayMenu]=useState<{x:number;y:number;surface:'tabs'|'rail'}|null>(null)
   const [zoomedId, setZoomedId] = useState<string | null>(null)
   const [keybindings, setKeybindings] = useState<Record<string, string>>({ 'ctrl+alt+t': 'session.spawnShell', 'ctrl+alt+p': 'palette.open' })
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null)
@@ -457,7 +460,8 @@ export function App() {
   // inject yet, so it hands the template to the Prompts tab to be filled in.
   const [promptPreselect,setPromptPreselect]=useState<{key:string}|undefined>()
   const [drawerTabDisplay,setDrawerTabDisplay]=useState<'icon'|'title'>('icon')
-  const utilityRailWidth=drawerTabDisplay==='title'?112:40
+  const [utilityRailDisplay,setUtilityRailDisplay]=useState<'icon'|'title'>('icon')
+  const utilityRailWidth=utilityRailDisplay==='title'?112:40
   const [drawerWidth,setDrawerWidth]=useState(()=>storedDrawerWidth(localStorage.getItem(DRAWER_WIDTH_KEY)))
   const leftChromeWidth=sidebarCollapsed?SIDEBAR_COLLAPSED_WIDTH:sidebarWidth+SIDEBAR_RESIZER_WIDTH
   const drawerWidthLimit=drawerMaximumWidth(viewportWidth,leftChromeWidth,utilityRailWidth)
@@ -758,11 +762,13 @@ export function App() {
   const beginPointerDrag=(
     event:JSX.TargetedPointerEvent<HTMLElement>,label:string,identity:string,
     onStart:()=>void,onMove:(event:PointerEvent)=>void,onDrop:()=>void,onCancel:()=>void,
+    activation:PointerDragActivation=POINTER_MOVE_DRAG,
   )=>{
     if(event.button!==0||!event.isPrimary)return
     const source=event.currentTarget
     const pointerId=event.pointerId,startX=event.clientX,startY=event.clientY
-    let active=false,done=false,ghost:HTMLDivElement|null=null
+    let active=false,done=false,ghost:HTMLDivElement|null=null,activationTimer:number|null=null
+    let latestX=startX,latestY=startY
     // Held from the moment the drag becomes real until it unwinds, so the mobile gesture
     // recognizer stops reading this finger: a tab dragged along a strip is the same motion
     // as a swipe, and only the drag knows which it is. Claimed at activation rather than at
@@ -778,7 +784,10 @@ export function App() {
       window.removeEventListener('keydown',key,true)
       source.removeEventListener('lostpointercapture',lostCapture)
       if(source.hasPointerCapture(pointerId))source.releasePointerCapture(pointerId)
+      if(activationTimer!==null)window.clearTimeout(activationTimer)
+      activationTimer=null
       document.body.classList.remove('workspace-pointer-dragging')
+      source.classList.remove('dragging')
       showPointerDropIndicator(null)
       ghost?.remove()
     }
@@ -789,14 +798,26 @@ export function App() {
       window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
       if(commit)onDrop();else onCancel()
     }
+    const activate=(clientX:number,clientY:number)=>{
+      if(active||done)return
+      active=true
+      if(activationTimer!==null)window.clearTimeout(activationTimer)
+      activationTimer=null
+      releaseDragClaim=claimPointerDrag();suppressDragClickRef.current=identity
+      document.body.classList.add('workspace-pointer-dragging');source.classList.add('dragging')
+      try{source.setPointerCapture(pointerId)}catch{finish(false);return}
+      ghost=document.createElement('div');ghost.className='mux-pointer-drag-ghost';ghost.textContent=label;document.body.appendChild(ghost)
+      ghost.style.transform=`translate3d(${clientX+14}px,${clientY+12}px,0)`
+      onStart()
+    }
     const move=(pointer:PointerEvent)=>{
       if(pointer.pointerId!==pointerId)return
-      if(!active&&Math.hypot(pointer.clientX-startX,pointer.clientY-startY)<5)return
+      latestX=pointer.clientX;latestY=pointer.clientY
       if(!active){
-        active=true;releaseDragClaim=claimPointerDrag();suppressDragClickRef.current=identity;document.body.classList.add('workspace-pointer-dragging')
-        source.setPointerCapture(pointerId)
-        ghost=document.createElement('div');ghost.className='mux-pointer-drag-ghost';ghost.textContent=label;document.body.appendChild(ghost)
-        onStart()
+        const decision=pointerDragMoveDecision(activation,Math.hypot(pointer.clientX-startX,pointer.clientY-startY))
+        if(decision==='wait')return
+        if(decision==='cancel'){finish(false);return}
+        activate(pointer.clientX,pointer.clientY)
       }
       pointer.preventDefault()
       if(ghost)ghost.style.transform=`translate3d(${pointer.clientX+14}px,${pointer.clientY+12}px,0)`
@@ -814,12 +835,14 @@ export function App() {
     window.addEventListener('keydown',key,true)
     source.addEventListener('lostpointercapture',lostCapture)
     activePointerDragCancelRef.current=cancel
+    if(activation.mode==='hold')activationTimer=window.setTimeout(()=>activate(latestX,latestY),activation.delayMs)
   }
   const startupOrigins=useRef<Record<string,number>>({})
   const pendingSpawns=useRef<Record<string,PendingSpawnPlacement>>({})
   const spawning = useRef(false)
   const relaunching = useRef(false)
   const longPressTimer = useRef<number | null>(null)
+  const longPressOrigin = useRef<{pointerId:number;x:number;y:number}|null>(null)
   const runHeldRef = useRef(false)
   const mobileTabHeldRef = useRef(false)
   // When the Run menu's scrim dismissed it, so the trigger's own click can tell
@@ -853,6 +876,13 @@ export function App() {
   const cancelLongPress = () => {
     if (longPressTimer.current !== null) window.clearTimeout(longPressTimer.current)
     longPressTimer.current = null
+    longPressOrigin.current = null
+  }
+
+  const moveLongPress = (event:JSX.TargetedPointerEvent<HTMLElement>) => {
+    const origin=longPressOrigin.current
+    if(!origin||origin.pointerId!==event.pointerId)return
+    if(Math.hypot(event.clientX-origin.x,event.clientY-origin.y)>8)cancelLongPress()
   }
 
   // A touch long-press is commonly followed by a synthetic click when the same
@@ -917,6 +947,7 @@ export function App() {
     if (event.pointerType !== 'touch') return
     cancelLongPress()
     const {clientX,clientY}=event
+    longPressOrigin.current={pointerId:event.pointerId,x:clientX,y:clientY}
     longPressTimer.current=window.setTimeout(()=>{navigator.vibrate?.(20);open(clientX,clientY);longPressTimer.current=null},550)
   }
 
@@ -1001,6 +1032,7 @@ export function App() {
     xterm_scrollback_lines:number
     terminal_renderer:TerminalRendererPreference
     drawer_tab_display?:'icon'|'title'
+    utility_rail_display?:'icon'|'title'
   }&Record<string,unknown>
 
   // One place that turns a daemon config into browser state. The boot path, the
@@ -1030,6 +1062,7 @@ export function App() {
     setSwipeAwayClose(swipeAwayCloseEnabled(config))
     setClipboardEnabled(config.clipboard_history_enabled!==false)
     setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')
+    setUtilityRailDisplay(config.utility_rail_display==='title'?'title':'icon')
   }
 
   const loadConfig = (includeTheme:boolean) =>
@@ -1037,15 +1070,18 @@ export function App() {
       .then(config=>applyConfig(config,includeTheme))
       .catch(()=>{})
 
-  const persistDrawerTabDisplay=async(next:'icon'|'title')=>{
-    const previous=drawerTabDisplay
+  const persistDrawerDisplay=async(surface:'tabs'|'rail',next:'icon'|'title')=>{
+    const previous=surface==='tabs'?drawerTabDisplay:utilityRailDisplay
     setDrawerDisplayMenu(null)
-    setDrawerTabDisplay(next)
+    if(surface==='tabs')setDrawerTabDisplay(next)
+    else setUtilityRailDisplay(next)
     try{
-      const config=await api<AppConfig>('PATCH','/api/config',{drawer_tab_display:next})
+      const field=surface==='tabs'?'drawer_tab_display':'utility_rail_display'
+      const config=await api<AppConfig>('PATCH','/api/config',{[field]:next})
       applyConfig(config,false)
     }catch(cause){
-      setDrawerTabDisplay(previous)
+      if(surface==='tabs')setDrawerTabDisplay(previous)
+      else setUtilityRailDisplay(previous)
       setError(cause instanceof Error?cause.message:String(cause))
     }
   }
@@ -1559,9 +1595,9 @@ export function App() {
     setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setMainMenuOpen(false)
     setSortMenu({x,y})
   }
-  const openDrawerDisplayMenu=(x:number,y:number)=>{
+  const openDrawerDisplayMenu=(x:number,y:number,surface:'tabs'|'rail')=>{
     setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setMainMenuOpen(false)
-    setDrawerDisplayMenu({x,y})
+    setDrawerDisplayMenu({x,y,surface})
   }
   const bucketIdFor=(project:Project)=>
     project.group_id&&projectGroups.some(group=>group.id===project.group_id)?project.group_id:UNGROUPED_BUCKET_ID
@@ -1599,21 +1635,50 @@ export function App() {
   }
   const beginProjectPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,project:Project,bucketId:string,peerIds:string[])=>{
     const bucket=event.currentTarget.closest<HTMLElement>('.sidebar-project-bucket')
+    const tree=event.currentTarget.closest<HTMLElement>('.project-tree')
     const initial:ProjectDrag={id:project.id,bucketId,previewIds:displayProjectIds,overId:null,side:null}
+    let latestPointer:{clientX:number;clientY:number}|null=null,scrollFrame:number|null=null
+    const preview=(pointer:{clientX:number;clientY:number})=>{
+      const current=dragProjectRef.current
+      if(!current||!bucket||!peerIds.includes(current.id)){showPointerDropIndicator(null);return}
+      const target=reorderTargetFromContainer(bucket,current.id,'vertical',pointer.clientY)
+      if(!target){showPointerDropIndicator(null);return}
+      const previewIds=reorderForHover(current.previewIds,current.id,target.id,target.side)
+      dragProjectRef.current={...current,previewIds,overId:target.id,side:target.side}
+      const targetElement=Array.from(bucket.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).find(item=>item.dataset.reorderId===target.id)||null
+      showPointerDropIndicator(targetElement,`insert-${target.side}`)
+    }
+    const stopAutoScroll=()=>{
+      latestPointer=null
+      if(scrollFrame!==null)window.cancelAnimationFrame(scrollFrame)
+      scrollFrame=null
+    }
+    const autoScroll=()=>{
+      scrollFrame=null
+      if(!tree||!latestPointer)return
+      const box=tree.getBoundingClientRect()
+      const delta=edgeAutoScrollDelta(latestPointer.clientY,box.top,box.bottom)
+      if(delta===0)return
+      const before=tree.scrollTop
+      tree.scrollTop+=delta
+      if(tree.scrollTop===before)return
+      preview(latestPointer)
+      scrollFrame=window.requestAnimationFrame(autoScroll)
+    }
     beginPointerDrag(event,project.name,`project:${project.id}`,
-      ()=>{cancelLongPress();dragProjectRef.current=initial},
-      pointer=>{
-        const current=dragProjectRef.current
-        if(!current||!bucket||!peerIds.includes(current.id)){showPointerDropIndicator(null);return}
-        const target=reorderTargetFromContainer(bucket,current.id,'vertical',pointer.clientY)
-        if(!target){showPointerDropIndicator(null);return}
-        const previewIds=reorderForHover(current.previewIds,current.id,target.id,target.side)
-        dragProjectRef.current={...current,previewIds,overId:target.id,side:target.side}
-        const targetElement=Array.from(bucket.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).find(item=>item.dataset.reorderId===target.id)||null
-        showPointerDropIndicator(targetElement,`insert-${target.side}`)
+      ()=>{
+        cancelLongPress();setProjectMenu(null);setContextMenu(null);setRunMenu(null)
+        if(mobileWorkspace)navigator.vibrate?.(15)
+        dragProjectRef.current=initial
       },
-      ()=>{const current=dragProjectRef.current;setDragProject(null);if(current)void commitProjectOrder(current.previewIds)},
-      ()=>setDragProject(null),
+      pointer=>{
+        latestPointer={clientX:pointer.clientX,clientY:pointer.clientY}
+        preview(pointer)
+        if(scrollFrame===null)scrollFrame=window.requestAnimationFrame(autoScroll)
+      },
+      ()=>{stopAutoScroll();const current=dragProjectRef.current;setDragProject(null);if(current)void commitProjectOrder(current.previewIds)},
+      ()=>{stopAutoScroll();setDragProject(null)},
+      mobileWorkspace?MOBILE_PROJECT_HOLD_DRAG:POINTER_MOVE_DRAG,
     )
   }
   /** Reorder the sidebar's sections. Group order is shared (it lives on the Group
@@ -3502,7 +3567,7 @@ export function App() {
     const attention=!agent||activeId===session.id?''
       :visibleSessionIds.includes(session.id)?'viewing'
       :isUnread(session,seenActivity)?'unread':'read'
-    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){const pointerId=event.pointerId;beginLongPress(event,(x,y)=>{suppressLongPressClick(`session:${session.id}`,pointerId);openSessionMenu(session,x,y,'sidebar')});beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
+    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){const pointerId=event.pointerId;beginLongPress(event,(x,y)=>{suppressLongPressClick(`session:${session.id}`,pointerId);openSessionMenu(session,x,y,'sidebar')});if(!mobileWorkspace)beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       <span class={sessionDotClass(session)} />
       <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={session.backend}>{providerGlyph(session.backend as ProviderName)}</span>}{sessionName(session)}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}{activityGlyphs(session)}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
@@ -3577,7 +3642,7 @@ export function App() {
       else if(leaf.kind!=='terminal')openTabMenu(leaf,label,x,y,'mobile')
     }
     return <div key={`${leaf.kind}:${leaf.id}`} class="stack-tab-shell mobile-unified-tab">
-      <button role="tab" aria-label={`${label} ${leaf.kind} tab`} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>{if(mobileTabHeldRef.current){mobileTabHeldRef.current=false;return}activateMobileTab(leaf)}} onPointerDown={event=>{mobileTabHeldRef.current=false;beginLongPress(event,openMobileTabMenu)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event=>{event.preventDefault();event.stopPropagation();cancelLongPress();openMobileTabMenu(event.clientX,event.clientY)}}>{glyph}{visibleLabel}</button>
+      <button role="tab" aria-label={`${label} ${leaf.kind} tab`} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>{if(mobileTabHeldRef.current){mobileTabHeldRef.current=false;return}activateMobileTab(leaf)}} onPointerDown={event=>{mobileTabHeldRef.current=false;beginLongPress(event,openMobileTabMenu)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress} onContextMenu={event=>{event.preventDefault();event.stopPropagation();cancelLongPress();openMobileTabMenu(event.clientX,event.clientY)}}>{glyph}{visibleLabel}</button>
     </div>
   }
   // With no new-tab button left in the rail, an empty projection would render a
@@ -3618,7 +3683,7 @@ export function App() {
           showMobileHud(`starting ${backend}…`)
           void spawnTerminal(activeProject.id,false,undefined,undefined,'after',backend)
         })}}
-        onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress}
+        onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress}
         onClick={event=>{
           if(runHeldRef.current){runHeldRef.current=false;return}
           if(activeProject)toggleRunMenu(activeProject,event.currentTarget)
@@ -3663,11 +3728,10 @@ export function App() {
             // something in here is waiting on you.
             const bucketStatus=bucketCollapsed?projectSetRailStatus(sessions,peerIds,seenActivity):null
             return <section class={`sidebar-project-bucket ${bucketCollapsed?'collapsed':''}`} key={bucket.id} data-reorder-id={bucket.id}>
-            {/* The header is the section's drag handle and its collapse toggle: press
-                and move to reorder, press and release to fold. The drag suppresses the
-                click it ends with, which is the same disambiguation a Project row uses.
-                Its buttons stop the pointer so pressing one never starts either. */}
-            <header title={`${bucket.name} — click to ${bucketCollapsed?'expand':'collapse'}, drag to reorder`} onPointerDown={event=>beginBucketPointerDrag(event,bucket.id,bucket.name)} onClick={()=>{if(suppressDragClickRef.current===`bucket:${bucket.id}`){suppressDragClickRef.current=null;return}setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))}}>
+            {/* Desktop uses the header as both drag handle and collapse toggle. Mobile
+                keeps only the tap-to-fold half because Project rows are its sole sidebar
+                reorder target. The rename button stops either parent gesture. */}
+            <header title={mobileWorkspace?`${bucket.name} - tap to ${bucketCollapsed?'expand':'collapse'}`:`${bucket.name} - click to ${bucketCollapsed?'expand':'collapse'}, drag to reorder`} onPointerDown={event=>{if(!mobileWorkspace)beginBucketPointerDrag(event,bucket.id,bucket.name)}} onClick={()=>{if(suppressDragClickRef.current===`bucket:${bucket.id}`){suppressDragClickRef.current=null;return}setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))}}>
               <span class="bucket-chevron" aria-hidden="true">{bucketCollapsed?'▸':'▾'}</span><span>{bucket.name}</span>
               {bucketStatus&&bucketStatus.liveCount>0&&<span class={`bucket-collapsed-badge activity-${bucketStatus.activity} ${bucketStatus.unread?'unread':''}`} title={`${bucketStatus.liveCount} live session${bucketStatus.liveCount===1?'':'s'} · ${projectRailActivityLabel[bucketStatus.activity]}${bucketStatus.unread?' · unread output':''}`}><i aria-hidden="true"/>{bucketStatus.liveCount}</span>}
               {/* Rename only. Sort moved to the sidebar toolbar, and delete is gone
@@ -3686,8 +3750,8 @@ export function App() {
             const collapsed=collapsedProjects.has(project.id)
             const liveCount=children.filter(session=>!session.pending&&!['exited','crashed'].includes(session.state)).length
             return <section key={project.id} data-reorder-id={project.id} style={{order:projectPreviewIds.indexOf(project.id)}} class={`project-group ${project.id === projectId ? 'active' : ''} ${collapsed?'collapsed':''} ${dropClass}`}>
-              <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title="Drag to reorder Project" onPointerDown={event=>{beginLongPress(event,(x,y)=>setProjectMenu({project,x,y}));beginProjectPointerDrag(event,project,bucket.id,peerIds)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault(); setProjectMenu({ project, x: event.clientX, y: event.clientY }) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id)}}>
-                <button class="project-chevron project-collapse-toggle" aria-expanded={!collapsed} aria-label={`${collapsed?'Expand':'Collapse'} ${project.name}`} title={collapsed?'Expand project':'Collapse project'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();toggleProjectCollapsed(project.id)}}>{collapsed?'▸':'▾'}</button><strong class="project-name-cell"><span class="project-name-text">{project.name}</span>{collapsed&&liveCount>0&&<span class="project-collapsed-badge" title={`${liveCount} active session${liveCount===1?'':'s'}`}>{liveCount}</span>}</strong><button data-tutorial="project-run" class="project-row-run" title={`Run in ${project.name}`} aria-label={`Run in ${project.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
+              <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title={mobileWorkspace?'Hold to reorder Project':'Drag to reorder Project'} onPointerDown={event=>beginProjectPointerDrag(event,project,bucket.id,peerIds)} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onContextMenu={event => { event.preventDefault();if(!mobileWorkspace)openProjectMenuAt(project,event.clientX,event.clientY) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id)}}>
+                <button class="project-chevron project-collapse-toggle" aria-expanded={!collapsed} aria-label={`${collapsed?'Expand':'Collapse'} ${project.name}`} title={collapsed?'Expand project':'Collapse project'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();toggleProjectCollapsed(project.id)}}>{collapsed?'▸':'▾'}</button><strong class="project-name-cell"><span class="project-name-text">{project.name}</span>{collapsed&&liveCount>0&&<span class="project-collapsed-badge" title={`${liveCount} active session${liveCount===1?'':'s'}`}>{liveCount}</span>}</strong><button data-menu-toggle class="project-row-menu" title={`Project actions for ${project.name}`} aria-label={`Project actions for ${project.name}`} aria-haspopup="menu" aria-expanded={projectMenu?.project.id===project.id} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();if(projectMenu?.project.id===project.id){setProjectMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openProjectMenuAt(project,rect.left,rect.bottom+4)}}>⋮</button><button data-tutorial="project-run" class="project-row-run" title={`Run in ${project.name}`} aria-label={`Run in ${project.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
               </div>
               {!collapsed&&<div class="session-list">
                 {sidebarNode(projectLayout.root)}
@@ -3742,8 +3806,9 @@ export function App() {
         onLayout={layout=>commitDrawerLayout(layout)}
         // The drag ghost's pointer-up also fires a click on the tab it started from, which
         // would switch to the tab the user was only moving.
-        onTab={tab=>{
+        onTab={(tab,collapseIfSelected)=>{
           if(suppressDragClickRef.current===`drawer-tab:${tab}`){suppressDragClickRef.current=null;return}
+          if(collapseIfSelected){setClipboardOpen(false);return}
           selectDrawerTab(tab)
         }}
         onClose={()=>setClipboardOpen(false)}
@@ -3796,7 +3861,7 @@ export function App() {
         onPopDrawerNoteToTab={resourceId=>popDrawerNoteToTab(resourceId,projectId)}
         tabDisplay={drawerTabDisplay}
         onTabDragStart={beginDrawerTabDrag}
-        onTabDisplayMenu={openDrawerDisplayMenu}
+        onTabDisplayMenu={(x,y)=>openDrawerDisplayMenu(x,y,'tabs')}
         draggingTab={dragDrawerTab}
         announcement={drawerAnnouncement}
         promptPreselect={promptPreselect}
@@ -3824,7 +3889,7 @@ export function App() {
       {/* Desktop only: the always-visible strip that makes these surfaces
           discoverable without a menu or a chord. Mobile reaches the same tabs
           through the drawer's own tab strip after a two-finger swipe. */}
-      {!mobileWorkspace&&<nav class={`utility-rail ${drawerTabDisplay==='title'?'title-mode':'icon-mode'}`} aria-label="Side panel">
+      {!mobileWorkspace&&<nav class={`utility-rail ${utilityRailDisplay==='title'?'title-mode':'icon-mode'}`} aria-label="Side panel">
         {drawerLauncherTabs.map(tab=>{
           const Icon=DRAWER_TAB_ICONS[tab.id]
           const owner=drawerStackForTab(drawerLayout,tab.id)
@@ -3840,10 +3905,10 @@ export function App() {
             onContextMenu={event=>{
               event.preventDefault()
               event.stopPropagation()
-              openDrawerDisplayMenu(event.clientX,event.clientY)
+              openDrawerDisplayMenu(event.clientX,event.clientY,'rail')
             }}
             onClick={()=>showDrawerTab(tab.id)}
-          >{drawerTabDisplay==='title'?<span class="drawer-tab-title">{tab.label}</span>:<Icon/>}{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}</button>
+          >{utilityRailDisplay==='title'?<span class="drawer-tab-title">{tab.label}</span>:<Icon/>}{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}</button>
         })}
       </nav>}
 
@@ -4043,9 +4108,11 @@ export function App() {
       {unpanned.map(session => <button role="menuitem" onClick={() => runNamedCommand(`session.attach(${session.id})`)}><span class={stateDotClass(session.state)} />{sessionName(session)}</button>)}
     </div>}
 
-    {drawerDisplayMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Side panel tab display" style={{left:clampContextMenuLeft(drawerDisplayMenu.x,innerWidth),top:Math.max(4,Math.min(drawerDisplayMenu.y,innerHeight-100))}}>
-      <div class="context-title"><strong>SIDE PANEL TABS</strong></div>
-      <button role="menuitemcheckbox" aria-checked={drawerTabDisplay==='title'} onClick={()=>void persistDrawerTabDisplay(drawerTabDisplay==='icon'?'title':'icon')}>{drawerTabDisplay==='title'?'✓ ':''}Text labels</button>
+    {drawerDisplayMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu drawer-display-menu" role="menu" aria-label={`${drawerDisplayMenu.surface==='tabs'?'Drawer tabs':'Right rail'} options`} style={{left:clampContextMenuLeft(drawerDisplayMenu.x,innerWidth),top:Math.max(4,Math.min(drawerDisplayMenu.y,innerHeight-140))}}>
+      <div class="context-title"><strong>{drawerDisplayMenu.surface==='tabs'?'DRAWER TABS':'RIGHT RAIL'}</strong></div>
+      {(()=>{const display=drawerDisplayMenu.surface==='tabs'?drawerTabDisplay:utilityRailDisplay;return <button role="menuitemcheckbox" aria-checked={display==='title'} onClick={()=>void persistDrawerDisplay(drawerDisplayMenu.surface,display==='icon'?'title':'icon')}>{display==='title'?'✓ ':''}Text labels</button>})()}
+      <div class="context-rule" />
+      <button role="menuitem" disabled={!clipboardOpen} onClick={()=>{setDrawerDisplayMenu(null);setClipboardOpen(false)}}>Collapse utility drawer</button>
     </div>}
 
     {mainMenuOpen && <div data-tutorial="main-menu" class="context-menu main-menu" role="menu" aria-label="swe-mux menu">

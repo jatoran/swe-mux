@@ -278,10 +278,9 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     # silently parked the last two off-screen. Adding a tab means re-checking that on a
     # phone, which is what this assertion is for — it is a prompt, not a cap.
     #
-    # Re-checked at nine (Context): nine 36px touch cells do not fit beside the 30px close
-    # target on a 360px phone. Wrapping made the drawer header jump to two rows, so the
-    # tablist now scrolls on one row behind a fade; the close target sits outside that
-    # scroller and selection calls scrollIntoView.
+    # Re-checked at nine (Context): nine 36px touch cells do not fit on a 360px phone.
+    # Wrapping made the rail jump to two rows, so the tablist scrolls on one row behind a
+    # fade and selection reveals the selected item.
     #
     # Re-checked at ten (Transcript): the tenth cell overflows the same 360px row the ninth
     # already did, and lands in the same scroller, which is the arrangement that made the
@@ -309,7 +308,7 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     assert len(ids) == 12, ids
     tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
     assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
-    assert ".drawer-chrome>.drawer-close" in css
+    assert "drawer-chrome" not in drawer
     assert ".drawer-tabs button{position:relative;min-height:34px;flex:1 0 32px" in css
     assert ".drawer-tabs button{min-height:44px;flex-basis:36px;min-width:36px" in css
     assert "activeKey={selected}" in drawer
@@ -324,7 +323,7 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     assert "glyph" not in drawer
     assert "props.tabDisplay === 'title'" in drawer
     assert '<span class="drawer-tab-title">{item.label}</span>' in drawer
-    assert "drawerTabDisplay==='title'" in app
+    assert "utilityRailDisplay==='title'" in app
     assert '<span class="drawer-tab-title">{tab.label}</span>' in app
     assert "<Icon />" in drawer and "<Icon/>" in app
 
@@ -399,12 +398,24 @@ def test_drawer_tab_display_is_live_and_searchable() -> None:
     css = source("style.css")
 
     assert "drawer_tab_display?:'icon'|'title'" in app
+    assert "utility_rail_display?:'icon'|'title'" in app
     assert "setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')" in app
-    assert "Side panel tabs<select" in settings
+    assert "setUtilityRailDisplay(config.utility_rail_display==='title'?'title':'icon')" in app
+    assert "Drawer tabs<select" in settings
+    assert "Right rail<select" in settings
     assert '<option value="icon">Icons</option>' in settings
     assert '<option value="title">Titles</option>' in settings
     assert "tabDisplay={drawerTabDisplay}" in app
+    assert "utilityRailDisplay==='title'" in app
+    assert "const utilityRailWidth=utilityRailDisplay==='title'?112:40" in app
     assert "props.tabDisplay === 'title'" in drawer
+    assert "surface:'tabs'|'rail'" in app
+    assert "Collapse utility drawer" in app
+    assert "drawer-display-menu" in app
+    assert ".drawer-display-menu{z-index:70}" in css
+    assert "onTab(id, id === selected)" in drawer
+    assert "beginTabLongPress" in drawer
+    assert "drawer-chrome" not in drawer
     assert "--utility-rail-width" in app
     assert "var(--utility-rail-width,40px)" in css
 
@@ -421,7 +432,7 @@ def test_recursive_drawer_exposes_tab_and_separator_accessibility() -> None:
     assert "event.key !== 'ArrowLeft' && event.key !== 'ArrowRight'" in drawer
     assert "aria-valuenow={Math.round(node.ratio * 100)}" in drawer
     assert "onDblClick={() => updateRatio(0.5)}" in drawer
-    assert "onPointerDown={projection ? undefined" in drawer
+    assert "onPointerDown={projection ? beginTabLongPress" in drawer
     assert "mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root)" in drawer
     assert 'aria-live="polite"' in drawer
 

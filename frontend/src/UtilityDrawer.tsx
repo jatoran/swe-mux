@@ -1,5 +1,5 @@
 import type { JSX } from 'preact'
-import { useRef } from 'preact/hooks'
+import { useEffect, useRef } from 'preact/hooks'
 import { AgentContextTab } from './AgentContextTab'
 import { AgentEnvironmentTab } from './AgentEnvironmentTab'
 import { ClipboardTab } from './ClipboardPanel'
@@ -40,7 +40,9 @@ import type { Project, ProjectBackend, Session } from './types'
 type Props = {
   layout: DrawerLayout
   presentation: DrawerProjectPresentation
-  onTab: (tab: DrawerTabId) => void
+  /** Select a tab. A direct click on the pane's already-selected tab asks the
+   *  caller to collapse the entire drawer; focus and keyboard navigation do not. */
+  onTab: (tab: DrawerTabId, collapseIfSelected?: boolean) => void
   onLayout: (layout: DrawerLayout) => void
   onClose: () => void
   mobile: boolean
@@ -98,7 +100,7 @@ type Props = {
   /** Give it back and put it in a pane, focused. */
   onPopDrawerNoteToTab: (resourceId: string) => void
   onTabDragStart: (event: JSX.TargetedPointerEvent<HTMLElement>, id: DrawerTabId) => void
-  /** Open the shared Icons/Titles preference menu from any drawer tab. */
+  /** Open the drawer-tab Icons/Titles preference menu from any drawer tab. */
   onTabDisplayMenu: (x: number, y: number) => void
   /** True while a tab is being dragged, so the strip can suppress its own click. */
   draggingTab: DrawerTabId | null
@@ -129,6 +131,49 @@ type Props = {
 
 export function UtilityDrawer(props: Props) {
   const { layout, presentation, onTab, onClose, mobile, session, project } = props
+  const tabLongPressRef = useRef<{
+    pointerId: number
+    timer: number
+    cleanup: () => void
+  } | null>(null)
+  const suppressTabClickUntilRef = useRef(0)
+
+  const cancelTabLongPress = (pointerId?: number) => {
+    const state = tabLongPressRef.current
+    if (!state || (pointerId !== undefined && state.pointerId !== pointerId)) return
+    window.clearTimeout(state.timer)
+    state.cleanup()
+    tabLongPressRef.current = null
+  }
+
+  useEffect(() => () => cancelTabLongPress(), [])
+
+  const beginTabLongPress = (event: JSX.TargetedPointerEvent<HTMLElement>) => {
+    if (!mobile || event.pointerType !== 'touch' || !event.isPrimary) return
+    cancelTabLongPress()
+    const { pointerId, clientX: x, clientY: y } = event
+    const move = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return
+      if (Math.hypot(moveEvent.clientX - x, moveEvent.clientY - y) > 8) cancelTabLongPress(pointerId)
+    }
+    const finish = (finishEvent: PointerEvent) => cancelTabLongPress(finishEvent.pointerId)
+    const cleanup = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    const state = { pointerId, cleanup, timer: 0 }
+    state.timer = window.setTimeout(() => {
+      if (tabLongPressRef.current !== state) return
+      suppressTabClickUntilRef.current = performance.now() + 700
+      navigator.vibrate?.(20)
+      props.onTabDisplayMenu(x, y)
+    }, 550)
+    tabLongPressRef.current = state
+  }
   const focusedTab = presentation.focused_tab
   const stackOrder = drawerTabs(layout)
   // Acting closes the drawer on mobile (it covers the surface just acted on) and
@@ -320,13 +365,16 @@ export function UtilityDrawer(props: Props) {
         tabIndex={id === selected ? 0 : -1}
         class={`${id === selected ? 'active' : ''} ${props.draggingTab === id ? 'dragging' : ''}`}
         title={`${item.title}${item.scope === 'session' ? ' - session scoped' : ''}${projection ? '' : ' - drag to rearrange or split'}`}
-        onPointerDown={projection ? undefined : event => props.onTabDragStart(event, id)}
+        onPointerDown={projection ? beginTabLongPress : event => props.onTabDragStart(event, id)}
         onContextMenu={event => {
           event.preventDefault()
           event.stopPropagation()
           props.onTabDisplayMenu(event.clientX, event.clientY)
         }}
-        onClick={() => onTab(id)}
+        onClick={() => {
+          if (performance.now() < suppressTabClickUntilRef.current) return
+          onTab(id, id === selected)
+        }}
         onKeyDown={event => {
           if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
           event.preventDefault()
@@ -490,10 +538,6 @@ export function UtilityDrawer(props: Props) {
         if (event.key === 'Escape' && !event.defaultPrevented) { event.stopPropagation(); onClose() }
       }}
     >
-      <div class="drawer-chrome">
-        <span>Utilities</span>
-        <button class="drawer-close" aria-label="Close panel" title="Close panel" onClick={onClose}>×</button>
-      </div>
       <div class="drawer-tree">
         {mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root)}
       </div>

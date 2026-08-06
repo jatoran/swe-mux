@@ -16,6 +16,7 @@
 | utility drawer width | `mux.drawer.width.v1` | device-local, global across Projects |
 | utility drawer pane selections, focused tab, desktop expansion | `mux.drawer.projects.v2` keyed by Project | device-local |
 | mobile utility drawer visibility | `mobileDrawerOpen` in App | browser session |
+| drawer-tab and desktop-right-rail icon/title modes | `drawer_tab_display` and `utility_rail_display` config fields | live presentation settings, independent |
 | pointer drag target/ghost | refs and direct DOM attributes | one gesture |
 | note/file draft | resource component/save queue | resource-local |
 | terminal touch selection | xterm buffer selection + component-local action state | one selection |
@@ -46,6 +47,7 @@ The server continues accepting the legacy flat domain for compatibility, but rec
 Mobile visibility remains transient in `mobileDrawerOpen`.
 Mobile derives one depth-first tab rail and one selected body from the desktop tree, and activation updates only the owning stack's Project presentation.
 Responsive transitions never flatten or persist replacement geometry.
+The drawer tab strips and desktop right rail have separate icon/title config fields; only `utility_rail_display` feeds `--utility-rail-width`, so changing drawer tabs never reflows the workspace grid.
 
 `OverflowRail` wraps workspace and utility tablists without taking over their ARIA roles or drag targets.
 It owns endpoint detection, non-layout-consuming fade chevrons, wheel translation, boundary-aware paging, and selected or focused tab reveal.

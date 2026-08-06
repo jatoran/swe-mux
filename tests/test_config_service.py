@@ -555,16 +555,26 @@ def test_terminal_renderer_is_hot_reloadable_and_validated(tmp_path: Path) -> No
 def test_drawer_tab_display_is_hot_reloadable_and_validated(tmp_path: Path) -> None:
     config = load_config(tmp_path / "config.toml")
     assert config.drawer_tab_display == "icon"
+    assert config.utility_rail_display == "icon"
 
-    hot, restart = update_config(config, {"drawer_tab_display": "title"})
-    assert hot == {"drawer_tab_display"}
+    hot, restart = update_config(
+        config,
+        {"drawer_tab_display": "title", "utility_rail_display": "title"},
+    )
+    assert hot == {"drawer_tab_display", "utility_rail_display"}
     assert restart == set()
     assert load_config(tmp_path / "config.toml").drawer_tab_display == "title"
+    assert load_config(tmp_path / "config.toml").utility_rail_display == "title"
 
     with pytest.raises(ValueError, match="drawer_tab_display"):
         update_config(config, {"drawer_tab_display": "both"})
     assert config.drawer_tab_display == "title"
     assert load_config(tmp_path / "config.toml").drawer_tab_display == "title"
+
+    with pytest.raises(ValueError, match="utility_rail_display"):
+        update_config(config, {"utility_rail_display": "both"})
+    assert config.utility_rail_display == "title"
+    assert load_config(tmp_path / "config.toml").utility_rail_display == "title"
 
 
 def test_builtin_themes_and_custom_text_meet_readability_contract(tmp_path: Path) -> None:
