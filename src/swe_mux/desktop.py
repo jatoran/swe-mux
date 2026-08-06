@@ -35,6 +35,25 @@ MB_OK = 0x00000000
 MB_ICONWARNING = 0x00000030
 MB_SETFOREGROUND = 0x00010000
 MB_TOPMOST = 0x00040000
+# How long a freshly spawned daemon may take to answer `/api/health` before the
+# tray stops waiting for it and brings the window up anyway. A daemon binds its
+# port only after opening its databases and reattaching supervised sessions, and
+# a start right after a redeploy pays for that with a cold page cache: measured
+# 2026-08-06, the same daemon took 14s warm and 36s on the start that followed a
+# bundle rebuild. The old 30s budget expired inside that window and killed the
+# tray while the daemon it had spawned went on to serve normally, which is why
+# this mirrors `packaging/redeploy_desktop.py`: generous for a slow start, and
+# irrelevant to a real failure because a child that exits is detected at once.
+DAEMON_HEALTH_TIMEOUT_SECONDS = 300.0
+# Cadence of the post-start health poll that loads the window once a daemon that
+# outlived the budget finally answers.
+DAEMON_HEALTH_POLL_SECONDS = 0.5
+# The tray-menu restart waits far less, and for a different reason: pystray runs
+# a menu action on its message thread, so waiting there freezes the tray. It also
+# has nothing to wait for - the window already exists and its SPA reconnects to
+# the returning daemon by itself. Long enough to catch a daemon that dies on
+# contact, short enough that the tray stays usable if one does not.
+DAEMON_RESTART_WAIT_SECONDS = 30.0
 
 
 def local_url(config: Config) -> str:
@@ -255,9 +274,21 @@ class DesktopRuntime:
                 "terminated when that Job closes",
             )
 
-    def ensure_daemon(self) -> None:
+    def ensure_daemon(self, *, wait_seconds: float | None = None) -> bool:
+        """Start the daemon unless one is already serving; report whether it answered.
+
+        **A daemon that is still running has not failed - it is still starting.**
+        Only a child that actually exits is a failure, and it is raised as one
+        immediately rather than after the budget. Exhausting the budget with the
+        child alive returns False, which leaves the caller to keep the tray up
+        and load the window once health arrives.
+
+        The budget resolves at call time rather than as a default argument value,
+        so `DAEMON_HEALTH_TIMEOUT_SECONDS` stays the single authority for it.
+        """
+        budget = DAEMON_HEALTH_TIMEOUT_SECONDS if wait_seconds is None else wait_seconds
         if health_snapshot(self.url) is not None:
-            return
+            return True
         assert self.config.config_path is not None
         from .spawn_contract import scrub_claude_session_markers
 
@@ -286,17 +317,29 @@ class DesktopRuntime:
             )
         ledger(self.config.data_dir, f"tray spawned daemon pid {self.child.pid}")
         self._watch_daemon_exit(self.child)
-        deadline = time.monotonic() + 30
+        started = time.monotonic()
+        deadline = started + budget
         while time.monotonic() < deadline:
             if health_snapshot(self.url, timeout=0.5) is not None:
-                return
-            if self.child.poll() is not None:
-                break
+                ledger(
+                    self.config.data_dir,
+                    f"daemon pid {self.child.pid} answered health after "
+                    f"{time.monotonic() - started:.1f}s",
+                )
+                return True
+            code = self.child.poll()
+            if code is not None:
+                raise RuntimeError(
+                    f"The swe-mux daemon exited during startup (code {code}) after "
+                    f"{time.monotonic() - started:.1f}s. See {log_path}."
+                )
             time.sleep(0.15)
-        code = self.child.poll()
-        raise RuntimeError(
-            f"The swe-mux daemon did not start (exit {code}). See {log_path}."
+        ledger(
+            self.config.data_dir,
+            f"daemon pid {self.child.pid} is still starting after "
+            f"{budget:.0f}s; the tray will load the window when it answers",
         )
+        return False
 
     def _watch_daemon_exit(self, child: subprocess.Popen[bytes]) -> None:
         """Ledger the daemon's exit code; external kills leave no other trace.
@@ -392,7 +435,12 @@ class DesktopRuntime:
                     self.child.terminate()
             self.child = None
         try:
-            self.ensure_daemon()
+            if not self.ensure_daemon(wait_seconds=DAEMON_RESTART_WAIT_SECONDS):
+                show_desktop_warning(
+                    "Daemon still starting",
+                    "The replacement daemon has not answered its health check yet. "
+                    "The window reconnects on its own once it does.",
+                )
         except RuntimeError as exc:
             show_desktop_warning("Restart failed", str(exc))
 
@@ -455,6 +503,37 @@ class DesktopRuntime:
             if self.instance.wait_for_activation():
                 self.show()
 
+    def load_when_healthy(self) -> None:
+        """Load the window once a daemon that outlived the start budget answers.
+
+        Runs on the WebView's post-start thread, so the tray, the activation
+        signal and the window all exist while it waits. The window was created
+        against a daemon that was not serving yet and is showing WebView2's
+        connection error until this reload lands. Only a daemon that exits ends
+        the wait, because uptime alone is never evidence of failure.
+        """
+        while not self.stop.is_set():
+            if health_snapshot(self.url, timeout=0.5) is not None:
+                ledger(self.config.data_dir, "daemon answered health; loading the window")
+                window = self.window
+                if window is not None:
+                    window.load_url(self.url)
+                return
+            child = self.child
+            if child is not None and child.poll() is not None:
+                ledger(
+                    self.config.data_dir,
+                    f"daemon pid {child.pid} exited (code {child.returncode}) before it "
+                    "ever answered health",
+                )
+                show_desktop_warning(
+                    "swe-mux daemon stopped",
+                    f"The daemon exited during startup (code {child.returncode}). "
+                    f"See {self.config.data_dir / 'desktop-daemon.log'}.",
+                )
+                return
+            time.sleep(DAEMON_HEALTH_POLL_SECONDS)
+
     def run(self) -> None:
         try:
             import pystray
@@ -464,7 +543,10 @@ class DesktopRuntime:
                 "Desktop dependencies are missing. Install with: uv sync --extra desktop"
             ) from exc
 
-        self.ensure_daemon()
+        # A daemon that has not answered yet still gets a tray and a window: the
+        # shell is the only way to reach the app, and exiting here used to strand
+        # the user with a healthy daemon and nothing to talk to it.
+        healthy = self.ensure_daemon()
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
         self.window = webview.create_window(
             "swe-mux",
@@ -510,6 +592,7 @@ class DesktopRuntime:
         ).start()
         try:
             webview.start(
+                None if healthy else self.load_when_healthy,
                 debug=False,
                 private_mode=False,
                 storage_path=str(self.config.data_dir / "webview"),

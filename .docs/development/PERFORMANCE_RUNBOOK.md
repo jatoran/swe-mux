@@ -193,6 +193,41 @@ Process-level CPU is the weaker check, because fleet size and agent activity mov
 and are not controlled.
 Say so when reporting a before/after number taken that way.
 
+## Startup latency
+
+A distinct question from "the running daemon is slow", with its own measurement and its own
+failure mode: nothing the daemon serves exists until the listener binds, and the listener binds
+only after `runtime_context` has opened every store, reattached supervised sessions, and built
+every service.
+
+Read it from `<data_dir>/daemon.log`:
+
+```
+daemon runtime ready in 8.4s (8 live session(s)); binding listeners
+```
+
+The line is INFO under `SLOW_STARTUP_SECONDS` (20s) and WARNING above it, so a drifting start is
+one grep rather than an inference from the gap between two unrelated timestamps.
+Cross-check against `PTY supervisor connected`, which splits the interval into store/DB work
+before it and session reattachment after it.
+
+Reference, measured 2026-08-06 on a fleet of 6-8 sessions with an 879 MB `mux.db`: **~8s warm**.
+Post-redeploy starts are the slow ones, at 27s and 31s, because the bundle rebuild has just
+flushed the page cache the store opens depend on - the same daemon, the same work, cold.
+
+Two rules this path earns:
+
+- **Housekeeping must never gate the port.**
+  Retention prunes are scans whose cost tracks database size and cache state, and they used to run
+  on this path for four stores.
+  Every one of them was already covered by a supervised background loop that reruns it hourly,
+  so the startup copies bought nothing and delayed the bind by their own cost.
+  Anything that is not needed to answer the first request belongs in a loop.
+- **The desktop shell budgets its health wait against this number.**
+  A start that crosses `DAEMON_HEALTH_TIMEOUT_SECONDS` (300s) leaves the tray waiting.
+  A start that crosses it *and* the daemon then answers is the ordinary case that
+  `load_when_healthy` covers; see `design/features/desktop-shell.md`.
+
 ## Known-cost frames
 
 Frames expected in a healthy profile, so they are not mistaken for defects:

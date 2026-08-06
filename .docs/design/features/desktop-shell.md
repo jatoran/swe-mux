@@ -24,10 +24,27 @@ continues to own every terminal.
 - One instance exists per resolved config path. A second visible launch signals the existing
   instance to restore/focus; a duplicate hidden login launch exits silently.
 - Startup probes `/api/health`. A healthy daemon is reused; otherwise the tray starts a
-  consoleless child and waits up to 30 seconds. The daemon is spawned via
+  consoleless child. The daemon is spawned via
   `popen_outside_job` (breakaway from any inherited Job object) so a tray relaunched from
   inside a session cannot hand the daemon that session's kill-on-close Job; the tray also
   checks `process_in_job()` at startup and records a warning in the lifecycle ledger.
+- **A daemon that is still running has not failed.** Only a spawned child that *exits* is a
+  startup failure, and it ends the wait immediately; uptime is never evidence against it. The
+  health wait is budgeted at `DAEMON_HEALTH_TIMEOUT_SECONDS` (300s, matching
+  `packaging/redeploy_desktop.py`) because a daemon binds its port only after opening its
+  databases and reattaching supervised sessions, and a start whose page cache was just flushed
+  by a redeploy takes multiples of a warm one. Exhausting the budget with the child alive is
+  not fatal either: the tray, the window and the activation signal all come up, and the window
+  loads once health finally arrives (`load_when_healthy`). The tray exits only when there is
+  genuinely nothing to show. A 30-second budget and a fatal verdict on expiry previously killed
+  the tray during ordinary post-redeploy starts, leaving a healthy daemon with no shell
+  attached and requiring a manual relaunch.
+- The tray-menu restart waits `DAEMON_RESTART_WAIT_SECONDS` (30s) instead, because pystray runs
+  a menu action on its message thread and a long wait there freezes the tray, and because that
+  path has nothing to wait for: the window already exists and its SPA reconnects to the
+  returning daemon by itself.
+- Health waits are recorded in `<data_dir>/lifecycle.log`: how long the daemon took to answer,
+  or that it is still starting, or that it exited before answering.
 - The daemon's console output redirects to `<data_dir>/desktop-daemon.log` (rotated to `.1`
   at each spawn; it is a crash catcher — structured logs live in the rotating
   `<data_dir>/daemon.log` / `access.log`). The tray watches the daemon child and appends its

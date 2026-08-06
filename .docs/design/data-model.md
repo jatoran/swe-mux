@@ -205,9 +205,11 @@ quota samples roll into daily summaries before deletion. Process and operational
 are independently configurable. Quota history contains account IDs and utilization, never
 credentials; process history contains command hashes, never command text.
 
-Retention runs at startup **and hourly** from the daemon's supervised retention loop, not at
-startup only: session-preserving reload makes weeks-long uptimes the norm, so a startup-only
-prune means "bounded by age" holds only across restarts. Every automation table with
+Retention runs **hourly** from the daemon's supervised retention loop, and only there.
+Session-preserving reload makes weeks-long uptimes the norm, so a startup-only prune would mean
+"bounded by age" holds only across restarts; the loop's first pass runs shortly after startup
+rather than during it, because a prune is a scan whose cost tracks database size and page cache,
+and on the startup path it delays the listener bind by exactly that much. Every automation table with
 unbounded growth is covered — firings, action results, observer calls, notifications, the
 spend ledger, observer batches and rule checkpoints on the configured
 `automation_retention_days`, and the three derived-knowledge tables (run-note annotations,

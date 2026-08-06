@@ -73,8 +73,8 @@ opt-in and gated (`automation-enablement.md`). Vision: `../../development/CONTRO
 - Gated per session: capture only for sessions whose owning Project opted `tier0` in,
   resolved off the loop with a short TTL cache. The gate resolver returns the session's
   `Tier0Context` (run + project) rather than a bare bool.
-- Retention: bounded by age (`prune`), reusing the process-evidence retention window. Run at
-  startup and hourly by the daemon's supervised retention loop.
+- Retention: bounded by age (`prune`), reusing the process-evidence retention window. Run
+  hourly by the daemon's supervised retention loop, never on the startup path.
 
 ## API surface
 

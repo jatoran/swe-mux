@@ -226,7 +226,10 @@ class StatusTimelineStore:
         # concurrent base computations for one run would mint two different
         # durable-seq offsets for the same entries (duplicated rows).
         self._flush_lock = asyncio.Lock()
-        self._next_prune = time.monotonic() + PRUNE_INTERVAL_SECONDS
+        # Due immediately: retention no longer runs on the daemon's startup path
+        # (a prune there delays the listener bind), so the flush loop owns the
+        # first pass as well as every later one.
+        self._next_prune = time.monotonic()
         self.write_stats: dict[str, int] = {
             "rows_written": 0,
             "rows_lost_to_ring_eviction": 0,

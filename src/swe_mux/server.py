@@ -233,6 +233,11 @@ LOOP_LAG_LOOP = "loop-lag"
 LIFECYCLE_HEARTBEAT_LOOP = "lifecycle-heartbeat"
 MEDIA_CLEANUP_LOOP = "media-cleanup"
 RETENTION_LOOP = "store-retention"
+# Startup past this is logged as a warning. A daemon reattaching a large fleet
+# legitimately takes a few seconds; anything near the desktop shell's health
+# budget is the shape of an incident, and it left no trace of its own until a
+# 36s start expired the tray's wait and looked like a daemon that never started.
+SLOW_STARTUP_SECONDS = 20.0
 # Retained events replayed to a reconnecting /events client when it supplies no
 # cursor: the NEWEST N, never the oldest — catch-up that replays ancient history
 # delivers exactly the events the client already has and none that it missed.
@@ -796,6 +801,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # shutdown while this daemon is still barely started, then keep our own
     # heartbeat fresh so the next daemon can do the same for us.
     daemon_started(config.data_dir, log)
+    # Nothing here is reachable until the listener binds, which happens only
+    # after this context is fully built, so every second spent below is a second
+    # the daemon is invisible to clients and to the desktop shell's health probe.
+    startup_started = time.monotonic()
     background.start(LIFECYCLE_HEARTBEAT_LOOP, lambda: _lifecycle_heartbeat_loop(config.data_dir))
     history = HistoryIndex(config.database_path)
     events = EventBus(history.append_event)
@@ -804,7 +813,11 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         retention_days=config.operational_telemetry_retention_days,
         process_retention_days=config.process_evidence_retention_days,
     )
-    await telemetry.prune(process_retention_days=config.process_evidence_retention_days)
+    # Retention is housekeeping and belongs to `TELEMETRY_RETENTION_LOOP`, which
+    # runs it 5s after start and hourly after that. The identity repair below is
+    # not: it hides false runs that would otherwise be served as history from the
+    # first request, and it is index-backed rather than a scan of the retention
+    # tables, so it stays on the startup path.
     historical_identity_repairs = await history.reconcile_historical_provider_collisions()
     for session_id, false_run_id, canonical_root_run_id in historical_identity_repairs:
         await telemetry.quarantine_agent_run_provider_observations(
@@ -822,15 +835,14 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             "quarantined %d historical provider collision(s)",
             len(historical_identity_repairs),
         )
+    # Pruned by `RETENTION_LOOP` a minute after start, not here.
     tier0 = Tier0Store(config.database_path, retention_days=config.process_evidence_retention_days)
-    await tier0.prune()
     # Durable per-session detection timeline: every ledger entry survives
     # daemon restarts and session ends so status incidents stay investigable
-    # (status-detection.md § durable timeline).
+    # (status-detection.md § durable timeline). Pruned by its own flush loop.
     status_timeline = StatusTimelineStore(
         config.database_path, retention_days=config.status_timeline_retention_days
     )
-    await status_timeline.prune()
     projects = ProjectManager(history)
     await projects.start()
     agent_context = AgentContextService(config.data_dir / "agent-context-backups")
@@ -904,8 +916,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                 )
     git_monitor = GitMonitor(sessions, events, config.git_poll_seconds)
     hooks = MetaHookEngine(config.data_dir / "hooks.toml", events, sessions)
+    # Pruned by `RETENTION_LOOP` a minute after start, not here.
     automation_store = AutomationStore(config.database_path)
-    await automation_store.prune(config.automation_retention_days)
     secret_store = PlatformSecretStore(config.data_dir / "automation.secrets.json")
     openrouter = OpenRouterClient(
         secret_store, timeout_seconds=config.openrouter_request_timeout_seconds
@@ -1168,6 +1180,17 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         project_actions=project_actions,
         project_watcher=project_watcher,
         automation_tasks=set(),
+    )
+    # The startup duration nobody could see. A daemon takes this long to become
+    # reachable, and the desktop shell budgets its health wait against it, so a
+    # start that drifts is worth a line of its own rather than an inference from
+    # the gap between two unrelated INFO timestamps.
+    startup_seconds = time.monotonic() - startup_started
+    log.log(
+        logging.WARNING if startup_seconds > SLOW_STARTUP_SECONDS else logging.INFO,
+        "daemon runtime ready in %.1fs (%d live session(s)); binding listeners",
+        startup_seconds,
+        len(sessions.sessions),
     )
     yield
     if reconcile_task:
@@ -4872,10 +4895,14 @@ async def _retention_loop(
     prompt_queue_store: PromptQueueStore,
     config: Config,
 ) -> None:
-    """Periodic retention for the stores that only pruned at startup.
+    """The only retention pass for these stores; nothing prunes at startup.
 
     Session-preserving reload makes weeks-long uptimes the norm, so a
-    startup-only prune means "bounded by age" holds only across restarts.
+    startup-only prune would mean "bounded by age" holds only across restarts.
+    Retention ran at startup *as well* until it was measured there: a prune of
+    the retention tables is a scan whose cost tracks database size and page
+    cache, and on the startup path it delays the listener bind by exactly that
+    much. Housekeeping must never gate the port.
     """
     await asyncio.sleep(60)
     while True:
