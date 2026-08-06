@@ -579,6 +579,21 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     assert "TRANSCRIPT_EXPANSION_MAX_ENTRIES = 500" in view
     assert "sessionId: string" in view and "runId: string" in view and "messageId: string" in view
 
+    # One message is one message whether it is being read live or out of history, so
+    # both surfaces stamp it through the same helper rather than each carrying its own
+    # date formatting. `transcriptView.ts` owns the behavior (unit-tested in
+    # `frontend/test/transcriptView.test.ts`); what is pinned here is the wiring, which
+    # is what silently drifts when a reader gains a feature the other does not.
+    history = source("HistoryBrowser.tsx")
+    for surface in (tab, history):
+        assert "transcriptTimestampLabel(message.ts)" in surface
+        assert "transcriptTimestampIso(message.ts)" in surface
+    # Deliberately not the same formatter the history *list* uses: a row with no
+    # timestamp still owes the reader an explanation, while a message stamp that
+    # cannot be rendered is simply omitted (`{stamp&&<time…>}`).
+    assert "'timestamp unavailable'" in history
+    assert "'timestamp unavailable'" not in view
+
 
 def test_history_filters_fit_narrow_split_panes() -> None:
     css = source("style.css")
@@ -591,10 +606,12 @@ def test_history_filters_fit_narrow_split_panes() -> None:
         in css
     )
     assert "@container (max-width:620px)" in css
+    # The time filter chooses which of the two stamps a row is ranked by, so the row
+    # has to show both for the choice to mean anything.
     assert "time_basis" in history
     assert "Time: last message" in history
-    assert "timestampLabel(message.ts)" in history
     assert "Started {timestampLabel(historyStart(entry))}" in history
+    assert "Last {entry.last_message_role" in history
 
 
 def test_daemon_spawned_panes_request_focus_rather_than_setting_it() -> None:
