@@ -391,6 +391,7 @@ policy, not config: live agent runs receive bounded default-on rows, while expli
 and the pause survive a restart and depend on no provider
 (`features/auto-delivery.md`).
 `/queue/mailbox` is an application-wide view over the same message rows, partitioned by authorship rather than inbox/outbox direction and optionally filtered by Project or target session before its result limit (`features/agent-messaging.md`).
+It backs the **fleet queue** surface; the route keeps its original name because renaming a daemon path for a UI rename would be a breaking change bought with nothing.
 
 ## Clipboard history
 

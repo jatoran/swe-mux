@@ -2257,7 +2257,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-composer-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .pane-tools .queue-chip.has-pending{color:var(--accent)}
 
-/* ---- Auto-delivery, schedules, mailbox, spawn requests ---- */
+/* ---- Auto-delivery, schedules, fleet queue, spawn requests ---- */
 /* One status line, disclosed. Two labelled checkboxes and a sentence cost three wrapped
    lines of a 380px column, permanently, above the thing the panel was opened for. */
 .queue-auto-strip{display:flex;align-items:center;border-bottom:1px solid var(--line)}
@@ -2271,20 +2271,32 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-item-target{color:var(--text)}
 .queue-item-note{margin-left:auto}
 .queue-item-actions .queue-schedule-preset{color:var(--muted)}
-/* The two install-wide controls, which the Mailbox carries because they must stay
-   one gesture from any device. */
-.mailbox-author-scope button{font-size:8px}
-.mailbox-filters{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:6px 10px;border-bottom:1px solid var(--line)}
-.mailbox-filters label{display:grid;gap:3px;min-width:0;color:var(--muted);font-size:8px}
-.mailbox-filters select{min-width:0;min-height:28px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit}
-.mailbox-project{color:var(--muted)}
-.queue-mailbox-controls{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line)}
-.queue-mailbox-controls button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
-.queue-mailbox-controls button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
-.queue-mailbox-controls button.danger{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
+/* The two install-wide brakes, on the one queue surface that delivers. Separated from the
+   per-session toggles above them by a rule, because they are not per-session. */
+.queue-auto-emergency{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
+.queue-auto-emergency button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.queue-auto-emergency button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+.queue-auto-emergency button.danger{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
 .queue-promotion{flex:1 1 100%;color:var(--muted);font-size:9px;line-height:1.4}
-/* Pending work is not an alert: the amber badge means "unread", this one means "staged". */
-.drawer-badge.queue-badge{background:var(--accent);color:var(--bg)}
+/* Staged work is not an alert, so it carries the count as a word rather than an amber
+   dot: it names where the fleet-wide answer is instead of pretending to be one. */
+.queue-fleet-open{min-height:22px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;font-size:9px;cursor:pointer}
+.queue-fleet-open.has-pending{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+
+/* The fleet queue overlay reuses the usage-analytics shell (same layer geometry, same
+   button and header rules) with a flex body, so a conditional error row cannot desync a
+   fixed grid-template-rows count. */
+.fleet-queue-panel{display:flex;flex-direction:column;grid-template-rows:none}
+.fleet-queue-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:end;padding:7px 9px;border-bottom:1px solid var(--line)}
+.fleet-queue-author-scope{display:flex;gap:3px;margin-right:auto}
+.fleet-queue-author-scope [role=tab]{color:var(--muted)}
+.fleet-queue-author-scope [role=tab].active{border-color:var(--text);color:var(--text)}
+.fleet-queue-controls label{display:grid;gap:3px;min-width:0;color:var(--muted);font-size:9px}
+.fleet-queue-controls select{min-width:0;min-height:29px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit}
+.fleet-queue-status{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:5px 10px;border-bottom:1px solid var(--line);color:var(--muted);font-size:9px}
+.fleet-queue-status .fleet-queue-paused{color:var(--red)}
+.fleet-queue-panel>main{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:0}
+.fleet-queue-project{color:var(--muted)}
 .observation-request{display:grid;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}
 .observation-request.done{opacity:.6}
 .observation-request-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:var(--muted);font-size:9px}
@@ -2295,7 +2307,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .observation-request-actions{display:flex;gap:6px;align-items:center}
 .observation-request-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .observation-request-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
-@media(max-width:760px){.queue-item-actions button,.queue-item-actions select{min-height:38px}.queue-scope button,.queue-done button{min-height:38px}.queue-composer-actions button{min-height:40px}.mailbox-filters select,.queue-mailbox-controls button,.observation-request-actions button{min-height:40px}}
+@media(max-width:760px){.queue-item-actions button,.queue-item-actions select{min-height:38px}.queue-scope button,.queue-done button{min-height:38px}.queue-composer-actions button{min-height:40px}.fleet-queue-controls select,.queue-auto-emergency button,.observation-request-actions button{min-height:40px}.fleet-queue-controls{gap:6px}.fleet-queue-controls label{flex:1 1 45%}}
 
 /* ---- Project-scoped Git review ---- */
 .git-review-tab{height:100%;min-height:0;overflow:auto;background:var(--bg)}

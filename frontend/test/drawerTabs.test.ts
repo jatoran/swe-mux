@@ -35,10 +35,13 @@ test('session surfaces lead, then Project surfaces, then application surfaces', 
   // reads that session back instead of writing into it. Processes closes the Project block
   // for the same shape of reason as Git: Project-scoped, reports rather than opens, and is
   // the watch half of a surface whose acting half stays modal.
-  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript', 'agent', 'files', 'notes', 'context', 'git', 'processes', 'mailbox', 'notifications'])
+  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript', 'agent', 'files', 'notes', 'context', 'git', 'processes', 'notifications'])
   assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'session').map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript', 'agent'])
   assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'project').map(tab => tab.id), ['files', 'notes', 'context', 'git', 'processes'])
-  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'app').map(tab => tab.id), ['mailbox', 'notifications'])
+  // Alerts is the only app-scoped tab. The fleet queue is app-scoped too but is a modal:
+  // it has no send button, so it needs no terminal beside it, and a second queue-shaped
+  // tab in the same rail reads as a duplicate of the first.
+  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'app').map(tab => tab.id), ['notifications'])
   assert.deepEqual(DRAWER_TABS.filter(tab => isNavigatorTab(tab.id)).map(tab => tab.id), ['files', 'notes'])
   // The insert group and the navigator group must stay contiguous, so the rail reads as
   // two blocks rather than an arbitrary list.
@@ -50,7 +53,7 @@ test('session surfaces lead, then Project surfaces, then application surfaces', 
   assert.equal(new Set(labels).size, labels.length, 'tab labels must be distinct')
   assert.deepEqual(DRAWER_TABS.map(tab => tab.heading), [
     'Clipboard History', 'Commands', 'Prompt Library', 'Prompt Queue', 'Transcript', 'Agent Environment',
-    'File Explorer', 'Notes', 'Instructions & Memory', 'Git', 'Processes', 'Mailbox', 'Alerts',
+    'File Explorer', 'Notes', 'Instructions & Memory', 'Git', 'Processes', 'Alerts',
   ])
   for (const tab of DRAWER_TABS) {
     assert.ok(tab.label.length <= 10, `${tab.id} label is too long to also serve as a name`)

@@ -715,10 +715,12 @@ responsive controls.
   actually in force (sends left, minutes left, quiet hours, why it is off), disclosing the
   toggle and the separate "accept agent messages armed" switch. It is unavailable — with the
   reason shown — when the install's master switch is off (`features/auto-delivery.md`).
-- The **Mailbox** is the Queue tab's `inbox`/`outbox` scopes (app menu → Mailbox… lands
-  there), app-level rather than per-Project: messages point at sessions across every Project,
-  and those scopes carry the two controls that must be one gesture away on any device —
-  pause all auto-delivery and report an unsafe delivery (`features/agent-messaging.md`).
+- That same `auto:` disclosure carries the two **install-wide** controls that must be one
+  gesture away on any device — pause all auto-delivery and report an unsafe delivery —
+  below a rule that marks them as not per-session. They are here, on the one queue surface
+  that delivers, rather than in the fleet-queue overlay, because a brake reachable only by
+  opening something is not reachable when it is wanted; `autodelivery.pause` reaches the same
+  operation with nothing open (`features/auto-delivery.md`).
 - The pane header is `[status] [cwd] [voice] [tools]` and **must stay one row**. It is a grid
   with `grid-auto-flow:column`, which is what enforces that: without it, an item beyond the
   declared column count auto-places into a *second row*, and the voice group is a
@@ -867,7 +869,7 @@ responsive controls.
 ## Utility drawer
 
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they are one gesture on mobile or one visible click on desktop away instead of two menu levels deep.
-  The canonical default order is **Clipboard**, **Commands**, **Prompts**, **Queue**, **Transcript**, **Agent**, **Files**, **Notes**, **Context**, **Git**, **Processes**, **Mailbox**, and **Alerts**.
+  The canonical default order is **Clipboard**, **Commands**, **Prompts**, **Queue**, **Transcript**, **Agent**, **Files**, **Notes**, **Context**, **Git**, **Processes**, and **Alerts**.
   Users may distribute those singleton tabs across a recursive arrangement, but the default order groups by what a tab acts on.
   The first
   four are the same verb - text into the focused session - and Transcript reads the same session
@@ -884,8 +886,9 @@ responsive controls.
   what it shows and the mutations it is allowed. **Processes** closes that block for the same
   shape of reason: Project-scoped, reports rather than opens, and see below for the split it
   represents. Notifications is neither, and sits last. Session history, usage, and automation
-  stay modal, as does the process *inspector*: they are wide, table-shaped surfaces that a
-  ~380 px column serves badly.
+  stay modal, as do the process *inspector* and the *fleet queue*: they are wide,
+  table-shaped surfaces that a ~380 px column serves badly, and none of them decides
+  anything that has to be read off a terminal.
 - The injection tabs share the verb but not the routing. Clipboard inserts land in the
   last-focused surface, editor or terminal. **Prompts** inserts are terminals-only and its rows
   additionally answer right-click / long-press with a target menu (a live agent session in this
@@ -897,8 +900,11 @@ responsive controls.
   safe moment to interrupt this agent") is read off the terminal, and only the docked column
   leaves the terminal on screen.
   Queue remains strictly session-scoped.
-- **Mailbox** is an application-scoped provenance and delivery-state view over queued messages from every Project and session.
-  It filters by explicit authorship, Project, and target session; owns the fleet-wide pending badge and emergency auto-delivery controls; and opens a target's Queue without pretending the global list is session-scoped.
+  Its header carries a `fleet` control, labelled with the fleet-wide pending count, that opens the fleet queue.
+- The **fleet queue** is an application-scoped provenance and delivery-state view over queued messages from every Project and session, and is a **modal**, not a tab.
+  It filters by explicit authorship, Project, and target session, and opens a target's Queue without pretending the global list is session-scoped.
+  It is modal for the reason Queue is not: the argument for docking Queue is that the decision to interrupt is read off the terminal, and the fleet queue makes no such decision — it has no send button, so it needs nothing on screen beside it.
+  This is the same watch-here/act-there split **Processes** has with the process inspector, and it also stops the rail from carrying two queue-shaped tabs that read as duplicates.
 - **Transcript** is an *inert* session surface: the focused session's conversation
   as prose you can scroll and copy, without touching the live terminal or scrolling it back.
   Deliberately no composer, no insert, no send. Mixing those actions into the surface for reviewing

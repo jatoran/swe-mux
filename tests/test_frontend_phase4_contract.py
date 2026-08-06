@@ -289,8 +289,13 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     #
     # Re-checked at thirteen (Agent): it is a session-scoped compact disclosure surface and
     # uses the same one-row scroller and selected-tab reveal contract.
+    #
+    # Back to twelve: Mailbox left the rail entirely and became the fleet-queue modal. It
+    # never answered "does this surface belong beside a terminal" — it has no send button,
+    # so nothing in it needed the terminal on screen, and it read as a duplicate of the
+    # Queue tab three cells up. A count going *down* is the healthy direction here.
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
-    assert len(ids) == 13, ids
+    assert len(ids) == 12, ids
     tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
     assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
     assert ".drawer-chrome>.drawer-close" in css

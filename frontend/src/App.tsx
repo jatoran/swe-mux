@@ -9,7 +9,8 @@ import { ProjectResource } from './ProjectResource'
 import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentResult, type SendToAgentTarget } from './SendToAgentPicker'
 import { pastePayload } from './noteSelection'
 import { QueuePane } from './QueuePane'
-import { editQueueMessage, enqueueMessage, fetchQueueSummary, sendQueueMessage, type QueueTargetSummary } from './queueApi'
+import { editQueueMessage, enqueueMessage, fetchAutoStatus, fetchQueueSummary, sendQueueMessage, setAutoPaused, type QueueAutoStatus, type QueueTargetSummary } from './queueApi'
+import { FleetQueue } from './FleetQueue'
 import { ContinuityBanner } from './ContinuityBanner'
 import { DirectoryPicker } from './DirectoryPicker'
 import { folderNameFromPath } from './pathNames'
@@ -295,14 +296,19 @@ export function App() {
   // target session id and refreshed off `queue_updated` events.
   const [queueSummary,setQueueSummary]=useState<Record<string,QueueTargetSummary>>({})
   const queueSummaryTimer=useRef<number|undefined>(undefined)
+  // The install-wide auto-delivery flag, held here so `autodelivery.pause` can name the
+  // act it is about to perform. The emergency stop has to be reachable without opening a
+  // surface first, which means the command list needs to know the current state.
+  const [autoStatus,setAutoStatus]=useState<QueueAutoStatus|null>(null)
   const loadQueueSummary=async()=>{
     try{
-      const result=await fetchQueueSummary()
+      const [result,policy]=await Promise.all([fetchQueueSummary(),fetchAutoStatus()])
       setQueueSummary(Object.fromEntries(result.targets.map(target=>[target.target_session_id,target])))
+      setAutoStatus(policy)
     }catch{/* the daemon is briefly away; the next event retries */}
   }
-  // Fleet-wide pending count, for the drawer tab's badge: "is anything waiting anywhere",
-  // which is the question you have while looking at some other session.
+  // Fleet-wide pending count: "is anything waiting anywhere", which is the question you
+  // have while looking at some other session. It labels the way into the fleet queue.
   const queuePendingTotal=useMemo(()=>Object.values(queueSummary).reduce((total,target)=>total+target.pending,0),[queueSummary])
   const refreshQueueSummary=()=>{
     if(queueSummaryTimer.current)return
@@ -377,6 +383,9 @@ export function App() {
   const [notificationUnread, setNotificationUnread] = useState(0)
   const [notificationToast, setNotificationToast] = useState<UiNotification | null>(null)
   const [usageOpen, setUsageOpen] = useState(false)
+  // The fleet queue overlay, and the Project it opens filtered to (the Project menu scopes
+  // it to its own row; everywhere else opens it unfiltered). `null` is closed.
+  const [fleetQueue, setFleetQueue] = useState<{ projectId: string } | null>(null)
   const [automationOpen,setAutomationOpen]=useState(false)
   const [projectGroups,setProjectGroups]=useState<ProjectGroup[]>([])
   const dragSessionTargetRef=useRef<{sessionId?:string;stackId?:string;projectId:string}|null>(null)
@@ -2268,6 +2277,22 @@ export function App() {
     setNoteMenu({resourceId,projectId:targetProject,x,y})
   }
 
+  /** Every target's queue at once, partitioned by who wrote each message. A modal rather
+   *  than a drawer tab because nothing in it delivers: it needs no terminal beside it, the
+   *  same reason the process fleet is a modal and the Processes tab is not. */
+  const openFleetQueue=(scopeProjectId='')=>{
+    setFleetQueue({projectId:scopeProjectId})
+    setMainMenuOpen(false);setProjectMenu(null);setContextMenu(null);setSidebarMenu(null)
+  }
+
+  /** The install-wide emergency stop. Deliberately callable with nothing open — the whole
+   *  point of a brake is that reaching it costs one gesture. */
+  const toggleAutoPaused=async()=>{
+    setMainMenuOpen(false)
+    try{setAutoStatus(await setAutoPaused(!autoStatus?.paused))}
+    catch(cause){setError(`Auto-delivery could not be ${autoStatus?.paused?'resumed':'paused'}: ${cause instanceof Error?cause.message:String(cause)}`)}
+  }
+
   const openProcessViewer=(session:Session|null=null,scope:string|null=null)=>{
     setProcessSession(session);setProcessScope(scope);setProcessViewerOpen(true)
     setContextMenu(null);setSidebarMenu(null);setMainMenuOpen(false);setProjectMenu(null)
@@ -2717,7 +2742,11 @@ export function App() {
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
     { id:'observations.open',label:'Open selected project’s observation inbox',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setObservationsProject(commandProject||null);setMainMenuOpen(false);setProjectMenu(null)} },
-    { id:'mailbox.open',label:'Open mailbox (queued messages, auto-delivery)',category:'input',available:true,run:()=>{openDrawerTab('mailbox');setMainMenuOpen(false);setProjectMenu(null)} },
+    { id:'queue.fleet',label:'Open fleet queue (every session’s queued messages)',category:'input',available:true,run:()=>openFleetQueue() },
+    { id:'queue.fleetProject',label:'Open fleet queue for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>commandProject&&openFleetQueue(commandProject.id) },
+    // The emergency stop, reachable with nothing open. Its label names the act, not the
+    // state, because a command list is read as a list of things you can do.
+    { id:'autodelivery.pause',label:autoStatus?.paused?'Resume auto-delivery (install-wide)':'Pause all auto-delivery (install-wide)',category:'input',available:true,run:()=>void toggleAutoPaused() },
     { id:'queue.open',label:'Open the prompt queue for the focused session',category:'input',available:!!active&&isAgent(active),disabledReason:'Focus a Claude or Codex session',run:()=>{if(active)void openQueueForSession(active.id)} },
     { id: 'session.spawnShell', label: 'New terminal in current project', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => void spawnTerminal() },
     { id: 'session.quickLaunch', label: 'New terminal custom…', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => openLauncher() },
@@ -3731,6 +3760,7 @@ export function App() {
         }}
         onOpenInspector={scope=>openProcessViewer(null,scope)}
         queuePending={queuePendingTotal}
+        onOpenFleetQueue={()=>openFleetQueue()}
         notesAllProjects={notesAllProjects}
         onNotesAllProjects={setNotesAllProjects}
         onOpenNote={(targetProject,noteId,title,place)=>{
@@ -3789,7 +3819,7 @@ export function App() {
               openDrawerDisplayMenu(event.clientX,event.clientY)
             }}
             onClick={()=>showDrawerTab(tab.id)}
-          >{drawerTabDisplay==='title'?<span class="drawer-tab-title">{tab.label}</span>:<Icon/>}{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}{tab.id==='mailbox'&&queuePendingTotal>0&&<i class="drawer-badge queue-badge">{queuePendingTotal>99?'99+':queuePendingTotal}</i>}</button>
+          >{drawerTabDisplay==='title'?<span class="drawer-tab-title">{tab.label}</span>:<Icon/>}{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}</button>
         })}
       </nav>}
 
@@ -3878,7 +3908,7 @@ export function App() {
       <button onClick={() => runNamedCommand('processes.project')}>Processes…</button>
       <button onClick={() => runNamedCommand('prompts.openProject')}>Prompt library…</button>
       <button onClick={() => runNamedCommand('observations.open')}>Observation inbox…</button>
-      <button onClick={() => runNamedCommand('mailbox.open')}>Mailbox…</button>
+      <button onClick={() => runNamedCommand('queue.fleetProject')}>Fleet queue…</button>
       <button onClick={()=>{openProjectFiles(projectMenu.project);setProjectMenu(null)}}>Browse files…</button>
       <div class="context-subtitle">PROJECT</div>
       <button onClick={() => runNamedCommand('project.reveal')}>Reveal in Explorer</button>
@@ -4002,6 +4032,7 @@ export function App() {
       <button onClick={() => runNamedCommand('history.open')}>Session history</button>
       <button onClick={() => runNamedCommand('notes.browse')}>Notes…</button>
       <button onClick={() => runNamedCommand('processes.all')}>Process fleet…</button>
+      <button onClick={() => runNamedCommand('queue.fleet')}>Fleet queue{queuePendingTotal?` [${queuePendingTotal} pending]`:''}</button>
       <button onClick={()=>runNamedCommand('prompts.open')}>Prompt library…</button>
       <button onClick={()=>runNamedCommand('clipboard.open')}>Clipboard history…</button>
       <button onClick={() => runNamedCommand('usage.open')}>Usage analytics…</button>
@@ -4090,6 +4121,7 @@ export function App() {
     {observationsProject&&<Observations project={observationsProject} onClose={()=>setObservationsProject(null)} onInsertBatch={activeId?text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}})):undefined}/>}
 
     {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}
+    {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}
     {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
 
     {processViewerOpen && <ProcessPanel initialSessionId={processSession?.id||null} initialProjectId={processScope} sessions={sessions} projects={projects} onClose={() => {setProcessViewerOpen(false);setProcessSession(null)}} onAttached={(preview, project) => {

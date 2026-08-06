@@ -7,7 +7,6 @@ import { CommandsTab } from './CommandsTab'
 import { PromptsTab } from './PromptsTab'
 import { NotesTab } from './NotesTab'
 import { QueuePane } from './QueuePane'
-import { MailboxPane } from './MailboxPane'
 import { TranscriptTab } from './TranscriptTab'
 import { GitTab } from './GitTab'
 import { ProjectResource } from './ProjectResource'
@@ -109,9 +108,12 @@ type Props = {
   queueOpenToken?: number
   /** Queue: pop the focused target's queue out into a workspace tab. */
   onQueueOpenAsTab: (sessionId: string) => void
-  /** Queue: pending items across every target, badged like the alerts count. Fleet-wide
-   *  rather than per-session on purpose — the badge answers "is anything waiting anywhere",
-   *  which is the question you have while looking at some other session. */
+  /** Queue: open the fleet-wide review overlay, the watch-here/act-there counterpart to
+   *  this session-scoped tab. */
+  onOpenFleetQueue: () => void
+  /** Queue: pending items across every target. Fleet-wide rather than per-session on
+   *  purpose — it answers "is anything waiting anywhere", which is the question you have
+   *  while looking at some other session, and it labels the way to go find out. */
   queuePending: number
   announcement: string
   /** Desktop only: pointer-drag handle for the column width. Typed as the plain
@@ -219,6 +221,8 @@ export function UtilityDrawer(props: Props) {
           sessions={props.sessions}
           onSelectSession={sessionId => { props.onOpenSession(sessionId); onDone() }}
           onOpenAsTab={sessionId => { props.onQueueOpenAsTab(sessionId); onDone() }}
+          onOpenFleetQueue={() => { props.onOpenFleetQueue(); onDone() }}
+          fleetPending={props.queuePending}
           openRequestToken={props.queueOpenToken}
         />
       case 'transcript':
@@ -261,11 +265,6 @@ export function UtilityDrawer(props: Props) {
           onOpenInspector={props.onOpenInspector}
           onRefresh={props.onRefreshProcesses}
           onDone={onDone}
-        />
-      case 'mailbox':
-        return <MailboxPane
-          projects={props.projects}
-          onOpenQueue={sessionId => { props.onOpenSession(sessionId); props.onTab('queue') }}
         />
       case 'notifications':
         return <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} onChanged={props.onNotificationsChanged} />
@@ -339,7 +338,6 @@ export function UtilityDrawer(props: Props) {
       >
         {renderTabMark(id)}
         {id === 'notifications' && props.unread > 0 && <i class="drawer-badge">{props.unread > 99 ? '99+' : props.unread}</i>}
-        {id === 'mailbox' && props.queuePending > 0 && <i class="drawer-badge queue-badge">{props.queuePending > 99 ? '99+' : props.queuePending}</i>}
       </button>
     })}
   </OverflowRail>
