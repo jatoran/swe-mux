@@ -266,6 +266,18 @@
   sessions whose CLI chooses the native ID internally. Daemon reattachment revalidates this
   observational metadata against immutable root identity before it can drive provider-specific
   status, tokens, context, history, resume, or frontend rendering.
+- **A known conversation is located by name, never by recency.** `transcript_path(native_id)`
+  answers from the rollout file name and confirms it against the file's own first record, so a
+  resumed pane binds immediately; correlation stays the fallback for a pane whose id is still the
+  placeholder mux one. Recency cannot serve a resume at all: `codex resume` appends to the
+  rollout the thread already owns, so the file is older than the pane, and Windows leaves an open
+  file's mtime frozen at creation while it grows (measured: a live 5 MB rollout reporting an mtime
+  71 minutes behind its newest record). Resumed Codex panes were therefore unobserved for their
+  whole life unless a written turn happened to refresh the mtime — no Transcript tab, no tokens,
+  no context, and a history row that reported no native transcript.
+- A pane never starts out following a transcript a live pane already holds, whatever named or
+  correlated evidence points at it. Codex Branch resumes a *live* conversation deliberately, to
+  make the CLI fork a child thread, and the fork's own rollout is what discovery then binds.
 - Claude project directories use the CLI's current non-alphanumeric-to-hyphen cwd encoding.
   Codex reads the active `CODEX_HOME` (falling back to `~/.codex`). Child rollouts with
   `parent_thread_id` are excluded from promotion and external-history reconciliation.

@@ -231,7 +231,9 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   runs **synchronously on the event loop**: measured against 1,314 rollouts in 158 directories,
   35.8 ms to 7.5 ms (4.8x), turning a recurring daemon-wide stall into a much shorter one. That
   tree cannot be pruned by directory name to go faster, because `codex resume` appends to the
-  original rollout and a file under an old date routinely holds the newest mtime.
+  original rollout and a file under an old date routinely holds the newest mtime. The walk is
+  cached whole for that window rather than sliced to the newest few, because locating a *known*
+  conversation (`transcript_path`) matches on the file name and would otherwise pay a second walk.
   Expensive-but-honest metrics (unique set size) are opt-in per request, never on the cadence.
   See `design/features/processes-and-previews.md` §Sampling cost.
 - Voice STT/TTS subprocesses and local models stay off the event loop. Incoming WAV duration,

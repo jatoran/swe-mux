@@ -59,6 +59,17 @@ def main() -> None:
         "action", choices=("list", "verify", "audit"), nargs="?", default="list"
     )
     accounts.add_argument("--limit", type=int, default=50, help="audit entries to show")
+    duplicates = sub.add_parser(
+        "history-duplicates",
+        help="report, or merge, history entries that share one conversation",
+    )
+    duplicates.add_argument(
+        "action",
+        choices=("report", "repair"),
+        nargs="?",
+        default="report",
+        help="report lists what would change; repair merges each conversation's rows",
+    )
     resume = sub.add_parser("resume")
     resume.add_argument("id")
     resume.add_argument("--project", required=True)
@@ -97,6 +108,13 @@ def main() -> None:
         result = request("GET", "/api/profiles")
     elif args.command == "doctor":
         result = request("GET", "/api/remote/status")
+    elif args.command == "history-duplicates":
+        if args.action == "repair":
+            result = request("POST", "/api/history/duplicates/repair", {"dry_run": False})
+        else:
+            # The endpoint's dry run reports the merge itself, which is more useful
+            # than a bare listing: it names the keeper and every value it would learn.
+            result = request("POST", "/api/history/duplicates/repair", {"dry_run": True})
     elif args.command == "accounts":
         if args.action == "verify":
             # Re-derives every saved account's owner from its own credentials,

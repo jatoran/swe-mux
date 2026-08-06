@@ -44,20 +44,39 @@
   cross-attribution the identity invariant forbids. Branch is the flow for forking a live
   conversation; rows whose pane has since rolled onward resume fine.
 - **Resuming a conversation continues its entry; it does not fork one.** A resumed pane is a
-  new process and a new session record, but for a Claude row resumed at its recorded root it
-  inherits the conversation's `agent_run_id` (`spawn_agent_run_id`) and reopens that row rather
-  than opening a second. Claude's `--resume` appends to the same transcript under the same
-  conversation id, so a second row indexed one file twice, showed one conversation as two
-  entries, and left the first entry's totals still moving after its own pane exited. The row's
-  start, note, totals and transcript watermark are the conversation's and are preserved; only
-  what the new PTY changes (argv, cwd, Project, name) is refreshed, and the exit markers are
-  cleared. Because every control-plane record keys on the run, the scan timeline, Tier 0 facts,
-  annotations and the settled title continue across the resume instead of restarting blank.
-  Two cases are genuinely new conversations and keep their own row: a **Codex** resume (which
-  mints a new rollout with a new id) and a **Claude resume into a different root** (Claude
-  resolves transcripts by working directory, so that writes a different file). Only those
-  record a `resume` lineage edge — an inherited run is the same run, and an edge to itself
-  would read as a fork that never happened.
+  new process and a new session record, but it inherits the conversation's `agent_run_id`
+  (`spawn_agent_run_id`) and reopens that row rather than opening a second. Both CLIs append to
+  the same transcript under the same conversation id, so a second row indexed one file twice,
+  showed one conversation as two entries, and left the first entry's totals still moving after
+  its own pane exited. The row's start, note, totals and transcript watermark are the
+  conversation's and are preserved; only what the new PTY changes (argv, cwd, Project, name) is
+  refreshed, and the exit markers are cleared. Because every control-plane record keys on the
+  run, the scan timeline, Tier 0 facts, annotations and the settled title continue across the
+  resume instead of restarting blank.
+- **Whether a resume continues the conversation is the adapter's answer**
+  (`resume_continues_conversation`), because it is the CLI's own transcript-resolution rule.
+  Claude resolves by working directory, so a **resume into a different root** writes a different
+  file and is genuinely a new conversation with its own row. Codex resolves by thread id and
+  reopens the original rollout wherever the pane runs, so every Codex resume continues its
+  entry. Codex was previously assumed to mint a new rollout per resume — true of an older CLI,
+  and until it was corrected each resume of a Codex conversation opened another entry over the
+  one file (13 surplus rows in five days on the author's install, one conversation indexed twice
+  at 95 messages each). Only a genuinely new conversation records a `resume` lineage edge — an
+  inherited run is the same run, and an edge to itself would read as a fork that never happened.
+- **A conversation with several rows is a repair job, not a display problem.** Row ownership of
+  a transcript is decided by `(backend, native_id)` ordered `external, spawned_at, id`, so the
+  earliest row — the conversation's own — is the one a reconcile indexes into; without the full
+  ordering the winner was whatever SQLite returned first, and the content hopped between
+  duplicates across restarts. `GET /api/history/duplicates` reports the rows still split,
+  and `POST /api/history/duplicates/repair` (`mux history-duplicates [repair]`, dry by default)
+  folds each conversation back into one entry: the keeper takes the latest observation, a rename
+  a later pane carried, the widest native timestamp span and the last pane's exit markers, then
+  the duplicates and their rebuildable message copies are deleted. It refuses a group whose
+  duplicate a live pane is still writing to, never touches native transcripts, and never
+  resurrects or absorbs a quarantined row. Merging is explicit because it rewrites entries and
+  has no undo, so no daemon start or migration does it. Records outside the history index that
+  key on a removed run id (Tier 0 facts, the status timeline) are left as they are, exactly as
+  a manual entry deletion leaves them.
 - **Resuming lands you in the resumed pane.** The daemon attaches it and makes it its stack's
   active tab; the browser also focuses it, closing the History overlay (and, on a phone, the
   sidebar) so the pane it just focused is actually on screen. Focus is *requested* rather than
@@ -67,7 +86,10 @@
 - **A resumed pane carries the conversation's name, unsuffixed.** The old `"<name> resumed"`
   compounded over repeated resumes (`… resumed resumed`) and, for an inherited run, renamed an
   entry the pane shares rather than replaces. The row's `auto_named` flag carries over too, so
-  a conversation nobody renamed stays auto-titleable and a renamed one stays pinned.
+  a conversation nobody renamed stays auto-titleable and a renamed one stays pinned. A pinned
+  row resumes under the name the user pinned, not its generated title: the flag arrives from
+  SQLite as `0`/`1`, and an `is not False` test matched every row, so a renamed conversation
+  came back titled by the titler.
 - **Live sessions read their own transcript through a separate route.** The drawer's Transcript
   tab (`ui.md`) uses `GET /sessions/{id}/transcript`, not the history transcript route: the
   history route reindexes a run's searchable messages and loads its annotations on every call,

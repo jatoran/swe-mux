@@ -159,6 +159,7 @@ from .push import PUSH_SENDER_LOOP, PushSender, PushStore
 from .reconcile import reconcile_external_history
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import (
+    AGENT_BACKENDS,
     STATE_WATCHDOG_LOOP,
     Session,
     SessionManager,
@@ -675,6 +676,9 @@ def create_app(
             web.post("/api/history/backfills", start_history_backfill),
             web.get("/api/history/backfills/{job_id}", get_history_backfill),
             web.delete("/api/history/backfills/{job_id}", cancel_history_backfill),
+            # Registered before the `{sid}` routes so the static segment wins.
+            web.get("/api/history/duplicates", list_history_duplicates),
+            web.post("/api/history/duplicates/repair", repair_history_duplicates),
             web.get("/api/history/{sid}/transcript", history_transcript),
             web.post("/api/history/{sid}/resume", resume_history),
             web.delete("/api/history/{sid}", delete_history_entry),
@@ -4207,20 +4211,27 @@ def _claude_transcript_stems(adapter: Any, cwd: str) -> set[str]:
 
 async def _await_claude_fork(
     adapter: Any, cwd: str, original: str, before: set[str], timeout_seconds: float
-) -> bool:
+) -> tuple[bool, str | None]:
     """Wait for ``/branch`` to write a brand-new transcript in ``cwd``.
 
     Watching the filesystem directly (rather than ``record.native_session_id``)
     sidesteps the sibling-cwd switch gate, which intentionally suppresses the
     daemon's own id update when other agents share the directory.
+
+    Returns ``(forked, branch_id)``. The id is the conversation the source pane
+    moved to, and it is reported only when exactly one new transcript appeared:
+    another agent starting in this cwd in the same instant makes "which file is the
+    fork" a guess, and the caller must not roll a pane's identity onto a guess. The
+    fork itself is still confirmed, so the branch proceeds without the roll.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_seconds
     while loop.time() < deadline:
         await asyncio.sleep(0.3)
-        if _claude_transcript_stems(adapter, cwd) - before - {original}:
-            return True
-    return False
+        appeared = _claude_transcript_stems(adapter, cwd) - before - {original}
+        if appeared:
+            return True, next(iter(appeared)) if len(appeared) == 1 else None
+    return False, None
 
 
 async def branch_session(request: web.Request) -> web.Response:
@@ -4233,6 +4244,15 @@ async def branch_session(request: web.Request) -> web.Response:
     one: ``codex resume`` starts a child thread (``parent_thread_id`` set) that
     diverges from the still-live original without sharing its rollout, so the
     source pane keeps the original and the new pane holds the branch.
+
+    In the Claude case the sibling *continues* the original conversation rather than
+    starting a new one, so it inherits that conversation's run exactly as a resume
+    does; opening a second row there left one conversation showing as two entries
+    with one file indexed twice. That inheritance is only sound once the source pane
+    has let go of the run, so the confirmed fork id is applied to it first: the
+    source retires the original row and opens its own, and the sibling then reopens
+    the row the original conversation owns. Without the explicit roll the source pane
+    keeps the retired id until a hook happens to report the replacement.
     """
     manager: SessionManager = request.app["sessions"]
     source = manager.resolve(request.match_info["sid"])
@@ -4254,13 +4274,22 @@ async def branch_session(request: web.Request) -> web.Response:
     # resumed copy must run in the same cwd the conversation was recorded under.
     branch_cwd = record.run_cwd or record.cwd
 
+    # Captured before the fork: after it, the source pane's run is its own new
+    # conversation's, and the row this sibling continues is the one it holds now.
+    original_run_id = record.agent_run_id or record.id
+    adopt_run_id: str | None = None
     if record.backend == "claude":
         adapter = manager.adapters.get("claude")
         before = _claude_transcript_stems(adapter, branch_cwd) if adapter else set()
         source.pty.write("/branch\r")
-        if not adapter or not await _await_claude_fork(
-            adapter, branch_cwd, original, before, timeout_seconds=15.0
-        ):
+        forked, branch_id = (
+            await _await_claude_fork(
+                adapter, branch_cwd, original, before, timeout_seconds=15.0
+            )
+            if adapter
+            else (False, None)
+        )
+        if not forked:
             # The fork never registered; do not resume the (still-live) original —
             # that would collide on its transcript. The source pane may already be
             # branched; the original stays resumable from history.
@@ -4268,6 +4297,12 @@ async def branch_session(request: web.Request) -> web.Response:
                 {"error": "branch did not complete in time; try again", "code": "branch_timeout"},
                 504,
             )
+        if branch_id is not None and await manager.roll_agent_conversation(
+            record.id, native_id=branch_id, reason="branched", source="branch"
+        ):
+            # The source pane is on its own conversation now, so the original's row
+            # is free for the sibling that continues it.
+            adopt_run_id = original_run_id
     suffix = "original" if record.backend == "claude" else "branch"
     session = await manager.spawn(
         backend=record.backend,
@@ -4275,6 +4310,7 @@ async def branch_session(request: web.Request) -> web.Response:
         cwd=branch_cwd,
         project_id=record.project_id,
         resume_native_id=original,
+        adopt_run_id=adopt_run_id,
         project_label=project.name,
     )
     next_layout = attach_terminal(
@@ -5655,18 +5691,6 @@ async def history_transcript(request: web.Request) -> web.Response:
     )
 
 
-def _same_directory(left: str, right: str) -> bool:
-    """Whether two recorded paths name the same directory on this platform."""
-
-    def key(value: str) -> str:
-        try:
-            return os.path.normcase(str(Path(value).resolve()))
-        except OSError:
-            return os.path.normcase(value)
-
-    return key(left) == key(right)
-
-
 async def resume_history(request: web.Request) -> web.Response:
     row = await request.app["history"].history_entry(request.match_info["sid"])
     if not row:
@@ -5724,20 +5748,21 @@ async def resume_history(request: web.Request) -> web.Response:
             409,
         )
     owning_project = request.app["projects"].projects[target_project]
-    # Claude's `--resume` continues the same conversation in the same transcript
-    # file under the same id, so the resumed pane inherits that conversation's
-    # run instead of opening a second entry over one file. Codex mints a new
-    # rollout with a new id on resume, so there the new run is a genuinely new
-    # conversation and gets its own entry. Claude resolves transcripts by working
-    # directory, so a resume into a different root writes a different file and is
-    # likewise a new conversation.
-    adopts_run = str(row["backend"]) == "claude" and _same_directory(
-        str(row["cwd"]), owning_project.root
-    )
+    # A resume that reopens the same conversation, in the same file, under the same
+    # id continues an agent run that already has a row: the pane inherits it rather
+    # than opening a second entry over one file. Only the adapter can say whether
+    # this resume is that, because the answer is the CLI's own transcript-resolution
+    # rule -- Claude resolves by working directory (a resume into another root writes
+    # a different file, so that is a new conversation), Codex by thread id.
+    adapter = request.app["sessions"].adapters[str(row["backend"])]
+    adopts_run = bool(adapter.resume_continues_conversation(str(row["cwd"]), owning_project.root))
     requested_name = str(body.get("name") or "")
+    # `auto_named` arrives from SQLite as 0/1, so an `is not False` test never
+    # matched: a conversation the user had renamed came back under its *generated*
+    # title instead of the name they pinned.
     inherited_name = (
         str(row.get("generated_title"))
-        if row.get("auto_named") is not False and row.get("generated_title")
+        if bool(row.get("auto_named")) and row.get("generated_title")
         else str(row["name"])
     )
     session = await request.app["sessions"].spawn(
@@ -5781,6 +5806,44 @@ async def resume_history(request: web.Request) -> web.Response:
             {"backend": row["backend"], "project_id": target_project},
         )
     return json_response(session.record.snapshot(), 201)
+
+
+def _live_agent_run_ids(manager: SessionManager) -> frozenset[str]:
+    """Run rows a live pane is still writing to."""
+    return frozenset(
+        session.record.agent_run_id or session.record.id
+        for session in manager.sessions.values()
+        if session.record.backend in AGENT_BACKENDS
+        and session.record.state not in {"exited", "crashed"}
+    )
+
+
+async def list_history_duplicates(request: web.Request) -> web.Response:
+    """Conversations whose history is split across more than one entry."""
+    return json_response({"items": await request.app["history"].duplicate_conversation_rows()})
+
+
+async def repair_history_duplicates(request: web.Request) -> web.Response:
+    """Fold duplicate rows back into each conversation's own entry.
+
+    Explicit and dry by default. Merging rewrites history entries, so it is never
+    something a daemon start or a migration does on its own — the duplicates it
+    repairs came from bugs, but an automatic merge would be indistinguishable from
+    losing entries, and there is no undo.
+    """
+    body = await request.json() if request.can_read_body else {}
+    dry_run = bool(body.get("dry_run", True))
+    result = await request.app["history"].merge_duplicate_conversation_rows(
+        live_run_ids=_live_agent_run_ids(request.app["sessions"]), dry_run=dry_run
+    )
+    if not dry_run and result["merged"]:
+        await request.app["events"].emit(
+            "history_duplicates_merged",
+            source="user",
+            conversations=len(result["merged"]),
+            removed=sum(len(item["removed"]) for item in result["merged"]),
+        )
+    return json_response(result)
 
 
 async def delete_history_entry(request: web.Request) -> web.Response:
