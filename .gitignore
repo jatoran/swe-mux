@@ -63,6 +63,7 @@ src/swe_mux/static/index.html
 _agents-orchestrator/
 .tmp-orca/
 .tmp-omp/
+.tmp-herdr/
 .trash/
 
 # === Project-local swe-mux state ===
