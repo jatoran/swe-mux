@@ -37,7 +37,7 @@ import json
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, TypeVar
@@ -1053,12 +1053,29 @@ class PromptQueueStore:
 
         return await self._run(op)
 
-    async def auto_policies(self) -> list[dict[str, Any]]:
+    async def auto_policies(
+        self, session_ids: Collection[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Policy rows, optionally restricted to the given session ids.
+
+        Rows are never deleted (an explicit opt-out or a failed-delivery hold must
+        survive), so the table accumulates one row per session ever granted. The
+        controller polls every second and only live sessions can be delivered to,
+        so it passes their ids here rather than paying for the whole history —
+        measured at 106 rows scanned per tick with 12 live sessions before the
+        filter existed.
+        """
+
         def op() -> list[dict[str, Any]]:
-            rows = self._db.execute(
-                "SELECT * FROM queue_auto_policy WHERE session_id!=? ORDER BY updated_at DESC",
-                (AUTO_POLICY_GLOBAL,),
-            ).fetchall()
+            query = "SELECT * FROM queue_auto_policy WHERE session_id!=?"
+            params: list[str] = [AUTO_POLICY_GLOBAL]
+            if session_ids is not None:
+                if not session_ids:
+                    return []
+                placeholders = ",".join("?" * len(session_ids))
+                query += f" AND session_id IN ({placeholders})"
+                params.extend(session_ids)
+            rows = self._db.execute(query + " ORDER BY updated_at DESC", params).fetchall()
             return [dict(row) for row in rows]
 
         return await self._run(op)

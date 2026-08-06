@@ -421,6 +421,31 @@ async def test_an_unsafe_report_resets_the_proving_period_and_pauses(
     assert status["promotion"]["met"] is False
 
 
+@pytest.mark.asyncio
+async def test_the_tick_reads_only_live_sessions_not_the_whole_policy_history(
+    tmp_path: Path,
+) -> None:
+    """Policy rows are never deleted, so the table holds one row per session ever
+    granted. The controller polls every second; before the live-session filter it
+    scanned all of them — 106 rows for 12 live sessions on a real install."""
+    harness = Harness(tmp_path, live_session("s1"))
+    try:
+        # A long history of dead sessions, each with a persisted policy row.
+        for ghost in range(40):
+            await harness.store.set_auto_policy(
+                f"dead-{ghost}", enabled=True, agent_run_id=f"run-dead-{ghost}"
+            )
+        rows = await harness.auto._policies_with_conversation_defaults()
+        assert {row["session_id"] for row in rows} == {"s1"}
+        # The store-level filter is what makes that cheap, and an empty filter
+        # must mean "no sessions", never "no filter".
+        assert await harness.store.auto_policies([]) == []
+        both = await harness.store.auto_policies(["s1", "dead-3"])
+        assert {row["session_id"] for row in both} == {"s1", "dead-3"}
+    finally:
+        harness.close()
+
+
 def test_promotion_criteria_are_quantitative() -> None:
     fresh = promotion_status({})
     assert fresh["met"] is False

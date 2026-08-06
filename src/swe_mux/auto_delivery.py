@@ -285,7 +285,12 @@ class AutoDeliveryController:
         still requires the promised human verification and manual re-enable.
         """
         async with self._policy_lock:
-            rows = await self.queue.store.auto_policies()
+            # Restricted to live sessions: only they can be delivered to, and policy
+            # rows are never deleted (opt-outs and failed-delivery holds must
+            # survive), so the unfiltered table grows by one row per session ever
+            # granted and this runs every tick.
+            live_ids = [str(session_id) for session_id in self.sessions.sessions]
+            rows = await self.queue.store.auto_policies(live_ids)
             by_session = {str(row["session_id"]): row for row in rows}
             changed = False
             for session_id, session in self.sessions.sessions.items():
@@ -312,7 +317,7 @@ class AutoDeliveryController:
                 )
                 changed = True
             if changed:
-                return await self.queue.store.auto_policies()
+                return await self.queue.store.auto_policies(live_ids)
             return rows
 
     async def status(self) -> dict[str, Any]:
@@ -377,6 +382,11 @@ class AutoDeliveryController:
             # message is a promise the user made about *any* delivery path.
             with contextlib.suppress(Exception):
                 await self.queue.expire_due()
+        # Materialized even when the master switch is off — the per-session default
+        # must exist for the UI to show before the user enables delivery (asserted by
+        # test_master_switch_is_required_but_agent_conversations_default_on). The
+        # fetch stays affordable per one-second tick because it is restricted to live
+        # sessions rather than every row the table has ever accumulated.
         rows = await self._policies_with_conversation_defaults()
         if not self.config.auto_delivery_enabled:
             self._stability.clear()

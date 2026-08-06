@@ -113,6 +113,13 @@ POST /api/queue/auto/report-unsafe         {note}            operator review inp
 PATCH /api/queue/messages/{id}             {constraints}     schedule / clear
 ```
 
+Per-session rows cover live sessions only.
+Policy rows themselves are never deleted — an explicit opt-out or a failed-delivery hold
+must survive a restart — so the table holds one row per session ever granted, and both the
+one-second controller tick and this endpoint read it filtered to the sessions that exist
+(`auto_policies(session_ids)`); unfiltered it had grown to ~9x the live count on a real
+install, scanned every second.
+
 ## Configuration
 
 `auto_delivery_enabled`, `auto_delivery_stable_seconds`, `auto_delivery_max_consecutive`,
