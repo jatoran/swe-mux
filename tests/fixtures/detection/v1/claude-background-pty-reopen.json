@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": true,
+  "description": "The CLI's background-wait footer must corroborate a background_tasks annotation, never open one. The screen is a 32 KiB append-only window of redraw traffic, so the footer drawn while a task genuinely ran is still matchable minutes after it finished: measured live 2026-08-06, the transcript positively closed the annotation and this reading re-added it 29 s later with a fresh 30-minute TTL, after which nothing but that TTL could clear it. Here the same footer sits in the retained screen across a later turn end and must change nothing.",
+  "steps": [
+    {
+      "kind": "transcript",
+      "ts_offset": 0,
+      "record": {
+        "type": "user",
+        "isSidechain": false,
+        "message": { "content": "kick off the watcher" }
+      }
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 1,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_pty1",
+              "name": "Bash",
+              "input": {
+                "command": "npm run watch",
+                "description": "Watch the build",
+                "run_in_background": true
+              }
+            }
+          ]
+        }
+      },
+      "expect_standing": [
+        {
+          "kind": "background_tasks",
+          "source": "transcript",
+          "evidence": "transcript:Bash:run_in_background",
+          "count": 1,
+          "detail": "Watch the build",
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "pty_tail",
+      "data": "\u001b[2J✦ churned for 4s · 1 shell still running ❯ check the task status\n"
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 20,
+      "record": {
+        "type": "queue-operation",
+        "operation": "enqueue",
+        "content": "<task-notification>\n<task-id>bpty</task-id>\n<tool-use-id>toolu_pty1</tool-use-id>\n<status>completed</status>\n</task-notification>"
+      },
+      "expect_standing": []
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 21,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [{ "type": "text", "text": "The watcher finished." }],
+          "stop_reason": "end_turn"
+        }
+      },
+      "expect_state": "idle",
+      "expect_standing": []
+    },
+    {
+      "kind": "timer",
+      "seconds": 2.1,
+      "expect_state": "idle",
+      "expect_delivery": "safe",
+      "oracle_safe": true,
+      "expect_standing": []
+    }
+  ],
+  "expected": {
+    "events": [
+      { "type": "turn_started", "source": "transcript", "scope": "root" },
+      { "type": "tool_use", "source": "transcript", "scope": "root", "tool": "Bash" },
+      {
+        "type": "turn_ended",
+        "source": "transcript",
+        "scope": "root",
+        "outcome": "completed"
+      }
+    ],
+    "states": [
+      { "previous": "idle", "state": "working", "source": "transcript", "proof": "proven" },
+      { "previous": "working", "state": "idle", "source": "transcript", "proof": "proven" }
+    ],
+    "standing": [],
+    "parser": { "status": "ready", "recognized": 4, "unknown": 0, "unknown_signatures": {} },
+    "delivery_state": "safe",
+    "delivery_reason": "all_required_evidence_positive"
+  }
+}

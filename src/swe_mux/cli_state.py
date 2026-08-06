@@ -61,6 +61,12 @@ class CliSessionState:
     def snapshot(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
+            # The CLI's *live* working directory, which the spawn cwd stops
+            # describing the moment the agent enters a worktree. Claude derives a
+            # transcript's directory from cwd, so this is what re-finds a
+            # conversation whose file moved out from under the observer
+            # (`SessionManager._relocated_transcript_candidate`).
+            "cwd": self.cwd,
             "pid": self.pid,
             "proc_start": self.proc_start,
             "kind": self.kind,

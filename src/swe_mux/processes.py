@@ -342,19 +342,53 @@ class ProcessInspector:
     # refute it: a launch's child may not exist yet on the pass that races it.
     BACKGROUND_FAST_CLEAR_MIN_AGE_SECONDS = 15.0
 
+    @staticmethod
+    def _could_be_background_task(item: Any, root_pid: int | None, threshold: float) -> bool:
+        """Whether one live descendant could be the task the annotation names.
+
+        Two exclusions, both structural rather than name-matched:
+
+        - The CLI root itself, which is the process the descendants hang off.
+        - Anything that was **already running when the annotation opened**. A
+          background task's process starts when the launch that opened the
+          annotation runs, so a descendant older than the annotation cannot be
+          it — that is what separates a task from the CLI's own long-lived
+          children (language servers, stdio MCP servers, console hosts) without
+          matching on their names, which would drift with every CLI release.
+
+        An unreadable start time counts as task-capable. Every uncertainty here
+        has to fall that way: refusing to clear leaves the TTL in charge, while a
+        wrong clear retracts a true "an agent is still working" the user is
+        relying on.
+        """
+        if root_pid is not None and getattr(item, "pid", None) == root_pid:
+            return False
+        started = getattr(item, "started_at", None)
+        if not isinstance(started, int | float):
+            return True
+        return float(started) >= threshold
+
     def _fast_clear_background_annotations(self, snapshots: list[Any], now: float) -> None:
         """A vanished process cannot still be working — the strongest *clear*.
 
-        A `background_tasks` annotation whose session has no live descendant
-        besides the CLI root itself is cleared immediately instead of waiting
-        for its TTL. Never the reverse: descendants alone open nothing (an MCP
-        server child is not a background task), and a session with any extra
-        descendant is left to transcript evidence and the TTL — which also makes
-        a false clear structurally impossible while a task's process runs.
+        A `background_tasks` annotation whose session has no live descendant that
+        *could be that task* is cleared immediately instead of waiting out its
+        30-minute TTL. Never the reverse: descendants alone open nothing (an MCP
+        server child is not a background task).
+
+        The candidate test used to be "the session has exactly one descendant,
+        the CLI root". That is the right intent and an unreachable gate: a Claude
+        session that has opened a file holds a language server, and one with a
+        stdio MCP server holds that too, so real sessions carry 4-10 permanent
+        children and the count was never 1. Measured on the live fleet
+        2026-08-06, the one positive clear that does not depend on the transcript
+        had therefore never fired on any session that could run a background task
+        at all. `_could_be_background_task` replaces the count with a per-process
+        question that those helpers answer "no" to by construction.
         """
-        live_counts: dict[str, int] = {}
+        live: dict[str, list[Any]] = {}
         for item in snapshots:
-            live_counts[item.session_id] = live_counts.get(item.session_id, 0) + 1
+            live.setdefault(item.session_id, []).append(item)
         for session in self.sessions.sessions.values():
             # getattr-guarded like the rest of the inspector: tests drive it
             # with lightweight record stand-ins.
@@ -369,16 +403,32 @@ class ProcessInspector:
                 continue
             if now - annotation.since < self.BACKGROUND_FAST_CLEAR_MIN_AGE_SECONDS:
                 continue
-            if live_counts.get(record.id, 0) != 1:
-                # 0 means the root itself is gone (session exit owns that);
-                # >1 means something still runs under the CLI.
+            descendants = live.get(record.id) or []
+            if not descendants:
+                # The root itself is gone; session exit owns that transition and
+                # clears the whole annotation set with it.
+                continue
+            root_pid = getattr(record, "pid", None)
+            # The same grace absorbs the launch/observation race in the other
+            # direction: a task process can be a moment older than the record
+            # that opened the annotation.
+            threshold = annotation.since - self.BACKGROUND_FAST_CLEAR_MIN_AGE_SECONDS
+            if any(
+                self._could_be_background_task(item, root_pid, threshold)
+                for item in descendants
+            ):
                 continue
             if clear_standing_activity(
-                session, "background_tasks", evidence="process:descendants_zero", now=now
+                session, "background_tasks", evidence="process:no_task_descendants", now=now
             ):
                 observation_state = getattr(session, "observation_state", None)
                 if isinstance(observation_state, dict):
+                    # The launch bookkeeping described the annotation just
+                    # cleared. `background_closed` deliberately survives: it is
+                    # what keeps a duplicate completion from decrementing a
+                    # later annotation that has nothing to do with it.
                     observation_state.get("background_open", {}).clear()
+                    observation_state.get("background_labels", {}).clear()
                 session.publish_update()
 
     async def _ensure_sampled(self, *, force: bool = False) -> None:

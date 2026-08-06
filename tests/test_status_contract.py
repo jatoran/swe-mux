@@ -580,13 +580,26 @@ def test_background_wait_is_an_idle_sub_reason_not_a_state() -> None:
     # going to wake itself. Rendering that as a plain "ready · turn complete" is
     # true and misleading at once, so it becomes an idle sub-reason.
     assert pty_tail_waiting_on_background("✻ Waiting for 2 background tasks to finish") is True
-    assert pty_tail_waiting_on_background("running a background task…") is True
+    # The current CLI's shape, captured in `background-wait.bin`. The noun varies
+    # (`shell`, `monitor`); the count is what makes it a footer.
+    assert pty_tail_waiting_on_background("✻ churned for 4s · 1 shell still running") is True
+    assert pty_tail_waiting_on_background("✻ crunched for 36s · 1 monitor still running") is True
+    assert pty_tail_waiting_on_background("· 2 shells still running · check the tasks") is True
     # A live turn is `working`, never a background wait.
     assert (
         pty_tail_waiting_on_background("Waiting for tasks\nthinking… (esc to interrupt)") is False
     )
     assert pty_tail_waiting_on_background("❯ ? for shortcuts") is False
     assert pty_tail_waiting_on_background("") is False
+    # Prose is not a footer. The screen this is read from is 32 KiB of redraw
+    # traffic that also carries the user's prompts, the agent's replies, and any
+    # tool output, so a marker arbitrary English can satisfy is not evidence —
+    # `background-wait.bin` itself contains a prompt reading "wait for it, then
+    # say done". Requiring a count is what separates the two.
+    assert pty_tail_waiting_on_background("running a background task…") is False
+    assert pty_tail_waiting_on_background("the daemon is still running") is False
+    assert pty_tail_waiting_on_background("I am waiting for the build to finish") is False
+    assert pty_tail_waiting_on_background("checked whether the harness is still running") is False
     # The state itself is unchanged: this never invents or blocks a state.
     assert pty_tail_state("✻ Waiting for 2 background tasks to finish") == "unknown"
 

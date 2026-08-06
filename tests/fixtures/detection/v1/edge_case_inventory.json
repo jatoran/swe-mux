@@ -142,6 +142,16 @@
       "guard": "tests/test_status_contract.py::test_startup_dialog_blocks_and_clears_from_the_screen_alone",
       "root_cause": "The Codex variant of the startup-dialog gap: no session-start hook and no transcript exist before turn one, so the startup-quiet idle was the last word while a trust/update dialog blocked the pane. Same rule, same guard — the unwitnessed pair deliberately cannot act on an approval screen, so only the startup-dialog rule can represent it."
     },
+    "background_completion_queued_not_messaged": {
+      "fixture": "claude-background-queued-completion.json",
+      "guard": "tests/test_standing_activity.py::test_a_queued_completion_closes_a_background_launch",
+      "root_cause": "A background shell that finishes while its session is between turns has no turn to be announced into, so the CLI queues the notification: it lands as a `queue-operation` record and its `attachment` mirror, and only becomes a user message if the CLI later hands it to the model. The extractors read only the user form, so the annotation stayed open for its full 30-minute TTL while the proof of completion sat in the transcript the whole time (measured live 2026-08-06 on a session showing a hollow blue ring with every one of its background shells long dead). All three carriers now close, idempotently per task, because duplicate announcements are the normal case."
+    },
+    "background_pty_footer_reopen": {
+      "fixture": "claude-background-pty-reopen.json",
+      "guard": "tests/test_standing_activity.py::test_the_pty_footer_cannot_reopen_a_closed_background_annotation",
+      "root_cause": "The CLI's background-wait footer is corroboration, but `set_standing_activity` creates when absent, which quietly made it a source. Read over a 32 KiB append-only window of redraw traffic, the footer drawn while a task genuinely ran stays matchable long after it finished: measured live 2026-08-06, the transcript positively closed the annotation and this reading re-added it 29 s later with a fresh 30-minute TTL, after which nothing but that TTL could clear it. The tier is now refresh-only, the same rule the subagent tier's `create=False` already had, and its markers must name a count so arbitrary prose on screen cannot satisfy them."
+    },
     "screen_classifier_blind_alarm": {
       "fixture": "claude-classifier-blind.json",
       "guard": "tests/test_status_contract.py::test_classifier_blindness_counts_once_per_blind_window",

@@ -21,7 +21,7 @@ Per signal class, every layer feeds the same ledger with its own `source` string
 
 | Layer | Source tag | What it may do |
 | --- | --- | --- |
-| CLI side state (`~/.claude/sessions/<pid>.json`) | `cli-state` | Corroborate + identity (counters, ledger entries). **Never drives SessionState** — promotion to a transition source requires a release of disagreement telemetry plus its own corpus fixtures. |
+| CLI side state (`~/.claude/sessions/<pid>.json`) | `cli-state` | Corroborate + identity (counters, ledger entries) + the live `cwd` that re-finds a relocated transcript. **Never drives SessionState** — promotion to a transition source requires a release of disagreement telemetry plus its own corpus fixtures. |
 | Hooks (incl. `SubagentStart`/`SubagentStop`) | `hook` | Turn boundaries, blocks, identity (priority 2). |
 | Transcript records | `transcript` | Ordered turn evidence (priority 1) + standing-activity extraction. |
 | PTY screen classifier | `pty` / `watchdog-pty` | Recoveries, vetoes, the startup-dialog rule, drift self-check. |
@@ -43,6 +43,9 @@ What it feeds:
   comparison — it is recorded as a `layer_reading` instead. Treating "CLI `waiting` while
   mux shows `working`" as a disagreement is a real candidate for the next iteration, and
   it goes through the same telemetry gate as any other expansion of this layer's role.
+- **Transcript relocation**: the file's `cwd` is the CLI's *live* working directory, which
+  the spawn cwd stops describing the moment the agent enters a worktree. It is what
+  `_relocated_transcript_candidate` re-derives a moved transcript's path from.
 - **Identity corroboration**: a file in exactly one live session's cwd, bound to a
   conversation no live session owns, updated after that session's run began, is a nested
   child CLI observed deterministically — the signal the `bb81463` incident had to infer
@@ -97,6 +100,36 @@ Windows reports an mtime frozen at its creation, which made this fire on healthy
 hard-block their queued messages (`backends.md`, `delivery-readiness.md`).
 A conversation rollover itself is a `daemon`-sourced forced transition to `starting`, the same
 lifecycle class as promotion.
+
+**A transcript that is *missing* revokes authority the same way a stale one does.**
+Claude derives a transcript's directory from the CLI's working directory, so entering a
+native worktree *moves the file*: the path resolved at spawn stops existing and a file with
+the same name appears under the new directory's slug, with nothing telling the daemon.
+`parser_status` then stays frozen at `ready` from the last successful read, and because
+that field is what `_transcript_authoritative` reads, the hook tier keeps being suppressed
+as redundant to a transcript that can no longer report anything. Measured live 2026-08-06:
+a session latched `idle` for four minutes while its own screen showed the working spinner,
+its cli-state file read `busy`, and root turn hooks kept arriving 8 s apart — every layer
+that could have spoken was either blind or being dropped. Two rules close it:
+
+- **Re-resolution** (`SessionManager._relocated_transcript_candidate`): when the followed
+  path does not exist and the cli-state file reports a different `cwd`, the adapter
+  re-derives the path from (native id, live cwd) and the observer re-aims at it. This is
+  not the mtime heuristic below and needs none of its ownership analysis — that one
+  guesses *which* conversation a session moved to and can latch onto a sibling's, while
+  this re-finds a file named by the conversation id the session already owns. Both halves
+  are proven: the followed path is gone, and the candidate's stem is this session's own
+  `native_session_id`. A switch to a file naming the conversation already owned is
+  therefore a **relocation, not a rollover** — rolling would rekey identity, close the
+  history row, and mint a new agent run for a conversation that never ended. Claude-only:
+  Codex mints rollout filenames the daemon cannot reconstruct.
+- **The staleness net**: a missing followed file alongside a recent root turn hook marks
+  `observation_stale_since` (`reason: transcript_missing`), which is what un-suppresses
+  hooks whatever the cause. Previously a missing file returned early — "no reading" was
+  read as "no evidence" — which made the guard written for a moved conversation
+  unreachable in the case where it moved hardest. A missing file *without* a turn hook
+  stays silent: the observer is aimed before the CLI creates the file, so that is an
+  ordinary startup race.
 
 `SessionStart` is lifecycle and identity evidence, never a turn boundary.
 When it arrives during an active `working` or `awaiting` root turn, including Codex compaction, it is ledgered as `session_start_state_ignored` and cannot move the session to `idle`.
@@ -202,6 +235,17 @@ subagents (`subagents`) — as a list of
   without a positive clear is a small drift signal). A pure TTL refresh is silent —
   subagent evidence renews at tool-record cadence and would bury the entries that matter.
 
+- **Manually retractable.** `POST /api/sessions/{sid}/standing-activity/clear` (optional
+  `{kind}`; the whole set otherwise) retracts an annotation the user can see is wrong,
+  ledgered `manual` like any other clear, and drops the run-scoped launch bookkeeping with
+  it so a later duplicate completion cannot decrement a fresh annotation. Bounded by the
+  axis: it cannot move `SessionState`, `awaiting_reason`, or `delivery_state`, and it
+  cannot *assert* activity — only retract it, after which a genuinely running task
+  re-announces itself on its next piece of evidence. Every source here is evidence about
+  work the daemon cannot observe directly, so any of them can be left holding a false
+  claim whose only other exit is a 30-minute TTL. Surfaced as "Clear standing activity" in
+  the session context menu and the command palette, offered only when a badge is showing.
+
 Add/refresh/expire/clear go through `set_standing_activity` /
 `clear_standing_activity` / `expire_standing_activity` / `clear_all_standing_activity`
 (`session.py`), shared by the live `Session` and the replay harness exactly as
@@ -225,15 +269,46 @@ Record shapes verified 2026-07-31 against live transcripts and the CLI's own too
   increments (cadence as `detail`, expiry mirroring the CLI's 7-day bound),
   `CronDelete {id}` decrements, the last delete clears; `CronList` results are free text
   and only refresh.
-- **`background_tasks`** — a Bash tool_use with `run_in_background: true` opens (tracked
-  by tool_use id in `observation_state`); the launch's tool_result ("Command running in
-  background with ID: <task_id>") binds the task id. Closes: a `<task-notification>`
-  user record naming the launch's `<tool-use-id>`, or `TaskStop {task_id}`. A close with
-  no tracked open (state lost across a daemon restart) decrements the adopted
+- **`background_tasks`** — opens are read from the launch's **tool_result**, which is the
+  only place both launch shapes appear: an explicit `run_in_background: true` Bash
+  tool_use (which also supplies the `detail`, from its `description`), and a *foreground*
+  command the CLI moved to the background when it outran its timeout, whose input carries
+  no flag at all. Both results name the task id ("Command running in background with ID:
+  <task_id>" / "was moved to the background (ID: <task_id>)"). Tracked by tool_use id in
+  `observation_state`, so the whole set is run-scoped.
+
+  Closes: a `<task-notification>` naming the launch's `<tool-use-id>`, or
+  `TaskStop {task_id}`. **The notification rides up to three carriers for one
+  completion** (verified live 2026-08-06): a `queue-operation` record (`operation:
+  "enqueue"` when the task finishes, `"remove"` when it is handed to the model) with the
+  body in its top-level `content`; an `attachment` record (`attachment.commandMode ==
+  "task-notification"`) with the body in `attachment.prompt`; and — only if the CLI gets
+  to deliver it into a turn — a plain user record. A session whose turn ends before the
+  shell exits never gets the user record at all, so reading only that one left the
+  annotation open for its full TTL on every background shell that outlived its turn.
+  Whichever carrier arrives first closes; the rest are no-ops, because closes are
+  idempotent per task rather than decrementing (duplicate announcements are the normal
+  case, and each extra would subtract again). The queued carriers are still excluded from
+  `_CLAUDE_TAIL_IGNORED`'s turn-state judgement — they are not turn activity, only
+  completion evidence.
+
+  A close with no tracked open (state lost across a daemon restart) decrements the adopted
   annotation's own count. No evidence bounds a background task's duration, so the TTL is
   a slow decay (30 min) refreshed by background evidence and by the CLI's own
-  background-wait footer at turn end, which corroborates without knowing the count.
-  `idle_reason: waiting_on_background` is now *derived* from this annotation (or the
+  background-wait footer at turn end.
+
+  **The footer may only refresh, never open.** It is read from a 32 KiB append-only window
+  of redraw traffic, so the line drawn while a task genuinely ran stays matchable long
+  after it finished; because `set_standing_activity` creates when absent, corroboration had
+  quietly become a source. Measured live 2026-08-06: the transcript positively closed the
+  annotation and this reading re-added it 29 s later with a fresh 30-minute TTL, after
+  which nothing but that TTL could clear it. This is the same rule the subagent tier's
+  `create=False` already had. Its markers must also name a **count**
+  (`PTY_BACKGROUND_WAIT_MARKERS`), which is what distinguishes a footer from prose: the
+  same screen carries the user's prompts and the agent's replies, and the captured fixture
+  itself contains a prompt reading "wait for it, then say done".
+
+  `idle_reason: waiting_on_background` is still *derived* from this annotation (or the
   live footer) at each turn end — kept one release for UI compat.
 - **`subagents`** — `SubagentStart`/`SubagentStop` lifecycle hooks (registered in
   `adapters/claude.py`) own the count (starts − stops, floor 0; a stop at zero clears).
@@ -258,12 +333,26 @@ Record shapes verified 2026-07-31 against live transcripts and the CLI's own too
 Two cross-backend sources complete the set:
 
 - **Process fast-clear** (`processes.py`): on each inspector pass, a session holding a
-  `background_tasks` annotation older than the spawn-race grace (15 s) whose CLI root has
-  **no live descendant** is cleared immediately (`process:descendants_zero`) — a vanished
-  process cannot still be working, and this is the strongest clear there is. Never the
-  reverse: descendants alone open nothing (an MCP-server child is not a background task),
-  and any extra descendant leaves the annotation to transcript evidence and the TTL —
-  which also makes a false clear structurally impossible while a task's process runs.
+  `background_tasks` annotation older than the spawn-race grace (15 s) with **no live
+  descendant that could be that task** is cleared immediately
+  (`process:no_task_descendants`) — a vanished process cannot still be working, and this
+  is the strongest clear there is. Never the reverse: descendants alone open nothing (an
+  MCP-server child is not a background task).
+
+  A descendant could be the task unless it is the CLI root itself, or it was **already
+  running when the annotation opened** — a background task's process starts with the
+  launch that opened the annotation, so anything older is one of the CLI's own long-lived
+  children. The discriminator is deliberately age against `annotation.since` and not a
+  name match, which would drift with every CLI release. An unreadable start time counts as
+  task-capable: refusing to clear leaves the TTL in charge, while a wrong clear retracts a
+  true "an agent is still working", so a false clear stays structurally impossible.
+
+  The earlier test was "the session has exactly one descendant, the CLI root". That is the
+  same intent and an unreachable gate: a Claude session that has opened a file holds a
+  language server, one with a stdio MCP server holds that too, and real sessions carry
+  4-10 permanent children. Measured on the live fleet 2026-08-06, the count was never 1 on
+  any session that could run a background task, so the one positive clear that does not
+  depend on the transcript had never fired.
 - **Codex** (`_codex`): no loop/cron equivalents exist in the Codex CLI, so those
   annotations stay empty rather than being faked. Trusted `SubagentStart`/`SubagentStop`
   hooks own the subagent count; before any lifecycle hook arrives, `sub_agent_activity`
@@ -579,7 +668,12 @@ distinguishes "loop armed" from the cron cadence — sidebar density beats taxon
 `≡` background tasks with count, `⑂` subagents with count — and `sessionStatus`
 composes them into the line: `ready · loop armed`, `working · Task · 3 subagents`,
 `ready · 2 background tasks` (the background annotation supersedes the derived
-`idle_reason` text so one fact never renders twice). Dense surfaces (sidebar rows, tab
+`idle_reason` text so one fact never renders twice). Each badge's tooltip carries the
+annotation's own `detail`, which for `background_tasks` names the newest open launch and
+how many others there are ("Restart the harness daemon (+1 more)"). That is not
+decoration: a count alone is unfalsifiable from the outside — "1 background task" on a
+session with nothing running looks exactly like a correct reading — so the failure these
+sources are prone to is the one the UI could not otherwise show. Dense surfaces (sidebar rows, tab
 strips, the mobile projection) show the dimmed glyphs beside the dot; the full text lives
 in the status line and tooltips. Tests assert every annotation kind renders a glyph and
 label and that idle-with-loop still classifies as ready with an unchanged dot class.
@@ -616,7 +710,8 @@ consumer looking as solid as a hook-proven turn end.
   `watchdog_decision`, `pty_tail_appears_idle`, `apply_watchdog_recovery`,
   `session_is_unwitnessed`, `session_status_health`, `fleet_status_health`,
   standing-activity set management, `startup_dialog_observation`,
-  `note_classifier_blindness`
+  `note_classifier_blindness`, `_relocated_transcript_candidate`,
+  `_note_transcript_staleness`
 - `src/swe_mux/observation.py` — evidence extraction, `tail_turn_state`, hook/transcript
   handlers, `closed_by_transcript` latch, trailing-completion guard, standing-activity
   extractors

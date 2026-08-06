@@ -46,7 +46,7 @@
           "source": "transcript",
           "evidence": "transcript:Bash:run_in_background",
           "count": 1,
-          "detail": null,
+          "detail": "Build in background",
           "expires": true
         }
       ]
@@ -100,7 +100,7 @@
           "source": "transcript",
           "evidence": "transcript:Bash:run_in_background",
           "count": 2,
-          "detail": null,
+          "detail": "Watch logs (+1 more)",
           "expires": true
         }
       ]
@@ -148,9 +148,9 @@
         {
           "kind": "background_tasks",
           "source": "transcript",
-          "evidence": "transcript:Bash:run_in_background",
+          "evidence": "transcript:Bash:background_result",
           "count": 2,
-          "detail": null,
+          "detail": "Watch logs (+1 more)",
           "expires": true
         }
       ]
@@ -165,9 +165,9 @@
         {
           "kind": "background_tasks",
           "source": "transcript",
-          "evidence": "transcript:Bash:run_in_background",
+          "evidence": "transcript:Bash:background_result",
           "count": 2,
-          "detail": null,
+          "detail": "Watch logs (+1 more)",
           "expires": true
         }
       ]
@@ -189,7 +189,7 @@
           "source": "transcript",
           "evidence": "transcript:task_notification",
           "count": 1,
-          "detail": null,
+          "detail": "Watch logs",
           "expires": true
         }
       ]

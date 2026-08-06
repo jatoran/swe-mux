@@ -426,6 +426,7 @@ POST   /sessions
 GET    /sessions/{id}
 PATCH  /sessions/{id}
 POST   /sessions/{id}/title/regenerate
+POST   /sessions/{id}/standing-activity/clear
 DELETE /sessions/{id}
 POST   /sessions/{id}/input
 POST   /sessions/{id}/broadcast-set
@@ -442,6 +443,14 @@ GET    /sessions/{id}/agent-environment[?refresh=1]
 an asynchronous `title_regenerate_requested` event. It is limited to live auto-named Claude/Codex
 runs; ended, shell, and manually named sessions are rejected. Provider and budget failures remain
 visible through automation diagnostics and never block the agent lifecycle.
+
+`POST /sessions/{id}/standing-activity/clear` takes an optional
+`{kind?: 'loop'|'cron'|'background_tasks'|'subagents'}` (the whole set when omitted or when the
+body is absent) and returns `{ok, cleared, standing_activity}`. It **retracts only**: annotations
+are not states, so this cannot move `state`, `awaiting_reason`, or `delivery_state`, and it cannot
+assert activity. An unknown `kind` is rejected. Every clear is ledgered with evidence `manual` and
+drops the run-scoped launch bookkeeping, so a later duplicate completion cannot decrement a fresh
+annotation (`design/features/status-detection.md`).
 
 ```ts
 interface SpawnRequest {

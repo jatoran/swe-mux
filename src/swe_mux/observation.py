@@ -153,9 +153,24 @@ CLAUDE_CONTEXT_WINDOWS = {
 #   run-scoped annotation clears already match the store's lifetime. CronList
 #   results are free text and are not parsed — the list call only refreshes.
 # - A background Bash launch carries `run_in_background: true`; its tool_result
-#   reads "Command running in background with ID: <task_id>." and completion
-#   arrives later as a user record containing `<task-notification>` with the
-#   launch's `<tool-use-id>` and a `<status>`. `TaskStop` input `{task_id}`.
+#   reads "Command running in background with ID: <task_id>." A *foreground*
+#   Bash that outruns its timeout is moved to the background by the CLI with no
+#   `run_in_background` in its input at all — the promotion exists only in the
+#   result text ("was moved to the background (ID: <task_id>)"), so the result is
+#   the authoritative open for both shapes and the input is only a hint.
+# - Completion arrives as `<task-notification>` naming the launch's
+#   `<tool-use-id>`, `<task-id>` and a `<status>`. It rides up to three carriers
+#   for one completion (verified live 2026-08-06): a `queue-operation` record
+#   (`operation: "enqueue"` when the task finishes, `"remove"` when it is handed
+#   to the model) with the body in its top-level `content`; an `attachment`
+#   record (`attachment.commandMode == "task-notification"`) with the body in
+#   `attachment.prompt`; and — only if the CLI gets to deliver it into a turn —
+#   a plain user record. A session that finishes its turn before the shell exits
+#   never gets the user record at all, which is why the queued carriers are read:
+#   reading only the user record left the annotation open for its full 30-minute
+#   TTL on every background shell that outlived its turn. Duplicate carriers are
+#   the normal case, so closes are idempotent per task rather than decrementing.
+# - `TaskStop` input `{task_id}`.
 LOOP_DELAY_MIN_SECONDS = 60.0
 LOOP_DELAY_MAX_SECONDS = 3600.0
 CRON_JOB_LIFETIME_SECONDS = 7 * 86400.0
@@ -173,9 +188,15 @@ SUBAGENT_QUIET_SECONDS = 120.0
 # on that straggler would flap a correctly cleared annotation for a full TTL.
 SUBAGENT_REOPEN_GRACE_SECONDS = 10.0
 STANDING_DETAIL_MAX_CHARS = 120
-_BACKGROUND_TASK_ID = re.compile(r"running in background with ID:\s*([A-Za-z0-9_-]+)")
+# Both launch shapes bind a task id from the *result* text: an explicit
+# `run_in_background` launch, and a foreground command the CLI moved to the
+# background when it outran its timeout (which carries no input flag at all).
+_BACKGROUND_TASK_ID = re.compile(
+    r"(?:running in background with ID:|moved to the background \(ID:)\s*([A-Za-z0-9_-]+)"
+)
 _TASK_NOTIFICATION_TOOL_USE = re.compile(r"<tool-use-id>\s*([^<\s]+)\s*</tool-use-id>")
 _TASK_NOTIFICATION_TASK = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
+_TASK_NOTIFICATION_MARKER = "<task-notification>"
 
 
 def _publish_update(session: Session) -> None:
@@ -1246,10 +1267,23 @@ async def _finish_root_turn(
         payload.setdefault("inferred", True)
     if outcome == "completed":
         pty_wait = _background_wait_reason(session)
-        if pty_wait and not getattr(session, "observation_replay", False):
-            # The CLI's own footer corroborates running background work. It
-            # knows *that* tasks run, not how many, so it refreshes recency
-            # without clobbering a transcript-derived count.
+        if (
+            pty_wait
+            and not getattr(session, "observation_replay", False)
+            # Refresh only — this tier may never *open* the annotation. The
+            # screen is a 32 KiB append-only window of redraw traffic, so the
+            # footer drawn while a task genuinely ran is still matchable minutes
+            # after it finished; creating on it resurrected annotations the
+            # transcript had just positively closed (measured live 2026-08-06:
+            # `transcript:task_notification` removed it, `pty:background_wait_marker`
+            # re-added it 29 s later with a fresh 30-minute TTL, and nothing but
+            # that TTL could clear it again). Corroboration was always the stated
+            # role; `set_standing_activity` creating when absent is what quietly
+            # made it a source. Same rule as the subagent tier's `create=False`.
+            and _standing_activity_count(session, "background_tasks") > 0
+        ):
+            # It knows *that* tasks run, not how many, so it refreshes recency
+            # without clobbering a transcript-derived count or detail.
             now = _session_now(session)
             if set_standing_activity(
                 session,
@@ -1872,6 +1906,52 @@ def _background_open(session: Session) -> dict[str, str | None]:
     return tasks  # type: ignore[no-any-return]
 
 
+def _background_labels(session: Session) -> dict[str, str]:
+    """Human label per open launch (tool_use id -> description or command).
+
+    Feeds the annotation's `detail`, which is the only thing that tells the user
+    *what* the daemon believes is still running. A count alone is unfalsifiable
+    from the outside: "1 background task" on a session with nothing running is
+    indistinguishable from a correct reading, so the failure the annotation
+    sources are prone to is also the one the UI cannot show.
+    """
+    state = _observation_state(session)
+    labels = state.setdefault("background_labels", {})
+    return labels  # type: ignore[no-any-return]
+
+
+def _background_closed(session: Session) -> set[str]:
+    """Identifiers already closed this run (both tool_use ids and task ids).
+
+    One completion is announced up to three times (a `queue-operation` enqueue,
+    its `attachment` mirror, and the `remove` when it reaches the model), so
+    closes have to be idempotent per task. Without this the unmatched-close path
+    — which decrements the annotation's own count when no open was tracked —
+    would subtract two or three times for one finished shell and zero out a count
+    that other, genuinely-running tasks own.
+    """
+    state = _observation_state(session)
+    closed = state.setdefault("background_closed", set())
+    return closed  # type: ignore[no-any-return]
+
+
+def _background_detail(session: Session) -> str | None:
+    """`detail` for the annotation: what the newest open launch is, plus a count.
+
+    Never None while anything is open, because `set_standing_activity` reads None
+    as "keep the existing value" — a stale detail outliving the task it named
+    would be worse than none at all.
+    """
+    open_tasks = _background_open(session)
+    if not open_tasks:
+        return None
+    newest_key = next(reversed(open_tasks))
+    labels = _background_labels(session)
+    newest = labels.get(newest_key) or open_tasks.get(newest_key) or "background command"
+    extra = len(open_tasks) - 1
+    return _standing_detail(f"{newest} (+{extra} more)" if extra > 0 else newest)
+
+
 def _sync_background_annotation(session: Session, *, evidence: str, now: float) -> bool:
     open_tasks = _background_open(session)
     if not open_tasks:
@@ -1886,8 +1966,38 @@ def _sync_background_annotation(session: Session, *, evidence: str, now: float) 
         evidence=evidence,
         expires_at=now + BACKGROUND_TASKS_TTL_SECONDS,
         count=len(open_tasks),
+        detail=_background_detail(session),
         now=now,
     )
+
+
+def _open_background_task(
+    session: Session,
+    *,
+    tool_use_id: str,
+    evidence: str,
+    now: float,
+    label: str | None = None,
+    task_id: str | None = None,
+) -> bool:
+    """Track one background launch, whichever shape announced it.
+
+    Re-opening an id this run already closed is refused: the launch record and
+    its completion can be read in either order across a daemon restart (the
+    transcript is re-read from a byte offset, hooks are not), and a resurrected
+    open would hold the annotation for a full TTL against a shell that is gone.
+    """
+    if not tool_use_id or tool_use_id in _background_closed(session):
+        return False
+    open_tasks = _background_open(session)
+    open_tasks.setdefault(tool_use_id, None)
+    if task_id:
+        open_tasks[tool_use_id] = task_id
+    if label:
+        # `setdefault`, so the launch's own description (read at tool_use time,
+        # written for a human) outranks the raw command the result path recovers.
+        _background_labels(session).setdefault(tool_use_id, label)
+    return _sync_background_annotation(session, evidence=evidence, now=now)
 
 
 def _close_background_task(
@@ -1898,6 +2008,14 @@ def _close_background_task(
     tool_use_id: str | None = None,
     task_id: str | None = None,
 ) -> bool:
+    closed = _background_closed(session)
+    identifiers = {value for value in (tool_use_id, task_id) if value}
+    if not identifiers or identifiers & closed:
+        # Already accounted for. One finished shell is announced up to three
+        # times (see the record-shape notes), and each extra announcement would
+        # otherwise decrement the count a second and third time.
+        return False
+    closed |= identifiers
     open_tasks = _background_open(session)
     matched = None
     if tool_use_id and tool_use_id in open_tasks:
@@ -1906,6 +2024,7 @@ def _close_background_task(
         matched = next((key for key, value in open_tasks.items() if value == task_id), None)
     if matched is not None:
         open_tasks.pop(matched, None)
+        _background_labels(session).pop(matched, None)
         if open_tasks:
             return _sync_background_annotation(session, evidence=evidence, now=now)
         return clear_standing_activity(session, "background_tasks", evidence=evidence, now=now)
@@ -2000,12 +2119,13 @@ def _extract_standing_tool_use(
                 now=now,
             )
     elif name == "Bash" and tool_input.get("run_in_background"):
-        tool_use_id = str(block.get("id") or "")
-        if tool_use_id:
-            _background_open(session).setdefault(tool_use_id, None)
-            changed = _sync_background_annotation(
-                session, evidence="transcript:Bash:run_in_background", now=now
-            )
+        changed = _open_background_task(
+            session,
+            tool_use_id=str(block.get("id") or ""),
+            evidence="transcript:Bash:run_in_background",
+            now=now,
+            label=_standing_detail(tool_input.get("description") or tool_input.get("command")),
+        )
     elif name == "TaskStop":
         task_id = str(tool_input.get("task_id") or "")
         if task_id:
@@ -2032,7 +2152,12 @@ def _extract_standing_tool_use(
 
 
 def _extract_standing_tool_result(
-    session: Session, event: dict[str, Any], tool: str, tool_use_id: str, detail: str
+    session: Session,
+    event: dict[str, Any],
+    tool: str,
+    tool_use_id: str,
+    detail: str,
+    target: str | None = None,
 ) -> None:
     """Annotation lifecycle from one tool_result record (live only)."""
     if getattr(session, "observation_replay", False):
@@ -2040,11 +2165,20 @@ def _extract_standing_tool_result(
     now = _standing_now(session, event)
     changed = False
     if tool == "Bash":
-        open_tasks = _background_open(session)
-        if tool_use_id in open_tasks and open_tasks[tool_use_id] is None:
-            match = _BACKGROUND_TASK_ID.search(detail)
-            if match:
-                open_tasks[tool_use_id] = match.group(1)
+        # The result is authoritative for both launch shapes: an explicit
+        # `run_in_background` launch (already open, this binds its task id) and a
+        # foreground command the CLI moved to the background on timeout, whose
+        # input carried no flag at all and which nothing else would ever open.
+        match = _BACKGROUND_TASK_ID.search(detail)
+        if match:
+            changed = _open_background_task(
+                session,
+                tool_use_id=tool_use_id,
+                evidence="transcript:Bash:background_result",
+                now=now,
+                label=_standing_detail(target),
+                task_id=match.group(1),
+            )
     elif tool in {"Task", "Agent"}:
         state = _observation_state(session)
         if state.get("subagent_hooks_seen"):
@@ -2063,11 +2197,38 @@ def _extract_standing_tool_result(
         _publish_update(session)
 
 
+def _claude_task_notification_text(event: dict[str, Any]) -> str:
+    """The `<task-notification>` body carried by a non-message record, if any.
+
+    A background shell that finishes while its session is between turns has no
+    turn to be announced into, so the CLI queues the notification instead: it
+    lands as a `queue-operation` record (body in `content`) and its `attachment`
+    mirror (body in `attachment.prompt`), and only becomes a user message if the
+    CLI later gets to hand it to the model. Reading only the message form is why
+    a completed shell could hold the annotation for its full 30-minute TTL — the
+    proof of completion was in the transcript the whole time, in a record type
+    the standing-activity extractors never looked at.
+    """
+    event_type = event.get("type")
+    if event_type == "queue-operation":
+        content = event.get("content")
+        return content if isinstance(content, str) else ""
+    if event_type == "attachment":
+        attachment = event.get("attachment")
+        if isinstance(attachment, dict):
+            prompt = attachment.get("prompt")
+            return prompt if isinstance(prompt, str) else ""
+    return ""
+
+
 def _extract_standing_task_notifications(
     session: Session, event: dict[str, Any], text: str
 ) -> None:
-    """Close background launches named by <task-notification> user records."""
-    if getattr(session, "observation_replay", False) or "<task-notification>" not in text:
+    """Close background launches named by a `<task-notification>` body.
+
+    Idempotent per task, because one completion arrives on up to three carriers.
+    """
+    if getattr(session, "observation_replay", False) or _TASK_NOTIFICATION_MARKER not in text:
         return
     now = _standing_now(session, event)
     changed = False
@@ -2459,6 +2620,15 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
             block_types=sorted(set(block_types)),
         )
         return
+    if event_type in {"queue-operation", "attachment"}:
+        # Deliberately not turn activity — `_CLAUDE_TAIL_IGNORED` skips both when
+        # judging whether a turn ended, and that stays true. They are read here
+        # for one thing: they are the carriers a background-task completion uses
+        # when there is no live turn to announce it into.
+        _extract_standing_task_notifications(
+            session, event, _claude_task_notification_text(event)
+        )
+        return
     if event_type == "user":
         content = message.get("content")
         text = _claude_user_text(content)
@@ -2547,7 +2717,9 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                         scope="subagent",
                         kind="completed",
                     )
-                _extract_standing_tool_result(session, event, tool, tool_use_id, detail)
+                _extract_standing_tool_result(
+                    session, event, tool, tool_use_id, detail, target
+                )
     elif event_type == "assistant":
         # The model produced output again, so nothing is blocking it.
         await _resume_from_awaiting(session, events, event, evidence="assistant_record")

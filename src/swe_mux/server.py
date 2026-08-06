@@ -28,7 +28,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, get_args
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -84,7 +84,7 @@ from .logsetup import current_log_level, set_log_level
 from .loop_lag import LoopLagMonitor
 from .mcp import McpAuthError, McpService
 from .meta_hooks import MetaHookEngine, parse_hook_rules
-from .models import MuxEvent
+from .models import MuxEvent, StandingActivityKind
 from .observation import (
     apply_hook_observation,
     cancel_pending_approval,
@@ -162,6 +162,8 @@ from .session import (
     STATE_WATCHDOG_LOOP,
     Session,
     SessionManager,
+    clear_all_standing_activity,
+    clear_standing_activity,
     session_is_unwitnessed,
 )
 from .session_attachments import (
@@ -658,6 +660,9 @@ def create_app(
             web.get("/api/sessions/{sid}/agent-environment", session_agent_environment),
             web.patch("/api/sessions/{sid}", patch_session),
             web.post("/api/sessions/{sid}/title/regenerate", regenerate_session_title),
+            web.post(
+                "/api/sessions/{sid}/standing-activity/clear", clear_session_standing_activity
+            ),
             web.delete("/api/sessions/{sid}", delete_session),
             web.post("/api/sessions/{sid}/relaunch", relaunch_session),
             web.post("/api/sessions/{sid}/branch", branch_session),
@@ -4113,6 +4118,54 @@ async def regenerate_session_title(request: web.Request) -> web.Response:
         force_title=True,
     )
     return json_response({"ok": True}, 202)
+
+
+async def clear_session_standing_activity(request: web.Request) -> web.Response:
+    """Manually retract a standing-activity annotation the user can see is wrong.
+
+    Every annotation source is evidence about something the daemon cannot
+    observe directly, so any of them can be left holding a claim the user knows
+    is false — a completion notification that never arrived, a set adopted
+    across a daemon restart whose closes were read as history. The decay path
+    for that is a 30-minute TTL, which is a long time to look at a session that
+    says an agent is still working when nothing is.
+
+    Bounded on purpose: annotations are not states, so this cannot move
+    `SessionState`, `awaiting_reason`, or `delivery_state`, and it cannot
+    *assert* activity — only retract it. The run-scoped launch bookkeeping goes
+    with it, so a later duplicate completion cannot decrement a fresh
+    annotation, and the clear is ledgered like every other one (evidence
+    `manual`) rather than silently mutating the record.
+    """
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    try:
+        body = await request.json()
+    except (ValueError, json.JSONDecodeError):
+        body = {}
+    kind = str((body or {}).get("kind") or "").strip()
+    if kind:
+        if kind not in get_args(StandingActivityKind):
+            raise ValueError(f"unknown standing-activity kind: {kind}")
+        cleared = clear_standing_activity(
+            session, cast(StandingActivityKind, kind), evidence="manual"
+        )
+    else:
+        cleared = clear_all_standing_activity(session, evidence="manual")
+    if cleared:
+        observation_state = getattr(session, "observation_state", None)
+        if isinstance(observation_state, dict) and kind in {"", "background_tasks"}:
+            observation_state.get("background_open", {}).clear()
+            observation_state.get("background_labels", {}).clear()
+        session.publish_update()
+    return json_response(
+        {
+            "ok": True,
+            "cleared": cleared,
+            "standing_activity": [
+                activity.snapshot() for activity in session.record.standing_activity
+            ],
+        }
+    )
 
 
 async def delete_session(request: web.Request) -> web.Response:

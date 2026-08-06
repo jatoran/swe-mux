@@ -632,6 +632,108 @@ async def test_staleness_is_announced_once(tmp_path: Path) -> None:
     assert manager.events.emit.await_count == 1
 
 
+async def test_a_missing_transcript_with_a_turn_hook_is_stale(tmp_path: Path) -> None:
+    # The hardest version of "the conversation moved": the file is not quiet, it
+    # is *gone*, so there is no timestamp to be quiet and this used to return
+    # before deciding anything. Measured live 2026-08-06 on a session that
+    # entered a Claude native worktree — the CLI relocates the transcript to the
+    # new cwd's project directory — the observer sat on a path that no longer
+    # existed while `parser_status` stayed frozen at `ready` from its last
+    # successful read. Because `_transcript_authoritative` reads that field, the
+    # hook tier stayed suppressed as redundant to a transcript that could no
+    # longer report anything, and the session latched `idle` for four minutes
+    # while its own screen showed the working spinner and root turn hooks kept
+    # arriving 8 s apart.
+    manager, session, transcript = stale_manager(tmp_path, last_turn_hook_ts=time.time())
+    transcript.unlink()
+
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    assert session.record.observation_stale_since is not None
+    assert manager.events.emit.await_args.kwargs["reason"] == "transcript_missing"
+
+
+async def test_a_missing_transcript_without_a_turn_hook_stays_silent(tmp_path: Path) -> None:
+    # The observer is aimed before the CLI creates the file, so "missing" on its
+    # own is an ordinary startup race. Only a turn hook makes it evidence: the
+    # CLI ran a turn and none of it landed where we are looking.
+    manager, session, transcript = stale_manager(tmp_path, last_turn_hook_ts=0.0)
+    transcript.unlink()
+
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    assert session.record.observation_stale_since is None
+    manager.events.emit.assert_not_awaited()
+
+
+def relocation_fixture(tmp_path: Path) -> tuple[Any, Any, Path, Path]:
+    """A Claude session whose transcript moved to a worktree's project dir."""
+    from swe_mux.adapters.claude import ClaudeAdapter, encode_cwd
+
+    native = "3763350c-df0c-4f85-9e93-7f73ffba2c07"
+    projects = tmp_path / "projects"
+    worktree = tmp_path / "repo" / ".claude" / "worktrees" / "feature"
+    worktree.mkdir(parents=True)
+    spawn_dir = projects / encode_cwd(tmp_path / "repo")
+    spawn_dir.mkdir(parents=True)
+    current = spawn_dir / f"{native}.jsonl"
+    moved_dir = projects / encode_cwd(worktree)
+    moved_dir.mkdir(parents=True)
+    moved = moved_dir / f"{native}.jsonl"
+    moved.write_text("{}\n", encoding="utf-8")
+
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    manager.events = SimpleNamespace(emit=AsyncMock())
+    record = agent_record(cwd=str(tmp_path / "repo"))
+    record.native_session_id = native
+    adapter = ClaudeAdapter()
+    session = cast(
+        Any,
+        SimpleNamespace(
+            record=record,
+            adapter=adapter,
+            transcript_provisional=False,
+            cli_state={"cwd": str(worktree)},
+        ),
+    )
+    return manager, session, current, moved
+
+
+def test_a_relocated_transcript_is_re_found_from_the_live_cwd(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # Not the mtime heuristic and needing none of its ownership analysis: that
+    # one guesses *which* conversation a session moved to and can latch onto a
+    # sibling's, while this re-finds a file named by the conversation id the
+    # session already owns. Both halves are proven — the followed path is gone,
+    # and the candidate's stem is this session's own native id.
+    manager, session, current, moved = relocation_fixture(tmp_path)
+    monkeypatch.setattr(
+        "swe_mux.adapters.claude.claude_data_home", lambda: moved.parent.parent.parent
+    )
+    assert SessionManager._relocated_transcript_candidate(manager, session, current) == moved
+
+
+def test_relocation_stands_down_without_proof(tmp_path: Path, monkeypatch: Any) -> None:
+    manager, session, current, moved = relocation_fixture(tmp_path)
+    monkeypatch.setattr(
+        "swe_mux.adapters.claude.claude_data_home", lambda: moved.parent.parent.parent
+    )
+    # A live followed file is never relocated out from under the observer.
+    current.write_text("{}\n", encoding="utf-8")
+    assert SessionManager._relocated_transcript_candidate(manager, session, current) is None
+    current.unlink()
+    # No live cwd reading, or one that never moved: nothing to re-resolve.
+    session.cli_state = None
+    assert SessionManager._relocated_transcript_candidate(manager, session, current) is None
+    session.cli_state = {"cwd": str(tmp_path / "repo")}
+    assert SessionManager._relocated_transcript_candidate(manager, session, current) is None
+    # A guessed binding must not be re-resolved as if the id were proven.
+    session.cli_state = {"cwd": str(moved.parent)}
+    session.transcript_provisional = True
+    assert SessionManager._relocated_transcript_candidate(manager, session, current) is None
+
+
 # ------------------------------------ a filesystem that stops dating a live file
 #
 # Windows does not keep a live file's last-write time current. Measured 2026-08-06:

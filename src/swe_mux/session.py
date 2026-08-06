@@ -20,7 +20,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from .adapters import BackendAdapter, SpawnOptions
 from .adapters.claude import claude_data_home
@@ -840,11 +840,22 @@ PTY_IDLE_MARKERS = ("? for shortcuts", "(shift+tab to cycle)")
 # The CLI's own line for "my turn is over but background work is still running".
 # Pre-2.x drew `✻ Waiting for 2 background tasks to finish`; the current CLI
 # (captured 2026-07-31, tests/fixtures/pty_tails/background-wait.bin) replaces
-# the idle footer hint with `1 shell still running · check the task status`,
-# whose stable fragment is "still running". This is an *idle sub-reason* /
-# `background_tasks` annotation corroboration, never a state: the composer
-# accepts input and delivery is safe either way.
-PTY_BACKGROUND_WAIT_MARKERS = ("waiting for", "background task", "still running")
+# the idle footer hint with `✻ churned for 4s · 1 shell still running · check
+# the task status` — the noun varies (`shell`, `monitor`), the count does not.
+# This is an *idle sub-reason* / `background_tasks` annotation corroboration,
+# never a state: the composer accepts input and delivery is safe either way.
+#
+# Every marker must name a **count**, which is what makes it a footer rather than
+# prose. The earlier bare substrings ("waiting for", "background task", "still
+# running") were searched over 32 KiB of screen that also carries the user's
+# prompts, the agent's own replies, and any tool output — the same fixture that
+# pins the real footer also contains a user prompt reading "wait for it, then say
+# done". A marker that arbitrary English can satisfy is not evidence, and this
+# one had no negative signal to retract it: the reading only ever added.
+PTY_BACKGROUND_WAIT_MARKERS = (
+    re.compile(r"\d+\s+[a-z]+s?\s+still running"),
+    re.compile(r"waiting for\s+\d+\s+background task"),
+)
 
 
 # Escape sequences ride the same byte stream as the text and break it two ways.
@@ -878,7 +889,12 @@ def pty_tail_waiting_on_background(tail: str) -> bool:
     be read.
     """
     lowered = _normalize_tail_text(tail).lower()
-    marker = max((lowered.rfind(item) for item in PTY_BACKGROUND_WAIT_MARKERS), default=-1)
+    starts = [
+        match.start()
+        for pattern in PTY_BACKGROUND_WAIT_MARKERS
+        for match in pattern.finditer(lowered)
+    ]
+    marker = max(starts, default=-1)
     if marker < 0:
         return False
     working = lowered.rfind("esc to interrupt")
@@ -3500,7 +3516,17 @@ class SessionManager:
                 # meaningful for a guess. Re-aim the guess instead and stay
                 # provisional; the hook still decides what this session really is.
                 switched_native = adapter.transcript_native_id(switch)
-                if switched_native and not provisional:
+                # A file naming the conversation this session already owns is a
+                # *relocation*, not a rollover. Rolling would rekey identity,
+                # close the history row, and mint a new agent run for a
+                # conversation that never ended — the annotation-and-identity
+                # damage of a `/clear` applied to a session that only changed
+                # directory.
+                if (
+                    switched_native
+                    and not provisional
+                    and switched_native != session.record.native_session_id
+                ):
                     await self._apply_conversation_rollover(
                         session,
                         native_id=switched_native,
@@ -3565,6 +3591,17 @@ class SessionManager:
                 break
             if session.record.backend not in {"claude", "codex"}:
                 break
+            relocated = self._relocated_transcript_candidate(session, current)
+            if relocated is not None:
+                await self.events.emit(
+                    "transcript_relocated",
+                    session_id=session.record.id,
+                    source="daemon",
+                    backend=session.record.backend,
+                    previous=str(current),
+                    path=str(relocated),
+                )
+                return relocated
             candidate = (
                 self._transcript_switch_candidate(session, current) if heuristic else None
             )
@@ -3580,6 +3617,59 @@ class SessionManager:
                 return candidate
             await self._note_transcript_staleness(session, current)
         return None
+
+    def _relocated_transcript_candidate(self, session: Session, current: Path) -> Path | None:
+        """The same conversation's file after the CLI's cwd moved it.
+
+        Claude derives a transcript's directory from the CLI's working directory,
+        so entering a native worktree *moves the file*: the path resolved at
+        spawn stops existing and a file with the same name appears under the new
+        directory's slug. Nothing in the daemon is told. Measured live
+        2026-08-06 on a session that entered `.claude/worktrees/<name>`: the
+        observer sat on a path that no longer existed, `parser_status` stayed
+        frozen at `ready` from its last successful read, and because
+        `_transcript_authoritative` reads that field it kept suppressing the hook
+        tier as redundant. The result was a session latched `idle` for four
+        minutes while its own screen showed the working spinner, its cli-state
+        file read `busy`, and root turn hooks kept arriving 8 s apart — every
+        layer that could have spoken was either blind or being dropped.
+
+        This is emphatically **not** the mtime heuristic in
+        `_transcript_switch_candidate`, and needs none of its ownership
+        analysis. That one guesses *which* conversation a session moved to and
+        can latch onto a sibling's; this one re-finds a file named by the
+        conversation id the session already owns. Both halves are proven, not
+        inferred: the followed path is gone, and the candidate's stem is this
+        session's own `native_session_id`.
+
+        Requires an adapter that derives a path from (native id, cwd) — Claude.
+        Codex mints rollout filenames the daemon cannot reconstruct, so it falls
+        through to the staleness net instead.
+        """
+        record = session.record
+        native_id = record.native_session_id
+        if not native_id or getattr(session, "transcript_provisional", False):
+            return None
+        if current.exists():
+            # A live file is never relocated out from under us; only the CLI
+            # moving its own conversation makes the followed path disappear.
+            return None
+        cli_state = getattr(session, "cli_state", None)
+        cwd = str(cli_state.get("cwd") or "") if isinstance(cli_state, dict) else ""
+        if not cwd or self._path_key(cwd) == self._path_key(record.run_cwd or record.cwd):
+            return None
+        resolver = getattr(session.adapter, "transcript_path", None)
+        if resolver is None:
+            return None
+        try:
+            candidate = cast("Path", resolver(native_id, Path(cwd)))
+        except (OSError, ValueError):
+            return None
+        if candidate == current or not candidate.exists():
+            return None
+        if session.adapter.transcript_native_id(candidate) != native_id:
+            return None
+        return candidate
 
     @staticmethod
     def _aim_observer(session: Session, path: Path) -> None:
@@ -3685,9 +3775,50 @@ class SessionManager:
         """
         record = session.record
         last_write = self._transcript_last_write_ts(session, current)
-        if last_write is None:
-            return
         now = time.time()
+        if last_write is None:
+            # The followed file is unreadable or gone. This used to return —
+            # "no reading" was treated as "no evidence" — which made the one
+            # guard written for a conversation that moved unreachable in the
+            # case where it moved *hardest*: a relocated transcript leaves a
+            # path that does not exist, so there is no timestamp to be quiet.
+            # The session then kept `parser_status == "ready"` from its last
+            # successful read, and that keeps hooks suppressed as redundant to a
+            # transcript that can no longer report anything.
+            #
+            # A vanished file is only *evidence* alongside a turn hook: the CLI
+            # ran a turn and none of it landed where we are looking. Without one
+            # this is an ordinary startup race (the observer is aimed before the
+            # CLI creates the file) and must stay silent.
+            if record.observation_stale_since is not None or not session.last_turn_hook_ts:
+                return
+            if now - session.last_turn_hook_ts > TRANSCRIPT_STALE_SECONDS:
+                return
+            record.observation_stale_since = now
+            record.parser_diagnostic = (
+                f"transcript {current.name} is missing while the CLI kept reporting "
+                "activity; the conversation may have moved"
+            )
+            log.warning(
+                "session %s observation stale: transcript %s missing with a turn hook %.0fs ago",
+                record.id,
+                current,
+                now - session.last_turn_hook_ts,
+            )
+            session.publish_update()
+            await self.events.emit(
+                "observation_stale",
+                session_id=record.id,
+                source="daemon",
+                backend=record.backend,
+                transcript_path=str(current),
+                transcript_last_write=None,
+                transcript_mtime=None,
+                transcript_growth_ts=float(getattr(session, "transcript_growth_ts", 0.0)),
+                last_turn_hook_ts=session.last_turn_hook_ts,
+                reason="transcript_missing",
+            )
+            return
         if record.observation_stale_since is not None:
             # Already blocked. The only thing worth checking is whether the file we
             # gave up on has been written since we did, which retracts the claim.

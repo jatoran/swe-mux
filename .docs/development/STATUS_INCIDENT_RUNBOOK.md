@@ -95,7 +95,14 @@ For the moment in question, from the timeline alone:
    - Displayed `idle`, `pty_tail: working` or `cli_state: busy` → work the daemon never
      saw. Check `hook_recency: never/stale` (hooks not wired or dropped), `unwitnessed`
      in the state-log, and `foreign_conversation_hook_ignored` (the work may belong to a
-     nested child, which is correct behavior).
+     nested child, which is correct behavior). **`hook_recency: fresh` here is the
+     signature of a transcript the daemon has lost**: hooks are arriving and being
+     suppressed as redundant to a file that can no longer report anything. Confirm with
+     `transcript_mtime: null` plus `parser_status: "ready"` in the state-log — the file at
+     `transcript_path` does not exist, most often because the agent entered a worktree and
+     the CLI moved its transcript to the new cwd's project directory. Expect a
+     `transcript_relocated` event re-aiming the observer, or an `observation_stale`
+     (`reason: transcript_missing`) revoking authority so hooks resume driving state.
    - Displayed `awaiting` long after the user answered → the known asymmetry (clears
      require positive proof). Look for the `resume_working` recovery and what delayed it.
 3. **Which run?** If `runs` has several ids, check the transition to `starting` with

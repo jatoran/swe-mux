@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": true,
+  "description": "A background shell that outlives its turn is announced through the CLI's queue rather than as a user message. The turn ends while the shell runs, the shell finishes, and the completion arrives as a `queue-operation` enqueue plus its `attachment` mirror plus the `remove` when it is handed to the model - three carriers for one completion. The first closes the annotation; the rest are no-ops. Reading only the user-message form left the annotation open for its full 30-minute TTL while the proof of completion sat in the transcript the whole time.",
+  "steps": [
+    {
+      "kind": "transcript",
+      "ts_offset": 0,
+      "record": {
+        "type": "user",
+        "isSidechain": false,
+        "message": { "content": "restart the harness daemon in the background" }
+      }
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 1,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_q1",
+              "name": "Bash",
+              "input": {
+                "command": "uv run muxd --config harness.toml",
+                "description": "Restart the harness daemon",
+                "run_in_background": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 2,
+      "record": {
+        "type": "user",
+        "isSidechain": false,
+        "message": {
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_q1",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Command running in background with ID: bqueued. Output is being written to: C:\\tmp\\q.output. You will be notified when it completes."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expect_standing": [
+        {
+          "kind": "background_tasks",
+          "source": "transcript",
+          "evidence": "transcript:Bash:background_result",
+          "count": 1,
+          "detail": "Restart the harness daemon",
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 3,
+      "record": {
+        "type": "assistant",
+        "isSidechain": false,
+        "message": {
+          "content": [{ "type": "text", "text": "Started; it will report back." }],
+          "stop_reason": "end_turn"
+        }
+      },
+      "expect_state": "idle"
+    },
+    {
+      "kind": "timer",
+      "seconds": 2.1,
+      "expect_delivery": "safe",
+      "oracle_safe": true,
+      "expect_state": "idle",
+      "expect_standing": [
+        {
+          "kind": "background_tasks",
+          "source": "transcript",
+          "evidence": "transcript:Bash:background_result",
+          "count": 1,
+          "detail": "Restart the harness daemon",
+          "expires": true
+        }
+      ]
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 30,
+      "record": {
+        "type": "queue-operation",
+        "operation": "enqueue",
+        "sessionId": "replay-native",
+        "content": "<task-notification>\n<task-id>bqueued</task-id>\n<tool-use-id>toolu_q1</tool-use-id>\n<output-file>C:\\tmp\\q.output</output-file>\n<status>failed</status>\n<summary>Background command \"Restart the harness daemon\" failed with exit code 1</summary>\n</task-notification>"
+      },
+      "expect_state": "idle",
+      "expect_standing": []
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 30,
+      "record": {
+        "type": "attachment",
+        "isSidechain": false,
+        "attachment": {
+          "type": "queued_command",
+          "commandMode": "task-notification",
+          "prompt": "<task-notification>\n<task-id>bqueued</task-id>\n<tool-use-id>toolu_q1</tool-use-id>\n<output-file>C:\\tmp\\q.output</output-file>\n<status>failed</status>\n<summary>Background command \"Restart the harness daemon\" failed with exit code 1</summary>\n</task-notification>"
+        }
+      },
+      "expect_state": "idle",
+      "expect_standing": []
+    },
+    {
+      "kind": "transcript",
+      "ts_offset": 36,
+      "record": {
+        "type": "queue-operation",
+        "operation": "remove",
+        "sessionId": "replay-native",
+        "content": "<task-notification>\n<task-id>bqueued</task-id>\n<tool-use-id>toolu_q1</tool-use-id>\n<output-file>C:\\tmp\\q.output</output-file>\n<status>failed</status>\n<summary>Background command \"Restart the harness daemon\" failed with exit code 1</summary>\n</task-notification>"
+      },
+      "expect_state": "idle",
+      "expect_delivery": "safe",
+      "oracle_safe": true,
+      "expect_standing": []
+    }
+  ],
+  "expected": {
+    "events": [
+      { "type": "turn_started", "source": "transcript", "scope": "root" },
+      { "type": "tool_use", "source": "transcript", "scope": "root", "tool": "Bash" },
+      {
+        "type": "tool_result",
+        "source": "transcript",
+        "scope": "root",
+        "tool": "Bash",
+        "success": true
+      },
+      {
+        "type": "turn_ended",
+        "source": "transcript",
+        "scope": "root",
+        "outcome": "completed"
+      }
+    ],
+    "states": [
+      { "previous": "idle", "state": "working", "source": "transcript", "proof": "proven" },
+      { "previous": "working", "state": "idle", "source": "transcript", "proof": "proven" }
+    ],
+    "standing": [],
+    "parser": { "status": "ready", "recognized": 7, "unknown": 0, "unknown_signatures": {} },
+    "delivery_state": "safe",
+    "delivery_reason": "all_required_evidence_positive"
+  }
+}
