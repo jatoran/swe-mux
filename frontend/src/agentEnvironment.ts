@@ -15,7 +15,7 @@ export interface AgentEnvironmentItem {
   state: string
   /** In-section heading for a contiguous run of items (hooks: the lifecycle event). */
   group?: string
-  /** Who provisioned the entry, when knowable — `swe_mux` for swe-mux's own. */
+  /** Who provisioned the entry, when knowable: `swe_mux` for swe-mux's own. */
   owner?: string
   source_id: string | null
   source_label: string | null

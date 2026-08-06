@@ -27,7 +27,7 @@ import { copyPreparedText } from './terminalClipboard'
 //
 // Rows carry previews only; the full text is fetched per entry when the row is
 // expanded or acted on, so a long history never ships megabytes into the picker.
-// Fetched text is cached per entry (an entry's text never changes — a re-copy
+// Fetched text is cached per entry (an entry's text never changes, since a re-copy
 // promotes the existing row rather than rewriting it), which also lets Copy on an
 // already-open entry run inside the click gesture, where the legacy `execCommand`
 // fallback still works.

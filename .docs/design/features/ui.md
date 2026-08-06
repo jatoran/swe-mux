@@ -1274,8 +1274,8 @@ responsive controls.
   body many screens tall keeps *that* entry's copy/pin/forget and a way out on screen for the whole
   scroll. The expanded body is `data-clipboard-capture="ignore"`: a part-selection copied back out
   of the history surface is transport, like the Copy button, not a new capture, and recording it
-  would reorder the list under the reader. Fetched text is cached per entry — an entry's text never
-  changes, a re-copy promotes the existing row — which also lets Copy on an open entry run inside
+  would reorder the list under the reader. Fetched text is cached per entry (an entry's text never
+  changes, a re-copy promotes the existing row), which also lets Copy on an open entry run inside
   the click gesture, where the legacy `execCommand` fallback still works.
 - The clipboard filter is autofocused on desktop and never on a soft-keyboard device
   (`hasSoftKeyboard()`, a *separate* question from the `MOBILE_QUERY` layout breakpoint: a narrowed

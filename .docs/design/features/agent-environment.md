@@ -66,7 +66,7 @@ The first following token that is a `-m` module or is structurally a script path
 A handler with no identifiable target reports its program with the arguments explicitly withheld, and one with neither is an `inline shell command`.
 The `Matcher` and `Timeout` a hook declares are shown because they are structural, not payload.
 
-That line — the program and its script, never the argument list — is what makes the section useful without reopening what the safety boundary above closes: a hook command line is exactly where a user's own tokens and passwords sit, and none of them can reach a candidate target.
+That line - the program and its script, never the argument list - is what makes the section useful without reopening what the safety boundary above closes: a hook command line is exactly where a user's own tokens and passwords sit, and none of them can reach a candidate target.
 
 Hooks whose command runs `swe_mux.hook_client` carry `owner: swe_mux`, in a source checkout and inside the frozen desktop bundle alike (`desktop.py` re-dispatches `-m` itself).
 That is the marker that makes swe-mux's own lifecycle reporting distinguishable from the user's hooks inside the same event, which is otherwise unanswerable from the payload.
@@ -77,7 +77,7 @@ The header shows the selected session, backend and version, plus an explicit Res
 Runtime identity is followed by compact counts and a warning when configuration changed after load.
 Sections are collapsed disclosures with item count and completeness label.
 Items that carry a `group` render under a sticky in-section heading for their run, so the event a hook belongs to stays readable while a long group scrolls; an `owner` renders as a chip on the row.
-Policies open by default; a local substring filter opens matching sections and searches item identity, group, owner, origin, scope, state, description, and safe metadata — so `swe-mux` filters the Hooks section to the ones swe-mux installed.
+Policies open by default; a local substring filter opens matching sections and searches item identity, group, owner, origin, scope, state, description, and safe metadata, so `swe-mux` filters the Hooks section to the ones swe-mux installed.
 Metadata values wrap rather than ellipsing, because the ones that overflow (a hook's script path, an MCP endpoint) are the ones worth reading and a touch device has no tooltip.
 
 Configuration sources and diagnostics are separate disclosures below the capability sections.

@@ -750,7 +750,7 @@ interface AgentEnvironmentInventory {
 ```
 
 `AgentEnvironmentScope` is `built_in | managed | user | project | local | session | unknown`.
-Hook items set `group` to the lifecycle event and name the handler target — the program and the one script or module its command runs, resolved structurally as described in `features/agent-environment.md`.
+Hook items set `group` to the lifecycle event and name the handler target: the program and the one script or module its command runs, resolved structurally as described in `features/agent-environment.md`.
 The response never includes hook command lines, their arguments or inline shell bodies, environment values, credentials, or unredacted MCP URLs.
 Configured MCP entries intentionally have no connection-health claim because the route never starts a server.
 

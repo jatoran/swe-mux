@@ -283,7 +283,7 @@ def _item(
 
     `group` is an optional in-section heading the UI renders above a run of
     consecutive items (hooks use the lifecycle event), and `owner` names who
-    installed the entry when that is knowable — `swe_mux` for the rows swe-mux
+    installed the entry when that is knowable: `swe_mux` for the rows swe-mux
     provisions itself, so they are distinguishable from the user's own.
     """
     identity = f"{kind}:{name}:{origin}:{source.source_id if source else ''}:{unique}"
@@ -727,7 +727,7 @@ def _hooks_from_data(
                 handler_type = str(handler.get("type") or "command")
                 run = _hook_handler_target(handler)
                 # The event is the group heading, so the row identifies the handler
-                # by what it runs — the question "which of these is swe-mux?" has no
+                # by what it runs: the question "which of these is swe-mux?" has no
                 # answer when every row is named after its event.
                 name = Path(run.target).name if run.target else run.program
                 meta: list[tuple[str, str]] = []

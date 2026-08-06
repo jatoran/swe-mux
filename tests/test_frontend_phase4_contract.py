@@ -58,7 +58,7 @@ def test_mobile_workspace_and_recovery_contracts_remain_available() -> None:
     assert "host.current.addEventListener('drop', drop)" in combined
     # The soft keyboard overlays the mobile layout and never resizes it. Under the old
     # `resizes-content` the keyboard shrank the layout viewport, which refitted every
-    # terminal and resized the real PTY — and shrinking an alternate-screen PTY discards
+    # terminal and resized the real PTY, and shrinking an alternate-screen PTY discards
     # the rows that no longer fit, so every keyboard open permanently ate part of the
     # conversation. Asserted in both directions: the replacement has to be there, and the
     # value that destroyed conversations must not come back. Read off the meta tag rather
