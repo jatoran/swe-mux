@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   SOFT_KEYBOARD_MIN_INSET_PX,
   deepActiveElement,
+  nextPeekState,
   raisesSoftKeyboard,
   softKeyboardInset,
   softKeyboardLost,
@@ -139,6 +140,20 @@ test('a visual viewport larger than the layout never slides the workspace down',
   assert.equal(softKeyboardInset(915, 1000), 0)
   assert.equal(softKeyboardInset(Number.NaN, 500), 0)
   assert.equal(softKeyboardInset(915, Number.NaN), 0)
+})
+
+test('peeking at the top of a grid survives output and ends on input', () => {
+  assert.equal(nextPeekState(false, 'toggle'), true)
+  assert.equal(nextPeekState(true, 'toggle'), false)
+  // The one that matters, and the one easiest to get backwards: a streaming reply is exactly
+  // when a reader is peeking, so writes must not drag them back to the composer.
+  assert.equal(nextPeekState(true, 'output'), true)
+  assert.equal(nextPeekState(false, 'output'), false)
+  // Typing means they have stopped reading, and the caret is at the composer.
+  assert.equal(nextPeekState(true, 'input'), false)
+  // Without the keyboard the whole grid fits, so there is no slice left to move.
+  assert.equal(nextPeekState(true, 'keyboardClosed'), false)
+  assert.equal(nextPeekState(false, 'keyboardClosed'), false)
 })
 
 test('a cyclic shadow tree terminates', () => {

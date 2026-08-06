@@ -1183,6 +1183,21 @@ responsive controls.
   the pane header off the top of the screen and drew the terminal where they had been; those are
   navigation rather than content, and they stay put. `.terminal-pane` clips while the keyboard is
   up, which covers everything outside the pane box (the tab rail, the mobile toolbar).
+- A terminal slid for the keyboard offers a peek toggle, because the slide shows the bottom of a
+  grid taller than the space left and that is the wrong half on a fresh agent session: the
+  composer is pinned to the bottom of the alternate screen while the conversation fills from the
+  top, so a first message and its reply land in the hidden region. Nothing could reach them — the
+  alternate screen has no scrollback, so a scroll gesture has nothing to move, and the rows are
+  clipped by a transform rather than scrolled away.
+- The toggle pushes the terminal host back down *inside* the already-slid surface, so the command
+  rail and the chips stay where the slide put them. That is what makes it a toggle rather than a
+  trapdoor: the control that reveals the top is still on screen and still takes you back.
+  Measured with a 415px keyboard over a 48-row grid: the first visible row moves 27 → 0 → 27
+  across toggle presses while the rail holds at 447..500 and the chip at 400..438.
+- `nextPeekState` owns when peeking ends. Typing returns to the composer (the caret is there and a
+  reader who types has stopped reading) and losing the keyboard ends it outright (the whole grid
+  fits again). Output deliberately does **not** end it: a streaming reply is exactly when a reader
+  is peeking, so snapping back on writes would make the toggle useless when it is most needed.
 - Every other mobile surface shortens rather than sliding, and the asymmetry is the whole point:
   a terminal must not resize because shrinking an alternate-screen PTY destroys rows, while a note
   editor, file view, or drawer reflows losslessly. Shortening is strictly better where it is safe,
