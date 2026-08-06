@@ -33,7 +33,7 @@ import { resumeCommand } from './resumeCommand'
 import { railPayload, resolveRail, type RailBackend, type RailItem } from './commandRail'
 import { createRailKeyRepeater, isRepeatableRailKey } from './railKeyRepeat'
 import { activatePromptRailItem } from './promptRail'
-import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
+import { AttachIcon, BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
 import { currentProfile, loadRailItems } from './deviceSettings'
 import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOwnsTail, attachRegistersViewport, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, refitVisibleTerminal, reflowVisibleTerminalRenderer, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
@@ -2042,6 +2042,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       else if (detail.action === 'copyReply') void copyLastReply()
       else if (detail.action === 'copyResume') void copyResumeCommand()
       else if (detail.action === 'branch') onBranch?.()
+      else if (detail.action === 'attach' && acceptsTerminalAttachments(session)) attachmentInputRef.current?.click()
       else if (detail.action === 'relaunch') runCommand('session.relaunch')
       // Both hosts route to App's `session.kill`, which owns the confirm window and
       // the layout/focus cleanup; the drawer is scoped to the focused session, and a
@@ -2183,8 +2184,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const scrollingRailItems=mobilePinnedSend?railItems.filter(item=>item.id!=='enter'):railItems
   const renderRailItem=(item:RailItem)=>{
     switch(item.id){
+      case 'attach':return acceptsTerminalAttachments(session)?<button key={item.id} class="rail-icon" disabled={attachmentBusy||['exited','crashed'].includes(session.state)} aria-label={attachmentBusy?'Attaching files':'Attach files'} title={attachmentBusy?'Attaching files…':item.title||'Attach files to this chat without sending'} onClick={()=>attachmentInputRef.current?.click()}><AttachIcon/></button>:null
       case 'relaunch':return isTask?<button key={item.id} class="term-relaunch" title="Relaunch this task terminal — stops it and re-runs the same command" onClick={()=>runCommand('session.relaunch')}>Relaunch</button>:null
-      // Copy reply / Branch / Paste are icon-only: their marks are conventional enough to read
+      // Attach / Copy reply / Branch / Paste are icon-only: their marks are conventional enough to read
       // without a word, and dropping four rail-widths of text is what keeps the terminal keys
       // reachable without scrolling. Copy resume deliberately keeps its label — a copy glyph
       // alone cannot distinguish it from Copy reply, and the two sit side by side.
@@ -2225,7 +2227,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   }
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
-  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><RailScroller>{acceptsTerminalAttachments(session)&&<button disabled={attachmentBusy||['exited','crashed'].includes(session.state)} title="Attach files to this chat without sending" onClick={()=>attachmentInputRef.current?.click()}>{attachmentBusy?'Attaching…':'Attach'}</button>}{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}>Send</button>}</div>{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><RailScroller>{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}>Send</button>}</div>{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }

@@ -38,6 +38,7 @@ function dispatch(sessionId: string, action: string, detail: Record<string, unkn
 
 /** Built-in action items the drawer can run; the rest are injection types. */
 const ACTION_LABELS: Record<string, string> = {
+  attach: 'Attach',
   paste: 'Paste',
   copyReply: 'Copy reply',
   copyResume: 'Copy resume',
@@ -135,9 +136,10 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
     onDone()
   }
 
-  const visible = items.filter(item => item.id !== 'clipboardHistory')
+  const visible = items.filter(item => item.id !== 'clipboardHistory' && (item.action !== 'attach' || isAgent))
   const keys = visible.filter(item => item.type === 'key')
   const rest = visible.filter(item => item.type !== 'key')
+  const actionDisabled = (item: RailItem) => item.action === 'attach' && (session.state === 'exited' || session.state === 'crashed')
   const label = (item: RailItem) =>
     item.action === 'endSession' && killArmed ? 'Confirm ✓'
       : item.type === 'action' ? ACTION_LABELS[item.action || ''] || item.label : item.label
@@ -148,7 +150,7 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
   return <>
     <p class="drawer-status">{session.name || session.id} · {backend}</p>
     {rest.length > 0 && <div class="drawer-grid" role="group" aria-label="Session commands">
-      {rest.map(item => <button key={item.id} class={item.action === 'endSession' && killArmed ? 'confirming' : undefined} title={item.title || (item.type === 'prompt' ? 'Insert this prompt template into the composer' : railPayload(item, backend)) || item.label} onClick={() => run(item)}>
+      {rest.map(item => <button key={item.id} class={item.action === 'endSession' && killArmed ? 'confirming' : undefined} disabled={actionDisabled(item)} title={actionDisabled(item)?'Files cannot be attached to an ended session':item.title || (item.type === 'prompt' ? 'Insert this prompt template into the composer' : railPayload(item, backend)) || item.label} onClick={() => run(item)}>
         <span>{label(item)}</span>
         {item.type !== 'action' && <small>{item.type === 'skill' ? 'skill' : item.type === 'slash' ? 'command' : item.type === 'prompt' ? 'prompt' : 'text'}{item.type !== 'prompt' && item.submit ? ' · sends' : ''}</small>}
       </button>)}

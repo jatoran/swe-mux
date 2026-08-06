@@ -193,8 +193,8 @@ into mobile-voice setup instead.
   its most valuable leading slots and scrolled out of reach. The header group is itself a
   scroller, which is what keeps a long chip set (or a live transcript readout) from pushing the
   pane tools out of a bar that must never wrap — see `ui.md`.
-- On touch, the group additionally exposes `audio…` Settings, since a phone has no desktop
-  context menu. It does **not** repeat `speak`, summary/verbatim, or autoplay: those render
+- On touch, the group exposes `audio…` Settings only while that session's TTS or Talk switch is active, since an all-off header should stay quiet and the setup chips already provide the route into Voice settings.
+  It does **not** repeat `speak`, summary/verbatim, or autoplay: those render
   only when the player strip renders, and the strip is now the very next row. `tts:setup` and
   `talk:setup` replace their chips when the global feature is disabled, so an unavailable
   feature stays discoverable.

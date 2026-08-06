@@ -208,6 +208,9 @@ export function installClipboardCapture(): void {
   // Capture phase: xterm and the note editor both stop propagation of their own
   // copy events in some paths, and this must see them regardless.
   const onNativeCopy = (event: Event) => {
+    // A manual fallback can outlive the synchronous suppression scope. Its
+    // source surface therefore carries an explicit capture opt-out.
+    if (event.target instanceof Element && event.target.closest('[data-clipboard-capture="ignore"]')) return
     const clipboardEvent = event as ClipboardEvent
     const text =
       clipboardEvent.clipboardData?.getData('text/plain') ||

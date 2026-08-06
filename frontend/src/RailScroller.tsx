@@ -22,6 +22,7 @@ interface OverflowRailProps {
   focusKey?: string
   stripProps?: OverflowRailStripProps
   touchDrag?: boolean
+  touchDragGain?: number
 }
 
 type TouchDragState = {
@@ -78,6 +79,7 @@ export function OverflowRail({
   focusKey,
   stripProps,
   touchDrag = false,
+  touchDragGain = 1,
 }: OverflowRailProps) {
   const stripRef = useRef<HTMLDivElement>(null)
   const touchDragRef = useRef<TouchDragState | null>(null)
@@ -192,7 +194,7 @@ export function OverflowRail({
         state.dragging = true
       }
       event.preventDefault()
-      strip.scrollLeft = state.startScrollLeft - dx
+      strip.scrollLeft = state.startScrollLeft - dx * touchDragGain
       syncOverflow()
     }}
     onPointerUp={event => finishTouchDrag(event.currentTarget, event.pointerId, false)}

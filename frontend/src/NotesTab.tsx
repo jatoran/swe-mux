@@ -64,6 +64,12 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
   const [titleError,setTitleError]=useState('')
   const [browseOpen,setBrowseOpen]=useState(false)
   const scopeId=allProjects?'':project?.id||''
+  // Desktop keeps this component mounted while Projects switch. Tag the loaded
+  // collection with its request scope so the new Project cannot validate its
+  // remembered sub-tab against the previous Project's notes for one render.
+  const loadedScope=useRef<string|null>(null)
+  const scopedItems=loadedScope.current===scopeId?items:null
+  const scopedError=loadedScope.current===scopeId?error:''
   // A generation guard rather than a cancel flag: a refresh fired by a note-changed
   // event can land after a scope change, and the newest request must win.
   const generation=useRef(0)
@@ -82,14 +88,16 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     try{
       const result=await api<{items:ProjectNoteSummary[]}>('GET',path)
       if(mine!==generation.current)return
+      loadedScope.current=scopeId
       setItems(result.items);setError('')
     }catch(cause){
       if(mine!==generation.current)return
+      loadedScope.current=scopeId
       setItems([]);setError(cause instanceof Error?cause.message:String(cause))
     }
   }
 
-  useEffect(()=>{setItems(null);void load()},[scopeId])
+  useEffect(()=>{loadedScope.current=null;setItems(null);void load()},[scopeId])
   useEffect(()=>{
     const changed=()=>void load()
     window.addEventListener('mux:note-changed',changed)
@@ -134,13 +142,13 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
 
   const needle=query.trim().toLowerCase()
   const shown=useMemo(()=>{
-    const listed=items||[]
+    const listed=scopedItems||[]
     if(!needle)return listed
     return listed.filter(item=>
       item.title.toLowerCase().includes(needle)
       ||item.project_name.toLowerCase().includes(needle)
       ||item.excerpt.toLowerCase().includes(needle))
-  },[items,needle])
+  },[scopedItems,needle])
 
   // Grouping by project keeps an all-projects listing readable. A scoped listing is
   // already one project, so it renders flat.
@@ -156,15 +164,15 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
   },[shown,allProjects])
 
   const projectItems=useMemo(()=>stableProjectNoteTabs(
-    (items||[]).filter(item=>item.project_id===project?.id)
-  ),[items,project?.id])
+    (scopedItems||[]).filter(item=>item.project_id===project?.id)
+  ),[scopedItems,project?.id])
   const selectedTabId=canonicalNoteTabId(selectedResourceId)
 
   // A stale remembered id can follow a deletion or an older on-disk build. Resolve it only
   // after the scoped collection loads, then persist the replacement through the same callback
   // as an explicit tab click.
   useEffect(()=>{
-    if(allProjects||!project||!items)return
+    if(allProjects||!project||!scopedItems)return
     const fallback=fallbackNoteTab(selectedResourceId,projectItems)
     if(fallback===selectedTabId)return
     if(fallback===SCRATCHPAD_TAB_ID)onOpenScratchpad('drawer')
@@ -172,7 +180,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
       const note=projectItems.find(item=>projectNoteTabId(item.note_id)===fallback)
       if(note)onOpenNote(note.project_id,note.note_id,note.title,'drawer')
     }
-  },[allProjects,items,project?.id,projectItems,selectedResourceId,selectedTabId])
+  },[allProjects,scopedItems,project?.id,projectItems,selectedResourceId,selectedTabId])
 
   // Selecting a drawer sub-tab keeps the panel visible. Moving a note to a workspace tab
   // hands the screen back on mobile.
@@ -370,10 +378,10 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
         </select>
       </div>
       <div class="notes-body notes-tab-body">
-        {error&&<p class="notes-state error" role="alert">{error}</p>}
-        {!items&&!error&&<p class="notes-state">Reading notes…</p>}
-        {items&&!error&&!shown.length&&<p class="notes-state">
-          {items.length?'No note matches this search.':'No notes yet. Create one for this Project.'}
+        {scopedError&&<p class="notes-state error" role="alert">{scopedError}</p>}
+        {!scopedItems&&!scopedError&&<p class="notes-state">Reading notes…</p>}
+        {scopedItems&&!scopedError&&!shown.length&&<p class="notes-state">
+          {scopedItems.length?'No note matches this search.':'No notes yet. Create one for this Project.'}
         </p>}
         {!!shown.length&&<div class="notes-listing">
           {allProjects

@@ -12,13 +12,18 @@ responsive controls.
   an inset rounded thumb, transparent track, theme-derived muted colour, and stronger hover /
   active feedback. Compact horizontal rails may hide their scrollbar when another overflow
   affordance is present.
-- A persistent top rail places `swe_mux`, sidebar collapse, and daemon activity above the
-  sidebar column. Workspace tabs are not global top-rail state; every pane renders its own tab
-  strip beside that rail.
+- A persistent top rail places sidebar collapse, daemon activity, the ellipsized active Project title,
+  and the active Project's Run trigger above the sidebar column.
+  The product wordmark is omitted because Project scope is the useful persistent identity in this compact row.
+  Workspace tabs are not global top-rail state; every pane renders its own tab strip beside that rail.
 - The sidebar is pointer/keyboard resizable from 190-480 px and collapsible.
   Dragging its divider below 150 px previews collapse, and reversing the same drag past 170 px reopens it before release.
   The separate thresholds prevent state chatter near the boundary.
   Width and collapse state are device-local browser preferences, not Project layout state.
+- Sidebar focus is structural rather than another status colour.
+  The active Project has one continuous neutral rail flush to the sidebar edge across its heading and expanded children, backed by a shallow inward wash.
+  The focused session has a compact neutral selection plate inside that Project block.
+  Runtime state colours remain confined to status dots and status copy, so Ready green, working blue, attention amber, and failure red do not compete with selection.
 - On mobile, selecting either a Project row or a session row closes the navigation overlay. Project
   selection closes it before restoring that Project's remembered active view, including when no
   valid remembered view exists.
@@ -164,9 +169,10 @@ responsive controls.
 - Context menus are source-aware. Terminal-only operations never appear on resource tabs;
   obsolete focused-terminal, detach/remove-from-group, Project-note, pane-swap, and pane-header
   minimize/close actions are absent.
-- Opening tab actions is non-activating. Desktop right-click and mobile long-press target the
-  named tab without changing the pane-active tab, focused view, or active terminal; normal
-  click/tap remains the activation gesture.
+- Opening tab or sidebar-session actions is non-activating.
+  Desktop right-click and mobile long-press target the named tab or session without changing the active Project, pane-active tab, focused view, or active terminal.
+  The click synthesized after a sidebar long-press is consumed; normal click/tap remains the activation gesture.
+  Menu actions operate on the captured target without selecting it unless the action explicitly opens or focuses that target.
 - **No context menu reorders or reshapes anything, on any platform.** Open-in-split,
   new-terminal-in-split, new-custom-terminal-in-split, stack-with-focused, dissolve-stack, and
   move-tab are absent from the session menu on every source (sidebar row, tab, pane bar / `⋯`),
@@ -633,10 +639,11 @@ responsive controls.
   the bar. Phones drop the cwd column and cap the status width so the group keeps room.
 - Every terminal has an in-flow action rail at the bottom of its pane on desktop and mobile,
   below the terminal rather than over it. It carries a keyboard toggle plus terminal-key
-  buttons (Esc, Enter, Tab,
-  Ctrl-C, and the four arrows), then Attach (agent sessions), Copy reply, Paste, and the
-  clipboard-history picker (`Clip`),
-  then a status readout. On narrow/coarse Claude and Codex panes, the configurable Enter item is
+  buttons (Esc, Enter, Tab, Ctrl-C, and the four arrows), Copy reply, Paste, and the clipboard-history picker (`Clip`).
+  Immediately after Up/Down, four editing helpers insert `\n\n---\n\n`, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
+  Attach is the final scrolling item on agent rails.
+  A status readout follows the configured items.
+  On narrow/coarse Claude and Codex panes, the configurable Enter item is
   removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate
   grid column. The four arrows are non-focusing pointer controls: press sends once, then a 350 ms
   hold repeats every 75 ms until release or cancellation. Preventing pointer focus keeps an open
@@ -647,15 +654,16 @@ responsive controls.
   desktop Enter behavior is unchanged. Rail items now carry a **placement**: `strip` (here), `drawer` (the
   utility drawer's Commands tab), or `both`. That replaces the old enabled/disabled toggle, which
   was a bad model — the strip is horizontally scarce, so "off" was the only way to get an item out
-  of it, and several useful built-ins (Home/End, ^Home/^End, newline, clear input, `/rewind`)
+  of it, and several useful built-ins (Home/End, ^Home/^End, newline, `/rewind`)
   shipped hidden for want of room. Those now ship *on*, in the drawer, and custom skills and slash
   commands default there too rather than crowding the arrows off the strip. The two regions are
   independent surfaces, not one slot: an item you hammer under the terminal can also carry its
   full label in the drawer, so the settings row edits them as two toggles (`Rail`, `Panel`) rather
   than a three-way select. Clearing both is what hides an item (`enabled: false`); the settings
   row is what dims. Saves predating placement are migrated on read: `enabled: false` meant "not on
-  the strip", so it becomes a drawer item.
-- Rail items come in five kinds: terminal `key`, built-in `action`, literal `text`, `slash`
+  the strip", so it becomes a drawer item. Saves predating the editing-helper cluster receive the
+  four helpers after Down and Attach at the end once; saving that merged catalog makes later user ordering authoritative.
+- Rail items come in six kinds: terminal `key`, built-in `action`, literal `text`, `slash`
   command, `skill`, and `prompt`. A `prompt` item is a *pointer* at a prompt-library template
   (`prompt-library.md`) — it stores the `scope:id` key, never the body, so the button always
   injects the template's current text and cannot drift into a stale copy. It is the one item type
@@ -758,11 +766,12 @@ responsive controls.
   than typing `/copy` or waiting for OSC 52. Reply extraction walks back to the newest turn with
   meaningful assistant text; provider control acknowledgements such as `No response requested.`
   never replace the last copyable reply.
-- Claude/Codex terminal bodies also accept OS file drops and copied-file paste, while the visible
-  **Attach** rail button supplies the same multi-file picker on desktop and mobile. Upload status
-  is reported in the rail. A general file inserts a quoted workspace-local path into the draft;
-  a recognized image keeps the provider's native image reference. Neither path submits, and
-  attachment input never follows terminal broadcast to sibling panes.
+- Claude/Codex terminal bodies also accept OS file drops and copied-file paste, while the paperclip rail button supplies the same multi-file picker on desktop and mobile.
+  Attach is a built-in command-rail item, so it can be moved, filtered, placed in the Commands panel, or hidden.
+  Upload status is reported in the rail.
+  A general file inserts a quoted workspace-local path into the draft; a recognized image keeps the provider's native image reference.
+  Neither path submits.
+  Attachment input never follows terminal broadcast to sibling panes.
 - Terminal copy is success-preserving: keyboard, menu, automatic selection, the action rail, and
   provider OSC 52 requests retain the exact text until a write succeeds. Blocked or insecure
   clipboard contexts open a prepared fallback automatically, leaving one explicit Copy tap.
@@ -810,6 +819,7 @@ responsive controls.
   The top-bar search filters the already loaded messages with literal, case-insensitive matching, highlights every occurrence, and leaves whole-conversation copy unchanged.
   Search owns a temporary scroll position and clearing it restores the reader's prior place.
   A message's copy control sticks to the body's top-right edge while that message is being read, then yields when the message leaves the viewport.
+  Every message header shows its full local date and time, not only a time-of-day.
   An explicit Show more or Show less choice is device-local and keyed by session, agent run, and stable message identity, so appending messages, a moving transcript window, or navigating away does not reset it or apply it to a different message.
   Search temporarily showing a full matching message does not change that saved choice.
   Only expanded identifiers and recency timestamps are stored, and a 500-entry cap bounds stale state without storing transcript text.
@@ -852,6 +862,8 @@ responsive controls.
   A pane whose conversation rolled over
   (`/clear`, `/new`) reloads onto the new run; the retired conversation stays in History, which
   is also where anything older than the loaded window lives.
+  History transcript messages use the same agent/you labels, full local timestamp, sticky per-message copy control, and long-message Show more/Show less treatment.
+  A search-matched history message is temporarily unfolded so its result cannot remain behind the clamp.
 - A live auto-named agent's session menu includes **Regenerate title**. It requests a fresh
   generated title from the latest observed user request. A manual Rename remains authoritative and
   removes this action because automation never overwrites a user title.
@@ -968,7 +980,10 @@ responsive controls.
   covering a terminal in a tiling workspace is exactly backwards for a panel you opened to work
   *with* that terminal. The mobile overlay is an uncapped `90vw`, leaving a narrow strip of context
   and scrim on every phone and small tablet.
+  Mobile tab-rail drags use a 2.5x horizontal gain so one committed swipe can traverse the complete rail.
   Desktop width is pointer-resizable and device-local, like the sidebar's.
+  The docked drawer sits one tonal step away from the Project workspace and casts a restrained shadow across its neutral resize gutter.
+  Its launcher rail takes a second tonal step, while internal drawer panes reuse the workspace's neutral gutter and focus-frame language.
   It has no fixed maximum; its live maximum is the available viewport width after reserving the navigation chrome, utility rail, and a 150 px main workspace.
   Dragging its divider below 260 px previews collapse, and reversing the same drag past 280 px reopens it before release.
 - Every width change reflows the pane tree and refits its terminals, which sends a resize to each
@@ -1007,6 +1022,7 @@ responsive controls.
   `drawer.resetLayout` restores one canonical stack and reconciles every Project presentation.
   Existing bindings for `drawer.resetTabs` migrate through a hidden alias.
 - Settings > Appearance exposes `drawer_tab_display` as **Icons** or **Titles**, defaulting to Icons.
+  Right-clicking a tab in either the open drawer rail or the desktop launcher rail exposes the same persisted Text labels toggle.
   The setting applies to every pane rail, the mobile projection, and the desktop launcher.
   Icon mode uses `DRAWER_TAB_ICONS`, while title mode uses the short `DrawerTab.label`; neither mode renders both marks.
   Title rails remain one-line scrollers with the same endpoint-aware overflow controls, and title mode widens the outer launcher through `--utility-rail-width`.
@@ -1081,7 +1097,8 @@ responsive controls.
   mobile dims, and the drawer and its scrim are in the gesture recognizer's allowlist so the same
   swipe that pulled it in pushes it back out. Clipboard rows carry previews only; full text is
   fetched per entry on use. Row actions are insert (primary), copy to the system clipboard, pin,
-  forget.
+  forget. Copying from the history tab, including its manual fallback, bypasses capture: it changes
+  the OS clipboard without promoting the entry or changing its timestamp.
 - Clipboard history's safety properties are part of the feature, not an afterthought: the ring is
   **memory-only by default** (`clipboard_history_persist` opts into the SQLite mirror, and turning
   it back off deletes the rows), secret-shaped copies are skipped rather than stored, oversized

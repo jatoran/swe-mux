@@ -1,7 +1,7 @@
 // The app's icon-only controls: the command rail and the utility drawer's tabs.
 //
-// On the command rail, only the actions whose meaning survives without a word are drawn: copy,
-// paste, and branch. Copy resume deliberately keeps its text label — "copy" alone cannot
+// On the command rail, only the actions whose meaning survives without a word are drawn: attach,
+// copy, paste, and branch. Copy resume deliberately keeps its text label — "copy" alone cannot
 // distinguish it from Copy reply, and the two sit next to each other on the rail.
 //
 // The drawer's tabs are all icons, and one set serves both places they appear (the strip
@@ -36,6 +36,11 @@ export const CopyIcon = () => <svg {...stroke}>
 export const PasteIcon = () => <svg {...stroke}>
   <rect x="8" y="2" width="8" height="4" rx="1" />
   <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+</svg>
+
+/** A paperclip, the conventional file-attachment mark. */
+export const AttachIcon = () => <svg {...stroke}>
+  <path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />
 </svg>
 
 /** The git branch mark: a trunk, a fork, and the commit each ends at. */

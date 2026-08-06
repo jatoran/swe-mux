@@ -58,6 +58,9 @@ PaneLeaf = terminal | note | preview | history | queue
   rearranges the pane tree except an explicit split, drag, or move.
 - Every pane has its own tab strip and active tab. There is no global tab strip, dock/pop-out
   mode, detached layout, or separate resource workspace.
+- Desktop pane boundaries use four-pixel neutral gutters and a quiet one-pixel pane frame.
+  The focused pane strengthens that neutral frame and adds a short top inset rather than introducing another semantic colour.
+  Mobile suppresses the frame because its projection renders only one pane at a time.
 - `tab.next` / `tab.previous` are the presentation-aware cycling commands. On desktop they walk
   the focused pane's stored tab order and wrap without jumping across splits; on mobile they walk
   the unified Project rail. Their desktop-app defaults are `Ctrl+Tab` / `Ctrl+Shift+Tab`, and both

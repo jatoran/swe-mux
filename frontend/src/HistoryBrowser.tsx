@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { withoutClipboardCapture } from './clipboardHistory'
 import { useModalFocus } from './modalFocus'
+import { copyPreparedText } from './terminalClipboard'
+import { transcriptClamped, transcriptSpeaker, transcriptTimestampIso, transcriptTimestampLabel } from './transcriptView'
 import type { Project } from './types'
 
 export type HistoryMatch={ordinal:number;role:'user'|'assistant';ts?:string;excerpt:string}
@@ -17,7 +20,7 @@ export type HistoryEntry = {
   auto_named?:number;generated_title?:string;matches?:HistoryMatch[];match_count?:number
 }
 type DerivedAnnotation={id:string;tag:string;content:string;provenance:string;resolved_model?:string;confidence?:number;cost_usd?:number;created_at:number}
-type TranscriptMessage={role:string;ts?:string;content:Array<{type:string;text?:string;name?:string;input?:unknown}>}
+type TranscriptMessage={role:'user'|'assistant';ts?:string;content:Array<{type:string;text?:string;name?:string;input?:unknown}>}
 type Transcript={entry:HistoryEntry;messages:TranscriptMessage[];annotations:DerivedAnnotation[];matches:HistoryMatch[]}
 type LineageEdge={id:string;parent_run_id:string;child_run_id:string;relation:string;created_at:number}
 type HistoryPage={items:HistoryEntry[];next_cursor:string|null}
@@ -38,6 +41,7 @@ type Props={
 }
 
 const money=new Intl.NumberFormat(undefined,{style:'currency',currency:'USD',maximumFractionDigits:4})
+const COPIED_FLASH_MS=1200
 const historyName=(entry:HistoryEntry)=>entry.auto_named!==0&&entry.generated_title?entry.generated_title:entry.name
 const timestampDate=(value?:string|number|null)=>{
   if(value===undefined||value===null||value==='')return null
@@ -55,6 +59,8 @@ const formatBytes=(bytes?:number|null)=>{
   while(value>=1024&&unit<units.length-1){value/=1024;unit++}
   return `${value>=100||unit===0?Math.round(value):value.toFixed(1)} ${units[unit]}`
 }
+const transcriptBlockText=(block:TranscriptMessage['content'][number])=>block.type==='text'?(block.text||''):block.type==='tool_use'?`${block.name||'tool'}\n${JSON.stringify(block.input,null,2)}`:block.type
+const historyMessageText=(message:TranscriptMessage)=>message.content.map(transcriptBlockText).filter(Boolean).join('\n\n')
 
 export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSecondOpinion,onHandoff}:Props){
   const [items,setItems]=useState<HistoryEntry[]>([])
@@ -74,10 +80,13 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
   const [transcript,setTranscript]=useState<Transcript|null>(null)
   const [confirmDelete,setConfirmDelete]=useState<string|null>(null)
   const [activeMatch,setActiveMatch]=useState(0)
+  const [expandedMessages,setExpandedMessages]=useState<Set<number>>(()=>new Set())
+  const [copiedMessage,setCopiedMessage]=useState<number|null>(null)
   const [lineage,setLineage]=useState<LineageEdge[]>([])
   const [job,setJob]=useState<BackfillJob|null>(null)
   const requestSequence=useRef(0)
   const transcriptBody=useRef<HTMLDivElement>(null)
+  const manualCopyArea=useRef<HTMLTextAreaElement>(null)
   const panel=useRef<HTMLElement>(null)
   useModalFocus(panel,onClose)
 
@@ -149,7 +158,7 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
   },[items,historyProjects,projects])
 
   const view=async(entry:HistoryEntry)=>{
-    setError('');setActiveMatch(0);setLineage([])
+    setError('');setActiveMatch(0);setLineage([]);setExpandedMessages(new Set());setCopiedMessage(null)
     try{
       const search=new URLSearchParams({scope});if(query)search.set('q',query)
       setTranscript(await api<Transcript>('GET',`/api/history/${entry.id}/transcript?${search}`))
@@ -173,6 +182,15 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
 
   const cancelBackfill=()=>job&&api<{job:BackfillJob}>('DELETE',`/api/history/backfills/${job.id}`).then(result=>setJob(result.job)).catch(cause=>setError(cause instanceof Error?cause.message:String(cause)))
   const moveMatch=(offset:number)=>{if(!transcript?.matches.length)return;setActiveMatch(current=>(current+offset+transcript.matches.length)%transcript.matches.length)}
+  const toggleMessage=(ordinal:number)=>setExpandedMessages(current=>{const next=new Set(current);if(next.has(ordinal))next.delete(ordinal);else next.add(ordinal);return next})
+  const copyMessage=async(message:TranscriptMessage,ordinal:number)=>{
+    const text=historyMessageText(message)
+    if(manualCopyArea.current)manualCopyArea.current.value=text
+    const ok=await withoutClipboardCapture(()=>copyPreparedText(text,manualCopyArea.current))
+    if(!ok){setError('The browser refused the copy. Select the message and copy it manually.');return}
+    setError('');setCopiedMessage(ordinal)
+    window.setTimeout(()=>setCopiedMessage(current=>current===ordinal?null:current),COPIED_FLASH_MS)
+  }
   const activeOrdinal=transcript?.matches[activeMatch]?.ordinal
 
   const scopeProject=projects.find(item=>item.id===project)
@@ -202,7 +220,20 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
       <main>{transcript?<><div class="transcript-heading"><button class="history-back" onClick={()=>setTranscript(null)}>← Results</button><div><h3>[{transcript.entry.backend}] {historyName(transcript.entry)}</h3><span>{transcript.entry.project_label||'Unassigned'} · {transcript.entry.cwd}</span><small>Started {timestampLabel(historyStart(transcript.entry))} · last {transcript.entry.last_message_role==='assistant'?'agent':transcript.entry.last_message_role==='user'?'you':'message'} {timestampLabel(transcript.entry.last_message_at)}</small><small>{transcript.entry.exit_reason||transcript.entry.final_state||'indexed'} · {transcript.entry.model||'model unavailable'} · {transcript.entry.external?'external':'mux session'}</small><small>{transcript.entry.context_window?`context final ${Math.round((transcript.entry.final_context_pct||0)*100)}% · peak ${Math.round((transcript.entry.peak_context_pct||0)*100)}% · ${transcript.entry.measurement_source||'native observation'}`:'context unavailable'} · tokens in {transcript.entry.tokens_in||0} / out {transcript.entry.tokens_out||0}{formatBytes(transcriptBytes(transcript.entry))?` · transcript ${formatBytes(transcriptBytes(transcript.entry))}`:''}</small><small>{transcript.entry.compaction_count?`explicit compactions ${transcript.entry.compaction_count} · ${transcript.entry.compaction_capability||'native evidence'} · confidence ${transcript.entry.compaction_confidence||'unknown'}`:'compaction count unavailable — token drops are not treated as compaction evidence'}</small></div><button class="primary" onClick={()=>void onResume(transcript.entry)}>Resume as new</button></div>
         <div class="transcript-actions"><button onClick={()=>void onHandoff(transcript.entry)}>Export handoff</button><button class="primary" onClick={()=>void onSecondOpinion(transcript.entry)}>Review with {transcript.entry.backend==='claude'?'Codex':'Claude'}</button>{transcript.matches.length>0&&<div class="transcript-match-nav"><button aria-label="Previous search match" onClick={()=>moveMatch(-1)}>↑</button><span>{activeMatch+1}/{transcript.matches.length}</span><button aria-label="Next search match" onClick={()=>moveMatch(1)}>↓</button></div>}</div>
         {lineage.length>0&&<section class="transcript-lineage"><h4>Work lineage</h4>{lineage.map(edge=><article><strong>{edge.relation}</strong><span>{edge.parent_run_id} → {edge.child_run_id}</span><small>{new Date(edge.created_at*1000).toLocaleString()}</small></article>)}</section>}{transcript.annotations.length>0&&<section class="transcript-annotations"><h4>Run notes</h4>{transcript.annotations.map(item=><details><summary>{item.tag} · {item.content}</summary><small>{new Date(item.created_at*1000).toLocaleString()} · {item.provenance} · model::{item.resolved_model||'deterministic'} · confidence::{item.confidence??'—'} · cost::{money.format(item.cost_usd||0)}</small></details>)}</section>}
-        <div class="messages" ref={transcriptBody}>{transcript.messages.length?transcript.messages.map((message,ordinal)=><article data-message-ordinal={ordinal} class={`${message.role} ${transcript.matches.some(match=>match.ordinal===ordinal)?'search-match-message':''} ${activeOrdinal===ordinal?'active-search-match':''}`}><header><span>{message.role}</span><time dateTime={timestampIso(message.ts)}>{timestampLabel(message.ts)}</time></header>{message.content.map(block=>block.type==='text'?<p>{block.text}</p>:<pre>{block.type==='tool_use'?`${block.name}\n${JSON.stringify(block.input,null,2)}`:block.type}</pre>)}</article>):<div class="no-transcript">No native transcript is available for this session.</div>}</div></>:<div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Search prompts and replies, then inspect the native transcript.</p></div>}</main>
+        <div class="messages" ref={transcriptBody}>{transcript.messages.length?transcript.messages.map((message,ordinal)=>{
+          const text=historyMessageText(message)
+          const matched=transcript.matches.some(match=>match.ordinal===ordinal)
+          const foldable=transcriptClamped(text)
+          const expanded=matched||expandedMessages.has(ordinal)
+          const speaker=transcriptSpeaker(message.role)
+          const stamp=transcriptTimestampLabel(message.ts)
+          return <article data-message-ordinal={ordinal} class={`transcript-message ${message.role} ${matched?'search-match-message':''} ${activeOrdinal===ordinal?'active-search-match':''}`}>
+            <div class="transcript-copy-anchor"><button class={copiedMessage===ordinal?'transcript-copy copied':'transcript-copy'} aria-label={`Copy this ${speaker==='you'?'message':'reply'}`} title={`Copy this ${speaker==='you'?'message':'reply'}`} onClick={()=>void copyMessage(message,ordinal)}>{copiedMessage===ordinal?'Copied':'Copy'}</button></div>
+            <header><span class="transcript-speaker">{speaker}</span>{stamp&&<time dateTime={transcriptTimestampIso(message.ts)}>{stamp}</time>}</header>
+            <div class={`history-transcript-content ${foldable&&!expanded?'clamped':''}`}>{message.content.map(block=>block.type==='text'?<p>{block.text}</p>:<pre>{transcriptBlockText(block)}</pre>)}</div>
+            {foldable&&!matched&&<button class="transcript-expand" onClick={()=>toggleMessage(ordinal)}>{expanded?'Show less':'Show more'}</button>}
+          </article>
+        }):<div class="no-transcript">No native transcript is available for this session.</div>}</div><textarea ref={manualCopyArea} class="transcript-manual" readOnly aria-hidden="true" tabIndex={-1}/></>:<div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Search prompts and replies, then inspect the native transcript.</p></div>}</main>
     </div>
     </section>
     </section>

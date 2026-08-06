@@ -17,6 +17,8 @@ import {
   transcriptMatchesQuery,
   transcriptSearchParts,
   transcriptSpeaker,
+  transcriptTimestampIso,
+  transcriptTimestampLabel,
   TRANSCRIPT_CHANGED_EVENT,
   TRANSCRIPT_EXPANSION_KEY,
   TURN_ENDED_EVENT,
@@ -54,13 +56,6 @@ const writeTranscriptExpansions = (entries: ReturnType<typeof readTranscriptExpa
   }
 }
 
-const timeLabel = (value?: string): string => {
-  if (!value) return ''
-  const numeric = /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : null
-  const date = new Date(numeric === null ? value : numeric > 10_000_000_000 ? numeric : numeric * 1000)
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-}
-
 function Message({ message, copied, expanded, query, onCopy, onExpand }: {
   message: TranscriptMessage
   copied: boolean
@@ -70,7 +65,7 @@ function Message({ message, copied, expanded, query, onCopy, onExpand }: {
   onExpand: (messageId: string) => void
 }) {
   const clamped = transcriptClamped(message.text) && !expanded && !query
-  const stamp = timeLabel(message.ts)
+  const stamp = transcriptTimestampLabel(message.ts)
   return <article class={`transcript-message ${message.role}`} data-message-ordinal={message.ordinal}>
     <div class="transcript-copy-anchor">
       <button
@@ -82,7 +77,7 @@ function Message({ message, copied, expanded, query, onCopy, onExpand }: {
     </div>
     <header>
       <span class="transcript-speaker">{transcriptSpeaker(message.role)}</span>
-      {stamp && <time>{stamp}</time>}
+      {stamp && <time dateTime={transcriptTimestampIso(message.ts)}>{stamp}</time>}
     </header>
     <p class={clamped ? 'clamped' : ''}>{query
       ? transcriptSearchParts(message.text, query).map((part, index) =>

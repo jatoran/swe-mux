@@ -11,7 +11,7 @@ type Phase='off'|'starting'|'listening'|'hearing'|'transcribing'|'sending'|'stan
 // own trigger word rather than a hardcoded "Mux".
 const primaryWake=(words?:string[])=>(words&&words.find(word=>word.trim())||DEFAULT_WAKE_WORDS[0])
 
-export function ConversationControl({session,status,onSession}:{session:Session;status:VoiceStatus;onSession:(session:Session)=>void}){
+export function ConversationControl({session,status,onSession,onActiveChange}:{session:Session;status:VoiceStatus;onSession:(session:Session)=>void;onActiveChange:(active:boolean)=>void}){
   const wake=primaryWake(status.wake_words)
   const matcher=useMemo(
     ()=>buildVoiceMatcher(status.wake_words?.length?status.wake_words:DEFAULT_WAKE_WORDS,status.commands?.length?status.commands:DEFAULT_COMMANDS),
@@ -32,7 +32,9 @@ export function ConversationControl({session,status,onSession}:{session:Session;
     setSegments(next);return next.join(' ').trim()
   }
   const stop=()=>{
+    const wasActive=enabledRef.current
     enabledRef.current=false;standbyRef.current=false;captureRef.current?.stop();captureRef.current=null
+    if(wasActive)onActiveChange(false)
     setPhase('off');setDetail(`Say “${wake}, send” when your message is ready.`)
   }
 
@@ -155,7 +157,7 @@ export function ConversationControl({session,status,onSession}:{session:Session;
       onError:message=>{if(enabledRef.current){setPhase('error');setDetail(message)}},
     })
     try{
-      await capture.start();captureRef.current=capture;enabledRef.current=true;standbyRef.current=false
+      await capture.start();captureRef.current=capture;enabledRef.current=true;standbyRef.current=false;onActiveChange(true)
       setPhase('listening');setDetail(`Listening. Say “${wake}, send” to submit.`)
     }catch(cause){capture.stop();enabledRef.current=false;setPhase('error');setDetail(cause instanceof Error?cause.message:String(cause))}
   }

@@ -322,6 +322,7 @@ export function App() {
   const [noteMenu,setNoteMenu]=useState<NoteContext>(null)
   const [tabMenu,setTabMenu]=useState<TabContext>(null)
   const [emptyMenu, setEmptyMenu] = useState<{x:number;y:number} | null>(null)
+  const [drawerDisplayMenu,setDrawerDisplayMenu]=useState<{x:number;y:number}|null>(null)
   const [zoomedId, setZoomedId] = useState<string | null>(null)
   const [keybindings, setKeybindings] = useState<Record<string, string>>({ 'ctrl+alt+t': 'session.spawnShell', 'ctrl+alt+p': 'palette.open' })
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null)
@@ -730,6 +731,7 @@ export function App() {
   const [mobileHud,setMobileHud]=useState('')
   const mobileHudTimer=useRef<number|null>(null)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
+  const [talkActiveSessionId,setTalkActiveSessionId]=useState<string|null>(null)
   const [profiles, setProfiles] = useState<ShellProfile[]>([])
   const [defaultProfile, setDefaultProfile] = useState('default')
   const [launcherProfile, setLauncherProfile] = useState(localStorage.getItem('mux.lastProfile') || '')
@@ -842,6 +844,21 @@ export function App() {
   const cancelLongPress = () => {
     if (longPressTimer.current !== null) window.clearTimeout(longPressTimer.current)
     longPressTimer.current = null
+  }
+
+  // A touch long-press is commonly followed by a synthetic click when the same
+  // pointer lifts. Keep suppression through that release/click turn, then clear
+  // it so a later deliberate tap activates normally even if no click was emitted.
+  const suppressLongPressClick = (identity:string,pointerId:number) => {
+    suppressDragClickRef.current=identity
+    const release=(pointer:PointerEvent)=>{
+      if(pointer.pointerId!==pointerId)return
+      window.removeEventListener('pointerup',release)
+      window.removeEventListener('pointercancel',release)
+      window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
+    }
+    window.addEventListener('pointerup',release)
+    window.addEventListener('pointercancel',release)
   }
 
   const showMobileHud = (text: string) => {
@@ -1010,6 +1027,19 @@ export function App() {
     api<AppConfig>('GET','/api/config')
       .then(config=>applyConfig(config,includeTheme))
       .catch(()=>{})
+
+  const persistDrawerTabDisplay=async(next:'icon'|'title')=>{
+    const previous=drawerTabDisplay
+    setDrawerDisplayMenu(null)
+    setDrawerTabDisplay(next)
+    try{
+      const config=await api<AppConfig>('PATCH','/api/config',{drawer_tab_display:next})
+      applyConfig(config,false)
+    }catch(cause){
+      setDrawerTabDisplay(previous)
+      setError(cause instanceof Error?cause.message:String(cause))
+    }
+  }
 
   // Read aloud turned off in Settings (here or on another device — `configuration_changed`
   // refetches this status everywhere) silences whatever is mid-clip rather than letting it
@@ -1495,8 +1525,12 @@ export function App() {
   // it, which also keeps that event from reaching the document's dismiss handler —
   // so opening this menu has to close whatever else was open itself.
   const openSortMenu=(x:number,y:number)=>{
-    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setMainMenuOpen(false)
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setMainMenuOpen(false)
     setSortMenu({x,y})
+  }
+  const openDrawerDisplayMenu=(x:number,y:number)=>{
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setMainMenuOpen(false)
+    setDrawerDisplayMenu({x,y})
   }
   const bucketIdFor=(project:Project)=>
     project.group_id&&projectGroups.some(group=>group.id===project.group_id)?project.group_id:UNGROUPED_BUCKET_ID
@@ -1641,7 +1675,7 @@ export function App() {
   useEffect(() => { if (!sortMenu) setMenuGroup(null) }, [sortMenu])
 
   useEffect(() => {
-    if (!contextMenu && !projectMenu && !sidebarMenu && !sortMenu && !noteMenu && !tabMenu && !emptyMenu && !mainMenuOpen && !renameTarget) return
+    if (!contextMenu && !projectMenu && !sidebarMenu && !sortMenu && !noteMenu && !tabMenu && !emptyMenu && !drawerDisplayMenu && !mainMenuOpen && !renameTarget) return
     const dismissEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       event.preventDefault()
@@ -1653,15 +1687,16 @@ export function App() {
       setNoteMenu(null)
       setTabMenu(null)
       setEmptyMenu(null)
+      setDrawerDisplayMenu(null)
       setMainMenuOpen(false)
       setRenameTarget(null)
     }
     window.addEventListener('keydown', dismissEscape, true)
     return () => window.removeEventListener('keydown', dismissEscape, true)
-  }, [contextMenu, projectMenu, sidebarMenu, sortMenu, noteMenu, tabMenu, emptyMenu, mainMenuOpen, renameTarget])
+  }, [contextMenu, projectMenu, sidebarMenu, sortMenu, noteMenu, tabMenu, emptyMenu, drawerDisplayMenu, mainMenuOpen, renameTarget])
 
   useEffect(() => {
-    if (!contextMenu && !projectMenu && !sidebarMenu && !sortMenu && !noteMenu && !tabMenu && !emptyMenu && !mainMenuOpen) return
+    if (!contextMenu && !projectMenu && !sidebarMenu && !sortMenu && !noteMenu && !tabMenu && !emptyMenu && !drawerDisplayMenu && !mainMenuOpen) return
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     menuDismissedByPointer.current = false
     const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>('.context-menu button:not(:disabled)')?.focus())
@@ -1689,7 +1724,7 @@ export function App() {
       menuDismissedByPointer.current = false
       if (!claimed) previous?.focus()
     }
-  }, [contextMenu, projectMenu, sidebarMenu, sortMenu, noteMenu, tabMenu, emptyMenu, mainMenuOpen])
+  }, [contextMenu, projectMenu, sidebarMenu, sortMenu, noteMenu, tabMenu, emptyMenu, drawerDisplayMenu, mainMenuOpen])
 
   useEffect(() => {
     if (!confirmKillId) return
@@ -2851,7 +2886,7 @@ export function App() {
       const command = keybindings[keyChord(event)]
       if (command && runNamedCommand(command)) event.preventDefault()
       if (event.key === 'Escape') {
-        setPaletteOpen(false); setLauncherOpen(false); setContextMenu(null); setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setTabMenu(null); setEmptyMenu(null); setMainMenuOpen(false); setSidebarOpen(false); setRenameTarget(null); setProcessSession(null);setProcessViewerOpen(false); setSettingsOpen(false); setProjectsManagerOpen(false); setReviewState(null);setHandoffState(null);setClipboardOpen(false)
+        setPaletteOpen(false); setLauncherOpen(false); setContextMenu(null); setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setTabMenu(null); setEmptyMenu(null);setDrawerDisplayMenu(null); setMainMenuOpen(false); setSidebarOpen(false); setRenameTarget(null); setProcessSession(null);setProcessViewerOpen(false); setSettingsOpen(false); setProjectsManagerOpen(false); setReviewState(null);setHandoffState(null);setClipboardOpen(false)
       }
     }
     const onPointerDown = (event: PointerEvent) => {
@@ -2869,6 +2904,7 @@ export function App() {
       setNoteMenu(null)
       setTabMenu(null)
       setEmptyMenu(null)
+      setDrawerDisplayMenu(null)
       setMainMenuOpen(false)
     }
     window.addEventListener('mux:command', onCommand)
@@ -3037,9 +3073,9 @@ export function App() {
   }
 
   const openSessionMenu = (session:Session,x:number,y:number,source:NonNullable<ContextState>['source']) => {
-    setProjectId(session.project_id)
-    // A tab menu targets the named session without activating it. Pane-bar menus
-    // still focus their pane; sidebar, desktop-tab, and mobile-tab menus do not.
+    // Context targeting is not workspace activation. Pane-bar menus still focus
+    // their own pane; sidebar, desktop-tab, and mobile-tab menus preserve the
+    // active Project, active terminal, and focused view.
     if(source==='pane'){setActiveId(session.id);setFocusedViewId(session.id)}
     setTabMenu(null);setNoteMenu(null)
     setContextMenu({session,x,y,source})
@@ -3267,6 +3303,7 @@ export function App() {
     const voiceAvailable=!!voiceStatus?.enabled&&agentVoice
     const conversationAvailable=!!voiceStatus?.stt_enabled&&agentVoice
     const voiceStripVisible=voiceAvailable&&voiceMode!=='off'
+    const audioSettingsVisible=voiceMode!=='off'||talkActiveSessionId===session.id
     // Read-aloud and conversation controls live in the pane header beside note/proc, and the
     // playback strip (seek, clip nav, generate) expands as a row directly beneath it. They
     // used to lead the bottom command rail, but that rail is a horizontal scroller the user
@@ -3276,13 +3313,13 @@ export function App() {
     const paneVoice=agentVoice&&voiceStatus?<>
       {voiceAvailable&&<button class={`voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}
       {!voiceAvailable&&<button class="voice-chip mobile-voice-action" aria-label="Set up read aloud" title="Read aloud is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>tts:setup</button>}
-      {conversationAvailable&&<ConversationControl session={session} status={voiceStatus} onSession={updateSession}/>}
+      {conversationAvailable&&<ConversationControl session={session} status={voiceStatus} onSession={updateSession} onActiveChange={active=>setTalkActiveSessionId(current=>active?session.id:current===session.id?null:current)}/>}
       {!conversationAvailable&&<button class="conversation-chip mobile-voice-action" aria-label="Set up hands-free conversation" title="Microphone conversation is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>talk:setup</button>}
       {/* speak / verbatim-summary / autoplay used to be repeated here for touch, because the
           playback strip was buried at the bottom of the pane. The strip is now the row
           immediately below this bar, so those chips would sit a few pixels from the controls
           they duplicate — they render only when the strip renders. The strip owns them. */}
-      {(voiceAvailable||conversationAvailable)&&<button class="mobile-voice-action voice-settings" title="Open all Voice settings" onClick={()=>openSettings('Voice')}>audio…</button>}
+      {(voiceAvailable||conversationAvailable)&&audioSettingsVisible&&<button class="mobile-voice-action voice-settings" title="Open all Voice settings" onClick={()=>openSettings('Voice')}>audio…</button>}
     </>:null
     const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} onSession={updateSession} />:null
     // `key` matters here in a way it does not for a single-child stack: a stack now
@@ -3398,7 +3435,7 @@ export function App() {
     const attention=!agent||activeId===session.id?''
       :visibleSessionIds.includes(session.id)?'viewing'
       :isUnread(session,seenActivity)?'unread':'read'
-    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){beginLongPress(event,(x,y)=>openSessionMenu(session,x,y,'sidebar'));beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
+    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){const pointerId=event.pointerId;beginLongPress(event,(x,y)=>{suppressLongPressClick(`session:${session.id}`,pointerId);openSessionMenu(session,x,y,'sidebar')});beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       <span class={sessionDotClass(session)} />
       <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={session.backend}>{providerGlyph(session.backend as ProviderName)}</span>}{sessionName(session)}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}{activityGlyphs(session)}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
@@ -3535,7 +3572,7 @@ export function App() {
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''} ${drawerTabDisplay==='title'?'drawer-tabs-title':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`,'--utility-rail-width':`${utilityRailWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
-        <div class="app-identity"><strong>swe_mux</strong><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span>{activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
+        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>{activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* One toolbar for the whole tree. Both controls used to live per section —
@@ -3691,6 +3728,7 @@ export function App() {
         onPopDrawerNoteToTab={resourceId=>popDrawerNoteToTab(resourceId,projectId)}
         tabDisplay={drawerTabDisplay}
         onTabDragStart={beginDrawerTabDrag}
+        onTabDisplayMenu={openDrawerDisplayMenu}
         draggingTab={dragDrawerTab}
         announcement={drawerAnnouncement}
         promptPreselect={promptPreselect}
@@ -3731,6 +3769,11 @@ export function App() {
             aria-pressed={visible}
             aria-label={`${tab.title}${tab.scope==='session'?'. Session scoped.':''}`}
             title={`${tab.title}${tab.scope==='session'?' - session scoped':''}`}
+            onContextMenu={event=>{
+              event.preventDefault()
+              event.stopPropagation()
+              openDrawerDisplayMenu(event.clientX,event.clientY)
+            }}
             onClick={()=>showDrawerTab(tab.id)}
           >{drawerTabDisplay==='title'?<span class="drawer-tab-title">{tab.label}</span>:<Icon/>}{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}{tab.id==='mailbox'&&queuePendingTotal>0&&<i class="drawer-badge queue-badge">{queuePendingTotal>99?'99+':queuePendingTotal}</i>}</button>
         })}
@@ -3929,6 +3972,11 @@ export function App() {
       <button role="menuitem" onClick={() => { setEmptyMenu(null); openLauncher() }}>New terminal custom…</button>
       {unpanned.length > 0 && <div class="context-subtitle">ATTACH LIVE SESSION</div>}
       {unpanned.map(session => <button role="menuitem" onClick={() => runNamedCommand(`session.attach(${session.id})`)}><span class={stateDotClass(session.state)} />{sessionName(session)}</button>)}
+    </div>}
+
+    {drawerDisplayMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Side panel tab display" style={{left:clampContextMenuLeft(drawerDisplayMenu.x,innerWidth),top:Math.max(4,Math.min(drawerDisplayMenu.y,innerHeight-100))}}>
+      <div class="context-title"><strong>SIDE PANEL TABS</strong></div>
+      <button role="menuitemcheckbox" aria-checked={drawerTabDisplay==='title'} onClick={()=>void persistDrawerTabDisplay(drawerTabDisplay==='icon'?'title':'icon')}>{drawerTabDisplay==='title'?'✓ ':''}Text labels</button>
     </div>}
 
     {mainMenuOpen && <div data-tutorial="main-menu" class="context-menu main-menu" role="menu" aria-label="swe-mux menu">

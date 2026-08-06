@@ -18,6 +18,8 @@ import {
   transcriptMatchesQuery,
   transcriptSearchParts,
   transcriptSpeaker,
+  transcriptTimestampIso,
+  transcriptTimestampLabel,
   type TranscriptMessage,
 } from '../src/transcriptView.ts'
 
@@ -69,6 +71,14 @@ test('long messages fold, ordinary ones do not', () => {
   assert.equal(transcriptClamped('short'), false)
   assert.equal(transcriptClamped('x'.repeat(TRANSCRIPT_CLAMP_CHARS)), false)
   assert.equal(transcriptClamped('x'.repeat(TRANSCRIPT_CLAMP_CHARS + 1)), true)
+})
+
+test('transcript timestamps expose a full local date and machine-readable value', () => {
+  const value = '2026-08-05T15:30:00Z'
+  assert.ok(transcriptTimestampLabel(value).includes('2026'))
+  assert.equal(transcriptTimestampIso(value), '2026-08-05T15:30:00.000Z')
+  assert.equal(transcriptTimestampLabel('not-a-date'), '')
+  assert.equal(transcriptTimestampIso('not-a-date'), undefined)
 })
 
 test('explicitly expanded messages persist by session, run, and stable message id', () => {

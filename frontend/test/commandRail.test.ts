@@ -3,12 +3,39 @@ import test from 'node:test'
 import { BUILTIN_RAIL, adoptPlacement, clearProjectRailBlob, mergeRail, railHasProjectOverride, railItemsFromBlob, railItemVisible, railPayload, resolveRail, writeRailBlob, type RailItem } from '../src/commandRail.ts'
 import { AGENT_NEWLINE } from '../src/terminalKeys.ts'
 
-test('default rail preserves the legacy order and omits disabled extras', () => {
+test('default rail groups editing helpers after Down and ends with Attach', () => {
   const ids = resolveRail(BUILTIN_RAIL, { platform: 'desktop', backend: 'claude' }).map(item => item.id)
   assert.deepEqual(ids, [
     'relaunch', 'copyReply', 'copyResume', 'branch', 'paste', 'clipboardHistory', 'kbdToggle',
-    'esc', 'enter', 'tab', 'ctrlC', 'up', 'down', 'left', 'right',
+    'esc', 'enter', 'tab', 'ctrlC', 'up', 'down',
+    'markdownDivider', 'markdownCodeFence', 'clearInput', 'restoreInput',
+    'left', 'right', 'attach',
   ])
+})
+
+test('attach is an agent-only configurable action', () => {
+  const attach = BUILTIN_RAIL.find(item => item.id === 'attach')
+  assert.ok(attach)
+  assert.equal(attach.type, 'action')
+  assert.equal(resolveRail(BUILTIN_RAIL, { platform: 'desktop', backend: 'claude' }).includes(attach), true)
+  assert.equal(resolveRail(BUILTIN_RAIL, { platform: 'mobile', backend: 'codex' }).includes(attach), true)
+  assert.equal(resolveRail(BUILTIN_RAIL, { platform: 'desktop', backend: 'shell' }).includes(attach), false)
+  assert.equal(resolveRail([{ ...attach, enabled: false }], { platform: 'desktop', backend: 'claude' }).length, 0)
+})
+
+test('the editing-helper catalog migration reorders old saved rails once', () => {
+  const merged = mergeRail([{ id: 'paste', type: 'action', action: 'paste', label: 'Paste' }])
+  const ids = merged.map(item => item.id)
+  const down = ids.indexOf('down')
+  assert.deepEqual(ids.slice(down + 1, down + 5), ['markdownDivider', 'markdownCodeFence', 'clearInput', 'restoreInput'])
+  assert.equal(merged.find(item => item.id === 'clearInput')?.placement, 'strip')
+  assert.equal(ids.at(-1), 'attach')
+})
+
+test('saved ordering remains authoritative after the editing helpers are present', () => {
+  const saved = BUILTIN_RAIL.map(item => ({ ...item }))
+  saved.unshift(...saved.splice(saved.findIndex(item => item.id === 'attach'), 1))
+  assert.equal(mergeRail(saved)[0]?.id, 'attach')
 })
 
 test('branch item is limited to agent backends', () => {
@@ -43,13 +70,20 @@ test('placement splits the strip from the drawer without hiding anything', () =>
   // is now visible in the drawer instead of hidden behind a settings trip.
   assert.equal(strip.includes('esc'), true)
   assert.equal(strip.includes('home'), false)
-  assert.deepEqual(drawer, ['home', 'end', 'ctrlHome', 'ctrlEnd', 'newline', 'clearInput', 'rewind', 'endSession'])
+  assert.deepEqual(drawer, ['home', 'end', 'ctrlHome', 'ctrlEnd', 'newline', 'rewind', 'endSession'])
   // Every built-in lands in exactly one host.
   assert.deepEqual([...strip, ...drawer].sort(), BUILTIN_RAIL.filter(item => railItemVisible(item, ctx)).map(item => item.id).sort())
 })
 
 test('the drawer newline uses the sequence accepted by Claude and Codex', () => {
   assert.equal(BUILTIN_RAIL.find(item => item.id === 'newline')?.bytes, AGENT_NEWLINE)
+})
+
+test('editing helpers inject their exact text and control bytes', () => {
+  assert.equal(BUILTIN_RAIL.find(item => item.id === 'markdownDivider')?.text, '\n\n---\n\n')
+  assert.equal(BUILTIN_RAIL.find(item => item.id === 'markdownCodeFence')?.text, '\n\n```\n')
+  assert.equal(BUILTIN_RAIL.find(item => item.id === 'clearInput')?.bytes, '\x15')
+  assert.equal(BUILTIN_RAIL.find(item => item.id === 'restoreInput')?.bytes, '\x19')
 })
 
 test('end session ships in the drawer for every backend, never on the strip', () => {
@@ -121,7 +155,10 @@ test('text payload is passed through verbatim', () => {
 test('a project override fully replaces the global list; other projects keep global', () => {
   const custom: RailItem[] = [{ id: 'paste', type: 'action', action: 'paste', label: 'Paste' }]
   const blob = writeRailBlob({ items: undefined }, custom, 'proj-a')
-  assert.deepEqual(railItemsFromBlob(blob, 'proj-a').map(i => i.id), ['paste', ...BUILTIN_RAIL.filter(b => b.id !== 'paste').map(b => b.id)])
+  const projectIds = railItemsFromBlob(blob, 'proj-a').map(i => i.id)
+  assert.equal(projectIds[0], 'paste')
+  assert.deepEqual(projectIds.slice(projectIds.indexOf('down') + 1, projectIds.indexOf('down') + 5), ['markdownDivider', 'markdownCodeFence', 'clearInput', 'restoreInput'])
+  assert.equal(projectIds.at(-1), 'attach')
   // Another project (no override) resolves to the global/default list.
   assert.deepEqual(railItemsFromBlob(blob, 'proj-b').map(i => i.id), BUILTIN_RAIL.map(b => b.id))
   assert.equal(railHasProjectOverride(blob, 'proj-a'), true)

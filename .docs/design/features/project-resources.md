@@ -54,6 +54,7 @@ The file tree and notes collection are utility-drawer tabs.
   `mux.drawer.note.v1`, never in `project.layout`, which is shared.
   Closing the drawer retains that selection while ending the drawer's temporary editor ownership.
   Reopening Notes, switching utility tabs, switching sessions, switching Projects, and reloading all restore the selected note for that Project.
+  Selection validation waits for a note collection loaded for the same Project; the persistently mounted desktop drawer must never test a new Project's remembered sub-tab against the previous Project's collection.
   While the drawer is open, a matching pane leaf keeps its place but renders an "open in the panel" placeholder.
   Moving that selected note to a pane closes the drawer, so the pane becomes the only mounted editor without erasing the remembered Notes tab.
 - Moving between hosts unmounts one editor and mounts the other, which is lossless because the
@@ -165,9 +166,10 @@ The file tree and notes collection are utility-drawer tabs.
   across an upgrade. TOML has no null, so a released chord is stored as `""` and the browser
   maps it back to the `null` the editor wants. Two chords the editor binds but flags
   non-browser-safe (bullet and task toggles) are reclaimed by the shipped default.
-- The rail's *arrangement* — which buttons, in what order — stays owned by the editor, which
-  persists it per device from its own gear panel. Settings only offers a reset, which therefore
-  applies immediately and is not part of the Save/Cancel draft.
+- The rail's *arrangement* - which buttons, in what order - stays owned by the editor, which persists it per device from its own gear panel.
+  One versioned browser-local migration makes Copy, Paste, Indent, Outdent, Bullet, Checklist, Move line up, and Move line down visible and first in that order while preserving the relative order of every remaining action.
+  The migration then yields to user reordering.
+  Settings only offers a reset, which immediately restores this baseline and is not part of the Save/Cancel draft.
 
 ### Finding text in a note
 
@@ -225,6 +227,8 @@ The file tree and notes collection are utility-drawer tabs.
 
 - A muted breadcrumb of the enclosing heading chain hovers over the note's first row and
   follows the reader down, so the current section is visible without opening the outline.
+  Its background is fully opaque and its overlay shares the editor's grid row, keeping it flush with the editor edge across full and compact Project-note headers.
+  While Continuity's touch selection toolbar is visible, the editor host temporarily takes the higher stacking layer so Copy, Cut, Paste, and Select all cannot be covered by the breadcrumb.
   Each crumb jumps to its heading.
 - The reading position comes from the editor's visible source-line window, which is the one
   fact the host cannot derive: line geometry is not exported (headings render larger, wrapped

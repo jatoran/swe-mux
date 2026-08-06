@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type {
   ContinuityChangeDetail,
   ContinuityEditorElement,
@@ -11,8 +11,10 @@ import { ContinuityEditor } from '@continuity-editor/editor/react'
 import { noteQueueKey, noteSaveQueue } from './noteSaveQueue'
 import { forgetEditorFocus, noteEditorFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
+import { hasSelection, selectionText } from './noteSelection'
 import {
   currentNoteEditorSettings,
+  ensureNoteRailArrangement,
   NOTE_EDITOR_EVENT,
   type NoteEditorSettings,
 } from './noteEditorSettings'
@@ -105,6 +107,14 @@ function useNoteEditorSettings(): NoteEditorSettings {
   return settings
 }
 
+/** App clipboard policy shared by Continuity's fallback request and the explicit rail action. */
+function copyNoteText(text: string): void {
+  const manualCopy = () => { window.prompt('Copy the text below:', text) }
+  captureCopy(text, 'note')
+  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).catch(manualCopy)
+  else manualCopy()
+}
+
 /** Route the editor's host requests through the app's ordinary browser policies. */
 function routeRequest(detail: ContinuityRequestDetail): void {
   if (detail.kind === 'openLink') {
@@ -119,36 +129,16 @@ function routeRequest(detail: ContinuityRequestDetail): void {
     }
     return
   }
-  if (detail.kind === 'copyText') {
-    // The editor asks the host only after its own Clipboard API and selection
-    // fallbacks both failed (e.g. iOS Safari over plain-HTTP LAN), so a bare
-    // clipboard retry here will usually fail too. Surface the text for manual
-    // copy as the last resort.
-    const manualCopy = () => {
-      window.prompt('Copy the text below:', detail.text)
-    }
-    // Clipboard history still records it: this is exactly the case (insecure
-    // context, denied policy) where the ring is the only way to get the text back.
-    captureCopy(detail.text, 'note')
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(detail.text).catch(manualCopy)
-    } else {
-      manualCopy()
-    }
-  }
+  if (detail.kind === 'copyText') copyNoteText(detail.text)
   // contextMenu and filesDropped fall through to default browser/daemon behavior.
 }
 
 /**
- * Answer the editor's `pasteText` request. The editor emits it only after its
- * own clipboard-read was refused (insecure context, or a webview/permission
- * policy that denies `clipboard-read`), so we read from the host and splice the
- * text via the editor's public `insertText`. When the host read is also blocked
- * we prompt for manual paste, mirroring the `copyText` fallback above, so
- * cross-application paste still works. In-editor copy/paste never reaches here
- * (the engine remembers its own last copy).
+ * Answer either the editor's fallback request or the explicit rail Paste action.
+ * Clipboard denial falls back to the rail's remembered copy when available, then to a manual
+ * prompt; accepted text is spliced through the editor's public `insertText` operation.
  */
-async function handlePasteRequest(element: ContinuityEditorElement | null): Promise<void> {
+async function handlePasteRequest(element: ContinuityEditorElement | null, remembered = ''): Promise<void> {
   if (!element) return
   let text: string | null = null
   if (navigator.clipboard?.readText) {
@@ -158,9 +148,34 @@ async function handlePasteRequest(element: ContinuityEditorElement | null): Prom
       text = null
     }
   }
+  if (text === null && remembered) text = remembered
   if (text === null) text = window.prompt('Paste text:')
   if (text) element.insertText(text)
 }
+
+// Continuity's internal clipboard is private to its native selection action bar. Keep the
+// rail's last successful copy as the same-browser fallback when clipboard-read is denied.
+let noteRailClipboard = ''
+const NOTE_CLIPBOARD_RAIL_ACTIONS: readonly RailAction[] = [
+  {
+    id: 'mux:copy',
+    label: 'Copy selected text',
+    glyph: '⧉',
+    isEnabled: snapshot => hasSelection(snapshot),
+    run: editor => {
+      const text = selectionText(editor.snapshot())
+      if (!text) return
+      noteRailClipboard = text
+      copyNoteText(text)
+    },
+  },
+  {
+    id: 'mux:paste',
+    label: 'Paste text',
+    glyph: '▤',
+    run: editor => { void handlePasteRequest(editor, noteRailClipboard) },
+  },
+]
 
 /**
  * Shared Continuity WebAssembly markdown surface for every editable `.md` view: project
@@ -202,16 +217,25 @@ export function ContinuityMarkdownEditor({
   hostRef?: { current: ContinuityEditorElement | null }
   onCommit: (text: string) => void
 }) {
+  ensureNoteRailArrangement()
   const elementRef = useRef<ContinuityEditorElement | null>(null)
+  const selectionActionsObserver = useRef<MutationObserver | null>(null)
   const hostRefTarget = useRef(hostRef)
   hostRefTarget.current = hostRef
   const scrollKeyRef = useRef(scrollKey)
   scrollKeyRef.current = scrollKey
   const settings = useNoteEditorSettings()
+  const resolvedRailActions = useMemo<readonly RailAction[]>(
+    () => [...NOTE_CLIPBOARD_RAIL_ACTIONS, ...(railActions || [])],
+    [railActions],
+  )
   // Capture the viewport at ref detach: Preact nulls refs before removing the DOM node, so
   // the textarea scroll offsets are still live here (they read 0 once detached).
   const attachRef = useCallback((element: ContinuityEditorElement | null) => {
     if (!element && elementRef.current) {
+      selectionActionsObserver.current?.disconnect()
+      selectionActionsObserver.current = null
+      elementRef.current.removeAttribute('data-selection-actions-open')
       if (scrollKeyRef.current) {
         scrollStates.set(scrollKeyRef.current, elementRef.current.getScrollState())
         stashHistory(scrollKeyRef.current, elementRef.current)
@@ -255,7 +279,7 @@ export function ContinuityMarkdownEditor({
       // Attribute rather than an adapter prop; `auto` is Continuity's own
       // touch-only default, so it is passed as undefined to leave it alone.
       command-rail={settings.commandRail === 'auto' ? undefined : settings.commandRail}
-      railActions={railActions}
+      railActions={resolvedRailActions}
       onChange={(detail: ContinuityChangeDetail) => {
         // Uncontrolled: persist the committed snapshot, but never echo it back into `value`.
         // (`hostReplacement` cannot occur here since we issue no host replacements.)
@@ -269,6 +293,23 @@ export function ContinuityMarkdownEditor({
         if (scrollKeyRef.current) restoreHistory(scrollKeyRef.current, element)
         const saved = scrollKeyRef.current && scrollStates.get(scrollKeyRef.current)
         if (saved) element.restoreScrollState(saved)
+        // The selection toolbar is inside Continuity's paint-contained shadow tree, while the
+        // heading trail is a sibling overlay. Mirror toolbar visibility onto the host so CSS can
+        // promote that whole stacking context only for the lifetime of the popup.
+        const selectionActions = element.shadowRoot?.querySelector<HTMLElement>('.selection-actions')
+        if (selectionActions) {
+          const syncSelectionActions = () => element.toggleAttribute(
+            'data-selection-actions-open',
+            !selectionActions.hidden,
+          )
+          selectionActionsObserver.current?.disconnect()
+          selectionActionsObserver.current = new MutationObserver(syncSelectionActions)
+          selectionActionsObserver.current.observe(selectionActions, {
+            attributes: true,
+            attributeFilter: ['hidden'],
+          })
+          syncSelectionActions()
+        }
       }}
       onRequest={detail => {
         if (detail.kind === 'pasteText') {

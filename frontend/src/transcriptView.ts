@@ -124,6 +124,24 @@ export function setTranscriptMessageExpanded(
 
 export const transcriptClamped = (text: string): boolean => text.length > TRANSCRIPT_CLAMP_CHARS
 
+type TranscriptTimestamp = string | number | null | undefined
+
+function transcriptTimestampDate(value: TranscriptTimestamp): Date | null {
+  if (value === undefined || value === null || value === '') return null
+  const numeric = typeof value === 'number' ? value : /^\d+(?:\.\d+)?$/.test(value) ? Number(value) : null
+  const date = new Date(numeric === null ? value : numeric > 10_000_000_000 ? numeric : numeric * 1000)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+/** Full local date and time shared by live and historical transcript messages. */
+export function transcriptTimestampLabel(value: TranscriptTimestamp): string {
+  return transcriptTimestampDate(value)?.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) || ''
+}
+
+export function transcriptTimestampIso(value: TranscriptTimestamp): string | undefined {
+  return transcriptTimestampDate(value)?.toISOString()
+}
+
 export type TranscriptSearchPart = Readonly<{ text: string; match: boolean }>
 
 const transcriptSearchPattern = (query: string, global: boolean): RegExp =>

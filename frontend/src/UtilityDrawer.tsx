@@ -99,6 +99,8 @@ type Props = {
   /** Give it back and put it in a pane, focused. */
   onPopDrawerNoteToTab: (resourceId: string) => void
   onTabDragStart: (event: JSX.TargetedPointerEvent<HTMLElement>, id: DrawerTabId) => void
+  /** Open the shared Icons/Titles preference menu from any drawer tab. */
+  onTabDisplayMenu: (x: number, y: number) => void
   /** True while a tab is being dragged, so the strip can suppress its own click. */
   draggingTab: DrawerTabId | null
   /** Template handed off by a command-rail prompt button that needs its fields filled. */
@@ -297,6 +299,7 @@ export function UtilityDrawer(props: Props) {
     activeKey={selected}
     focusKey={focusedTab === selected ? selected : undefined}
     touchDrag={projection}
+    touchDragGain={2.5}
     stripProps={{
       'data-drawer-stack-id':stack.id,
       role:'tablist',
@@ -319,6 +322,11 @@ export function UtilityDrawer(props: Props) {
         class={`${id === selected ? 'active' : ''} ${props.draggingTab === id ? 'dragging' : ''}`}
         title={`${item.title}${item.scope === 'session' ? ' - session scoped' : ''}${projection ? '' : ' - drag to rearrange or split'}`}
         onPointerDown={projection ? undefined : event => props.onTabDragStart(event, id)}
+        onContextMenu={event => {
+          event.preventDefault()
+          event.stopPropagation()
+          props.onTabDisplayMenu(event.clientX, event.clientY)
+        }}
         onClick={() => onTab(id)}
         onKeyDown={event => {
           if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return

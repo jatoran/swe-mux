@@ -70,10 +70,9 @@ export const ALL_BACKENDS: readonly RailBackend[] = ['claude', 'codex', 'shell']
 export const ALL_PLATFORMS: readonly RailPlatform[] = ['desktop', 'mobile']
 
 // Built-in rail items in default order (the region after the leading voice chips).
-// This reproduces the previously hardcoded rail exactly: the Task/Project-Action
-// Relaunch button and the agent-only Copy reply / Copy resume are mutually
-// exclusive at render time (see TerminalPane), Paste is always present, then the
-// keyboard toggle (kept CSS-gated to coarse pointers via its class) and keys.
+// The Task/Project-Action Relaunch button and the agent-only Copy reply / Copy resume
+// are mutually exclusive at render time (see TerminalPane). Editing helpers follow
+// Up/Down as one cluster, while Attach ends agent rails so it never interrupts keys.
 export const BUILTIN_RAIL: RailItem[] = [
   { id: 'relaunch', type: 'action', action: 'relaunch', label: 'Relaunch' },
   { id: 'copyReply', type: 'action', action: 'copyReply', label: 'Copy reply' },
@@ -90,6 +89,10 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'ctrlC', type: 'key', bytes: '\x03', label: '^C', className: 'term-key', title: 'Interrupt (Ctrl-C)' },
   { id: 'up', type: 'key', bytes: '\x1b[A', label: '↑', className: 'term-key', title: 'Up / previous command' },
   { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', title: 'Down / next command' },
+  { id: 'markdownDivider', type: 'text', text: '\n\n---\n\n', label: '---', title: 'Insert a Markdown divider with blank lines around it' },
+  { id: 'markdownCodeFence', type: 'text', text: '\n\n```\n', label: '```', title: 'Start a Markdown code fence after two newlines' },
+  { id: 'clearInput', type: 'key', bytes: '\x15', label: '^U', className: 'term-key', title: 'Clear the current input (Ctrl+U)' },
+  { id: 'restoreInput', type: 'key', bytes: '\x19', label: '^Y', className: 'term-key', title: 'Restore or yank input (Ctrl+Y)' },
   { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', title: 'Left' },
   { id: 'right', type: 'key', bytes: '\x1b[C', label: '→', className: 'term-key', title: 'Right' },
   // Navigation + editing extras. These used to ship switched *off*, because the
@@ -102,8 +105,6 @@ export const BUILTIN_RAIL: RailItem[] = [
   // ESC+CR is the one newline sequence both agent composers accept. Raw LF works
   // in Claude but Codex treats it as ordinary input instead of editor.newline.
   { id: 'newline', type: 'key', bytes: AGENT_NEWLINE, label: '↵ nl', className: 'term-key', title: 'Insert newline without submitting', placement: 'drawer' },
-  // Ctrl+U clears the composed input (restorable with Ctrl+Y in Claude).
-  { id: 'clearInput', type: 'key', bytes: '\x15', label: 'clear', className: 'term-key', title: 'Clear the current input (Ctrl+U)', placement: 'drawer' },
   // Opens Claude's interactive /rewind picker (there is no one-shot,
   // conversation-only variant, so this just launches the picker).
   { id: 'rewind', type: 'slash', text: 'rewind', label: 'Rewind…', submit: true, backends: ['claude'], title: 'Open Claude /rewind (interactive checkpoint picker)', placement: 'drawer' },
@@ -111,7 +112,11 @@ export const BUILTIN_RAIL: RailItem[] = [
   // drawer rather than the strip — a kill button one mis-tap away from the arrow
   // keys is the wrong default even with the two-click confirm behind it.
   { id: 'endSession', type: 'action', action: 'endSession', label: 'End session', className: 'rail-danger', title: 'End this session (click twice to confirm)', placement: 'drawer' },
+  { id: 'attach', type: 'action', action: 'attach', label: 'Attach', backends: ['claude', 'codex'], title: 'Attach files to this chat without sending' },
 ]
+
+const EDITING_CLUSTER_IDS = ['markdownDivider', 'markdownCodeFence', 'clearInput', 'restoreInput'] as const
+const NEW_EDITING_CLUSTER_IDS = ['markdownDivider', 'markdownCodeFence', 'restoreInput'] as const
 
 /** Custom items (skills, slash commands, literal text) default to the drawer:
  *  they are unbounded in number and would otherwise crowd the arrows off the strip. */
@@ -143,7 +148,7 @@ export function isBuiltinRailId(id: string): boolean {
 /** Merge a saved customization over the built-in catalog. Built-in items keep
  *  their authoritative behaviour fields (so defaults can evolve) while adopting
  *  the user's enabled/platforms/backends and order; custom items are kept
- *  verbatim; any built-in the save predates is appended at its default. */
+ *  verbatim; catalog migrations place newly introduced built-ins once. */
 export function mergeRail(saved: RailItem[] | undefined | null): RailItem[] {
   if (!saved || !saved.length) return BUILTIN_RAIL.map(item => ({ ...item }))
   const builtinById = new Map(BUILTIN_RAIL.map(item => [item.id, item]))
@@ -162,6 +167,23 @@ export function mergeRail(saved: RailItem[] | undefined | null): RailItem[] {
   }
   for (const builtin of BUILTIN_RAIL) {
     if (!seen.has(builtin.id)) out.push({ ...builtin })
+  }
+  // Absence of any new editing helper identifies a layout from before this
+  // catalog revision. Pull the complete cluster after Down, surface the existing
+  // Ctrl+U helper on the strip, and move Attach to the end. Once Settings saves
+  // the merged catalog all ids are present, so later user ordering is untouched.
+  if (NEW_EDITING_CLUSTER_IDS.some(id => !seen.has(id))) {
+    const cluster: RailItem[] = []
+    for (const id of EDITING_CLUSTER_IDS) {
+      const index = out.findIndex(item => item.id === id)
+      if (index < 0) continue
+      const [item] = out.splice(index, 1)
+      cluster.push({ ...item, placement: item.id === 'clearInput' && item.enabled !== false ? 'strip' : item.placement })
+    }
+    const downIndex = out.findIndex(item => item.id === 'down')
+    out.splice(downIndex < 0 ? out.length : downIndex + 1, 0, ...cluster)
+    const attachIndex = out.findIndex(item => item.id === 'attach')
+    if (attachIndex >= 0) out.push(...out.splice(attachIndex, 1))
   }
   return out
 }

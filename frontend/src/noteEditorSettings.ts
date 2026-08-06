@@ -174,16 +174,65 @@ function remeasureLiveEditors(): void {
 
 /** Storage key Continuity persists the command rail's arrangement under. */
 export const RAIL_STORAGE_KEY = 'continuity-editor.command-rail'
+const RAIL_LEADING_ORDER_MIGRATION_KEY = 'mux.note-rail-leading-order.v1'
+
+/** The editing actions swe-mux keeps at the rail's leading edge. Remaining built-in and
+ *  host actions retain their existing relative order after this block. */
+export const NOTE_RAIL_LEADING_ORDER = [
+  'mux:copy',
+  'mux:paste',
+  'indent',
+  'outdent',
+  'bullet',
+  'checkbox',
+  'move-line-up',
+  'move-line-down',
+] as const
+
+/**
+ * Install the swe-mux rail baseline once per browser profile.
+ *
+ * Continuity owns the arrangement format and every edit made in its gear panel. This migration
+ * only lifts the requested core actions to the front, forces them visible, and leaves every
+ * other known or future id in its existing relative order. The marker then gets out of the way
+ * so later user reordering remains authoritative.
+ */
+export function ensureNoteRailArrangement(): void {
+  try {
+    if (localStorage.getItem(RAIL_LEADING_ORDER_MIGRATION_KEY) === '1') return
+    const parsed = JSON.parse(localStorage.getItem(RAIL_STORAGE_KEY) || 'null')
+    const stored = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as { order?: unknown; disabled?: unknown }
+      : {}
+    const order = Array.isArray(stored.order)
+      ? stored.order.filter((id): id is string => typeof id === 'string')
+      : []
+    const disabled = Array.isArray(stored.disabled)
+      ? stored.disabled.filter((id): id is string => typeof id === 'string')
+      : []
+    const leading = new Set<string>(NOTE_RAIL_LEADING_ORDER)
+    localStorage.setItem(RAIL_STORAGE_KEY, JSON.stringify({
+      ...stored,
+      order: [...NOTE_RAIL_LEADING_ORDER, ...order.filter(id => !leading.has(id))],
+      disabled: disabled.filter(id => !leading.has(id)),
+    }))
+    localStorage.setItem(RAIL_LEADING_ORDER_MIGRATION_KEY, '1')
+  } catch {
+    // Storage denial leaves Continuity's session-local default intact.
+  }
+}
 
 /**
  * Forget the rail arrangement saved by the editor's own gear panel. Live
  * editors hold theirs in memory, and only re-read storage when their
- * `rail-storage-key` changes — so flip the attribute and drop it again to make
- * them resolve the (now empty) default key without a reload.
+ * `rail-storage-key` changes - so flip the attribute and drop it again to make
+ * them resolve the freshly seeded swe-mux baseline without a reload.
  */
 export function resetNoteRailArrangement(): void {
   try {
     localStorage.removeItem(RAIL_STORAGE_KEY)
+    localStorage.removeItem(RAIL_LEADING_ORDER_MIGRATION_KEY)
+    ensureNoteRailArrangement()
   } catch {
     // Private-mode storage denial: the arrangement was never persisted anyway.
   }

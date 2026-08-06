@@ -8,6 +8,7 @@ import {
   relativeAge,
   setClipboardEntryPinned,
   sourceLabel,
+  withoutClipboardCapture,
   type ClipboardEntry,
   type ClipboardHistory,
 } from './clipboardHistory'
@@ -71,12 +72,20 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings }: Props) {
     onDone()
   })
 
-  // Copying from history re-enters the capture path, which promotes this entry to
-  // the front rather than duplicating it — the same behaviour as re-copying the
-  // text anywhere else in the app.
+  // Copy is transport out of the history surface, not a new capture. Keep the
+  // entry's position and timestamp stable while still updating the OS clipboard.
   const copy = (entry: ClipboardEntry) => withText(entry, async text => {
-    if (await copyPreparedText(text, manualArea.current)) { setManual(''); setNote('Copied to the system clipboard.') }
-    else { setManual(text); setNote('Clipboard blocked — copy the text below manually.') }
+    const area = manualArea.current
+    if (area) area.value = text
+    const copied = await withoutClipboardCapture(() => copyPreparedText(text, area))
+    if (copied) {
+      if (area) area.value = ''
+      setManual('')
+      setNote('Copied to the system clipboard.')
+    } else {
+      setManual(text)
+      setNote('Clipboard blocked — copy the text below manually.')
+    }
   })
 
   const pin = async (entry: ClipboardEntry) => {
@@ -124,7 +133,7 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings }: Props) {
       {/* Mounted even when empty: the legacy `execCommand('copy')` fallback needs a
           live textarea inside the same user gesture, so it cannot wait for a
           re-render after the modern write is refused. */}
-      <div class={`clipboard-manual ${manual ? 'shown' : ''}`}><textarea ref={manualArea} readOnly value={manual} aria-label="Text to copy manually" /><button onClick={() => setManual('')}>Done</button></div>
+      <div class={`clipboard-manual ${manual ? 'shown' : ''}`}><textarea ref={manualArea} readOnly value={manual} data-clipboard-capture="ignore" aria-label="Text to copy manually" /><button onClick={() => setManual('')}>Done</button></div>
       {note && <p class="clipboard-note" aria-live="polite">{note}</p>}
       <footer class="drawer-actions">
         {confirmClear
