@@ -733,6 +733,8 @@ interface AgentEnvironmentInventory {
       scope: AgentEnvironmentScope
       origin: string
       state: string
+      group: string   // in-section heading for this item's run; '' when ungrouped
+      owner: string   // who installed it: 'swe_mux', or '' when not knowable
       source_id: string | null
       source_label: string | null
       changed_after_start: boolean
@@ -747,7 +749,8 @@ interface AgentEnvironmentInventory {
 ```
 
 `AgentEnvironmentScope` is `built_in | managed | user | project | local | session | unknown`.
-The response never includes hook commands, arguments, environment values, credentials, or unredacted MCP URLs.
+Hook items set `group` to the lifecycle event and name the handler target — the program and the one script or module its command runs, resolved structurally as described in `features/agent-environment.md`.
+The response never includes hook command lines, their arguments or inline shell bodies, environment values, credentials, or unredacted MCP URLs.
 Configured MCP entries intentionally have no connection-health claim because the route never starts a server.
 
 ## Voice and Conversation mode

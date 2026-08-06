@@ -22,7 +22,16 @@ type AllSettings = Record<SettingsProfile, ProfileSettings>
 /** The one device-class breakpoint. Exported so chrome scale (`uiScale.ts`) splits
  *  desktop from mobile on exactly the same line the workspace and these settings do. */
 export const MOBILE_QUERY = '(max-width:760px)'
+/** Devices whose only keyboard is an on-screen one that covers the layout when it
+ *  opens. A separate question from `MOBILE_QUERY`: a narrowed desktop window has a
+ *  real keyboard, and a landscape tablet is wider than the breakpoint but not. */
+export const SOFT_KEYBOARD_QUERY = '(max-width: 760px), (pointer: coarse)'
 const LEGACY_SOUND_KEY = 'swe-mux:session-sounds-v1'
+
+/** True where focusing a field would raise the soft keyboard over the workspace. */
+export function hasSoftKeyboard(): boolean {
+  return typeof window !== 'undefined' && !!window.matchMedia?.(SOFT_KEYBOARD_QUERY).matches
+}
 
 let cache: AllSettings = { desktop: {}, mobile: {} }
 let loaded = false

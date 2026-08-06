@@ -1224,6 +1224,25 @@ responsive controls.
   fetched per entry on use. Row actions are insert (primary), copy to the system clipboard, pin,
   forget. Copying from the history tab, including its manual fallback, bypasses capture: it changes
   the OS clipboard without promoting the entry or changing its timestamp.
+- Tapping a clipboard row *reads* it rather than acting on it: the row expands to the full text,
+  selectable so part of an entry can be copied by hand, and the four actions move to a per-row bar.
+  A two-line preview cannot separate two similar copies, and while the row body was the insert
+  button the cost of finding that out was inserting the wrong one into a live agent. One entry is
+  open at a time. Its head pins to the top of the list and a Collapse footer to the bottom, so a
+  body many screens tall keeps *that* entry's copy/pin/forget and a way out on screen for the whole
+  scroll. The expanded body is `data-clipboard-capture="ignore"`: a part-selection copied back out
+  of the history surface is transport, like the Copy button, not a new capture, and recording it
+  would reorder the list under the reader. Fetched text is cached per entry — an entry's text never
+  changes, a re-copy promotes the existing row — which also lets Copy on an open entry run inside
+  the click gesture, where the legacy `execCommand` fallback still works.
+- The clipboard filter is autofocused on desktop and never on a soft-keyboard device
+  (`hasSoftKeyboard()`, a *separate* question from the `MOBILE_QUERY` layout breakpoint: a narrowed
+  desktop window has a real keyboard and a landscape tablet does not). Opening the tab to read what
+  was copied should not raise a keyboard over it; there the keyboard arrives by tapping the field.
+  Same rule as everywhere else in `ui.md`: nothing shows the soft keyboard the user did not ask for.
+- Row actions are an icon column beside the preview on desktop and a full-width labelled row under
+  it on mobile, where a four-icon column would take a third of the drawer from the text it exists
+  to show.
 - Clipboard history's safety properties are part of the feature, not an afterthought: the ring is
   **memory-only by default** (`clipboard_history_persist` opts into the SQLite mirror, and turning
   it back off deletes the rows), secret-shaped copies are skipped rather than stored, oversized

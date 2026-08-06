@@ -20,6 +20,10 @@ def _section(payload: dict, section_id: str) -> dict:
     return next(section for section in payload["sections"] if section["id"] == section_id)
 
 
+def _meta(item: dict) -> list[tuple[str, str]]:
+    return [(entry["label"], entry["value"]) for entry in item["meta"]]
+
+
 def _discover(
     backend: str,
     cwd: Path,
@@ -138,7 +142,11 @@ def test_claude_inventory_finds_hooks_agents_mcp_and_documented_builtins(
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "secret-runner --token hidden",
+                                    "command": (
+                                        'node "/tools/format.js" --api-key hidden '
+                                        "--endpoint https://user:hidden@example.test/ingest"
+                                    ),
+                                    "timeout": 12,
                                 }
                             ],
                         }
@@ -173,10 +181,16 @@ def test_claude_inventory_finds_hooks_agents_mcp_and_documented_builtins(
     agents = _section(payload, "agents")["items"]
     tools = {item["name"]: item for item in _section(payload, "tools")["items"]}
     mcp = _section(payload, "mcp")["items"]
-    assert hooks[0]["name"] == "PostToolUse"
+    # The row names the script the hook runs; the event is the group heading, and
+    # every remaining argument stays out of the payload.
+    assert hooks[0]["name"] == "format.js"
+    assert hooks[0]["group"] == "PostToolUse"
+    assert hooks[0]["owner"] == ""
     assert hooks[0]["meta"] == [
-        {"label": "Handler", "value": "command"},
+        {"label": "Runs", "value": "/tools/format.js"},
+        {"label": "Program", "value": "node"},
         {"label": "Matcher", "value": "Edit|Write"},
+        {"label": "Timeout", "value": "12s"},
     ]
     assert any(item["name"] == "reviewer" and item["scope"] == "user" for item in agents)
     assert any(item["name"] == "Explore" and item["scope"] == "built_in" for item in agents)
@@ -189,8 +203,89 @@ def test_claude_inventory_finds_hooks_agents_mcp_and_documented_builtins(
         for item in section["items"]
     )
     serialized = json.dumps(payload)
-    assert "secret-runner" not in serialized
     assert "hidden" not in serialized
+    assert "example.test" not in serialized
+    assert "--api-key" not in serialized
+
+
+def test_hooks_group_by_event_and_mark_the_ones_swe_mux_installs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "codex-home"
+    cwd = tmp_path / "repo"
+    home.mkdir()
+    cwd.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    (home / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    # Deliberately out of lifecycle order in the file.
+                    "Stop": [{"hooks": [{"type": "command", "command": "notify-send done"}]}],
+                    "SessionStart": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": (
+                                        "powershell -NoProfile -File "
+                                        '"C:\\tools\\state.ps1" session'
+                                    ),
+                                },
+                                {
+                                    "type": "command",
+                                    "command": (
+                                        "if [ -f '/opt/vendor/agent-hook.cmd' ]; "
+                                        "then '/opt/vendor/agent-hook.cmd'; fi"
+                                    ),
+                                },
+                            ]
+                        }
+                    ],
+                    "TotallyMadeUpEvent": [
+                        {"hooks": [{"type": "command", "command": "python -m my.reporter"}]}
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = _discover(
+        "codex",
+        cwd,
+        args=[
+            "-c",
+            'hooks.SessionStart=[{ hooks = [{ type = "command", '
+            'command = "python -m swe_mux.hook_client SessionStart", timeout = 15 }] }]',
+        ],
+    )
+
+    section = _section(payload, "hooks")
+    rows = [(item["group"], item["name"], item["owner"]) for item in section["items"]]
+    # Lifecycle order across sources, unknown events last; swe-mux's own handler is
+    # distinguishable from the user's inside the same event.
+    assert rows == [
+        ("SessionStart", "state.ps1", ""),
+        ("SessionStart", "agent-hook.cmd", ""),
+        ("SessionStart", "swe_mux.hook_client", "swe_mux"),
+        ("Stop", "notify-send", ""),
+        ("TotallyMadeUpEvent", "my.reporter", ""),
+    ]
+    facts = {item["name"]: dict(_meta(item)) for item in section["items"]}
+    assert facts["state.ps1"] == {"Runs": "C:\\tools\\state.ps1", "Program": "powershell"}
+    # An inline shell body reports the script it guards, never the snippet itself.
+    assert facts["agent-hook.cmd"] == {
+        "Runs": "/opt/vendor/agent-hook.cmd",
+        "Program": "inline shell",
+    }
+    assert facts["swe_mux.hook_client"] == {
+        "Runs": "swe_mux.hook_client",
+        "Program": "python",
+        "Timeout": "15s",
+    }
+    # No identifiable script: the program alone, and the arguments stay withheld.
+    assert facts["notify-send"] == {"Runs": "notify-send (arguments withheld)"}
 
 
 def test_source_and_skill_drift_are_relative_to_cli_process_start(
