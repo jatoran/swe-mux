@@ -178,6 +178,72 @@ async def test_runtime_cwd_switch_rate_limit_prevents_poll_target_churn(
     assert record.runtime_cwd_dropped == 1
 
 
+def hook_cwd_session(tmp_path: Path) -> tuple[Any, Any, SessionRecord]:
+    record = SessionRecord(
+        "mux-id", "agent", "default", "claude", "mux-id", str(tmp_path), "claude.exe", []
+    )
+    session = cast(
+        Any,
+        SimpleNamespace(
+            record=record,
+            stopping=False,
+            stop_event=asyncio.Event(),
+            cwd_debounce_task=None,
+            tasks=set(),
+        ),
+    )
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    return manager, session, record
+
+
+@pytest.mark.asyncio
+async def test_a_hook_reported_cwd_becomes_the_sessions_live_cwd(tmp_path: Path) -> None:
+    # An agent pane produced no cwd telemetry at all before this. OSC 7 comes from a
+    # shell drawing its prompt, and a CLI holding the terminal draws none, so
+    # `runtime_cwd_live` stayed False for the whole life of every Claude session and
+    # `git_cwd` fell back to the spawn directory - which for a session working in a
+    # native worktree meant the Git rail reported the primary checkout's branch and
+    # changes rather than the ones the agent was editing.
+    worktree = tmp_path / ".claude" / "worktrees" / "feature"
+    worktree.mkdir(parents=True)
+    manager, session, record = hook_cwd_session(tmp_path)
+    manager.events = SimpleNamespace(emit=AsyncMock())
+    manager.history = SimpleNamespace(project_scope=AsyncMock(return_value=None))
+    session.cwd_switches = deque()
+    session.cwd_telemetry_dropped = 0
+    session.publish_update = lambda: None
+    record.repository_id = "repo-of-the-primary-checkout"
+    record.project_scope_id = "scope-of-the-primary-checkout"
+    before = record.project_id
+
+    manager.note_hook_cwd(session, {"cwd": str(worktree)})
+    await session.cwd_debounce_task
+
+    assert record.runtime_cwd == str(worktree)
+    assert record.runtime_cwd_live is True
+    assert record.runtime_cwd_source == "hook"
+    assert record.git_cwd == str(worktree)
+    # The Project is not the worktree's. A worktree is the same Project as the
+    # checkout it was cut from, and a session that steps into one must not vanish
+    # from its group in the sidebar.
+    assert record.project_id == before
+    assert record.repository_id == "repo-of-the-primary-checkout"
+    assert record.project_scope_id == "scope-of-the-primary-checkout"
+
+
+def test_an_unchanged_hook_cwd_schedules_nothing(tmp_path: Path) -> None:
+    # This fires on every hook of every turn and the value is the same one all day,
+    # so the comparison has to happen before a task is created, not inside it.
+    manager, session, record = hook_cwd_session(tmp_path)
+    record.runtime_cwd = str(tmp_path)
+    record.runtime_cwd_live = True
+
+    manager.note_hook_cwd(session, {"cwd": str(tmp_path)})
+    manager.note_hook_cwd(session, {"cwd": ""})
+
+    assert session.cwd_debounce_task is None
+
+
 @pytest.mark.asyncio
 async def test_fallback_detection_ignores_a_native_run_that_already_exited(
     tmp_path: Path,

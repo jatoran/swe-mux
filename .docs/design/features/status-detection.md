@@ -22,7 +22,7 @@ Per signal class, every layer feeds the same ledger with its own `source` string
 | Layer | Source tag | What it may do |
 | --- | --- | --- |
 | CLI side state (`~/.claude/sessions/<pid>.json`) | `cli-state` | Corroborate + identity (counters, ledger entries) + the live `cwd` that re-finds a relocated transcript. **Never drives SessionState** - promotion to a transition source requires a release of disagreement telemetry plus its own corpus fixtures. |
-| Hooks (incl. `SubagentStart`/`SubagentStop`) | `hook` | Turn boundaries, blocks, identity (priority 2). |
+| Hooks (incl. `SubagentStart`/`SubagentStop`) | `hook` | Turn boundaries, blocks, identity (priority 2), and - for a hook speaking for the session's own conversation - the live `cwd` and the `transcript_path` the CLI says it is writing. |
 | Transcript records | `transcript` | Ordered turn evidence (priority 1) + standing-activity extraction. |
 | PTY screen classifier | `pty` / `watchdog-pty` | Recoveries, vetoes, the startup-dialog rule, drift self-check. |
 | Process tree (ProcessInspector) | `process` | Liveness; `background_tasks` fast-clear (a vanished process cannot still be working). |
@@ -110,8 +110,21 @@ that field is what `_transcript_authoritative` reads, the hook tier keeps being 
 as redundant to a transcript that can no longer report anything. Measured live 2026-08-06:
 a session latched `idle` for four minutes while its own screen showed the working spinner,
 its cli-state file read `busy`, and root turn hooks kept arriving 8 s apart - every layer
-that could have spoken was either blind or being dropped. Two rules close it:
+that could have spoken was either blind or being dropped. Three rules close it, in the
+order the observer's switch watcher consults them:
 
+- **The CLI's own report** (`SessionManager.note_hook_transcript_path` →
+  `_staged_transcript_relocation`): every Claude hook payload carries `transcript_path`,
+  and the daemon used to read it only when the payload *also* reported a new conversation
+  id - so the one case it could not see was the file moving while the conversation stayed
+  the same. Staged on the ingress task and consumed by the observer, because re-aiming
+  stops and restarts the tail task and the hook handler must never do that (Claude blocks
+  the user's turn on the POST). Accepted without corroboration: the POST is loopback-only
+  and hook-secret authenticated, the caller has already established the payload speaks for
+  this session's own conversation (`foreign_conversation_hook_id`), and the reported file
+  must still be the one named after that conversation id - which mux dictated at spawn, so
+  a nested child inheriting the hook wiring cannot point the session anywhere. The watcher
+  wakes on it rather than waiting out a poll tick.
 - **Re-resolution** (`SessionManager._relocated_transcript_candidate`): when the followed
   path does not exist and the cli-state file reports a different `cwd`, the adapter
   re-derives the path from (native id, live cwd) and the observer re-aims at it. This is
@@ -130,6 +143,19 @@ that could have spoken was either blind or being dropped. Two rules close it:
   unreachable in the case where it moved hardest. A missing file *without* a turn hook
   stays silent: the observer is aimed before the CLI creates the file, so that is an
   ordinary startup race.
+
+Both repairs need a live session to act on. **Binding and adoption search by conversation
+id instead** (`BackendAdapter.locate_transcript`, `_relocated_conversation_transcript`):
+every other discovery path reads the directory the *spawn* cwd names, so a session whose
+CLI had moved came back from a daemon restart with nothing to adopt - the mirrored path was
+dead and the recency scan was looking in the wrong place. Searching for `<native id>.jsonl`
+across the backend's project directories is safe where an mtime scan is not, because mux
+dictates that id at spawn: a file named after it is this session's by construction, and the
+ordinary claim rules still apply on top. Throttled to `TRANSCRIPT_LOCATE_INTERVAL_SECONDS`
+and run off-thread in the binding loop, because it searches rather than computes (measured
+2026-08-06: 9 ms across 448 project directories). Adoption also requires the mirrored path
+to still exist before re-adopting it, since a remembered path is not evidence a file is
+there.
 
 `SessionStart` is lifecycle and identity evidence, never a turn boundary.
 When it arrives during an active `working` or `awaiting` root turn, including Codex compaction, it is ledgered as `session_start_state_ignored` and cannot move the session to `idle`.
@@ -711,7 +737,8 @@ consumer looking as solid as a hook-proven turn end.
   `session_is_unwitnessed`, `session_status_health`, `fleet_status_health`,
   standing-activity set management, `startup_dialog_observation`,
   `note_classifier_blindness`, `_relocated_transcript_candidate`,
-  `_note_transcript_staleness`
+  `note_hook_transcript_path`, `_staged_transcript_relocation`,
+  `_relocated_conversation_transcript`, `note_hook_cwd`, `_note_transcript_staleness`
 - `src/swe_mux/observation.py` — evidence extraction, `tail_turn_state`, hook/transcript
   handlers, `closed_by_transcript` latch, trailing-completion guard, standing-activity
   extractors

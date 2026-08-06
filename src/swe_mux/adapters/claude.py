@@ -58,6 +58,10 @@ class ClaudeAdapter:
     # mux spawns with `--session-id <mux id>`, so the CLI writes exactly that
     # conversation and native_session_id is authoritative from the first moment.
     assigns_conversation_id = True
+    # Transcripts live under `projects/<encoded cwd>/`, so a cwd change *moves the
+    # existing file*. Entering a Claude native worktree is exactly that, and it is
+    # why a live session's transcript path is never permanently true.
+    resolves_transcript_by_cwd = True
 
     def __init__(
         self,
@@ -185,6 +189,51 @@ class ClaudeAdapter:
 
     def transcript_path(self, native_id: str, cwd: Path) -> Path:
         return claude_data_home() / "projects" / encode_cwd(cwd) / f"{native_id}.jsonl"
+
+    def locate_transcript(self, native_id: str) -> Path | None:
+        """Find `<native_id>.jsonl` in whichever project directory now holds it.
+
+        The CLI names a conversation's file after the conversation id, and mux
+        dictates that id at spawn (`--session-id`), so this is a search for a file
+        whose name we own outright: it cannot land on a sibling's conversation the
+        way an mtime scan can. That makes it safe to use as a recovery path where
+        the `(native id, cwd)` computation has stopped being true — after a cwd
+        change moved the file, or across a daemon restart that re-derives the path
+        from a spawn cwd the CLI has since left.
+
+        A directory probe per project slug rather than a recursive walk: measured
+        2026-08-06 against a real tree of 448 project directories, 9 ms and exactly
+        one hit. Cheap enough for a fallback, too expensive for a poll loop, which
+        is why callers throttle it.
+
+        Two files answering to one conversation id is not a case Claude produces —
+        it *moves* the file rather than copying it — but if it ever happens the
+        largest wins, because a conversation only grows and the live file is
+        therefore the longest. Deliberately not the newest mtime: Windows leaves an
+        open file's timestamp frozen at creation, so "newest" can name the dead one.
+        """
+        if not native_id:
+            return None
+        root = claude_data_home() / "projects"
+        name = f"{native_id}.jsonl"
+        found: list[tuple[int, Path]] = []
+        try:
+            entries = list(os.scandir(root))
+        except OSError:
+            return None
+        for entry in entries:
+            candidate = Path(entry.path) / name
+            try:
+                size = candidate.stat().st_size
+            except OSError:
+                # Not a directory, or no such conversation here. Either way this
+                # slug does not hold the file, and one raced or locked entry must
+                # not abort the search.
+                continue
+            found.append((size, candidate))
+        if not found:
+            return None
+        return max(found)[1]
 
     def graceful_exit_keys(self) -> str:
         return "/exit\r"

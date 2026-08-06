@@ -714,6 +714,152 @@ def test_a_relocated_transcript_is_re_found_from_the_live_cwd(
     assert SessionManager._relocated_transcript_candidate(manager, session, current) == moved
 
 
+def hook_relocation_fixture(tmp_path: Path) -> tuple[Any, Any, Path, Path]:
+    """`relocation_fixture` plus the state the hook-reported path needs."""
+    manager, session, current, moved = relocation_fixture(tmp_path)
+    manager.sessions = {}
+    session.stopping = False
+    session.stop_event = asyncio.Event()
+    session.transcript_path = current
+    session.pending_transcript_path = None
+    session.transcript_relocation_signal = asyncio.Event()
+    return manager, session, current, moved
+
+
+def test_a_hook_naming_a_moved_transcript_is_staged(tmp_path: Path) -> None:
+    # The CLI names the file it is writing in every hook payload, and the daemon
+    # read it only when the payload *also* reported a new conversation id - so the
+    # one case it could not see was the file moving while the conversation stayed
+    # the same, which is exactly what entering a native worktree does.
+    manager, session, _current, moved = hook_relocation_fixture(tmp_path)
+
+    SessionManager.note_hook_transcript_path(
+        manager, session, {"transcript_path": str(moved)}
+    )
+
+    assert session.pending_transcript_path == moved
+    assert session.transcript_relocation_signal.is_set()
+
+
+def test_a_hook_naming_the_followed_file_stages_nothing(tmp_path: Path) -> None:
+    # The common case by far: every hook of every turn reports the path already
+    # being followed, and none of them may wake the watcher.
+    manager, session, current, _moved = hook_relocation_fixture(tmp_path)
+
+    SessionManager.note_hook_transcript_path(
+        manager, session, {"transcript_path": str(current)}
+    )
+
+    assert session.pending_transcript_path is None
+    assert not session.transcript_relocation_signal.is_set()
+
+
+def test_a_hook_naming_another_conversation_is_ignored(tmp_path: Path) -> None:
+    # A nested child CLI inherits this session's hook wiring but not its
+    # conversation id, and the file name carries that id. Rejecting on the name is
+    # what stops a child from aiming its parent's observation at its own transcript.
+    manager, session, _current, moved = hook_relocation_fixture(tmp_path)
+    foreign = moved.with_name("11111111-2222-4333-8444-555555555555.jsonl")
+    foreign.write_text("{}\n", encoding="utf-8")
+
+    SessionManager.note_hook_transcript_path(
+        manager, session, {"transcript_path": str(foreign)}
+    )
+
+    assert session.pending_transcript_path is None
+
+
+def test_codex_never_stages_a_relocation(tmp_path: Path) -> None:
+    # Rollouts are addressed by thread id in a date tree, so a Codex conversation's
+    # file does not move when its pane's directory does. A differing path from that
+    # backend is a report about some other conversation.
+    manager, session, _current, moved = hook_relocation_fixture(tmp_path)
+    session.adapter = SimpleNamespace(
+        resolves_transcript_by_cwd=False,
+        transcript_native_id=lambda path: path.stem,
+        name="codex",
+    )
+    session.record.backend = "codex"
+
+    SessionManager.note_hook_transcript_path(
+        manager, session, {"transcript_path": str(moved)}
+    )
+
+    assert session.pending_transcript_path is None
+
+
+def test_a_staged_relocation_is_consumed_once(tmp_path: Path) -> None:
+    manager, session, current, moved = hook_relocation_fixture(tmp_path)
+    SessionManager.note_hook_transcript_path(
+        manager, session, {"transcript_path": str(moved)}
+    )
+
+    assert SessionManager._staged_transcript_relocation(manager, session, current) == moved
+    # Consumed, and the signal retracted: a second tick must not re-aim observation
+    # at a file it is already following.
+    assert SessionManager._staged_transcript_relocation(manager, session, current) is None
+    assert not session.transcript_relocation_signal.is_set()
+
+
+def test_a_staged_relocation_a_live_sibling_owns_is_refused(tmp_path: Path) -> None:
+    # The same claim rule every other binding path applies. Two panes on one
+    # transcript is the failure this whole area exists to prevent.
+    manager, session, current, moved = hook_relocation_fixture(tmp_path)
+    sibling_record = agent_record(cwd=str(tmp_path / "repo"))
+    sibling_record.id = "other-mux-id"
+    manager.sessions = {
+        "other-mux-id": SimpleNamespace(record=sibling_record, transcript_path=moved)
+    }
+    session.pending_transcript_path = moved
+
+    assert SessionManager._staged_transcript_relocation(manager, session, current) is None
+
+
+def test_a_staged_relocation_that_vanished_is_refused(tmp_path: Path) -> None:
+    manager, session, current, moved = hook_relocation_fixture(tmp_path)
+    session.pending_transcript_path = moved
+    moved.unlink()
+
+    assert SessionManager._staged_transcript_relocation(manager, session, current) is None
+
+
+def test_a_clear_inside_a_worktree_still_rolls() -> None:
+    # `/clear` reports the cwd the CLI is standing in, which for a session that
+    # entered a worktree is not the one it spawned in. Comparing against the spawn
+    # cwd alone refused the roll as a foreign process: the session stayed keyed to
+    # the conversation the user had just wiped, and every later hook was then
+    # filtered as foreign - a permanent detachment from a routine command.
+    record = agent_record(cwd="D:/repo")
+    record.runtime_cwd = "D:/repo/.claude/worktrees/feature"
+    record.runtime_cwd_live = True
+    session = cast(Any, SimpleNamespace(record=record, agent_lifecycle_id=ORIGINAL))
+
+    decision = conversation_rollover_decision(
+        session,
+        "SessionStart",
+        {"session_id": CLEARED, "source": "clear", "cwd": record.runtime_cwd},
+    )
+
+    assert decision.roll_to == CLEARED
+    assert decision.refused is None
+
+
+def test_a_clear_from_an_unrelated_directory_is_still_refused() -> None:
+    record = agent_record(cwd="D:/repo")
+    record.runtime_cwd = "D:/repo/.claude/worktrees/feature"
+    record.runtime_cwd_live = True
+    session = cast(Any, SimpleNamespace(record=record, agent_lifecycle_id=ORIGINAL))
+
+    decision = conversation_rollover_decision(
+        session,
+        "SessionStart",
+        {"session_id": CLEARED, "source": "clear", "cwd": "C:/somewhere/else"},
+    )
+
+    assert decision.refused == CLEARED
+    assert decision.refusal_reason == "cwd_mismatch"
+
+
 def test_relocation_stands_down_without_proof(tmp_path: Path, monkeypatch: Any) -> None:
     manager, session, current, moved = relocation_fixture(tmp_path)
     monkeypatch.setattr(

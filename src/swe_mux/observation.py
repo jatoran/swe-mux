@@ -1788,8 +1788,18 @@ def conversation_rollover_decision(
     if source == "startup":
         return RolloverDecision(refused=native_id, refusal_reason="foreign_process_startup")
     hook_cwd = str(payload.get("cwd") or "")
-    session_cwd = session.record.run_cwd or session.record.cwd
-    if hook_cwd and session_cwd and not _same_directory(hook_cwd, session_cwd):
+    # Both directories this session is known to stand in. The spawn/run cwd is where
+    # it was launched; the live cwd is where its CLI says it is now, and for Claude
+    # those differ for the whole life of a session that entered a native worktree.
+    # Comparing against the spawn cwd alone made a `/clear` inside a worktree read as
+    # a foreign process: the roll was refused, the session stayed keyed to the
+    # conversation the user had just wiped, and every later hook was then filtered as
+    # foreign - a permanent detachment from a routine command.
+    known_cwds = [session.record.run_cwd or session.record.cwd]
+    if session.record.runtime_cwd_live and session.record.runtime_cwd:
+        known_cwds.append(session.record.runtime_cwd)
+    present = [cwd for cwd in known_cwds if cwd]
+    if hook_cwd and present and not any(_same_directory(hook_cwd, cwd) for cwd in present):
         return RolloverDecision(refused=native_id, refusal_reason="cwd_mismatch")
     return RolloverDecision(roll_to=native_id)
 

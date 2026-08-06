@@ -103,6 +103,11 @@ For the moment in question, from the timeline alone:
      the CLI moved its transcript to the new cwd's project directory. Expect a
      `transcript_relocated` event re-aiming the observer, or an `observation_stale`
      (`reason: transcript_missing`) revoking authority so hooks resume driving state.
+     `transcript_relocated` carries `source`: `hook` is the CLI naming the file itself
+     (the fast path, within one hook of the move), `daemon` is the cli-state re-resolution
+     fallback. Neither firing on a session whose `runtime_cwd` moved means the hook stream
+     is not reaching this session at all - check `hook_recency` and the hook secret before
+     looking further.
    - Displayed `awaiting` long after the user answered → the known asymmetry (clears
      require positive proof). Look for the `resume_working` recovery and what delayed it.
 3. **Which run?** If `runs` has several ids, check the transition to `starting` with

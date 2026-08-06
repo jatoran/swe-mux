@@ -129,6 +129,86 @@ def test_a_conversation_a_live_pane_owns_is_never_taken_over(
     assert manager._named_conversation_transcript(branching, cwd) is None
 
 
+def relocated_claude_session(tmp_path: Path) -> tuple[Any, Any, Path, Path]:
+    """A Claude pane whose conversation moved into a worktree's project directory."""
+    from swe_mux.adapters import ClaudeAdapter
+    from swe_mux.adapters.claude import encode_cwd
+
+    checkout = tmp_path / "repo"
+    worktree = checkout / ".claude" / "worktrees" / "feature"
+    worktree.mkdir(parents=True)
+    projects = tmp_path / "claude" / "projects"
+    spawn_path = projects / encode_cwd(checkout) / f"{PANE}.jsonl"
+    spawn_path.parent.mkdir(parents=True)
+    moved = projects / encode_cwd(worktree) / f"{PANE}.jsonl"
+    moved.parent.mkdir(parents=True)
+    moved.write_text("{}\n", encoding="utf-8")
+
+    record = SessionRecord(
+        PANE, "worktree agent", "default", "claude", PANE, str(checkout), "claude.exe", []
+    )
+    record.spawn_backend = "claude"
+    record.spawn_native_session_id = PANE
+    record.run_cwd = str(checkout)
+    session = cast(
+        Any,
+        SimpleNamespace(
+            record=record,
+            adapter=ClaudeAdapter(),
+            transcript_path=None,
+            transcript_provisional=False,
+            ignored_detection_runs=set(),
+        ),
+    )
+    return manager_with(session), session, spawn_path, moved
+
+
+def test_a_relocated_conversation_is_rebound_across_a_daemon_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every discovery path reads the directory the *spawn* cwd names, so a session
+    # whose CLI entered a worktree had nothing left to adopt after a restart: the
+    # mirrored path was dead and the recency scan was looking in the wrong place.
+    # It came back permanently unobserved, and silently - a missing file is exactly
+    # what the staleness guard cannot read a timestamp from.
+    monkeypatch.setattr(
+        "swe_mux.adapters.claude.claude_data_home", lambda: tmp_path / "claude"
+    )
+    manager, session, spawn_path, moved = relocated_claude_session(tmp_path)
+
+    assert not spawn_path.exists()
+    found = asyncio.run(
+        SessionManager._await_owned_transcript(manager, session, asyncio.Event())
+    )
+    # Exact, not provisional: the file is named after the conversation id mux
+    # dictated at spawn, so it is this pane's by construction.
+    assert found == (moved, False)
+
+
+def test_a_relocated_conversation_a_sibling_owns_is_not_taken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "swe_mux.adapters.claude.claude_data_home", lambda: tmp_path / "claude"
+    )
+    manager, session, _spawn_path, moved = relocated_claude_session(tmp_path)
+    owner = SimpleNamespace(
+        record=SessionRecord(
+            "owner-pane", "owner", "default", "claude", PANE, str(tmp_path), "claude.exe", []
+        ),
+        transcript_path=moved,
+    )
+    owner.record.state = "running"
+    manager.sessions["owner-pane"] = owner
+
+    assert (
+        manager._relocated_conversation_transcript(
+            session.adapter, "claude", PANE, *manager._live_transcript_claims(session)
+        )
+        is None
+    )
+
+
 def test_a_conversation_this_pane_has_disowned_is_not_rebound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

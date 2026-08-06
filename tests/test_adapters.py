@@ -21,6 +21,63 @@ def test_spawn_spec_defaults_are_safe() -> None:
     assert first.env is not second.env
 
 
+def test_locate_transcript_finds_a_conversation_whose_cwd_moved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `transcript_path` answers "where would this conversation live if the CLI were
+    # standing in `cwd`", which stops being true the moment it moves: entering a
+    # native worktree relocates the whole file into the new directory's slug.
+    # Searching by conversation id is safe where an mtime scan is not, because mux
+    # dictates that id at spawn - a file named after it is this session's by
+    # construction.
+    monkeypatch.setattr("swe_mux.adapters.claude.claude_data_home", lambda: tmp_path)
+    native = "3763350c-df0c-4f85-9e93-7f73ffba2c07"
+    spawn_root = tmp_path / "projects" / encode_cwd(tmp_path / "repo")
+    worktree_root = tmp_path / "projects" / encode_cwd(tmp_path / "repo" / "wt")
+    for root in (spawn_root, worktree_root):
+        root.mkdir(parents=True)
+    (spawn_root / "unrelated.jsonl").write_text("{}\n", encoding="utf-8")
+    moved = worktree_root / f"{native}.jsonl"
+    moved.write_text("{}\n", encoding="utf-8")
+    adapter = ClaudeAdapter()
+
+    assert adapter.transcript_path(native, tmp_path / "repo") == spawn_root / f"{native}.jsonl"
+    assert adapter.locate_transcript(native) == moved
+    assert adapter.locate_transcript("00000000-0000-4000-8000-000000000000") is None
+    assert adapter.locate_transcript("") is None
+
+
+def test_locate_transcript_prefers_the_longest_of_two_same_named_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Claude moves the file rather than copying it, so two should never coexist. If
+    # they ever do, the live one is the longest - a conversation only grows.
+    # Deliberately not the newest mtime: Windows leaves an open file's timestamp
+    # frozen at creation, so "newest" can name the dead one.
+    monkeypatch.setattr("swe_mux.adapters.claude.claude_data_home", lambda: tmp_path)
+    native = "3763350c-df0c-4f85-9e93-7f73ffba2c07"
+    stale = tmp_path / "projects" / "a-slug"
+    live = tmp_path / "projects" / "b-slug"
+    for root in (stale, live):
+        root.mkdir(parents=True)
+    (stale / f"{native}.jsonl").write_text("{}\n", encoding="utf-8")
+    longest = live / f"{native}.jsonl"
+    longest.write_text('{"one":1}\n{"two":2}\n', encoding="utf-8")
+    os.utime(longest, (0, 0))
+
+    assert ClaudeAdapter().locate_transcript(native) == longest
+
+
+def test_only_a_cwd_resolved_backend_can_relocate_a_transcript() -> None:
+    # The flag gates the hook-reported relocation path. Codex addresses a rollout by
+    # thread id in a date tree, so its file never moves when the pane's cwd does,
+    # and a differing path from that backend is a report about another conversation.
+    assert ClaudeAdapter().resolves_transcript_by_cwd is True
+    assert CodexAdapter().resolves_transcript_by_cwd is False
+    assert ShellAdapter().resolves_transcript_by_cwd is False
+    assert ShellAdapter().locate_transcript("anything") is None
+
+
 def test_provider_transcript_roots_follow_current_cli_path_rules(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

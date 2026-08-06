@@ -290,6 +290,10 @@ async def test_subagent_hooks_never_date_transcript_staleness_evidence(
         sessions={record.id: session},
         maybe_heal_from_own_conversation_hook=AsyncMock(),
         roll_agent_conversation=AsyncMock(),
+        # The ingress hands every own-conversation hook's `cwd` and
+        # `transcript_path` to the manager; this test is about neither.
+        note_hook_cwd=lambda _session, _payload: None,
+        note_hook_transcript_path=lambda _session, _payload: None,
     )
     app["events"] = SimpleNamespace(emit=AsyncMock())
     app["automation"] = SimpleNamespace(note_native_hook=lambda _sid: None)

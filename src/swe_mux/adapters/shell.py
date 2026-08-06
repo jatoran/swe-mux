@@ -11,6 +11,7 @@ class ShellAdapter:
     reports_conversation_rollover = False
     # A shell has no conversation of its own; promotion adopts the agent's id.
     assigns_conversation_id = False
+    resolves_transcript_by_cwd = False
 
     def __init__(self, default_exe: str = "powershell.exe") -> None:
         self.default_exe = default_exe
@@ -33,6 +34,10 @@ class ShellAdapter:
 
     def transcript_path(self, native_id: str, cwd: Path) -> None:
         del native_id, cwd
+        return None
+
+    def locate_transcript(self, native_id: str) -> None:
+        del native_id
         return None
 
     def graceful_exit_keys(self) -> str:

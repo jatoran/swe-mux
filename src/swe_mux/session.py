@@ -68,6 +68,13 @@ TRANSCRIPT_SWITCH_FRESH_SECONDS = 5.0
 # a working agent writes transcript records continuously, a replaced one never will.
 TRANSCRIPT_STALE_SECONDS = 90.0
 
+# `locate_transcript` searches every project directory the backend owns rather than
+# computing one path, so it is the expensive way to answer "where is this
+# conversation". Cheap in absolute terms (measured 9 ms over 448 directories) but
+# not at the 0.5 s cadence of the binding loop, which would spend it forever on
+# sessions whose CLI simply has not written its first record yet.
+TRANSCRIPT_LOCATE_INTERVAL_SECONDS = 5.0
+
 # A shell prompt rendered while a session is promoted means the nested CLI has
 # exited (the shell is otherwise blocked on it). Prompts within the grace window
 # of promotion are pipeline stragglers from before/around the launch.
@@ -1440,6 +1447,13 @@ class Session:
         # (`_may_adopt_sole_candidate`). It may drive *state* and nothing else:
         # see `provisional_observation_blocks` for the exact list and why.
         self.transcript_provisional = False
+        # A transcript path the CLI named for itself in a hook, staged by the
+        # ingress task for the observer's switch watcher to pick up. Two objects
+        # because they answer different questions: the path is *what* to follow, the
+        # event is *when* — without it a relocation would wait out a poll tick while
+        # the session showed a frozen conversation.
+        self.pending_transcript_path: Path | None = None
+        self.transcript_relocation_signal = asyncio.Event()
         self.detection_task: asyncio.Task[Any] | None = None
         # The launcher-generated lifecycle id remains stable even when an
         # adapter later discovers and records a different native transcript id.
@@ -2386,6 +2400,44 @@ class SessionManager:
             return None
         return path
 
+    def _relocated_conversation_transcript(
+        self,
+        adapter: Any,
+        backend: str,
+        native_id: str,
+        claimed_ids: set[tuple[str, str]],
+        claimed_paths: set[str],
+    ) -> Path | None:
+        """This conversation's file when the cwd it was computed from is no longer true.
+
+        `_named_conversation_transcript` asks the adapter where the conversation
+        *would* live given a cwd, which is the right question right up until the CLI
+        moves: Claude relocates the file into the slug for its new working directory
+        when a session enters a native worktree, and every path the daemon derived
+        from the spawn cwd stops existing. Across a daemon restart there is then
+        nothing left to adopt — the mirrored path is dead, the recency scan reads the
+        wrong directory, and the session comes back permanently unobserved.
+
+        Searching by conversation id is safe here in a way an mtime scan is not: mux
+        dictates the id at spawn, so a file named after it is this session's by
+        construction. The ordinary claim rules still apply on top, so a file a live
+        sibling already follows is never taken.
+        """
+        if not native_id:
+            return None
+        if (backend, native_id) in claimed_ids:
+            return None
+        locate = getattr(adapter, "locate_transcript", None)
+        if locate is None:
+            return None
+        try:
+            path = cast("Path | None", locate(native_id))
+        except OSError:
+            return None
+        if path is None or self._path_key(path) in claimed_paths:
+            return None
+        return path
+
     async def _await_owned_transcript(
         self, session: Session, stop_event: asyncio.Event
     ) -> tuple[Path, bool] | None:
@@ -2396,6 +2448,7 @@ class SessionManager:
         adoption by elimination and may only drive state
         (`_may_adopt_sole_candidate`).
         """
+        located_at = 0.0
         while not stop_event.is_set():
             cwd = Path(session.record.run_cwd or session.record.cwd)
             started = session.record.agent_run_started_at or session.record.created_at
@@ -2413,6 +2466,30 @@ class SessionManager:
             ]
             if exact:
                 return max(exact)[1], False
+            # Every candidate above was read out of the directory the *spawn* cwd
+            # names. A conversation whose CLI has since moved is not in there at all,
+            # so before falling back to elimination, ask where the file actually is.
+            # Throttled and off-thread: this searches rather than computes, and the
+            # common reason to be in this loop is a CLI that has simply not written
+            # its first record yet.
+            now = time.monotonic()
+            if (
+                getattr(session.adapter, "resolves_transcript_by_cwd", False)
+                and session.record.native_session_id
+                and now - located_at >= TRANSCRIPT_LOCATE_INTERVAL_SECONDS
+            ):
+                located_at = now
+                claimed_ids, claimed_paths = self._live_transcript_claims(session)
+                located = await asyncio.to_thread(
+                    self._relocated_conversation_transcript,
+                    session.adapter,
+                    session.adapter.name,
+                    session.record.native_session_id,
+                    claimed_ids,
+                    claimed_paths,
+                )
+                if located is not None:
+                    return located, False
             if len(candidates) == 1 and self._may_adopt_sole_candidate(
                 session, candidates[0][1], started
             ):
@@ -2551,7 +2628,12 @@ class SessionManager:
         )
         current_raw = meta.get("transcript_path")
         current = Path(current_raw) if isinstance(current_raw, str) and current_raw else None
-        if current is not None and record.backend == backend:
+        if current is not None and record.backend == backend and current.is_file():
+            # `is_file` because a mirrored path is only a memory of where the file
+            # was. A Claude session that entered a worktree while the daemon was down
+            # left this path behind entirely, and re-adopting it hands the observer a
+            # name for something that no longer exists — which then fails silently,
+            # since a missing file is exactly what the staleness guard cannot read.
             current_native = adapter.transcript_native_id(current)
             if (
                 current_native
@@ -2596,6 +2678,14 @@ class SessionManager:
         exact = [item for item in unclaimed if item[2] == expected]
         if exact:
             return max(exact)[1]
+        # Everything above reads the directory the recorded cwd names. A session
+        # whose CLI moved (a Claude native worktree) writes somewhere else entirely,
+        # so ask for the conversation by id before settling for elimination.
+        located = self._relocated_conversation_transcript(
+            adapter, backend, expected or record.id, claimed_ids, claimed_paths
+        )
+        if located is not None:
+            return located
         # Ambiguity is not identity evidence. Waiting for a lifecycle hook or a
         # unique transcript is safer than attaching a sibling's conversation.
         distinct = {self._path_key(item[1]): item for item in unclaimed}
@@ -3651,14 +3741,30 @@ class SessionManager:
         """
         heuristic = not getattr(session.adapter, "reports_conversation_rollover", False)
         while not stop_event.is_set() and not observe_task.done():
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=TRANSCRIPT_SWITCH_POLL_SECONDS)
-            except TimeoutError:
-                pass
+            await self._await_switch_tick(session, stop_event)
             if stop_event.is_set() or observe_task.done():
                 break
             if session.record.backend not in {"claude", "codex"}:
                 break
+            # The CLI's own word first. A hook names the file it is writing, which
+            # settles in one comparison what the readings below have to infer from
+            # a cwd the poller happened to catch and a path the daemon recomputes.
+            reported = self._staged_transcript_relocation(session, current)
+            if reported is not None:
+                await self.events.emit(
+                    "transcript_relocated",
+                    session_id=session.record.id,
+                    source="hook",
+                    backend=session.record.backend,
+                    previous=str(current),
+                    path=str(reported),
+                )
+                log.info(
+                    "session %s transcript relocated to %s (reported by the CLI)",
+                    session.record.id,
+                    reported,
+                )
+                return reported
             relocated = self._relocated_transcript_candidate(session, current)
             if relocated is not None:
                 await self.events.emit(
@@ -3685,6 +3791,107 @@ class SessionManager:
                 return candidate
             await self._note_transcript_staleness(session, current)
         return None
+
+    @staticmethod
+    async def _await_switch_tick(session: Session, stop_event: asyncio.Event) -> None:
+        """Sleep one watch tick, waking early when a hook names a new transcript.
+
+        The poll interval is sized for the filesystem readings below, which have
+        nothing better to do than look again. A hook is not a reading: the CLI has
+        already told us where it is writing, and every tick spent sleeping on that
+        is a tick the session spends showing a conversation it has left.
+        """
+        waiters = [
+            asyncio.ensure_future(stop_event.wait()),
+            asyncio.ensure_future(session.transcript_relocation_signal.wait()),
+        ]
+        try:
+            await asyncio.wait(
+                waiters,
+                timeout=TRANSCRIPT_SWITCH_POLL_SECONDS,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for waiter in waiters:
+                waiter.cancel()
+            await asyncio.gather(*waiters, return_exceptions=True)
+
+    def _staged_transcript_relocation(self, session: Session, current: Path) -> Path | None:
+        """The transcript path a hook reported for this session's own conversation.
+
+        Staged by `note_hook_transcript_path` on the ingress task and consumed here,
+        because re-aiming observation means stopping and restarting the tail task and
+        the hook handler must never do that: Claude blocks on the POST.
+
+        Cleared before it is read, never after. A hook landing in the gap then leaves
+        the signal set and costs one spurious tick, where the other order would drop
+        the report entirely and leave the session following a dead file.
+        """
+        session.transcript_relocation_signal.clear()
+        staged = session.pending_transcript_path
+        if staged is None:
+            return None
+        session.pending_transcript_path = None
+        if getattr(session, "transcript_provisional", False):
+            # A provisional follow has not established which conversation this is,
+            # so there is no identity for a reported path to match against.
+            return None
+        if self._path_key(staged) == self._path_key(current) or not staged.is_file():
+            return None
+        native_id = session.record.native_session_id
+        if not native_id or session.adapter.transcript_native_id(staged) != native_id:
+            return None
+        _claimed_ids, claimed_paths = self._live_transcript_claims(session)
+        if self._path_key(staged) in claimed_paths:
+            return None
+        return staged
+
+    def note_hook_transcript_path(self, session: Session, payload: dict[str, Any]) -> None:
+        """Stage the transcript file the CLI itself says it is writing.
+
+        Every Claude hook payload carries `transcript_path`, and until now the daemon
+        read it only when the payload also reported a *new conversation id* — so the
+        one case it could not see was the file moving while the conversation stayed
+        the same. That is precisely what entering a native worktree does, and the
+        result was a session that went silently unobserved for the rest of its life:
+        no reader tab, frozen tokens, no titles, and a history row pointing at a path
+        that no longer existed.
+
+        The evidence is strong enough to act on without corroboration. The POST is
+        loopback-only and authenticated with this session's own hook secret; the
+        caller has already established that the payload speaks for *this* session's
+        conversation (`foreign_conversation_hook_id`); and the reported file must
+        still be the one named after that conversation id, which mux dictated at
+        spawn. A nested child CLI inherits the hook wiring but not the id, so it
+        cannot point this session anywhere.
+
+        Explicitly not a rollover. The conversation did not end - it changed address.
+        Rolling would rekey identity, close the history row, and mint a new agent run
+        for a session that only changed directory.
+        """
+        record = session.record
+        if record.backend not in AGENT_BACKENDS or session.stopping:
+            return
+        if not getattr(session.adapter, "resolves_transcript_by_cwd", False):
+            # A backend that addresses conversations by id never moves a file, so a
+            # differing path here would be a report about some other conversation.
+            return
+        raw = str(payload.get("transcript_path") or "").strip()
+        if not raw or not record.native_session_id:
+            return
+        current = session.transcript_path
+        # Textual normcase first and `_path_key` only on a genuine difference: this
+        # runs on every hook of every turn, and `_path_key` resolves the path, which
+        # is filesystem I/O for a question that is almost always "no, same file".
+        if current is not None and os.path.normcase(raw) == os.path.normcase(str(current)):
+            return
+        reported = Path(raw)
+        if session.adapter.transcript_native_id(reported) != record.native_session_id:
+            return
+        if current is not None and self._path_key(reported) == self._path_key(current):
+            return
+        session.pending_transcript_path = reported
+        session.transcript_relocation_signal.set()
 
     def _relocated_transcript_candidate(self, session: Session, current: Path) -> Path | None:
         """The same conversation's file after the CLI's cwd moved it.
@@ -4864,9 +5071,28 @@ class SessionManager:
         session.cwd_debounce_task = task
         session.tasks.add(task)
 
-    async def _accept_runtime_cwd(self, session: Session, path: Path) -> None:
+    async def _accept_runtime_cwd(
+        self,
+        session: Session,
+        path: Path,
+        *,
+        source: str = "osc7",
+        channel: str = "pty",
+        debounce: float = 1.25,
+    ) -> None:
+        """Adopt a reported working directory as this session's live cwd.
+
+        The debounce exists for OSC 7, which a shell emits on every prompt and
+        therefore several times during one `cd`. A hook reports a cwd the CLI has
+        already settled on, so it waits for nothing.
+
+        Deliberately does not touch `project_id`/`repository_id`. A worktree is the
+        same Project as the checkout it was cut from, and a session that steps into
+        one must not vanish from its group in the sidebar.
+        """
         try:
-            await asyncio.sleep(1.25)
+            if debounce:
+                await asyncio.sleep(debounce)
             if session.stop_event.is_set() or not path.is_dir():
                 return
             value = str(path)
@@ -4883,7 +5109,7 @@ class SessionManager:
             session.cwd_switches.append(now)
             session.record.runtime_cwd = value
             session.record.runtime_cwd_live = True
-            session.record.runtime_cwd_source = "osc7"
+            session.record.runtime_cwd_source = source
             session.record.runtime_cwd_updated_at = time.time()
             session.record.runtime_project_scope_id = project.id if known else None
             session.record.git = GitState()
@@ -4891,13 +5117,49 @@ class SessionManager:
             await self.events.emit(
                 "runtime_cwd_changed",
                 session_id=session.record.id,
-                source="pty",
+                source=channel,
                 cwd=value,
                 project_scope_id=session.record.runtime_project_scope_id,
                 dropped=session.cwd_telemetry_dropped,
             )
         except asyncio.CancelledError:
             raise
+
+    def note_hook_cwd(self, session: Session, payload: dict[str, Any]) -> None:
+        """Take the working directory the CLI reports in its own hooks as live cwd.
+
+        An agent pane never produced cwd telemetry before this. OSC 7 comes from a
+        shell drawing its prompt, and a CLI holding the terminal draws no prompt, so
+        `runtime_cwd_live` stayed False for the entire life of every Claude session
+        and `git_cwd` fell back to the spawn directory. A session working inside a
+        native worktree therefore had its Git rail, diff, and branch chip reporting
+        the primary checkout - a different branch and a different set of changes than
+        the one the agent was editing.
+
+        Rate limiting and validation are the OSC 7 path's, unchanged: a directory
+        that does not exist is ignored, and a session that changes cwd more than
+        twelve times a minute has its telemetry dropped rather than trusted.
+        """
+        record = session.record
+        if session.stopping or session.stop_event.is_set():
+            return
+        raw = str(payload.get("cwd") or "").strip()
+        if not raw:
+            return
+        # Compared before scheduling, not inside the task: this fires on every hook
+        # of every turn, and the value is the same one all day.
+        if record.runtime_cwd_live and record.runtime_cwd == raw:
+            return
+        if session.cwd_debounce_task and not session.cwd_debounce_task.done():
+            session.cwd_debounce_task.cancel()
+        task = asyncio.create_task(
+            self._accept_runtime_cwd(
+                session, Path(raw), source="hook", channel="hook", debounce=0.0
+            ),
+            name=f"cwd-hook-{record.id}",
+        )
+        session.cwd_debounce_task = task
+        session.tasks.add(task)
 
     @staticmethod
     def _drop_runtime_cwd(session: Session) -> None:

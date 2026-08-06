@@ -45,6 +45,14 @@ class BackendAdapter(Protocol):
     # id — both kinds are UUIDs, and treating a placeholder as authoritative leaves
     # the session permanently unobserved.
     assigns_conversation_id: bool
+    # True when the CLI resolves a transcript's *directory* from its working
+    # directory, so the same conversation lives at different paths depending on
+    # where the CLI is standing. Such a backend can move a live conversation's file
+    # out from under the daemon by changing cwd (Claude entering a native
+    # worktree), which is what `locate_transcript` and the hook-reported relocation
+    # path exist to follow. False for a backend that addresses a conversation by id
+    # alone (Codex rollouts live in a date tree), where the path never moves.
+    resolves_transcript_by_cwd: bool
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec: ...
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec: ...
@@ -65,6 +73,21 @@ class BackendAdapter(Protocol):
         ...
 
     def transcript_path(self, native_id: str, cwd: Path) -> Path | None: ...
+    def locate_transcript(self, native_id: str) -> Path | None:
+        """Where this conversation's transcript lives *now*, cwd unknown.
+
+        ``transcript_path`` answers "where would this conversation live if the CLI
+        were standing in `cwd`", which stops being true the moment the CLI moves:
+        Claude relocates the whole file into the directory slug for its new working
+        directory. This answers the same question without needing the cwd, so a
+        session whose conversation moved can be re-found from its id alone.
+
+        Costlier than ``transcript_path`` (it searches rather than computes), so
+        callers reach for it only once the computed path has failed. ``None`` when
+        no file answers to the id.
+        """
+        ...
+
     def graceful_exit_keys(self) -> str: ...
     def recent_transcripts(self, cwd: Path, created_at: float) -> list[tuple[float, Path, str]]: ...
     async def await_transcript(

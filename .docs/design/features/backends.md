@@ -204,10 +204,20 @@
   spinner and whose turn hooks were arriving 8 s apart). A missing followed file alongside a
   recent root turn hook now marks staleness with `reason: transcript_missing`. Without a turn
   hook it stays silent - the observer is aimed before the CLI creates the file, so "missing" on
-  its own is an ordinary startup race. The repair for the Claude case runs first:
-  `_relocated_transcript_candidate` re-derives the path from the cli-state file's live `cwd` and
-  re-aims the observer at the same conversation, which is a **relocation, not a rollover**
-  (`design/features/status-detection.md`).
+  its own is an ordinary startup race. Two repairs for the Claude case run first: the
+  `transcript_path` the CLI reports in its own hooks (`note_hook_transcript_path`), and failing
+  that `_relocated_transcript_candidate` re-deriving the path from the cli-state file's live
+  `cwd`. Either re-aims the observer at the same conversation, which is a **relocation, not a
+  rollover** (`design/features/status-detection.md`).
+- **`resolves_transcript_by_cwd` says whether a conversation's path can move at all.** True for
+  Claude, whose transcripts live under `projects/<encoded cwd>/` so a cwd change relocates the
+  file; false for Codex, whose rollouts live in a date tree addressed by thread id and never
+  move. Only a `True` backend takes the hook-reported relocation path — for the others a
+  differing reported path is a report about some other conversation. `locate_transcript(native
+  id)` is the matching recovery: it finds a conversation's file without being told a cwd, which
+  is what re-binds a moved session at spawn-discovery time and across a daemon restart. Claude
+  probes each project slug for `<native id>.jsonl`; Codex answers from the same id-keyed lookup
+  its `transcript_path` already performs.
 - **"Dead" is measured by observed growth, never by the file's timestamp**
   (`_transcript_last_write_ts`). Windows does not keep a live file's last-write time current:
   measured 2026-08-06, every long-running Codex rollout on the machine reported an mtime frozen

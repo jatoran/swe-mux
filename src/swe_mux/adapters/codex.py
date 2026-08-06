@@ -76,6 +76,9 @@ class CodexAdapter:
     # as a placeholder until SessionStart reports the real id. Transcript discovery
     # can then exact-match it; elimination remains the hookless fallback.
     assigns_conversation_id = False
+    # Rollouts live in a date tree addressed by thread id, so a Codex conversation's
+    # file never moves when the pane's working directory does.
+    resolves_transcript_by_cwd = False
 
     def __init__(
         self,
@@ -187,6 +190,15 @@ class CodexAdapter:
             if self.transcript_native_id(path) == native_id:
                 return path
         return None
+
+    def locate_transcript(self, native_id: str) -> Path | None:
+        """Identical to ``transcript_path`` here: the lookup never used the cwd.
+
+        Kept as its own method so callers do not have to know which backends ignore
+        the cwd argument, and so a Codex session recovers through the same path a
+        relocated Claude one does.
+        """
+        return self.transcript_path(native_id, Path())
 
     def graceful_exit_keys(self) -> str:
         return "/exit\r"

@@ -7379,6 +7379,15 @@ async def hook_ingress(request: web.Request) -> web.Response:
             # authority and painting the status line's staleness warning on a
             # perfectly healthy session (measured live 2026-08-02, 666s).
             session.last_turn_hook_ts = session.last_hook_ts
+        # Where the CLI says it is standing, and which file it says it is writing.
+        # Both are only meaningful for a hook that speaks for this session's own
+        # conversation, which is why they live inside this branch: a nested child
+        # inherits the hook wiring, and letting its readings through would move a
+        # session's cwd and its observation onto a conversation it does not own.
+        # Only staged here — the ingress must return fast, because Claude blocks the
+        # user's turn on this POST.
+        request.app["sessions"].note_hook_cwd(session, payload)
+        request.app["sessions"].note_hook_transcript_path(session, payload)
         request.app["automation"].note_native_hook(session.record.id)
         if event_type not in _NORMALIZED_HOOK_EVENT_TYPES:
             await request.app["events"].emit(
