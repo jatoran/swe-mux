@@ -21,7 +21,7 @@ Per signal class, every layer feeds the same ledger with its own `source` string
 
 | Layer | Source tag | What it may do |
 | --- | --- | --- |
-| CLI side state (`~/.claude/sessions/<pid>.json`) | `cli-state` | Corroborate + identity (counters, ledger entries) + the live `cwd` that re-finds a relocated transcript. **Never drives SessionState** — promotion to a transition source requires a release of disagreement telemetry plus its own corpus fixtures. |
+| CLI side state (`~/.claude/sessions/<pid>.json`) | `cli-state` | Corroborate + identity (counters, ledger entries) + the live `cwd` that re-finds a relocated transcript. **Never drives SessionState** - promotion to a transition source requires a release of disagreement telemetry plus its own corpus fixtures. |
 | Hooks (incl. `SubagentStart`/`SubagentStop`) | `hook` | Turn boundaries, blocks, identity (priority 2). |
 | Transcript records | `transcript` | Ordered turn evidence (priority 1) + standing-activity extraction. |
 | PTY screen classifier | `pty` / `watchdog-pty` | Recoveries, vetoes, the startup-dialog rule, drift self-check. |
@@ -109,24 +109,24 @@ the same name appears under the new directory's slug, with nothing telling the d
 that field is what `_transcript_authoritative` reads, the hook tier keeps being suppressed
 as redundant to a transcript that can no longer report anything. Measured live 2026-08-06:
 a session latched `idle` for four minutes while its own screen showed the working spinner,
-its cli-state file read `busy`, and root turn hooks kept arriving 8 s apart — every layer
+its cli-state file read `busy`, and root turn hooks kept arriving 8 s apart - every layer
 that could have spoken was either blind or being dropped. Two rules close it:
 
 - **Re-resolution** (`SessionManager._relocated_transcript_candidate`): when the followed
   path does not exist and the cli-state file reports a different `cwd`, the adapter
   re-derives the path from (native id, live cwd) and the observer re-aims at it. This is
-  not the mtime heuristic below and needs none of its ownership analysis — that one
+  not the mtime heuristic below and needs none of its ownership analysis - that one
   guesses *which* conversation a session moved to and can latch onto a sibling's, while
   this re-finds a file named by the conversation id the session already owns. Both halves
   are proven: the followed path is gone, and the candidate's stem is this session's own
   `native_session_id`. A switch to a file naming the conversation already owned is
-  therefore a **relocation, not a rollover** — rolling would rekey identity, close the
+  therefore a **relocation, not a rollover** - rolling would rekey identity, close the
   history row, and mint a new agent run for a conversation that never ended. Claude-only:
   Codex mints rollout filenames the daemon cannot reconstruct.
 - **The staleness net**: a missing followed file alongside a recent root turn hook marks
   `observation_stale_since` (`reason: transcript_missing`), which is what un-suppresses
-  hooks whatever the cause. Previously a missing file returned early — "no reading" was
-  read as "no evidence" — which made the guard written for a moved conversation
+  hooks whatever the cause. Previously a missing file returned early - "no reading" was
+  read as "no evidence" - which made the guard written for a moved conversation
   unreachable in the case where it moved hardest. A missing file *without* a turn hook
   stays silent: the observer is aimed before the CLI creates the file, so that is an
   ordinary startup race.
@@ -240,7 +240,7 @@ subagents (`subagents`) — as a list of
   ledgered `manual` like any other clear, and drops the run-scoped launch bookkeeping with
   it so a later duplicate completion cannot decrement a fresh annotation. Bounded by the
   axis: it cannot move `SessionState`, `awaiting_reason`, or `delivery_state`, and it
-  cannot *assert* activity — only retract it, after which a genuinely running task
+  cannot *assert* activity - only retract it, after which a genuinely running task
   re-announces itself on its next piece of evidence. Every source here is evidence about
   work the daemon cannot observe directly, so any of them can be left holding a false
   claim whose only other exit is a 30-minute TTL. Surfaced as "Clear standing activity" in
@@ -269,7 +269,7 @@ Record shapes verified 2026-07-31 against live transcripts and the CLI's own too
   increments (cadence as `detail`, expiry mirroring the CLI's 7-day bound),
   `CronDelete {id}` decrements, the last delete clears; `CronList` results are free text
   and only refresh.
-- **`background_tasks`** — opens are read from the launch's **tool_result**, which is the
+- **`background_tasks`** - opens are read from the launch's **tool_result**, which is the
   only place both launch shapes appear: an explicit `run_in_background: true` Bash
   tool_use (which also supplies the `detail`, from its `description`), and a *foreground*
   command the CLI moved to the background when it outran its timeout, whose input carries
@@ -282,14 +282,14 @@ Record shapes verified 2026-07-31 against live transcripts and the CLI's own too
   completion** (verified live 2026-08-06): a `queue-operation` record (`operation:
   "enqueue"` when the task finishes, `"remove"` when it is handed to the model) with the
   body in its top-level `content`; an `attachment` record (`attachment.commandMode ==
-  "task-notification"`) with the body in `attachment.prompt`; and — only if the CLI gets
-  to deliver it into a turn — a plain user record. A session whose turn ends before the
+  "task-notification"`) with the body in `attachment.prompt`; and - only if the CLI gets
+  to deliver it into a turn - a plain user record. A session whose turn ends before the
   shell exits never gets the user record at all, so reading only that one left the
   annotation open for its full TTL on every background shell that outlived its turn.
   Whichever carrier arrives first closes; the rest are no-ops, because closes are
   idempotent per task rather than decrementing (duplicate announcements are the normal
   case, and each extra would subtract again). The queued carriers are still excluded from
-  `_CLAUDE_TAIL_IGNORED`'s turn-state judgement — they are not turn activity, only
+  `_CLAUDE_TAIL_IGNORED`'s turn-state judgement - they are not turn activity, only
   completion evidence.
 
   A close with no tracked open (state lost across a daemon restart) decrements the adopted
@@ -335,12 +335,12 @@ Two cross-backend sources complete the set:
 - **Process fast-clear** (`processes.py`): on each inspector pass, a session holding a
   `background_tasks` annotation older than the spawn-race grace (15 s) with **no live
   descendant that could be that task** is cleared immediately
-  (`process:no_task_descendants`) — a vanished process cannot still be working, and this
+  (`process:no_task_descendants`) - a vanished process cannot still be working, and this
   is the strongest clear there is. Never the reverse: descendants alone open nothing (an
   MCP-server child is not a background task).
 
   A descendant could be the task unless it is the CLI root itself, or it was **already
-  running when the annotation opened** — a background task's process starts with the
+  running when the annotation opened** - a background task's process starts with the
   launch that opened the annotation, so anything older is one of the CLI's own long-lived
   children. The discriminator is deliberately age against `annotation.since` and not a
   name match, which would drift with every CLI release. An unreadable start time counts as
@@ -671,8 +671,8 @@ composes them into the line: `ready · loop armed`, `working · Task · 3 subage
 `idle_reason` text so one fact never renders twice). Each badge's tooltip carries the
 annotation's own `detail`, which for `background_tasks` names the newest open launch and
 how many others there are ("Restart the harness daemon (+1 more)"). That is not
-decoration: a count alone is unfalsifiable from the outside — "1 background task" on a
-session with nothing running looks exactly like a correct reading — so the failure these
+decoration: a count alone is unfalsifiable from the outside - "1 background task" on a
+session with nothing running looks exactly like a correct reading - so the failure these
 sources are prone to is the one the UI could not otherwise show. Dense surfaces (sidebar rows, tab
 strips, the mobile projection) show the dimmed glyphs beside the dot; the full text lives
 in the status line and tooltips. Tests assert every annotation kind renders a glyph and

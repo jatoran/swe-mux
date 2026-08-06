@@ -98,7 +98,7 @@ For the moment in question, from the timeline alone:
      nested child, which is correct behavior). **`hook_recency: fresh` here is the
      signature of a transcript the daemon has lost**: hooks are arriving and being
      suppressed as redundant to a file that can no longer report anything. Confirm with
-     `transcript_mtime: null` plus `parser_status: "ready"` in the state-log — the file at
+     `transcript_mtime: null` plus `parser_status: "ready"` in the state-log - the file at
      `transcript_path` does not exist, most often because the agent entered a worktree and
      the CLI moved its transcript to the new cwd's project directory. Expect a
      `transcript_relocated` event re-aiming the observer, or an `observation_stale`

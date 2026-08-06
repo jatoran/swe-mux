@@ -841,14 +841,14 @@ PTY_IDLE_MARKERS = ("? for shortcuts", "(shift+tab to cycle)")
 # Pre-2.x drew `✻ Waiting for 2 background tasks to finish`; the current CLI
 # (captured 2026-07-31, tests/fixtures/pty_tails/background-wait.bin) replaces
 # the idle footer hint with `✻ churned for 4s · 1 shell still running · check
-# the task status` — the noun varies (`shell`, `monitor`), the count does not.
+# the task status` - the noun varies (`shell`, `monitor`), the count does not.
 # This is an *idle sub-reason* / `background_tasks` annotation corroboration,
 # never a state: the composer accepts input and delivery is safe either way.
 #
 # Every marker must name a **count**, which is what makes it a footer rather than
 # prose. The earlier bare substrings ("waiting for", "background task", "still
 # running") were searched over 32 KiB of screen that also carries the user's
-# prompts, the agent's own replies, and any tool output — the same fixture that
+# prompts, the agent's own replies, and any tool output - the same fixture that
 # pins the real footer also contains a user prompt reading "wait for it, then say
 # done". A marker that arbitrary English can satisfy is not evidence, and this
 # one had no negative signal to retract it: the reading only ever added.
@@ -3587,7 +3587,7 @@ class SessionManager:
                 # A file naming the conversation this session already owns is a
                 # *relocation*, not a rollover. Rolling would rekey identity,
                 # close the history row, and mint a new agent run for a
-                # conversation that never ended — the annotation-and-identity
+                # conversation that never ended - the annotation-and-identity
                 # damage of a `/clear` applied to a session that only changed
                 # directory.
                 if (
@@ -3699,7 +3699,7 @@ class SessionManager:
         `_transcript_authoritative` reads that field it kept suppressing the hook
         tier as redundant. The result was a session latched `idle` for four
         minutes while its own screen showed the working spinner, its cli-state
-        file read `busy`, and root turn hooks kept arriving 8 s apart — every
+        file read `busy`, and root turn hooks kept arriving 8 s apart - every
         layer that could have spoken was either blind or being dropped.
 
         This is emphatically **not** the mtime heuristic in
@@ -3710,7 +3710,7 @@ class SessionManager:
         inferred: the followed path is gone, and the candidate's stem is this
         session's own `native_session_id`.
 
-        Requires an adapter that derives a path from (native id, cwd) — Claude.
+        Requires an adapter that derives a path from (native id, cwd) - Claude.
         Codex mints rollout filenames the daemon cannot reconstruct, so it falls
         through to the staleness net instead.
         """
@@ -3845,8 +3845,8 @@ class SessionManager:
         last_write = self._transcript_last_write_ts(session, current)
         now = time.time()
         if last_write is None:
-            # The followed file is unreadable or gone. This used to return —
-            # "no reading" was treated as "no evidence" — which made the one
+            # The followed file is unreadable or gone. This used to return -
+            # "no reading" was treated as "no evidence" - which made the one
             # guard written for a conversation that moved unreachable in the
             # case where it moved *hardest*: a relocated transcript leaves a
             # path that does not exist, so there is no timestamp to be quiet.

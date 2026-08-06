@@ -352,7 +352,7 @@ class ProcessInspector:
         - Anything that was **already running when the annotation opened**. A
           background task's process starts when the launch that opened the
           annotation runs, so a descendant older than the annotation cannot be
-          it — that is what separates a task from the CLI's own long-lived
+          it - that is what separates a task from the CLI's own long-lived
           children (language servers, stdio MCP servers, console hosts) without
           matching on their names, which would drift with every CLI release.
 

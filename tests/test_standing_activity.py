@@ -567,7 +567,7 @@ async def test_a_queued_completion_closes_a_background_launch() -> None:
     # A background shell that finishes while its session is between turns has no
     # turn to be announced into, so the CLI queues the notification instead of
     # writing a user record. Reading only the user form is what left a finished
-    # shell holding the annotation for its full 30-minute TTL — measured live
+    # shell holding the annotation for its full 30-minute TTL - measured live
     # 2026-08-06, with the proof of completion sitting in the transcript the
     # whole time in a record type the extractors never looked at.
     replay = DetectionReplay("claude")
@@ -634,7 +634,7 @@ async def test_every_completion_carrier_closes_and_only_the_first_counts() -> No
 async def test_a_timeout_promoted_shell_is_tracked_from_its_result() -> None:
     # A foreground Bash that outruns its timeout is moved to the background by
     # the CLI. Its input carries no `run_in_background` at all, so nothing would
-    # ever open it — while its later completion, naming the same tool_use id,
+    # ever open it - while its later completion, naming the same tool_use id,
     # would still decrement a count it never contributed to.
     replay = DetectionReplay("claude")
     session = replay.session
@@ -955,7 +955,7 @@ async def test_codex_trailing_subagent_record_does_not_reopen_after_hook_stop() 
 
 async def test_process_tree_fast_clears_background_tasks() -> None:
     # A vanished process cannot still be working: the inspector clears the
-    # annotation once no live descendant *could be that task* — and never while
+    # annotation once no live descendant *could be that task* - and never while
     # one still could, which is what makes a false clear structurally impossible.
     #
     # The candidate test is deliberately not a descendant count. It used to be

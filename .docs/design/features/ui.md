@@ -958,7 +958,7 @@ responsive controls.
   removes this action because automation never overwrites a user title.
 - A session showing a standing-activity badge (`⟳`, `≡`, `⑂`) offers **Clear standing activity**
   in its menu and the command palette. Those badges assert work the daemon cannot observe
-  directly — live subagents, background shells, an armed wakeup — so any of them can outlive the
+  directly - live subagents, background shells, an armed wakeup - so any of them can outlive the
   thing it names, and the only other exit is a 30-minute decay. The action retracts and nothing
   more: the state dot, delivery, and awaiting are untouched, and a task that really is running
   re-announces itself on its next piece of evidence. Offered only where there is something to

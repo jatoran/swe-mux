@@ -636,8 +636,8 @@ async def test_a_missing_transcript_with_a_turn_hook_is_stale(tmp_path: Path) ->
     # The hardest version of "the conversation moved": the file is not quiet, it
     # is *gone*, so there is no timestamp to be quiet and this used to return
     # before deciding anything. Measured live 2026-08-06 on a session that
-    # entered a Claude native worktree — the CLI relocates the transcript to the
-    # new cwd's project directory — the observer sat on a path that no longer
+    # entered a Claude native worktree - the CLI relocates the transcript to the
+    # new cwd's project directory - the observer sat on a path that no longer
     # existed while `parser_status` stayed frozen at `ready` from its last
     # successful read. Because `_transcript_authoritative` reads that field, the
     # hook tier stayed suppressed as redundant to a transcript that could no
@@ -705,7 +705,7 @@ def test_a_relocated_transcript_is_re_found_from_the_live_cwd(
     # Not the mtime heuristic and needing none of its ownership analysis: that
     # one guesses *which* conversation a session moved to and can latch onto a
     # sibling's, while this re-finds a file named by the conversation id the
-    # session already owns. Both halves are proven — the followed path is gone,
+    # session already owns. Both halves are proven - the followed path is gone,
     # and the candidate's stem is this session's own native id.
     manager, session, current, moved = relocation_fixture(tmp_path)
     monkeypatch.setattr(

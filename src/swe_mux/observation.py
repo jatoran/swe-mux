@@ -155,7 +155,7 @@ CLAUDE_CONTEXT_WINDOWS = {
 # - A background Bash launch carries `run_in_background: true`; its tool_result
 #   reads "Command running in background with ID: <task_id>." A *foreground*
 #   Bash that outruns its timeout is moved to the background by the CLI with no
-#   `run_in_background` in its input at all — the promotion exists only in the
+#   `run_in_background` in its input at all - the promotion exists only in the
 #   result text ("was moved to the background (ID: <task_id>)"), so the result is
 #   the authoritative open for both shapes and the input is only a hint.
 # - Completion arrives as `<task-notification>` naming the launch's
@@ -164,7 +164,7 @@ CLAUDE_CONTEXT_WINDOWS = {
 #   (`operation: "enqueue"` when the task finishes, `"remove"` when it is handed
 #   to the model) with the body in its top-level `content`; an `attachment`
 #   record (`attachment.commandMode == "task-notification"`) with the body in
-#   `attachment.prompt`; and — only if the CLI gets to deliver it into a turn —
+#   `attachment.prompt`; and - only if the CLI gets to deliver it into a turn -
 #   a plain user record. A session that finishes its turn before the shell exits
 #   never gets the user record at all, which is why the queued carriers are read:
 #   reading only the user record left the annotation open for its full 30-minute
@@ -1270,7 +1270,7 @@ async def _finish_root_turn(
         if (
             pty_wait
             and not getattr(session, "observation_replay", False)
-            # Refresh only — this tier may never *open* the annotation. The
+            # Refresh only - this tier may never *open* the annotation. The
             # screen is a 32 KiB append-only window of redraw traffic, so the
             # footer drawn while a task genuinely ran is still matchable minutes
             # after it finished; creating on it resurrected annotations the
@@ -1926,7 +1926,7 @@ def _background_closed(session: Session) -> set[str]:
     One completion is announced up to three times (a `queue-operation` enqueue,
     its `attachment` mirror, and the `remove` when it reaches the model), so
     closes have to be idempotent per task. Without this the unmatched-close path
-    — which decrements the annotation's own count when no open was tracked —
+    - which decrements the annotation's own count when no open was tracked -
     would subtract two or three times for one finished shell and zero out a count
     that other, genuinely-running tasks own.
     """
@@ -1939,7 +1939,7 @@ def _background_detail(session: Session) -> str | None:
     """`detail` for the annotation: what the newest open launch is, plus a count.
 
     Never None while anything is open, because `set_standing_activity` reads None
-    as "keep the existing value" — a stale detail outliving the task it named
+    as "keep the existing value" - a stale detail outliving the task it named
     would be worse than none at all.
     """
     open_tasks = _background_open(session)
@@ -2205,7 +2205,7 @@ def _claude_task_notification_text(event: dict[str, Any]) -> str:
     lands as a `queue-operation` record (body in `content`) and its `attachment`
     mirror (body in `attachment.prompt`), and only becomes a user message if the
     CLI later gets to hand it to the model. Reading only the message form is why
-    a completed shell could hold the annotation for its full 30-minute TTL — the
+    a completed shell could hold the annotation for its full 30-minute TTL - the
     proof of completion was in the transcript the whole time, in a record type
     the standing-activity extractors never looked at.
     """
@@ -2621,7 +2621,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
         )
         return
     if event_type in {"queue-operation", "attachment"}:
-        # Deliberately not turn activity — `_CLAUDE_TAIL_IGNORED` skips both when
+        # Deliberately not turn activity - `_CLAUDE_TAIL_IGNORED` skips both when
         # judging whether a turn ended, and that stays true. They are read here
         # for one thing: they are the carriers a background-task completion uses
         # when there is no live turn to announce it into.

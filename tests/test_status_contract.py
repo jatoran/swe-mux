@@ -593,7 +593,7 @@ def test_background_wait_is_an_idle_sub_reason_not_a_state() -> None:
     assert pty_tail_waiting_on_background("") is False
     # Prose is not a footer. The screen this is read from is 32 KiB of redraw
     # traffic that also carries the user's prompts, the agent's replies, and any
-    # tool output, so a marker arbitrary English can satisfy is not evidence —
+    # tool output, so a marker arbitrary English can satisfy is not evidence -
     # `background-wait.bin` itself contains a prompt reading "wait for it, then
     # say done". Requiring a count is what separates the two.
     assert pty_tail_waiting_on_background("running a background task…") is False

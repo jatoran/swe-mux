@@ -2002,8 +2002,8 @@ export function App() {
   // Escape hatch for a standing-activity annotation the user can see is wrong.
   // Every source of one is evidence about work the daemon cannot observe
   // directly, so any of them can be left holding a claim that outlived its task;
-  // without this the only exit is a 30-minute TTL. It retracts only — the state
-  // dot, delivery, and awaiting are untouched — so the worst case is that a
+  // without this the only exit is a 30-minute TTL. It retracts only - the state
+  // dot, delivery, and awaiting are untouched - so the worst case is that a
   // genuinely running task re-announces itself on its next piece of evidence.
   const clearStandingActivity = async (session: Session) => {
     setContextMenu(null)

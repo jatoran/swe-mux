@@ -197,13 +197,13 @@
 - **A transcript that is missing rather than quiet is the same failure, and used to be
   invisible.** Claude derives a transcript's directory from the CLI's working directory, so
   entering a native worktree moves the file and the resolved path stops existing. There is then
-  no timestamp to be quiet, and this guard returned early — "no reading" read as "no evidence" —
+  no timestamp to be quiet, and this guard returned early - "no reading" read as "no evidence" -
   leaving `parser_status` frozen at `ready` from its last successful read, which keeps hooks
   suppressed as redundant to a transcript that can no longer report anything (measured live
   2026-08-06: `idle` latched for four minutes on a session whose screen showed the working
   spinner and whose turn hooks were arriving 8 s apart). A missing followed file alongside a
   recent root turn hook now marks staleness with `reason: transcript_missing`. Without a turn
-  hook it stays silent — the observer is aimed before the CLI creates the file, so "missing" on
+  hook it stays silent - the observer is aimed before the CLI creates the file, so "missing" on
   its own is an ordinary startup race. The repair for the Claude case runs first:
   `_relocated_transcript_candidate` re-derives the path from the cli-state file's live `cwd` and
   re-aims the observer at the same conversation, which is a **relocation, not a rollover**

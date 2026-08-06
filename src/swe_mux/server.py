@@ -4129,14 +4129,14 @@ async def clear_session_standing_activity(request: web.Request) -> web.Response:
 
     Every annotation source is evidence about something the daemon cannot
     observe directly, so any of them can be left holding a claim the user knows
-    is false — a completion notification that never arrived, a set adopted
+    is false - a completion notification that never arrived, a set adopted
     across a daemon restart whose closes were read as history. The decay path
     for that is a 30-minute TTL, which is a long time to look at a session that
     says an agent is still working when nothing is.
 
     Bounded on purpose: annotations are not states, so this cannot move
     `SessionState`, `awaiting_reason`, or `delivery_state`, and it cannot
-    *assert* activity — only retract it. The run-scoped launch bookkeeping goes
+    *assert* activity - only retract it. The run-scoped launch bookkeeping goes
     with it, so a later duplicate completion cannot decrement a fresh
     annotation, and the clear is ledgered like every other one (evidence
     `manual`) rather than silently mutating the record.
