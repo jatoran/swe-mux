@@ -111,18 +111,21 @@ export interface QueueTargetSummary {
   live: boolean
 }
 
-export type MailboxAuthor = 'all' | 'non_human' | 'human'
+/** Who wrote a queued message. The fleet view's only partition — not direction, and not
+ *  "mine vs theirs": provenance is derived by the daemon from transport and token, so it
+ *  is the one property of a row a client can trust. */
+export type FleetQueueAuthor = 'all' | 'non_human' | 'human'
 
-export interface MailboxTarget {
+export interface FleetQueueTarget {
   target_session_id: string
   label: string | null
   project_id: string | null
 }
 
-export interface MailboxView {
-  author: MailboxAuthor
+export interface FleetQueueView {
+  author: FleetQueueAuthor
   messages: QueueMessage[]
-  targets: MailboxTarget[]
+  targets: FleetQueueTarget[]
 }
 
 /** States that hold a place in the strict head-of-line order. */
@@ -220,14 +223,22 @@ export const setSessionAutoPolicy = (
 export const reportUnsafeDelivery = (note: string) =>
   api<QueueAutoStatus>('POST', '/api/queue/auto/report-unsafe', { note })
 
-export const fetchMailbox = (
-  author: MailboxAuthor,
+/**
+ * Every queued message across every target, newest first, partitioned by authorship.
+ *
+ * The route keeps its original `mailbox` name on purpose: it is the same projection over
+ * the same rows, and churning a daemon path for a UI rename would be a breaking change
+ * bought with nothing. The surface is named for what it shows; the route is named for
+ * when it was added.
+ */
+export const fetchFleetQueue = (
+  author: FleetQueueAuthor,
   filters: { projectId?: string; targetSessionId?: string } = {},
 ) => {
   const query = new URLSearchParams({ author })
   if (filters.projectId) query.set('project_id', filters.projectId)
   if (filters.targetSessionId) query.set('target_session_id', filters.targetSessionId)
-  return api<MailboxView>(
+  return api<FleetQueueView>(
     'GET',
     `/api/queue/mailbox?${query.toString()}`,
     undefined,
@@ -244,7 +255,7 @@ export function scheduleStatus(message: QueueMessage, now = Date.now() / 1000): 
   return 'due'
 }
 
-/** Short human label for a sender, used on queue rows and in the mailbox. */
+/** Short human label for a sender, used on queue rows and in the fleet queue. */
 export function senderLabel(message: QueueMessage): string {
   switch (message.sender_kind) {
     case 'agent':

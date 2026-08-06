@@ -99,9 +99,11 @@ separately opt-in.
   The pane header's `queue[:N]` chip focuses its named session before opening Queue, while `queue.open` and the rail open the focused session's queue.
   Queue has no application-wide or Project-wide mode.
   It live-updates from `mux:queue-changed`, re-dispatched from `queue_updated` and `queue_delivery` events.
-- **Mailbox is a separate application-scoped drawer tab** (`MailboxPane`) over the same message store.
-  It partitions rows by explicit authorship (`all authors | agents + automation | human`) and filters server-side by Project or target session.
-  Its rail icon carries the fleet-wide pending badge and its controls can pause all auto-delivery or report an unsafe delivery.
+- **The fleet queue is a modal overlay** (`FleetQueue`) over the same message store, not a second drawer tab.
+  It partitions rows by explicit authorship (`agents + automation | human | all authors`, opening on non-human) and filters server-side by Project or target session.
+  It is a modal because it has no send button: the Queue tab is docked so the target terminal stays visible while the operator decides to interrupt, and a view that decides nothing needs no terminal beside it.
+  It is reached from the app menu, `queue.fleet`, the Project menu, and the Queue tab's `fleet` control, which carries the fleet-wide pending count.
+  It reports install-wide auto-delivery state and owns none of it.
 - **Built for the drawer's 300 px minimum as well as its viewport-derived maximum.** Rows carry only `Send now` (head) and the arm toggle
   inline; edit, move, cancel/skip, the schedule presets and copy live behind a per-row `⋯`
   that opens a tray under the row rather than a floating menu. Terminal-state items
@@ -154,13 +156,13 @@ separately opt-in.
   `error_middleware`, service wiring + `_record_operator_input(source="queue")` injection,
   retention loop, `seed_text` handling in `_spawn_from_body`.
 - `src/swe_mux/spawn_contract.py` — `SpawnRequest.seed_text`.
-- `frontend/src/queueApi.ts` - typed queue and mailbox clients plus refusal mapping.
-- `frontend/src/QueuePane.tsx` - session-scoped Queue in drawer-following and pinned-pop-out renderings.
-- `frontend/src/MailboxPane.tsx` - application-wide authorship and target filters, provenance rows, revocation, and emergency controls.
-- `frontend/src/drawerTabs.ts` + `railIcons.tsx` - distinct `queue` and `mailbox` drawer tabs and marks.
-- `frontend/src/UtilityDrawer.tsx` - drawer rendering and Mailbox-to-Queue navigation.
+- `frontend/src/queueApi.ts` - typed session-queue and fleet-queue clients plus refusal mapping.
+- `frontend/src/QueuePane.tsx` - session-scoped Queue in drawer-following and pinned-pop-out renderings, the install-wide auto-delivery brakes, and the control that opens the fleet queue.
+- `frontend/src/FleetQueue.tsx` - the fleet-wide modal: authorship and target filters, provenance rows, revocation.
+- `frontend/src/drawerTabs.ts` + `railIcons.tsx` - the `queue` drawer tab and its mark.
+- `frontend/src/UtilityDrawer.tsx` - drawer rendering and the Queue-to-fleet-queue handoff.
 - `frontend/src/SendToAgentPicker.tsx` - queue sender and confirm flow.
-- `frontend/src/App.tsx` - `deliverToAgent`, `openQueueForSession` versus `openQueueTab`, pane chip, fleet badge total, and event re-dispatch.
+- `frontend/src/App.tsx` - `deliverToAgent`, `openQueueForSession` versus `openQueueTab`, `openFleetQueue`, `toggleAutoPaused`, pane chip, fleet pending total, and event re-dispatch.
 - `frontend/src/layout.ts` - `queue` leaf kind.
 - Tests: `tests/test_prompt_queue.py`, `frontend/test/queueApi.test.ts`.
 

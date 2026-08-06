@@ -81,6 +81,15 @@ Codex-managed worktrees begin detached and use Create branch here before final c
 Worktree agents commit only their own branch.
 Reconcile a finished branch with current `master`, verify it, and integrate branches one at a time.
 
+**Landing a finished branch is two commands, and both are yours to run.** From inside the
+worktree: `git merge master` (reconcile), then `.worktree-verify`. Then from the primary
+checkout: `git merge --ff-only worktree-<name>`. The fast-forward is deliberately the only
+merge the git-policy hook allows outside a worktree, because it cannot lose work: Git
+refuses it if the branch diverged, and refuses it if it would overwrite uncommitted local
+changes. `--no-ff` is blocked there and is not the flow; do not reach for it, and do not
+escalate to the user to land your own branch. Leave the worktree in place afterwards
+(`ExitWorktree` with keep) rather than removing it because the task ended.
+
 **A worktree is for editing and testing, not for running the app.** Worktrees isolate the
 working tree, not the runtime. The daemon owns port 8765 and a single data dir at
 `~/.mux`, both of which are process-wide singletons. Never start `muxd`, run the frozen

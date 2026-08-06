@@ -104,7 +104,7 @@ Phase 1  Evidence replay + delivery-readiness contract
         -> Phase 3.7  Control-plane deterministic consumers  [done: CP step 3]
           -> Phase 4  Persistent manual prompt queue
             -> Phase 4.5  mux MCP v0: read + discovery surface        [CP step 2.5, §7.5]
-              -> Phase 5  Gated auto-delivery + mailbox + bounded agent communication
+              -> Phase 5  Gated auto-delivery + fleet queue + bounded agent communication
                  (incl. mux.notify / mux.requestSpawn over the queue) [CP §7.2]  [done]
                 -> Phase 5.4  Agent conversation rollover (the run boundary contract)
                   -> Phase 5.5  Control-plane project card + scan timeline  [CP steps 4-5]
@@ -788,7 +788,7 @@ one the UI reads) and on shipped history/transcript search. It does not depend o
   to a PTY. Pinned by `tests/test_mcp.py` (the tool set is a closed allowlist of four read
   tools).
 
-## Phase 5 — Gated auto-delivery, mailbox, and bounded agent communication
+## Phase 5 — Gated auto-delivery, the fleet queue, and bounded agent communication
 
 Phase 5 authorizes narrowly scoped actuation after Phase 1 shadow evidence and Phase 4
 manual-delivery reliability pass. It does not authorize model-selected actions,
@@ -806,7 +806,7 @@ not), which is a separate product decision, recorded in the design as the enforc
 if it is ever needed. What was done instead is the part that *is* enforceable: agent-reachable
 authority stays strictly narrower than the browser's — no tool delivers, spawns, or writes
 to a PTY; every agent write is token-attributed, bounded, expiring, revocable, and visible in
-the mailbox; and the receiving session's own policy decides whether an agent message is even
+the fleet queue; and the receiving session's own policy decides whether an agent message is even
 armed. Stated plainly in the design: the bounds below constrain well-behaved callers, and a
 prompt-injected agent can still reach `POST /api/sessions/{id}/input` exactly as it could
 before Phase 5.
@@ -841,7 +841,9 @@ before Phase 5.
   pause is a persisted SQLite flag (not config, not a provider), the grant expires
   (default 60 min) and caps consecutive sends (default 3, reset by any manual send), quiet
   hours pause automatic sends only, and `queue_deliveries.initiator` records who pressed
-  send. Surfaced in the Queue tab strip and the Mailbox overlay (mobile included).
+  send. The emergency disable and the unsafe report are on the Queue tab's `auto:`
+  disclosure and on `autodelivery.pause` (mobile included); the fleet-queue overlay reports
+  their state and owns neither.
 - [x] Add time-based delivery — "send after N minutes" and "send at a time" — as a *delivery
   constraint on a queue item*, never as a private timer in a sender's UI.
   `constraints_json` (`not_before`/`expires_at`, 30-day horizon, `delay_seconds` resolved at
@@ -849,7 +851,7 @@ before Phase 5.
   keeps its state, "Send now" is the explicit human override, and an expired item is
   cancelled rather than delivered late. Recurring/schedule-driven sends remain out of scope.
 
-### Human/device mailbox
+### Human/device fleet queue
 
 - [x] Expose the generalized message model with explicit sender provenance for local user,
   authenticated remote user/device, deterministic rule, and session/agent sources.
@@ -860,7 +862,7 @@ before Phase 5.
   origin is recorded and changes nothing downstream.
 - [x] Add application-wide authorship views, delivery status, sender/target labels, retry-safe correlation, and
   revocation. Avoid creating a second transcript or conversation archive.
-  `GET /api/queue/mailbox` + `Mailbox.tsx` project the existing `queue_messages` rows;
+  `GET /api/queue/mailbox` + `FleetQueue.tsx` project the existing `queue_messages` rows;
   `correlation_id` is partial-unique per sender (a retry returns the original message);
   revocation is `cancel_kind: revoked`. No new store.
 

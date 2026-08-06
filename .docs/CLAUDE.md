@@ -56,10 +56,11 @@
   emergency pause, item scheduling/expiry, or the promotion criteria):
   `design/features/auto-delivery.md`, `design/features/prompt-queue.md`,
   `design/features/delivery-readiness.md`, `design/interfaces.md`, `design/data-model.md`
-- Changing agent-to-agent messages, the mailbox, sender provenance, or drafted spawn
-  requests: `design/features/agent-messaging.md`, `design/features/mux-mcp.md`,
+- Changing agent-to-agent messages, the fleet queue (the app-wide authorship view, served
+  by the older-named `/api/queue/mailbox`), sender provenance, or drafted spawn requests:
+  `design/features/agent-messaging.md`, `design/features/mux-mcp.md`,
   `design/features/observations.md`, `design/features/prompt-queue.md`,
-  `design/interfaces.md`, `design/data-model.md`
+  `design/features/ui.md`, `design/interfaces.md`, `design/data-model.md`
 - Changing root-session or quota-reset sounds: `design/features/notifications.md`,
   `design/features/voice.md`
 - Changing web push, which device a notification reaches, or the notification preference

@@ -149,10 +149,23 @@ class AutoDeliveryController:
         return bool(row and row.get("paused"))
 
     async def set_paused(self, paused: bool, *, by: str = "user") -> dict[str, Any]:
-        """The emergency disable. Persisted, instant, provider-independent."""
-        return await self.queue.store.set_auto_policy(
+        """The emergency disable. Persisted, instant, provider-independent.
+
+        Logged on every call, including no-op repeats: this flag decides whether anything
+        delivers itself, so "when did automatic delivery stop, and who stopped it" has to
+        be answerable from the log alone. The row records only the latest writer.
+        """
+        was = await self.paused()
+        row = await self.queue.store.set_auto_policy(
             AUTO_POLICY_GLOBAL, paused=int(bool(paused)), updated_by=by
         )
+        log.warning(
+            "auto-delivery %s by %s (was %s)",
+            "paused" if paused else "resumed",
+            by,
+            "paused" if was else "armed",
+        )
+        return row
 
     async def enable_session(
         self,

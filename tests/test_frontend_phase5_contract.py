@@ -48,34 +48,62 @@ def test_scheduling_is_a_property_of_the_queued_item() -> None:
     assert "a browser timer dies with the tab" in api
 
 
-def test_the_mailbox_carries_the_emergency_controls() -> None:
-    pane = (ROOT / "MailboxPane.tsx").read_text(encoding="utf-8")
+def test_the_emergency_controls_need_nothing_opened_to_reach() -> None:
+    """A brake reachable only by opening an overlay is a brake you cannot reach in the
+    moment you want it. The install-wide stop lives on the one queue surface that
+    delivers, and on a command that needs nothing open at all."""
+    pane = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
+    app = (ROOT / "App.tsx").read_text(encoding="utf-8")
 
     assert "pause all auto-delivery" in pane
     assert "report unsafe delivery" in pane
     assert "Stops every automatic delivery immediately, on every session" in pane
-    # Proving-period numbers are visible where the operator reviews deliveries.
-    assert "{promotion.proving_days}/{promotion.required_days} days" in pane
-    assert "Revoke" in pane
+    assert "autodelivery.pause" in app
+    assert "Pause all auto-delivery (install-wide)" in app
+    assert "Resume auto-delivery (install-wide)" in app
+    # The status line and the stop behind it survive an empty target: the install-wide
+    # state is true with no session focused, and it is the state that makes every
+    # per-session reading a lie when it is off.
+    assert "if (!sessionId) return 'armed for this install'" in pane
 
 
-def test_queue_and_mailbox_have_explicit_non_overlapping_scopes() -> None:
+def test_the_fleet_queue_reports_the_delivery_state_and_never_owns_it() -> None:
+    """It is a review surface. Nothing in it delivers, and nothing in it is a brake."""
+    fleet = (ROOT / "FleetQueue.tsx").read_text(encoding="utf-8")
+    pane = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
+
+    assert "sendQueueMessage" not in fleet
+    assert "Send now" not in fleet
+    assert "setAutoPaused" not in fleet
+    assert "reportUnsafeDelivery" not in fleet
+    assert "paused (emergency stop)" in fleet
+    assert "Revoke" in fleet
+    # Proving-period numbers stay visible in both places an operator reviews deliveries.
+    assert "{promotion.proving_days}/{promotion.required_days} days" in fleet
+    assert "{auto.promotion.proving_days}/{auto.promotion.required_days} days" in pane
+
+
+def test_the_session_queue_and_the_fleet_queue_have_non_overlapping_scopes() -> None:
     queue = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
-    mailbox = (ROOT / "MailboxPane.tsx").read_text(encoding="utf-8")
+    fleet = (ROOT / "FleetQueue.tsx").read_text(encoding="utf-8")
     api = (ROOT / "queueApi.ts").read_text(encoding="utf-8")
     tabs = (ROOT / "drawerTabs.ts").read_text(encoding="utf-8")
 
-    assert "fetchMailbox" not in queue
+    assert "fetchFleetQueue" not in queue
     assert "inbox" not in queue
     assert "outbox" not in queue
-    assert "agents + automation" in mailbox
-    assert "human" in mailbox
-    assert "Project" in mailbox
-    assert "Session" in mailbox
+    assert "agents + automation" in fleet
+    assert "human" in fleet
+    assert "Project" in fleet
+    assert "Session" in fleet
     assert "project_id" in api
     assert "target_session_id" in api
+    # Queue keeps the docked column, because deciding to send needs the terminal beside
+    # it. The fleet view has no send button, so it is a modal and not a tab at all.
     assert "id: 'queue'" in tabs and "scope: 'session'" in tabs
-    assert "id: 'mailbox'" in tabs and "scope: 'app'" in tabs
+    assert "id: 'mailbox'" not in tabs
+    assert 'role="dialog"' in fleet
+    assert "useModalFocus" in fleet
 
 
 def test_a_drafted_spawn_request_is_approved_by_a_human_in_the_inbox() -> None:
@@ -90,12 +118,20 @@ def test_a_drafted_spawn_request_is_approved_by_a_human_in_the_inbox() -> None:
     assert "Typed requests are decisions, not notes" in observations
 
 
-def test_the_app_menu_reaches_the_mailbox_from_any_device() -> None:
+def test_the_fleet_queue_is_reachable_from_any_device() -> None:
+    """Two ways in, for the two questions that lead there: the app menu answers "is
+    anything waiting anywhere", and the Queue tab's control answers "what else is staged
+    while I look at this one" — the same watch-here/act-there pair Processes has with the
+    process fleet."""
     app = (ROOT / "App.tsx").read_text(encoding="utf-8")
+    drawer = (ROOT / "UtilityDrawer.tsx").read_text(encoding="utf-8")
+    pane = (ROOT / "QueuePane.tsx").read_text(encoding="utf-8")
 
-    assert "mailbox.open" in app
-    assert "Mailbox…" in app
-    assert "openDrawerTab('mailbox')" in app
+    assert "queue.fleet" in app
+    assert "Fleet queue" in app
+    assert "<FleetQueue" in app
+    assert "onOpenFleetQueue" in drawer
+    assert "onOpenFleetQueue" in pane
 
 
 def test_the_queue_is_a_drawer_tab_and_the_pane_leaf_is_only_a_pop_out() -> None:

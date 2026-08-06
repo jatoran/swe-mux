@@ -1,10 +1,13 @@
+import { Fragment } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import {
   agentCompletenessLabel,
+  agentOwnerLabel,
   agentScopeLabel,
   agentStateLabel,
   filterAgentEnvironmentSections,
+  groupAgentEnvironmentItems,
   type AgentEnvironmentInventory,
   type AgentEnvironmentItem,
 } from './agentEnvironment'
@@ -12,7 +15,12 @@ import type { Session } from './types'
 
 function itemTitle(item: AgentEnvironmentItem): string {
   const details = item.meta.map(meta => `${meta.label}: ${meta.value}`)
-  return [item.description, ...details, item.source_label ? `Source: ${item.source_label}` : '']
+  return [
+    item.group ? `${item.group}` : '',
+    item.description,
+    ...details,
+    item.source_label ? `Source: ${item.source_label}` : '',
+  ]
     .filter(Boolean)
     .join('\n')
 }
@@ -125,19 +133,25 @@ export function AgentEnvironmentTab({ session }: { session: Session | null }) {
           </summary>
           <div class="agent-environment-items">
             {!section.items.length && <p class="drawer-empty">Nothing configured or discoverable.</p>}
-            {section.items.map(item => <article key={item.id} title={itemTitle(item)}>
-              <header>
-                <strong>{item.name}</strong>
-                <span class={`agent-state state-${item.state}`}>{agentStateLabel(item.state)}</span>
-              </header>
-              {item.description && <p>{item.description}</p>}
-              <div class="agent-item-facts">
-                <span>{agentScopeLabel(item.scope)}</span>
-                <span>{item.origin}</span>
-                {item.changed_after_start && <span class="warn">changed since load</span>}
-              </div>
-              {!!item.meta.length && <dl>{item.meta.map(meta => <div key={`${meta.label}:${meta.value}`}><dt>{meta.label}</dt><dd>{meta.value}</dd></div>)}</dl>}
-            </article>)}
+            {/* Grouped runs, not a flat list: a Hooks section named by event repeated
+                the event on every row and answered nothing about what each one runs. */}
+            {groupAgentEnvironmentItems(section.items).map(run => <Fragment key={run.key || section.id}>
+              {run.key && <h4 class="agent-environment-group"><span>{run.key}</span><small>{run.items.length}</small></h4>}
+              {run.items.map(item => <article key={item.id} title={itemTitle(item)}>
+                <header>
+                  <strong>{item.name}</strong>
+                  {item.owner && <span class="agent-owner">{agentOwnerLabel(item.owner)}</span>}
+                  <span class={`agent-state state-${item.state}`}>{agentStateLabel(item.state)}</span>
+                </header>
+                {item.description && <p>{item.description}</p>}
+                <div class="agent-item-facts">
+                  <span>{agentScopeLabel(item.scope)}</span>
+                  <span>{item.origin}</span>
+                  {item.changed_after_start && <span class="warn">changed since load</span>}
+                </div>
+                {!!item.meta.length && <dl>{item.meta.map(meta => <div key={`${meta.label}:${meta.value}`}><dt>{meta.label}</dt><dd title={meta.value}>{meta.value}</dd></div>)}</dl>}
+              </article>)}
+            </Fragment>)}
             {section.truncated && <p class="agent-environment-note">Showing {section.items.length} of {section.total} entries.</p>}
             <p class="agent-environment-note">{section.note}</p>
           </div>

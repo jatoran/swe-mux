@@ -715,10 +715,12 @@ responsive controls.
   actually in force (sends left, minutes left, quiet hours, why it is off), disclosing the
   toggle and the separate "accept agent messages armed" switch. It is unavailable — with the
   reason shown — when the install's master switch is off (`features/auto-delivery.md`).
-- The **Mailbox** is the Queue tab's `inbox`/`outbox` scopes (app menu → Mailbox… lands
-  there), app-level rather than per-Project: messages point at sessions across every Project,
-  and those scopes carry the two controls that must be one gesture away on any device —
-  pause all auto-delivery and report an unsafe delivery (`features/agent-messaging.md`).
+- That same `auto:` disclosure carries the two **install-wide** controls that must be one
+  gesture away on any device — pause all auto-delivery and report an unsafe delivery —
+  below a rule that marks them as not per-session. They are here, on the one queue surface
+  that delivers, rather than in the fleet-queue overlay, because a brake reachable only by
+  opening something is not reachable when it is wanted; `autodelivery.pause` reaches the same
+  operation with nothing open (`features/auto-delivery.md`).
 - The pane header is `[status] [cwd] [voice] [tools]` and **must stay one row**. It is a grid
   with `grid-auto-flow:column`, which is what enforces that: without it, an item beyond the
   declared column count auto-places into a *second row*, and the voice group is a
@@ -867,7 +869,7 @@ responsive controls.
 ## Utility drawer
 
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they are one gesture on mobile or one visible click on desktop away instead of two menu levels deep.
-  The canonical default order is **Clipboard**, **Commands**, **Prompts**, **Queue**, **Transcript**, **Agent**, **Files**, **Notes**, **Context**, **Git**, **Processes**, **Mailbox**, and **Alerts**.
+  The canonical default order is **Clipboard**, **Commands**, **Prompts**, **Queue**, **Transcript**, **Agent**, **Files**, **Notes**, **Context**, **Git**, **Processes**, and **Alerts**.
   Users may distribute those singleton tabs across a recursive arrangement, but the default order groups by what a tab acts on.
   The first
   four are the same verb - text into the focused session - and Transcript reads the same session
@@ -884,8 +886,9 @@ responsive controls.
   what it shows and the mutations it is allowed. **Processes** closes that block for the same
   shape of reason: Project-scoped, reports rather than opens, and see below for the split it
   represents. Notifications is neither, and sits last. Session history, usage, and automation
-  stay modal, as does the process *inspector*: they are wide, table-shaped surfaces that a
-  ~380 px column serves badly.
+  stay modal, as do the process *inspector* and the *fleet queue*: they are wide,
+  table-shaped surfaces that a ~380 px column serves badly, and none of them decides
+  anything that has to be read off a terminal.
 - The injection tabs share the verb but not the routing. Clipboard inserts land in the
   last-focused surface, editor or terminal. **Prompts** inserts are terminals-only and its rows
   additionally answer right-click / long-press with a target menu (a live agent session in this
@@ -897,8 +900,11 @@ responsive controls.
   safe moment to interrupt this agent") is read off the terminal, and only the docked column
   leaves the terminal on screen.
   Queue remains strictly session-scoped.
-- **Mailbox** is an application-scoped provenance and delivery-state view over queued messages from every Project and session.
-  It filters by explicit authorship, Project, and target session; owns the fleet-wide pending badge and emergency auto-delivery controls; and opens a target's Queue without pretending the global list is session-scoped.
+  Its header carries a `fleet` control, labelled with the fleet-wide pending count, that opens the fleet queue.
+- The **fleet queue** is an application-scoped provenance and delivery-state view over queued messages from every Project and session, and is a **modal**, not a tab.
+  It filters by explicit authorship, Project, and target session, and opens a target's Queue without pretending the global list is session-scoped.
+  It is modal for the reason Queue is not: the argument for docking Queue is that the decision to interrupt is read off the terminal, and the fleet queue makes no such decision — it has no send button, so it needs nothing on screen beside it.
+  This is the same watch-here/act-there split **Processes** has with the process inspector, and it also stops the rail from carrying two queue-shaped tabs that read as duplicates.
 - **Transcript** is an *inert* session surface: the focused session's conversation
   as prose you can scroll and copy, without touching the live terminal or scrolling it back.
   Deliberately no composer, no insert, no send. Mixing those actions into the surface for reviewing
@@ -1269,6 +1275,25 @@ responsive controls.
   fetched per entry on use. Row actions are insert (primary), copy to the system clipboard, pin,
   forget. Copying from the history tab, including its manual fallback, bypasses capture: it changes
   the OS clipboard without promoting the entry or changing its timestamp.
+- Tapping a clipboard row *reads* it rather than acting on it: the row expands to the full text,
+  selectable so part of an entry can be copied by hand, and the four actions move to a per-row bar.
+  A two-line preview cannot separate two similar copies, and while the row body was the insert
+  button the cost of finding that out was inserting the wrong one into a live agent. One entry is
+  open at a time. Its head pins to the top of the list and a Collapse footer to the bottom, so a
+  body many screens tall keeps *that* entry's copy/pin/forget and a way out on screen for the whole
+  scroll. The expanded body is `data-clipboard-capture="ignore"`: a part-selection copied back out
+  of the history surface is transport, like the Copy button, not a new capture, and recording it
+  would reorder the list under the reader. Fetched text is cached per entry (an entry's text never
+  changes, a re-copy promotes the existing row), which also lets Copy on an open entry run inside
+  the click gesture, where the legacy `execCommand` fallback still works.
+- The clipboard filter is autofocused on desktop and never on a soft-keyboard device
+  (`hasSoftKeyboard()`, a *separate* question from the `MOBILE_QUERY` layout breakpoint: a narrowed
+  desktop window has a real keyboard and a landscape tablet does not). Opening the tab to read what
+  was copied should not raise a keyboard over it; there the keyboard arrives by tapping the field.
+  Same rule as everywhere else in `ui.md`: nothing shows the soft keyboard the user did not ask for.
+- Row actions are an icon column beside the preview on desktop and a full-width labelled row under
+  it on mobile, where a four-icon column would take a third of the drawer from the text it exists
+  to show.
 - Clipboard history's safety properties are part of the feature, not an afterthought: the ring is
   **memory-only by default** (`clipboard_history_persist` opts into the SQLite mirror, and turning
   it back off deletes the rows), secret-shaped copies are skipped rather than stored, oversized

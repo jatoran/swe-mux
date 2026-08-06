@@ -16,16 +16,21 @@
 // leaving the session on screen is what the tab is for on a phone. Context follows them as
 // a read-only view of the files agents themselves consume. Git closes the Project-scoped block: it reads the
 // repository behind the Project rather than opening anything, so it is not a navigator,
-// but it acts on the same thing they do. Mailbox and Notifications are application-wide
-// fleet views and stay last.
+// but it acts on the same thing they do. Notifications is the one application-wide fleet
+// view that earns a permanent tab, and stays last.
 //
 // Queue closes the injection block, which is where it belongs and why it is here rather
 // than in a workspace tab or a modal: deciding whether to send is a judgement about the
 // agent's live state, and that state is only legible in the terminal. A pane leaf replaces
 // the terminal, a modal covers it; the docked column is the one placement that keeps the
 // target and the control on screen together.
+//
+// That argument is exactly why the *fleet* queue is not a tab. It has no send button —
+// nothing there needs a terminal beside it — so it is a modal opened from the Queue tab
+// and the app menu, the same watch-here/act-there split Processes has with the process
+// fleet. Two queue-shaped tabs in one rail also read as a duplicate of each other.
 
-export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'queue' | 'transcript' | 'agent' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'mailbox' | 'notifications'
+export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'queue' | 'transcript' | 'agent' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'notifications'
 
 /** What a tab acts on: the focused terminal, the active Project, or the app itself. */
 export type DrawerTabScope = 'session' | 'project' | 'app'
@@ -56,7 +61,6 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'context', label: 'Context', heading: 'Instructions & Memory', title: 'Context - view agent instructions and learned project memory', scope: 'project' },
   { id: 'git', label: 'Git', heading: 'Git', title: 'Git - worktree map and commit graph for this Project', scope: 'project' },
   { id: 'processes', label: 'Processes', heading: 'Processes', title: 'Processes - what this Project’s sessions are running, and what they are serving', scope: 'project' },
-  { id: 'mailbox', label: 'Mailbox', heading: 'Mailbox', title: 'Mailbox - application-wide queued-message provenance and delivery state', scope: 'app' },
   { id: 'notifications', label: 'Alerts', heading: 'Alerts', title: 'Alerts - notifications and attention records', scope: 'app' },
 ]
 

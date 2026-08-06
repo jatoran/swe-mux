@@ -1,4 +1,4 @@
-# Agent messaging, the mailbox, and drafted spawns
+# Agent messaging, the fleet queue, and drafted spawns
 
 ## What it is
 
@@ -10,7 +10,8 @@ one message store:
   queue. A caller over `PromptQueueService.enqueue`, never a second delivery path.
 - `mux.requestSpawn(prompt, …)` — an agent writes an **inert draft** into the Project's
   observation inbox. It starts nothing; a human approving it is what spawns the session.
-- The **Mailbox** - an application-wide authorship view over the same `queue_messages` rows, with sender/target labels, delivery state, Project/session filters, revocation, and emergency auto-delivery controls.
+- The **fleet queue** - an application-wide authorship view over the same `queue_messages` rows, with sender/target labels, delivery state, Project/session filters, and revocation.
+  It reviews; it does not deliver and does not carry the auto-delivery brakes.
 
 What is deliberately absent: an agent cannot deliver, cannot spawn, cannot address a
 session outside its Project, and cannot claim to be anyone else.
@@ -81,7 +82,7 @@ reasoning recorded so it is not rediscovered:
 - The compensating design is the one that *is* enforceable: agent-reachable authority stays
   strictly narrower than the browser's. No tool delivers, spawns, or writes to a PTY; every
   write is attributable to a session token, bounded, expiring, revocable, and visible in the
-  mailbox; and the receiver's own policy decides whether an agent message is even armed.
+  fleet queue; and the receiver's own policy decides whether an agent message is even armed.
 - If the day comes that the local HTTP surface must be an authorization boundary, the
   enforceable path is OS-level: bind the daemon to a per-user pipe/socket with an ACL that
   spawned sessions do not hold, and give the browser the only handle. That is a deliberate
@@ -89,12 +90,14 @@ reasoning recorded so it is not rediscovered:
 
 ## UI
 
-- **Mailbox** is its own application-scoped drawer tab, reached by app menu -> Mailbox or `mailbox.open` on desktop and mobile.
+- **Fleet queue** is a modal overlay, reached by app menu -> Fleet queue, `queue.fleet`, the Project menu (pre-filtered to that Project), or the Queue tab's `fleet` control.
+  It is a modal rather than a drawer tab because nothing in it delivers: it needs no terminal beside it, the same watch-here/act-there split the Processes tab has with the process fleet.
   It partitions by author (`all | non_human | human`), not message direction, because the operator observes messages sent between agents rather than being every message's recipient.
+  It opens on `non_human`: the rows the operator wrote are the ones they already know about.
   Project and target-session filters are applied by the daemon before the result limit.
   Rows show sender and target labels, delivery state, per-item revoke, and an "Open queue" transition to the target's session-scoped Queue.
-  Mailbox also owns pause-all auto-delivery and "report unsafe delivery".
-  Mailbox is not a transcript and shows only delivery state and provenance.
+  It reports install-wide auto-delivery state and the proving-period counters, and owns neither: the brakes are on the Queue tab and `autodelivery.pause` (`auto-delivery.md`).
+  It is not a transcript and shows only delivery state and provenance.
 - **Queue rows** show `from <sender>` and the hop number for relayed messages.
 - **Observation inbox** renders `spawn_request` items with the prompt, the requesting
   session, and `approve & start session` / `dismiss`.
@@ -103,6 +106,7 @@ reasoning recorded so it is not rediscovered:
 
 ```text
 GET  /api/queue/mailbox?author=all|non_human|human[&project_id=...][&target_session_id=...]
+     (the route keeps its original name; the surface it backs is the fleet queue)
 POST /api/queue/messages/{id}/cancel            {kind: revoked}
 POST /api/projects/{pid}/observations/{oid}/decide  {decision: approve|dismiss, …overrides}
 MCP  notify(target, body, reason?, correlation_id?)
@@ -118,16 +122,16 @@ in `queue_auto_policy`.
 
 ## Key files
 
-- `src/swe_mux/agent_messaging.py` — `AgentMessagingService` (relay policy, drafts, mailbox).
+- `src/swe_mux/agent_messaging.py` — `AgentMessagingService` (relay policy, drafts, the `mailbox()` authorship projection the fleet queue reads).
 - `src/swe_mux/mcp.py` — the two tools as thin callers.
 - `src/swe_mux/prompt_queue.py` — sender columns, correlation index, relay queries.
 - `src/swe_mux/project_files.py` — typed inbox items (`kind`/`request`) and
   `update_observation_request`.
-- `src/swe_mux/server.py` — mailbox route, spawn-request decision handler.
-- `frontend/src/MailboxPane.tsx` - application-wide authorship and target filters plus mailbox actions.
-- `frontend/src/QueuePane.tsx` - the target session's ordered queue reached by "Open queue".
+- `src/swe_mux/server.py` — `queue_mailbox` route, spawn-request decision handler.
+- `frontend/src/FleetQueue.tsx` - the modal: authorship and target filters, provenance rows, revocation.
+- `frontend/src/QueuePane.tsx` - the target session's ordered queue reached by "Open queue", and the control that opens the fleet queue.
 - `frontend/src/Observations.tsx` - drafted spawn requests.
-- `frontend/src/queueApi.ts` - typed mailbox query and response.
+- `frontend/src/queueApi.ts` - typed fleet-queue query and response.
 - Tests: `tests/test_agent_messaging.py`, `tests/test_mcp.py`,
   `tests/test_frontend_phase5_contract.py`.
 

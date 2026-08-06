@@ -1769,16 +1769,31 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .clipboard-search input{width:100%;height:calc(30px*var(--ui-scale));padding:0 8px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
 .clipboard-search input:focus{outline:0;border-color:var(--green)}
 .clipboard-entries{flex:1 1 auto;min-height:0;overflow:auto}
-.clipboard-entry{display:grid;grid-template-columns:minmax(0,1fr) auto;border-bottom:1px solid var(--line)}
-.clipboard-entry.active{background:var(--panel2)}
+.clipboard-entry{border-bottom:1px solid var(--line)}
+.clipboard-entry-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;background:var(--panel)}
+.clipboard-entry.active>.clipboard-entry-head{background:var(--panel2)}
 .clipboard-entry.pinned .clipboard-entry-body>small{color:var(--green)}
-.clipboard-entry-body{min-width:0;display:grid;gap:4px;padding:8px 9px;border:0;background:transparent;color:var(--text);text-align:left;font:inherit;cursor:pointer}
-.clipboard-entry-body>span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35;word-break:break-word}
-.clipboard-entry-body>small{color:var(--muted);font-size:8px}
+.clipboard-entry-body{min-width:0;display:grid;grid-template-columns:11px minmax(0,1fr);grid-template-areas:'caret preview' '. meta';gap:2px 4px;padding:8px 9px;border:0;background:transparent;color:var(--text);text-align:left;font:inherit;cursor:pointer}
+.clipboard-entry-caret{grid-area:caret;color:var(--muted);font-size:11px;line-height:1.2}
+.clipboard-entry-preview{grid-area:preview;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35;word-break:break-word}
+.clipboard-entry-body>small{grid-area:meta;color:var(--muted);font-size:8px}
 .clipboard-entry-body:disabled{opacity:.6;cursor:progress}
 .clipboard-entry-actions{flex:none;display:flex;align-items:center;gap:2px;padding:0 6px 0 2px}
 .clipboard-entry-actions button{width:26px;height:calc(26px*var(--ui-scale));border:1px solid transparent;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
-.clipboard-entry-actions button:hover{border-color:var(--line);color:var(--text)}
+.clipboard-entry-actions button:hover:not(:disabled){border-color:var(--line);color:var(--text)}
+.clipboard-entry-actions button:disabled{opacity:.45;cursor:progress}
+/* Icon-only until there is room for words; the label is what makes the mobile
+   full-width action row readable. */
+.clipboard-entry-actions b{display:none;font-weight:400}
+/* Expanded entry. The head pins to the top of the scroll port and the collapse
+   footer to its bottom, so a body many screens tall still has this entry's own
+   copy/pin/delete and a way out visible the whole way down. */
+.clipboard-entry.expanded>.clipboard-entry-head{position:sticky;top:0;z-index:2;background:var(--panel2);border-bottom:1px solid var(--line);box-shadow:0 2px 5px #0006}
+.clipboard-entry.expanded .clipboard-entry-preview{-webkit-line-clamp:1}
+.clipboard-entry-text{margin:0;padding:9px 10px;max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);color:var(--text);font:inherit;line-height:1.45;user-select:text;-webkit-user-select:text}
+.clipboard-entry-foot{position:sticky;bottom:0;z-index:2;display:flex;justify-content:flex-end;padding:5px 9px;border-top:1px solid var(--line);background:var(--panel2)}
+.clipboard-entry-foot button{min-height:calc(26px*var(--ui-scale));padding:0 12px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}
+.clipboard-entry-foot button:hover{border-color:var(--accent)}
 .clipboard-empty{margin:0;padding:22px 12px;color:var(--muted);font-size:9px;line-height:1.45;text-align:center}
 /* Kept in the layout (offscreen, never display:none) when idle: the legacy
    execCommand('copy') fallback has to select a live textarea inside the original
@@ -1794,7 +1809,15 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .clipboard-panel-scrim{display:block;position:fixed;inset:0;z-index:59;border:0;background:#020403aa}
   .clipboard-search input{height:calc(38px*var(--ui-scale));font-size:16px}
   .clipboard-entry-body{padding:11px 10px}
-  .clipboard-entry-actions button{width:36px;height:calc(40px*var(--ui-scale))}
+  /* Actions drop below the preview instead of squeezing it into a third of the
+     drawer: full-width labelled buttons, which is also what a thumb wants. */
+  .clipboard-entry-head{grid-template-columns:minmax(0,1fr)}
+  .clipboard-entry-actions{gap:0;padding:0;border-top:1px solid var(--line)}
+  .clipboard-entry-actions button{flex:1 1 0;display:flex;align-items:center;justify-content:center;gap:5px;width:auto;height:calc(42px*var(--ui-scale));border-width:0 0 0 1px;border-color:var(--line);border-style:solid}
+  .clipboard-entry-actions button:first-child{border-left-width:0}
+  .clipboard-entry-actions b{display:inline;font-size:9px}
+  .clipboard-entry-text{padding:11px 10px;font-size:12px;line-height:1.5;touch-action:auto}
+  .clipboard-entry-foot button{min-height:40px;padding:0 16px}
   .clipboard-panel>footer button{min-height:40px}
 }
 @media(prefers-reduced-motion:reduce){.clipboard-panel{animation:none}}
@@ -2072,8 +2095,17 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .agent-environment-items{display:grid;gap:4px;padding:0 5px 5px;border-top:1px solid var(--line)}
 .agent-environment-items article{min-width:0;padding:6px;border:1px solid var(--line);background:var(--panel)}
 .agent-environment-items article:first-of-type{margin-top:5px}
+/* In-section grouping (Hooks by lifecycle event). Sticky so the event a row belongs
+   to stays readable while a long group scrolls past. */
+.agent-environment-group{position:sticky;top:0;z-index:1;margin:5px 0 0;padding:3px 4px;display:flex;align-items:center;gap:5px;border-bottom:1px solid var(--line);background:var(--panel2);color:var(--text);font-size:8px;font-weight:600;letter-spacing:.04em}
+.agent-environment-group>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-environment-group>small{margin-left:auto;color:var(--muted);font-size:7px;font-weight:400}
+.agent-environment-group+article{margin-top:0}
 .agent-environment-items article>header{display:flex;align-items:center;gap:5px}
 .agent-environment-items article>header strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px}
+/* Provisioned by swe-mux itself. Green because the question this answers is
+   "which of these are mine and which did swe-mux add?" */
+.agent-owner{flex:0 0 auto;padding:0 4px;border:1px solid color-mix(in srgb,var(--green) 52%,var(--line));border-radius:2px;color:var(--green);font-size:7px;white-space:nowrap}
 .agent-state{margin-left:auto;padding:0 4px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:7px;white-space:nowrap}
 .agent-state.state-disabled,.agent-state.state-unavailable,.agent-state.state-shadowed{opacity:.58}
 .agent-state.state-restart_required{border-color:color-mix(in srgb,var(--amber) 48%,var(--line));color:var(--amber)}
@@ -2083,7 +2115,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .agent-environment-items dl{margin:5px 0 0;display:grid;gap:2px}
 .agent-environment-items dl>div{min-width:0;display:grid;grid-template-columns:minmax(62px,auto) minmax(0,1fr);gap:5px;font-size:7px}
 .agent-environment-items dt{color:var(--muted)}
-.agent-environment-items dd{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+/* Wraps rather than ellipsing: the values that overflow are the ones worth reading
+   in full (a hook's script path, an MCP endpoint, a matcher), and a touch device
+   has no tooltip to fall back on. */
+.agent-environment-items dd{margin:0;min-width:0;overflow-wrap:anywhere;text-align:right}
 .agent-environment-note{margin:0;padding:5px 2px 1px;color:var(--muted);font-size:7px;line-height:1.4}
 .agent-environment-sources>div{padding:0 6px 5px;border-top:1px solid var(--line)}
 .agent-environment-sources p{margin:5px 0 0;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 6px;font-size:8px}
@@ -2272,7 +2307,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-composer-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .pane-tools .queue-chip.has-pending{color:var(--accent)}
 
-/* ---- Auto-delivery, schedules, mailbox, spawn requests ---- */
+/* ---- Auto-delivery, schedules, fleet queue, spawn requests ---- */
 /* One status line, disclosed. Two labelled checkboxes and a sentence cost three wrapped
    lines of a 380px column, permanently, above the thing the panel was opened for. */
 .queue-auto-strip{display:flex;align-items:center;border-bottom:1px solid var(--line)}
@@ -2286,20 +2321,32 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-item-target{color:var(--text)}
 .queue-item-note{margin-left:auto}
 .queue-item-actions .queue-schedule-preset{color:var(--muted)}
-/* The two install-wide controls, which the Mailbox carries because they must stay
-   one gesture from any device. */
-.mailbox-author-scope button{font-size:8px}
-.mailbox-filters{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:6px 10px;border-bottom:1px solid var(--line)}
-.mailbox-filters label{display:grid;gap:3px;min-width:0;color:var(--muted);font-size:8px}
-.mailbox-filters select{min-width:0;min-height:28px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit}
-.mailbox-project{color:var(--muted)}
-.queue-mailbox-controls{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line)}
-.queue-mailbox-controls button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
-.queue-mailbox-controls button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
-.queue-mailbox-controls button.danger{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
+/* The two install-wide brakes, on the one queue surface that delivers. Separated from the
+   per-session toggles above them by a rule, because they are not per-session. */
+.queue-auto-emergency{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
+.queue-auto-emergency button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.queue-auto-emergency button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+.queue-auto-emergency button.danger{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
 .queue-promotion{flex:1 1 100%;color:var(--muted);font-size:9px;line-height:1.4}
-/* Pending work is not an alert: the amber badge means "unread", this one means "staged". */
-.drawer-badge.queue-badge{background:var(--accent);color:var(--bg)}
+/* Staged work is not an alert, so it carries the count as a word rather than an amber
+   dot: it names where the fleet-wide answer is instead of pretending to be one. */
+.queue-fleet-open{min-height:22px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;font-size:9px;cursor:pointer}
+.queue-fleet-open.has-pending{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
+
+/* The fleet queue overlay reuses the usage-analytics shell (same layer geometry, same
+   button and header rules) with a flex body, so a conditional error row cannot desync a
+   fixed grid-template-rows count. */
+.fleet-queue-panel{display:flex;flex-direction:column;grid-template-rows:none}
+.fleet-queue-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:end;padding:7px 9px;border-bottom:1px solid var(--line)}
+.fleet-queue-author-scope{display:flex;gap:3px;margin-right:auto}
+.fleet-queue-author-scope [role=tab]{color:var(--muted)}
+.fleet-queue-author-scope [role=tab].active{border-color:var(--text);color:var(--text)}
+.fleet-queue-controls label{display:grid;gap:3px;min-width:0;color:var(--muted);font-size:9px}
+.fleet-queue-controls select{min-width:0;min-height:29px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit}
+.fleet-queue-status{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:5px 10px;border-bottom:1px solid var(--line);color:var(--muted);font-size:9px}
+.fleet-queue-status .fleet-queue-paused{color:var(--red)}
+.fleet-queue-panel>main{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:0}
+.fleet-queue-project{color:var(--muted)}
 .observation-request{display:grid;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}
 .observation-request.done{opacity:.6}
 .observation-request-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:var(--muted);font-size:9px}
@@ -2310,7 +2357,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .observation-request-actions{display:flex;gap:6px;align-items:center}
 .observation-request-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .observation-request-actions button.primary{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
-@media(max-width:760px){.queue-item-actions button,.queue-item-actions select{min-height:38px}.queue-scope button,.queue-done button{min-height:38px}.queue-composer-actions button{min-height:40px}.mailbox-filters select,.queue-mailbox-controls button,.observation-request-actions button{min-height:40px}}
+@media(max-width:760px){.queue-item-actions button,.queue-item-actions select{min-height:38px}.queue-scope button,.queue-done button{min-height:38px}.queue-composer-actions button{min-height:40px}.fleet-queue-controls select,.queue-auto-emergency button,.observation-request-actions button{min-height:40px}.fleet-queue-controls{gap:6px}.fleet-queue-controls label{flex:1 1 45%}}
 
 /* ---- Project-scoped Git review ---- */
 .git-review-tab{height:100%;min-height:0;overflow:auto;background:var(--bg)}

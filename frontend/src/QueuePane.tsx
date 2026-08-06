@@ -4,9 +4,9 @@ import { sessionDotClass } from './sessionStatus'
 import { agentTargetName, agentTargets } from './agentTargets'
 import {
   armQueueMessage, cancelQueueMessage, editQueueMessage, enqueueMessage, fetchAutoStatus,
-  fetchQueue, isPendingQueueState, moveQueueMessage, queueHead,
+  fetchQueue, isPendingQueueState, moveQueueMessage, queueHead, reportUnsafeDelivery,
   retargetQueueMessage, scheduleQueueMessage, scheduleStatus, senderLabel, sendQueueMessage,
-  setSessionAutoPolicy,
+  setAutoPaused, setSessionAutoPolicy,
   type QueueAutoStatus, type QueueMessage, type QueueSendOutcome, type QueueTargetView,
 } from './queueApi'
 import type { Session } from './types'
@@ -21,6 +21,15 @@ import type { Session } from './types'
 // an explicit pop-out (wide review, two queues side by side) and renders this same
 // component with its target pinned instead of following focus.
 //
+// This is the only queue surface that delivers, so it is also where the install-wide
+// auto-delivery brakes live. They are global, not per-session, and they sit behind the
+// same disclosure as the per-session policy because that is the one place a person is
+// already standing when they decide automatic delivery has to stop: watching an agent
+// receive something. `autodelivery.pause` reaches the same operation with nothing open.
+//
+// The fleet-wide review of *every* target's queue is a modal, reached from the header
+// here. It has no send button, so it needs no terminal beside it.
+//
 // Every bound is the daemon's — this view shows state and forwards user acts.
 
 type Props = {
@@ -32,6 +41,11 @@ type Props = {
   onSelectSession?: (sessionId: string) => void
   /** Drawer only: pop this target's queue out into a workspace tab. */
   onOpenAsTab?: (sessionId: string) => void
+  /** Drawer only: open the fleet-wide review overlay. */
+  onOpenFleetQueue?: () => void
+  /** Pending items across every target, not just this one. Labels the fleet-queue control
+   *  so "is anything waiting anywhere" is answerable without opening it. */
+  fleetPending?: number
   /** Deliberate-open counter: focus the composer even when Queue was already selected. */
   openRequestToken?: number
 }
@@ -90,11 +104,16 @@ const DELAY_PRESETS: { label: string; seconds: number }[] = [
 
 /** One line, because it is a status the working view carries permanently: two labelled
  *  checkboxes and a sentence cost three wrapped lines of a 380px column, above the thing
- *  the panel was opened for. The controls live behind the disclosure. */
+ *  the panel was opened for. The controls live behind the disclosure.
+ *
+ *  Answers for the install first, then for the session. The install-wide states are the
+ *  ones that make every other reading a lie, and they are true with no session focused —
+ *  which is why this line, and the emergency stop behind it, survive an empty target. */
 function describeAuto(status: QueueAutoStatus | null, sessionId: string): string {
   if (!status) return '…'
   if (!status.master_enabled) return 'off for this install'
   if (status.paused) return 'paused (emergency stop)'
+  if (!sessionId) return 'armed for this install'
   const row = status.sessions.find(item => item.session_id === sessionId)
   if (!row?.enabled) return row?.disabled_reason ? `off — ${row.disabled_reason}` : 'off'
   const minutes = row.expires_in_s === null ? null : Math.max(0, Math.round(row.expires_in_s / 60))
@@ -112,7 +131,10 @@ const isAgentSession = (session: Session | null): boolean =>
 const isDoneState = (state: QueueMessage['state']): boolean =>
   state === 'sent' || state === 'failed' || state === 'cancelled'
 
-export function QueuePane({ sessionId, sessions, onSelectSession, onOpenAsTab, openRequestToken }: Props) {
+export function QueuePane({
+  sessionId, sessions, onSelectSession, onOpenAsTab, onOpenFleetQueue, fleetPending = 0,
+  openRequestToken,
+}: Props) {
   const [view, setView] = useState<QueueTargetView | null>(null)
   const [error, setError] = useState('')
   const [busyId, setBusyId] = useState('')
@@ -444,6 +466,9 @@ export function QueuePane({ sessionId, sessions, onSelectSession, onOpenAsTab, o
 
   const targetLabel = session ? agentTargetName(session) : view?.target.label || sessionId
   const live = view?.target.live ?? !!session
+  /** A live agent this pane can stage for. The per-session auto-delivery policy is
+   *  meaningless without one; the install-wide state and its brakes are not. */
+  const sessionTargeted = targetable && live
   const policy = auto?.sessions.find(item => item.session_id === sessionId) ?? null
   const autoOn = !!policy?.enabled
   const setPolicy = (patch: Parameters<typeof setSessionAutoPolicy>[1]) =>
@@ -460,6 +485,16 @@ export function QueuePane({ sessionId, sessions, onSelectSession, onOpenAsTab, o
             {live ? `${view?.pending ?? 0} pending` : 'target ended — pending items are stranded'}
           </span>
         )}
+        {onOpenFleetQueue && (
+          <button
+            type="button"
+            class={`queue-fleet-open${fleetPending > 0 ? ' has-pending' : ''}`}
+            title="Fleet queue - every queued message across all sessions, by who wrote it"
+            onClick={onOpenFleetQueue}
+          >
+            fleet{fleetPending > 0 ? ` ${fleetPending > 99 ? '99+' : fleetPending}` : ''}
+          </button>
+        )}
         {targetable && onOpenAsTab && (
           <button
             type="button"
@@ -472,45 +507,79 @@ export function QueuePane({ sessionId, sessions, onSelectSession, onOpenAsTab, o
           </button>
         )}
       </header>
-      {targetable && live && (
-        <div class="queue-auto-strip">
-          <button
-            type="button"
-            class={`queue-auto-summary${autoOn ? ' queue-auto-on' : ''}`}
-            aria-expanded={autoOpen}
-            title="Bounded, expiring, and never overrides a not-safe target"
-            onClick={() => setAutoOpen(value => !value)}
-          >
-            <span aria-hidden="true">{autoOpen ? '▾' : '▸'}</span> auto: {describeAuto(auto, sessionId)}
-          </button>
-        </div>
-      )}
-      {targetable && live && autoOpen && (
+      <div class="queue-auto-strip">
+        <button
+          type="button"
+          class={`queue-auto-summary${autoOn ? ' queue-auto-on' : ''}`}
+          aria-expanded={autoOpen}
+          title="Bounded, expiring, and never overrides a not-safe target"
+          onClick={() => setAutoOpen(value => !value)}
+        >
+          <span aria-hidden="true">{autoOpen ? '▾' : '▸'}</span> auto: {describeAuto(auto, sessionTargeted ? sessionId : '')}
+        </button>
+      </div>
+      {autoOpen && (
         <div class="queue-auto-detail">
-          <label class="queue-auto-toggle">
-            <input
-              type="checkbox"
-              checked={autoOn}
-              disabled={busyId === 'auto' || !auto?.master_enabled}
-              onChange={event => setPolicy({ enabled: event.currentTarget.checked })}
-            />
-            <span>auto-deliver armed messages</span>
-          </label>
-          <label class="queue-auto-toggle" title="Agent messages arrive armed instead of as drafts">
-            <input
-              type="checkbox"
-              checked={!!policy?.accept_agent_messages}
-              disabled={busyId === 'auto'}
-              onChange={event => setPolicy({ acceptAgentMessages: event.currentTarget.checked })}
-            />
-            <span>accept agent messages armed</span>
-          </label>
+          {sessionTargeted && (
+            <>
+              <label class="queue-auto-toggle">
+                <input
+                  type="checkbox"
+                  checked={autoOn}
+                  disabled={busyId === 'auto' || !auto?.master_enabled}
+                  onChange={event => setPolicy({ enabled: event.currentTarget.checked })}
+                />
+                <span>auto-deliver armed messages</span>
+              </label>
+              <label class="queue-auto-toggle" title="Agent messages arrive armed instead of as drafts">
+                <input
+                  type="checkbox"
+                  checked={!!policy?.accept_agent_messages}
+                  disabled={busyId === 'auto'}
+                  onChange={event => setPolicy({ acceptAgentMessages: event.currentTarget.checked })}
+                />
+                <span>accept agent messages armed</span>
+              </label>
+            </>
+          )}
           {auto && !auto.master_enabled && (
             <p class="queue-auto-note">
               Auto-delivery is off for this install. Turn on “Allow auto-delivery for agent
               conversations” under Settings → Agents → Prompt queue.
             </p>
           )}
+          {/* The two install-wide brakes. They are not per-session, and they are here
+              rather than in the fleet overlay because a stop reachable only by opening
+              something is not reachable at the moment you want it. */}
+          <div class="queue-auto-emergency">
+            <button
+              type="button"
+              class={auto?.paused ? 'primary' : 'danger'}
+              disabled={busyId === 'auto'}
+              title="Stops every automatic delivery immediately, on every session"
+              onClick={() => void run('auto', async () => setAuto(await setAutoPaused(!auto?.paused)))}
+            >
+              {auto?.paused ? 'resume auto-delivery' : 'pause all auto-delivery'}
+            </button>
+            <button
+              type="button"
+              disabled={busyId === 'auto'}
+              title="Record a delivery that should not have happened; pauses auto-delivery and restarts the proving period"
+              onClick={() => void run('auto', async () => {
+                setAuto(await reportUnsafeDelivery('reported from the queue'))
+                setError('Recorded. Auto-delivery is paused and the proving period restarted.')
+              })}
+            >
+              report unsafe delivery
+            </button>
+            {auto?.promotion && (
+              <span class="queue-promotion">
+                auto sends {auto.promotion.auto_sends}/{auto.promotion.required_sends} · proving{' '}
+                {auto.promotion.proving_days}/{auto.promotion.required_days} days · unsafe{' '}
+                {auto.promotion.unsafe_reports}
+              </span>
+            )}
+          </div>
         </div>
       )}
 

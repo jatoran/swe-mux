@@ -85,7 +85,8 @@ Quantitative, machine-checked, and visible rather than asserted:
 These gate *widening* the capability (enabling the install master by default, dropping the TTL
 or the consecutive cap) — they do not gate a conversation grant itself, which is bounded by
 construction. Current values
-are on `GET /api/queue/auto` and in the application-scoped Mailbox status line.
+are on `GET /api/queue/auto`, in the Queue tab's `auto:` disclosure, and in the fleet queue's
+status line.
 
 ## UI
 
@@ -96,8 +97,15 @@ are on `GET /api/queue/auto` and in the application-scoped Mailbox status line.
   above the queue in a narrow column; it used to cost three wrapped lines there.
 - **Per-item schedule**: `+5m` / `+15m` / `+1h` presets and `Clear schedule`, behind the
   row's `⋯`; a scheduled item shows its time in the row.
-- **Queue panel, `inbox`/`outbox` scopes**: pause-all / resume, `report unsafe delivery`,
-  and the proving-period counters — reachable in one gesture from desktop or phone.
+- **The install-wide brakes live where a person already is when they want them.** Pause-all /
+  resume, `report unsafe delivery`, and the proving-period counters sit under the Queue tab's
+  same `auto:` disclosure, separated by a rule because they are not per-session. That
+  disclosure survives an empty target: the install-wide state is true with no session
+  focused, and it is the state that makes every per-session reading a lie when it is off.
+  `autodelivery.pause` reaches the same operation with nothing open at all, from desktop or
+  phone. They are deliberately **not** in the fleet queue: a brake reachable only by opening
+  an overlay is a brake you cannot reach in the moment you want it. The fleet queue reports
+  the state and never owns it.
 - **Settings → Agents → Prompt queue**: the install-wide master switch and the bounds every
   grant runs under (stability window, consecutive-send cap, grant expiry, refusal back-off,
   quiet hours). The queue strip's "off for this install" note names that control.
@@ -136,8 +144,10 @@ SQLite, not config, so the emergency pause never waits on a config write.
 - `src/swe_mux/prompt_queue.py` — `queue_auto_policy` / `queue_auto_counters` tables,
   constraint enforcement in `send_next`, `normalize_constraints`, `schedule_status`.
 - `src/swe_mux/server.py` — the `/api/queue/auto*` handlers and lifecycle wiring.
-- `frontend/src/QueuePane.tsx` - per-session `auto:` strip and schedule presets.
-- `frontend/src/MailboxPane.tsx` - application-wide emergency controls and proving-period status.
+- `frontend/src/QueuePane.tsx` - the `auto:` strip, schedule presets, and the install-wide
+  emergency controls with the proving-period counters.
+- `frontend/src/App.tsx` - `autodelivery.pause`, the command that needs nothing open.
+- `frontend/src/FleetQueue.tsx` - read-only report of install-wide state and proving counters.
 - `frontend/src/queueApi.ts` - typed client.
 - Tests: `tests/test_auto_delivery.py`, `tests/test_delivery_readiness_promotion.py`,
   `tests/test_frontend_phase5_contract.py`.

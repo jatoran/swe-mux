@@ -18,6 +18,11 @@ Every item keeps three independent axes:
 - `origin`: the CLI, plugin, MCP source, or named configuration layer that supplied it;
 - `state`: `documented`, `configured`, `enabled`, `disabled`, `available`, `restricted`, `shadowed`, or `restart_required` as applicable.
 
+Two optional presentation fields sit alongside them.
+`group` is an in-section heading the UI renders above the consecutive run of items that share it, so a section can be read by its own natural key rather than as one flat list.
+`owner` names who installed an entry when that is knowable, and is `swe_mux` for the rows swe-mux provisions itself.
+Only Hooks populates either today; both are generic so a section that gains a natural grouping does not need a new response shape.
+
 Section `completeness` states how the inventory was obtained.
 The UI must show that qualifier rather than presenting a passive scan as an exhaustive runtime registry.
 In particular, configured MCP servers are not reported as connected, documented built-ins are not reported as loaded, and current skill files newer than the CLI generation are reported as requiring restart.
@@ -42,7 +47,7 @@ Opening or refreshing the tab never:
 - starts or health-checks an MCP server;
 - authenticates a connector;
 - imports or executes plugin code;
-- executes a hook command or exposes its command, prompt, URL, arguments, environment, or credentials;
+- executes a hook command, or exposes its arguments, inline shell body, prompt, URL, environment, or credentials;
 - writes provider configuration;
 - claims that current files were loaded by the already-running CLI.
 
@@ -50,12 +55,30 @@ MCP endpoints omit credentials and query strings.
 Stdio entries expose only the executable basename.
 Policy values are limited to known non-secret keys and structured collections are summarized by count.
 
+### Hook handler targets
+
+A hook whose only identity is its event answers nothing: with both CLIs keying hooks by event, every row read `PreToolUse` and no row said what it ran or who put it there.
+The event is therefore the `group` heading, and the row names the **handler target**: the program and the one script or module its command invokes.
+
+The target is resolved structurally, never by quoting the command.
+The first token is the program, unless it is a shell keyword, in which case the handler is reported as `inline shell` and its program is not named at all.
+The first following token that is a `-m` module or is structurally a script path becomes the target; a flag, a `key=value` assignment, anything containing `://` or `@`, and anything naming a credential are all refused as candidates.
+A handler with no identifiable target reports its program with the arguments explicitly withheld, and one with neither is an `inline shell command`.
+The `Matcher` and `Timeout` a hook declares are shown because they are structural, not payload.
+
+That line - the program and its script, never the argument list - is what makes the section useful without reopening what the safety boundary above closes: a hook command line is exactly where a user's own tokens and passwords sit, and none of them can reach a candidate target.
+
+Hooks whose command runs `swe_mux.hook_client` carry `owner: swe_mux`, in a source checkout and inside the frozen desktop bundle alike (`desktop.py` re-dispatches `-m` itself).
+That is the marker that makes swe-mux's own lifecycle reporting distinguishable from the user's hooks inside the same event, which is otherwise unanswerable from the payload.
+
 ## Surface
 
 The header shows the selected session, backend and version, plus an explicit Rescan control.
 Runtime identity is followed by compact counts and a warning when configuration changed after load.
 Sections are collapsed disclosures with item count and completeness label.
-Policies open by default; a local substring filter opens matching sections and searches item identity, origin, scope, state, description, and safe metadata.
+Items that carry a `group` render under a sticky in-section heading for their run, so the event a hook belongs to stays readable while a long group scrolls; an `owner` renders as a chip on the row.
+Policies open by default; a local substring filter opens matching sections and searches item identity, group, owner, origin, scope, state, description, and safe metadata, so `swe-mux` filters the Hooks section to the ones swe-mux installed.
+Metadata values wrap rather than ellipsing, because the ones that overflow (a hook's script path, an MCP endpoint) are the ones worth reading and a touch device has no tooltip.
 
 Configuration sources and diagnostics are separate disclosures below the capability sections.
 The tab has no insert, send, enable, disable, connect, edit, or install action.
