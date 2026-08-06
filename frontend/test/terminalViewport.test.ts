@@ -8,6 +8,7 @@ import {
   appOwnsTail,
   attachRegistersViewport,
   createViewportScheduler,
+  effectiveViewportCost,
   redrawVisibleTerminal,
   refitVisibleTerminal,
   reflowVisibleTerminalRenderer,
@@ -265,6 +266,36 @@ test('cancelling drops a pending burst', () => {
   advance(VIEWPORT_SETTLE_MS * 4)
   assert.equal(runs, 0)
   assert.equal(scheduler.deferred, false)
+})
+
+// The defect this encodes: below ConPTY's reflow threshold a local resize just appends
+// rows, so every pass measured "cheap" and the scheduler never engaged — a continuous
+// splitter drag sent ~22 pseudoconsole resizes per second per visible pane, each one a
+// full CLI repaint. The pass's real cost includes the half that runs in another process.
+test('a pass that shipped a resize frame is expensive regardless of the local clock', () => {
+  assert.equal(effectiveViewportCost(0.02, true), EXPENSIVE_VIEWPORT_PASS_MS)
+  assert.equal(effectiveViewportCost(25, true), 25)
+  // A pass that only measured (grid unchanged, nothing sent) stays as cheap as it was.
+  assert.equal(effectiveViewportCost(0.02, false), 0.02)
+})
+
+test('resize-sending passes make a splitter drag coalesce even when local fits are free', () => {
+  const { timers, advance } = fakeTimers()
+  let runs = 0
+  const scheduler = createViewportScheduler(() => { runs += 1 }, timers)
+  // First pass of the drag runs eagerly and sends a resize; every local fit is
+  // sub-millisecond, which without the downstream charge kept this eager forever.
+  scheduler.request(true)
+  assert.equal(runs, 1)
+  scheduler.observeCost(effectiveViewportCost(0.05, true))
+  for (let elapsed = 0; elapsed < VIEWPORT_SETTLE_MAX_MS * 2; elapsed += 16) {
+    scheduler.request(true)
+    advance(16)
+  }
+  // The drag floods requests every frame; the cap bounds updates to one per
+  // VIEWPORT_SETTLE_MAX_MS rather than one per crossed cell boundary.
+  assert.ok(runs <= 4, `expected capped cadence, got ${runs} passes`)
+  assert.ok(runs >= 2, `the gesture must still update at the cap, got ${runs}`)
 })
 
 test('a pane that becomes cheap again stops deferring', () => {

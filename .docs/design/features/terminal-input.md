@@ -62,6 +62,16 @@ If the movement crosses the target it switches to single-key precision; popup he
 The operation stops on user input, selection, resize, replay, ownership loss, buffer changes, hidden panes, missing progress, or a changed composer.
 The hidden mobile textarea is not used as a document mirror: it remains an end-pinned IME delta bridge and cannot represent the agent's whole draft.
 
+### Wheel scroll to an application-owned viewport
+
+When the application holds the mouse, every wheel notch becomes SGR scroll reports (one per line, ~7 per 120px notch) and each report is a full repaint by the CLI (~2-20 KB of output).
+A full-width Claude pane was measured consuming ~230 reports per second; a free-spinning wheel or trackpad flick emits thousands, and nothing else in the pipeline sheds load, so the excess was banked scrolling the terminal kept performing for 4-12 seconds after the gesture ended.
+The pane therefore paces wheel reports through `terminalWheelPacing.ts`: batches of at most `WHEEL_BATCH_MAX` per animation frame, each released only after the previous batch's repaint arrived (`noteOutput`, the PTY output ack) or after `WHEEL_ACK_TIMEOUT_MS` of silence (an application at its buffer edge repaints nothing), with the queue capped at `WHEEL_QUEUE_MAX` reports.
+The wheel is treated as a velocity control, not a distance ledger: past the cap, notches shorten the gesture instead of banking runaway scroll, and a direction reversal drops the stale queue outright.
+Ordering is preserved by construction: any non-wheel input flushes the queue first, and a view command (jump-to-latest) discards it, since queued scrolls landing after `^End` would drag the viewport straight back off the tail.
+At human scroll rates the ack returns faster than the wheel turns and the pacer is transparent; measured round-trip stays ~5 ms while a 400-notch flick's tail dropped from 4-12 s to under ~300 ms.
+Only plain vertical wheel reports (`CSI < 64/65 … M`) are paced: clicks, drags, and modified wheels keep their exact ordering.
+
 ### Geometry
 
 The input owner's viewport sizes the PTY; with no owner, the smallest visible one, so no
@@ -99,6 +109,23 @@ daemon broadcasts a `geometry` frame only when the arbitrated size actually *cha
 corrected the client. The ResizeObserver is not the safety net it appears to be: it triggers
 the coalescing burst path, which is deferred on exactly the panes expensive enough for this to
 matter, and it fires only if the box changes size again.
+
+**Every resize flood coalesces, including the one the daemon reflects back.** The viewport
+scheduler defers burst triggers only while passes are expensive, and the local clock alone
+cannot see the expensive half: below ConPTY's reflow threshold xterm's own resize just
+appends rows and measures microseconds, while the `resize` frame the pass sent resizes the
+real pseudoconsole and makes the CLI repaint everything it shows. A pass that shipped a
+`resize` frame is therefore charged at least `EXPENSIVE_VIEWPORT_PASS_MS`
+(`effectiveViewportCost`), whatever it cost the browser. The daemon's `geometry` answer to
+each registration is itself the fourth flood source and is classed as a burst trigger for
+the same reason: an eager fit on that frame re-measures a still-moving divider, sends the
+new grid, and the echo of *that* registration schedules the next pass — a pseudoconsole
+resize (and a full CLI repaint) every websocket round-trip for as long as the gesture
+lasts, invisible to the ResizeObserver's coalescing. Measured on a 2x2 grid before both
+rules existed: a continuous splitter drag sent ~22 resizes per second per visible pane
+(~1,200 CLI repaints in one gesture) and a window-resize sweep dropped a frame per step;
+after, the same drag sends one resize per `VIEWPORT_SETTLE_MAX_MS` per pane and the sweep
+drops none.
 
 A client registers a viewport only when it fitted itself *while on screen*
 (`attachRegistersViewport`). Both halves are load-bearing, and getting either wrong pins a
@@ -184,6 +211,8 @@ None user-facing.
   `_claim_terminal_input`, `_handle_terminal_input`, `_apply_client_viewport`)
 - Client ownership model (pure): `frontend/src/inputOwnership.ts`
 - Letterbox math and the reveal-adoption rule (pure): `frontend/src/terminalLetterbox.ts`
+- Wheel-report pacing to an application-owned viewport (pure): `frontend/src/terminalWheelPacing.ts`
+- Viewport pass scheduling and the resize-sending cost charge (pure): `frontend/src/terminalViewport.ts`
 - Socket, DOM, take-over strip: `frontend/src/TerminalPane.tsx`
 - Provider-aware pointer targeting and steering math: `frontend/src/terminalCaretPlacement.ts`
 

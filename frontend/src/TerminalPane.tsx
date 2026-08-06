@@ -36,7 +36,8 @@ import { activatePromptRailItem } from './promptRail'
 import { BranchIcon, CopyIcon, PasteIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
 import { currentProfile, loadRailItems } from './deviceSettings'
-import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOwnsTail, attachRegistersViewport, createViewportScheduler, redrawVisibleTerminal, refitVisibleTerminal, reflowVisibleTerminalRenderer, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
+import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOwnsTail, attachRegistersViewport, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, refitVisibleTerminal, reflowVisibleTerminalRenderer, scrollTerminalToTail, terminalHostIsVisible } from './terminalViewport'
+import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
 import { adoptsOwnGeometryOnReveal, geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
 import { scaledFontSize } from './uiScale'
 import {
@@ -741,6 +742,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let localFitBox: { width: number; height: number } | null = null
     let serverGeometry: { cols: number; rows: number } | null = null
     let sentViewport: { cols: number; rows: number; hidden: boolean } | null = null
+    // Whether the current viewport pass shipped a `resize` frame — the signal that its
+    // real cost includes a pseudoconsole resize and a CLI repaint, not just local work.
+    let viewportResizeSent = false
     let letterboxed = false
     // Armed by the visibility transition, consumed by the next `applyGeometry`. A single
     // pass, not a mode: the licence covers the one measurement taken as the pane comes
@@ -753,6 +757,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const hidden = paneIsHidden()
       if (!force && sentViewport?.cols === cols && sentViewport.rows === rows && sentViewport.hidden === hidden) return
       sentViewport = { cols, rows, hidden }
+      viewportResizeSent = true
       // `hidden` deregisters this viewport instead of registering it: a minimized
       // window still reports layout, and it must not reshape the PTY for the device
       // the user is actually holding.
@@ -874,11 +879,17 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // yanking someone who had deliberately scrolled up is worse than not.
         const wasAtTail = !offTailRef.current
         const startedAt = performance.now()
+        viewportResizeSent = false
         measureFit()
         applyGeometry()
         // Timed around the two calls that do the work, so the scheduler's decision to
-        // coalesce is based on this pane's real cost rather than on its backend.
-        viewportScheduler.observeCost(performance.now() - startedAt)
+        // coalesce is based on this pane's real cost rather than on its backend — and a
+        // pass that shipped a `resize` frame is charged the pseudoconsole resize and CLI
+        // repaint it caused downstream, which the local clock cannot see
+        // (`effectiveViewportCost`).
+        viewportScheduler.observeCost(
+          effectiveViewportCost(performance.now() - startedAt, viewportResizeSent),
+        )
         if (wasAtTail) scrollTerminalToTail(term)
         // DOM/WebGL pixels can be discarded while a pane or browser tab is hidden.
         // Repaint one frame after layout settles so every terminal row is invalidated.
@@ -1166,6 +1177,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         retry,
       }))
     }
+    const wheelPacer = createWheelPacer(
+      (data, broadcast) => sendInput(data, false, broadcast),
+      {
+        now: () => performance.now(),
+        schedule: fn => window.requestAnimationFrame(fn),
+        cancel: id => window.cancelAnimationFrame(id),
+      },
+    )
     // Keystrokes the daemon refused because this pane had lost input ownership without
     // knowing it yet — the race that used to eat a large fraction of everything typed
     // on a phone while a desktop pane was still attached. Re-claim and resend once;
@@ -1193,7 +1212,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
             pendingReplayWrites -= 1
             if (replayEndReceived && pendingReplayWrites === 0) finishReplay()
           })
-        } else term.write(new Uint8Array(event.data))
+        } else {
+          // Output arriving is the ack the wheel pacer's clock runs on: the repaint
+          // answering the last scroll report means the CLI is ready for the next one.
+          wheelPacer.noteOutput()
+          term.write(new Uint8Array(event.data))
+        }
       }
       else {
         const frame = JSON.parse(event.data)
@@ -1250,7 +1274,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           const rows = Number(frame.rows)
           if (Number.isFinite(cols) && Number.isFinite(rows)) {
             serverGeometry = { cols, rows }
-            scheduleFit()
+            // A burst trigger, not a discrete one: geometry frames stream during any
+            // continuous resize — the daemon answers every registration with one, so an
+            // eager fit here re-measured a moved divider, sent the new grid, and that
+            // registration's own geometry echo scheduled the next pass. That loop ran a
+            // pseudoconsole resize (and a full CLI repaint) every websocket round-trip,
+            // ~25/s per pane, for the whole gesture — the ResizeObserver's coalescing
+            // never saw any of it. A lone frame (another device resized once) still
+            // fits immediately while the last pass was cheap; only floods defer.
+            scheduleBurstFit()
           }
         }
         if (frame.type === 'exit') {
@@ -1381,6 +1413,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         pendingUserInput.push({ data, broadcast: shouldBroadcast })
         return
       }
+      // Wheel scrolls to an application that holds the mouse go through the pacer:
+      // xterm emits ~7 scroll reports per notch and the CLI drains them at its own
+      // repaint rate, so a fast flick otherwise banks seconds of runaway scrolling
+      // (see terminalWheelPacing). Everything else flushes the queue first — a click
+      // or keystroke must not overtake the scrolls that preceded it.
+      if (isWheelReportBurst(data)) {
+        wheelPacer.push(data, shouldBroadcast)
+        return
+      }
+      wheelPacer.flush()
       sendInput(data, false, shouldBroadcast)
     })
     // View keys skip xterm's `input()` so they are never broadcast, and are dropped rather
@@ -1389,6 +1431,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // for. It still claims input, since asking a session to scroll is this device using it.
     sendViewKeyRef.current = (sequence: string) => {
       if (replaying) return
+      // A view command supersedes the wheel gesture: queued scroll reports landing
+      // after jump-to-latest would drag the viewport straight back off the tail.
+      wheelPacer.discard()
       sendInput(sequence, false, false)
     }
     let mobileInputValue=''
@@ -1902,7 +1947,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput])
 
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so

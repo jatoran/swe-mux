@@ -141,6 +141,26 @@ export const EXPENSIVE_VIEWPORT_PASS_MS = 8
 export const VIEWPORT_SETTLE_MS = 120
 
 /**
+ * The cost a pass reports to the scheduler, given what it actually did.
+ *
+ * Timing the browser-side work alone misses the half of the cost that never runs in this
+ * process: a pass that sent a `resize` frame resized the real pseudoconsole, and the CLI
+ * behind it repaints everything it is showing — for an alternate-screen agent that is its
+ * whole screen, ~20 KB of output per resize, at whatever rate the frames arrive. On this
+ * side that pass can still measure microseconds: below ConPTY's reflow threshold xterm's
+ * own resize just appends rows. Measured on a 2x2 grid, a continuous splitter drag sent
+ * ~22 pseudoconsole resizes per second per pane — ~1,200 CLI repaints across one gesture —
+ * precisely because every pass was "cheap". A pass that reshaped the PTY is therefore
+ * expensive by definition, whatever the local clock says: reporting at least
+ * EXPENSIVE_VIEWPORT_PASS_MS makes the next burst coalesce, which is one resize per
+ * settle (or per VIEWPORT_SETTLE_MAX_MS during a gesture that never pauses) instead of
+ * one per crossed cell boundary.
+ */
+export function effectiveViewportCost(elapsedMs: number, sentResize: boolean): number {
+  return sentResize ? Math.max(elapsedMs, EXPENSIVE_VIEWPORT_PASS_MS) : elapsedMs
+}
+
+/**
  * How many frames a revealed pane may wait for its host to have layout.
  *
  * A pass whose host measures zero cannot fit, and returning was a silent dead end: the

@@ -84,6 +84,31 @@ does not reach the interactive path.
 For scale, the same daemon held 22.6% of a core before that day's fixes.
 A daemon materially above these with an idle fleet is worth investigating.
 
+A larger fleet measured 2026-08-05: 12 sessions carrying ~2.8 GB of transcripts (Codex
+rollouts up to 525 MB, resumed in parallel in ~0.8 s of wall per request batch) cost the
+daemon 3.30% of a core, supervisor 0.10%, keystroke p50 2.36 ms — unchanged from idle,
+which remains the property that matters: fleet size does not reach the interactive path.
+
+### Frontend reference numbers (measured 2026-08-05, 2x2 grid, 12-session fleet)
+
+Method: drive the real UI with Playwright against the live daemon (or `npm run dev` on
+port 5173, which proxies `/api`, `/pty`, `/events` to it), wrap `WebSocket` from an init
+script to timestamp frames per socket, sample `requestAnimationFrame` deltas for jank, and
+dispatch wheel/pointer input through CDP. One trap: an awaited CDP `mouse.wheel` costs
+~30 ms per call, so a "flick" loop written that way is actually a slow scroll — dispatch
+synthetic `WheelEvent`s in-page when the notch rate is the variable under test.
+
+- Codex scroll (xterm-local, `alternate_screen=never`): every frame on the vsync tick,
+  zero PTY traffic. There is nothing to optimize on this path.
+- Claude scroll (app-owned mouse, PTY round-trip per notch): round-trip p50 ~5 ms at
+  human rates, every frame on the vsync tick, single pane or 2x2 grid alike.
+- A 400-notch flick: ≤ ~300 ms of scroll tail after the gesture ends (the wheel pacer's
+  queue draining). Before the pacer existed the tail was 4-12 seconds.
+- Continuous splitter drag: one pseudoconsole resize per `VIEWPORT_SETTLE_MAX_MS` (600 ms)
+  per visible pane. ~22/s per pane means the resize-cost charge or the geometry burst
+  classification has regressed (`terminal-input.md` §Geometry).
+- Window-resize sweep and warm-tab switching: zero frames over 25 ms.
+
 ### 2. Ask which loop is expensive, not which is frequent
 
 ```

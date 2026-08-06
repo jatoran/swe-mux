@@ -181,6 +181,23 @@ test('every resize flood is routed through the coalescing scheduler', () => {
   ]) {
     assert.ok(source.includes(marker), `resize trigger no longer coalesced: ${marker}`)
   }
+  // The fourth flood is self-inflicted: the daemon answers every viewport registration
+  // with a `geometry` frame, so an eager fit on that frame re-registers a still-moving
+  // grid and the echo schedules the next pass — a pseudoconsole resize per websocket
+  // round-trip for as long as a splitter drag lasts, invisible to all three triggers
+  // above. Measured at ~25 resizes/s per pane before it was classed as a burst.
+  const geometryStart = source.indexOf("frame.type === 'geometry'")
+  const geometryEnd = source.indexOf("frame.type === 'exit'", geometryStart)
+  assert.ok(geometryStart >= 0 && geometryEnd > geometryStart, 'geometry handler not found')
+  const handlerBody = source.slice(geometryStart, geometryEnd)
+  assert.ok(
+    handlerBody.includes('scheduleBurstFit()'),
+    'the geometry-frame fit is no longer routed through the coalescing scheduler',
+  )
+  assert.ok(
+    !handlerBody.includes(' scheduleFit()'),
+    'the geometry-frame handler regained an eager fit',
+  )
 })
 
 test('a resize restores the tail only for a viewport that was already on it', () => {
@@ -195,7 +212,16 @@ test('a resize restores the tail only for a viewport that was already on it', ()
 
 test('the scheduler is fed the measured cost of each pass', () => {
   // Without this the adaptive path never learns, and every pane silently reverts to
-  // fitting on every frame.
+  // fitting on every frame. The cost must go through `effectiveViewportCost`: the local
+  // clock alone reads microseconds below ConPTY's reflow threshold, so a pass that sent
+  // a `resize` frame (a pseudoconsole resize plus a CLI repaint downstream) would keep
+  // the scheduler eager through an entire splitter drag — measured at ~22 resizes per
+  // second per visible pane before the charge existed.
   const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
-  assert.match(source, /viewportScheduler\.observeCost\(performance\.now\(\) - startedAt\)/)
+  assert.match(
+    source,
+    /viewportScheduler\.observeCost\(\s*effectiveViewportCost\(performance\.now\(\) - startedAt, viewportResizeSent\),?\s*\)/,
+  )
+  assert.match(source, /viewportResizeSent = false/)
+  assert.match(source, /viewportResizeSent = true/)
 })

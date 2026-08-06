@@ -78,3 +78,5 @@ test-tmp-codex/
 # fails before closing its store leaves one behind (Windows will not unlink a
 # file a live connection holds), and those are exactly what got committed before.
 tests/.phase2-*.db*
+# playwright-cli session output (snapshots, console logs) from driving the live UI
+.playwright-cli/
