@@ -92,7 +92,7 @@ import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from '
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
-import { dismissSoftKeyboard, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
+import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
 import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import { reorderForHover, reorderTargetFromContainer, type DropSide, type ReorderAxis } from './dragReorder'
@@ -1131,6 +1131,7 @@ export function App() {
 
   useEffect(() => {
     const viewport = window.visualViewport
+    let lastInset = -1
     // The shell is the *layout* viewport, which `interactive-widget=resizes-visual` keeps at
     // full height while the keyboard is up. Sizing it from `visualViewport` instead is what
     // used to shrink every terminal when the keyboard opened — and shrinking an
@@ -1146,6 +1147,13 @@ export function App() {
       // A `translateY(0)` still makes an element a containing block for its `position:fixed`
       // descendants, which would silently re-anchor the drawer and sidebar overlays.
       root.classList.toggle('soft-keyboard-open', inset > 0)
+      // Panes need this as state, not only as a length: a terminal shows a peek-at-the-top
+      // control while the keyboard covers part of it. Published on change only, because the
+      // keyboard fires resizes throughout its open animation.
+      if (inset !== lastInset) {
+        lastInset = inset
+        window.dispatchEvent(new CustomEvent(SOFT_KEYBOARD_EVENT, { detail: inset }))
+      }
       setViewportWidth(window.innerWidth)
     }
     updateAppHeight()
