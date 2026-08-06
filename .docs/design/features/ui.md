@@ -1181,14 +1181,35 @@ responsive controls.
   and rounding move it by a few, and sliding the workspace for those would read as the UI
   twitching. A visual viewport *larger* than the layout one (pinch-zoom out) clamps to zero
   rather than sliding the workspace off the bottom of the screen.
-- The composer stays reachable by sliding, not by resizing: `.workspace` is translated up by
-  `--keyboard-inset` so its bottom edge — the agent composer and the command rail — sits exactly
-  on top of the keyboard, while its height, and therefore the terminal grid inside it, is
-  untouched. The top scrolls out of view under the mobile toolbar, which is the half nobody is
-  looking at while typing. The translate is scoped to `.soft-keyboard-open` rather than applied
-  as an always-present zero, because a transform makes an element the containing block for its
-  `position:fixed` descendants even at zero, which would re-anchor the sidebar and drawer
-  overlays.
+- The composer stays reachable by sliding, not by resizing: `.terminal-surface` is translated up
+  by `--keyboard-inset` so its bottom edge — the agent composer and the command rail — sits
+  exactly on top of the keyboard, while its height, and therefore the terminal grid inside it, is
+  untouched. What is lost is the top of the terminal, which comes back when the keyboard closes.
+  The translate is scoped to `.soft-keyboard-open` rather than applied as an always-present zero,
+  because a transform makes an element the containing block for its `position:fixed` descendants
+  even at zero, which would re-anchor the sidebar and drawer overlays.
+- The surface and nothing above it. Translating the whole `.workspace` carried the tab rail and
+  the pane header off the top of the screen and drew the terminal where they had been; those are
+  navigation rather than content, and they stay put. `.terminal-pane` clips while the keyboard is
+  up, which covers everything outside the pane box (the tab rail, the mobile toolbar).
+- Every other mobile surface shortens rather than sliding, and the asymmetry is the whole point:
+  a terminal must not resize because shrinking an alternate-screen PTY destroys rows, while a note
+  editor, file view, or drawer reflows losslessly. Shortening is strictly better where it is safe,
+  because the entire surface stays reachable instead of having its top pushed off screen. The
+  mobile resource pane loses `--keyboard-inset` from its height; the drawer and mobile sidebar
+  overlays take it as a `bottom` offset.
+- This is what the note editor's command rail needs. Continuity pins that rail to the bottom of
+  the element the host gives it, so a box still running to the bottom of the layout viewport puts
+  the rail behind the keyboard however the editor is scrolled — the host owns the box, so the host
+  owns the fix, and no editor change can reach it. Measured on a Project note with a 415px
+  keyboard: the rail moves from `858..914` to `443..499` as the drawer's bottom lifts from 915 to
+  500.
+- Clipping is not enough for the pane's *own* header and read-aloud strip: they are inside the
+  clip and the surface is a later sibling, so a translated surface paints over them while they
+  remain laid out and hit-testable underneath. That is the worst version of hidden —
+  `getBoundingClientRect` reports them exactly where they belong while `elementFromPoint` returns
+  `xterm-screen` — so a rectangle-based check cannot see the bug and only paint order fixes it.
+  Both take a stacking layer of their own while the keyboard is open.
 - Opening either mobile panel also lowers the soft keyboard, in the same setters and for the same
   reason: the keyboard is held up by a field that is now behind the scrim, and it covers up to
   half of the panel that just opened. There is no API for "hide the keyboard", so the focused

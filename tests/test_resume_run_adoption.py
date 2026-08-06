@@ -1,14 +1,19 @@
-"""Resuming a Claude conversation continues its run instead of forking a second.
+"""Resuming a conversation continues its run instead of forking a second.
 
-Claude's `--resume` appends to the same transcript, under the same conversation
-id, in the same file: the CLI does not fork. Opening a second history entry for
-it indexed one file twice, showed one conversation as two entries, and left the
-first entry's totals moving after its own pane had exited. So the resumed pane
-inherits the conversation's `agent_run_id` — every control-plane record keys on
-that, so the timeline, facts, annotations, and title continue too.
+`claude --resume` and `codex resume` both append to the same transcript, under
+the same conversation id, in the same file: neither CLI forks. Opening a second
+history entry for it indexed one file twice, showed one conversation as two
+entries, and left the first entry's totals moving after its own pane had exited.
+So the resumed pane inherits the conversation's `agent_run_id` — every
+control-plane record keys on that, so the timeline, facts, annotations, and title
+continue too.
 
-Codex is the opposite case and stays as it was: `codex resume` writes a *new*
-rollout with a new id, so there a new run really is a new conversation.
+Whether a resume continues the conversation is the *adapter's* answer, because it
+is the CLI's own transcript-resolution rule: Claude resolves by working
+directory, so a resume into another root writes a different file and is a new
+conversation, while Codex resolves by thread id and reopens the original rollout
+wherever the pane runs. Codex was assumed to mint a new rollout per resume, which
+was true of an older CLI and is why a resume used to open a row per pane.
 
 The inheritance is the mirror of a rollover (same PTY, new conversation, new
 run), and it needs the same defence: `spawn_agent_run_id` is immutable spawn
@@ -25,6 +30,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
+from swe_mux.adapters import ClaudeAdapter, CodexAdapter
 from swe_mux.history import HistoryIndex
 from swe_mux.models import SessionRecord
 from swe_mux.server import resume_history
@@ -101,7 +107,13 @@ def resume_call(
     request = SimpleNamespace(
         app={
             "history": history,
-            "sessions": SimpleNamespace(spawn=spawn, adapters={backend: object()}, sessions={}),
+            # The real adapters: whether a resume continues the conversation is their
+            # answer, and stubbing it would only pin the stub.
+            "sessions": SimpleNamespace(
+                spawn=spawn,
+                adapters={"claude": ClaudeAdapter("claude.exe"), "codex": CodexAdapter()},
+                sessions={},
+            ),
             "projects": SimpleNamespace(
                 projects={
                     "default": SimpleNamespace(
@@ -157,15 +169,48 @@ async def test_a_resume_of_a_renamed_conversation_stays_pinned(tmp_path: Path) -
     assert captured[0]["auto_named"] is False
 
 
-async def test_a_codex_resume_opens_its_own_run(tmp_path: Path) -> None:
-    # `codex resume` writes a new rollout with a new id, so the conversation the
-    # pane ends up on is genuinely a new one and deserves its own entry.
+async def test_a_renamed_conversation_resumes_under_the_name_the_user_pinned(
+    tmp_path: Path,
+) -> None:
+    # A row carrying both a rename and an old generated title. `auto_named` arrives
+    # from SQLite as 0, and `0 is not False`, so the title test used to pass for
+    # every row: a conversation the user had named "device ownership" came back as
+    # "Session notes redesign".
+    request, captured, _ = resume_call(
+        tmp_path, auto_named=0, generated_title="Session notes redesign"
+    )
+
+    await resume_history(cast(Any, request))
+
+    assert captured[0]["name"] == "device ownership"
+    assert captured[0]["auto_named"] is False
+
+
+async def test_a_codex_resume_inherits_the_conversations_run(tmp_path: Path) -> None:
+    # `codex resume` reopens the rollout the thread id already owns and appends to
+    # it, so the pane continues that conversation and shares its entry.
     request, captured, lineage = resume_call(tmp_path, backend="codex")
 
     await resume_history(cast(Any, request))
 
-    assert captured[0]["adopt_run_id"] is None
-    assert lineage == [(RUN, PANE, "resume", {"backend": "codex", "project_id": "default"})]
+    assert captured[0]["adopt_run_id"] == RUN
+    assert lineage == []
+
+
+async def test_a_codex_resume_under_another_root_still_inherits_the_run(
+    tmp_path: Path,
+) -> None:
+    # The cwd rule is Claude's, not a general one: Codex addresses a conversation by
+    # thread id, so a resume elsewhere is still the same conversation in the same
+    # rollout. Asking the adapter is what keeps the two rules apart.
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    request, captured, lineage = resume_call(tmp_path, backend="codex", project_root=elsewhere)
+
+    await resume_history(cast(Any, request))
+
+    assert captured[0]["adopt_run_id"] == RUN
+    assert lineage == []
 
 
 async def test_a_codex_resume_inherits_the_effective_generated_title(tmp_path: Path) -> None:
@@ -409,6 +454,7 @@ def test_a_contested_inherited_run_is_dropped_but_never_quarantined(tmp_path: Pa
             name="claude",
             recent_transcripts=lambda *_: [],
             transcript_native_id=lambda path: Path(path).stem,
+            transcript_path=lambda native_id, _cwd: tmp_path / f"{native_id}.jsonl",
         )
     }
     records = {record.id: record, sibling.id: sibling}

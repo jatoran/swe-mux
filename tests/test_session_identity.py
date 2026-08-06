@@ -399,6 +399,7 @@ def test_adoption_refuses_a_rolled_conversation_claimed_by_a_sibling(
             name="claude",
             recent_transcripts=lambda *_: [],
             transcript_native_id=lambda path: Path(path).stem,
+            transcript_path=lambda native_id, _cwd: tmp_path / f"{native_id}.jsonl",
         )
     }
 

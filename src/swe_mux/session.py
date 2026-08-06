@@ -2087,6 +2087,17 @@ class SessionManager:
         if isinstance(pty, RemotePtyHost):
             self._attach_meta_sink(session)
         transcript = adapter.transcript_path(native_id, resolved_cwd)
+        if transcript is not None:
+            # A pane must never start out tailing a file a live pane already
+            # follows: two sessions on one transcript is the cross-attribution the
+            # identity invariant forbids. Codex Branch is the real case — it
+            # deliberately resumes a *live* conversation to make the CLI fork a
+            # child thread, and now that a Codex conversation can be located by id,
+            # asking for the resumed id here answers with the original's rollout.
+            # Discovery picks up the child rollout once the fork writes it.
+            _, claimed_paths = self._live_transcript_claims(session)
+            if self._path_key(transcript) in claimed_paths:
+                transcript = None
         # The PTY is usable now. Durable history/event registration shares SQLite
         # with transcript reconciliation and can occasionally queue behind a large
         # import. Never hide an already-running shell behind that bookkeeping.
@@ -2337,6 +2348,44 @@ class SessionManager:
                 distinct[key] = item
         return list(distinct.values())
 
+    def _named_conversation_transcript(self, session: Session, cwd: Path) -> Path | None:
+        """This pane's own conversation file, when the adapter can name it outright.
+
+        Only for an id mux did not invent: a backend that mints its own conversation
+        id carries the mux session id as a placeholder until discovery, and asking
+        where *that* conversation lives is asking about a conversation nobody has
+        seen. A resumed pane is the case this exists for. Its id came from the row it
+        resumed, its file already exists, and its mtime predates the pane — so the
+        recency scan below can never see it, and on Windows an open rollout's mtime
+        can stay frozen at creation for hours, which makes "wait for the mtime to
+        catch up" no fallback at all. Before this, a resumed Codex pane stayed
+        unobserved for its whole life unless it happened to write a turn *and* the
+        mtime happened to refresh: no transcript tab, no tokens, no context, and a
+        history entry that could never be resumed again.
+
+        Identity is still proved, never guessed: the adapter answers from the file's
+        own first record, and the same claim rules as `_unclaimed_transcripts` apply,
+        so this can only ever bind a file no live pane owns.
+        """
+        record = session.record
+        if not record.native_session_id or record.native_session_id == record.id:
+            return None
+        try:
+            path = session.adapter.transcript_path(record.native_session_id, cwd)
+            if path is None or not path.is_file():
+                return None
+        except OSError:
+            return None
+        backend = session.adapter.name
+        claimed_ids, claimed_paths = self._live_transcript_claims(session)
+        if (backend, record.native_session_id) in claimed_ids:
+            return None
+        if self._path_key(path) in claimed_paths:
+            return None
+        if (backend, record.native_session_id) in session.ignored_detection_runs:
+            return None
+        return path
+
     async def _await_owned_transcript(
         self, session: Session, stop_event: asyncio.Event
     ) -> tuple[Path, bool] | None:
@@ -2350,6 +2399,9 @@ class SessionManager:
         while not stop_event.is_set():
             cwd = Path(session.record.run_cwd or session.record.cwd)
             started = session.record.agent_run_started_at or session.record.created_at
+            direct = self._named_conversation_transcript(session, cwd)
+            if direct is not None:
+                return direct, False
             try:
                 candidates = self._unclaimed_transcripts(
                     session, session.adapter.recent_transcripts(cwd, started)
@@ -2508,6 +2560,29 @@ class SessionManager:
             ):
                 return current
         cwd = Path(record.run_cwd or record.spawn_cwd or record.cwd)
+        # After a conversation rollover the spawn id names a retired conversation;
+        # the live native id is what this run is expected to be writing.
+        expected = (
+            record.native_session_id
+            if record.agent_run_seq > 0
+            else record.spawn_native_session_id
+        )
+        # A conversation the adapter can name outright needs no correlation. This is
+        # what re-binds a resumed pane across a daemon restart that lost its mirrored
+        # path: its transcript is older than the pane, so the recency scan below is
+        # blind to it (`_named_conversation_transcript`).
+        if expected and expected != record.id:
+            try:
+                named = adapter.transcript_path(expected, cwd)
+            except OSError:
+                named = None
+            if (
+                named is not None
+                and named.is_file()
+                and (backend, expected) not in claimed_ids
+                and self._path_key(named) not in claimed_paths
+            ):
+                return named
         try:
             candidates = adapter.recent_transcripts(cwd, record.created_at)
         except OSError:
@@ -2518,13 +2593,6 @@ class SessionManager:
             if (backend, native_id) not in claimed_ids
             and self._path_key(path) not in claimed_paths
         ]
-        # After a conversation rollover the spawn id names a retired conversation;
-        # the live native id is what this run is expected to be writing.
-        expected = (
-            record.native_session_id
-            if record.agent_run_seq > 0
-            else record.spawn_native_session_id
-        )
         exact = [item for item in unclaimed if item[2] == expected]
         if exact:
             return max(exact)[1]

@@ -25,6 +25,12 @@ class ShellAdapter:
         del native_id
         return self.spawn_spec("", opts)
 
+    def resume_continues_conversation(self, recorded_cwd: str, target_cwd: str) -> bool:
+        # A shell owns no conversation, so there is none to continue. Resuming an
+        # agent run into a shell is refused a layer up; this keeps the protocol total.
+        del recorded_cwd, target_cwd
+        return False
+
     def transcript_path(self, native_id: str, cwd: Path) -> None:
         del native_id, cwd
         return None

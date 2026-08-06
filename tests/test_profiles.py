@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+from swe_mux.adapters import CodexAdapter
 from swe_mux.config import Config, ShellProfile, load_config, update_config
 from swe_mux.models import ProjectRecord
 from swe_mux.profiles import detected_profiles, resolve_profile
@@ -167,9 +168,12 @@ async def test_native_agent_history_resume_bypasses_shell_profiles(tmp_path: Pat
 
     async def spawn(**kwargs: Any) -> Any:
         captured.append(kwargs)
+        # Mirrors SessionManager.spawn: an inherited run id is the record's.
         return SimpleNamespace(
             record=SimpleNamespace(
-                id="resumed", agent_run_id="resumed-run", snapshot=lambda: kwargs
+                id="resumed",
+                agent_run_id=kwargs.get("adopt_run_id") or "resumed-run",
+                snapshot=lambda: kwargs,
             )
         )
 
@@ -193,7 +197,7 @@ async def test_native_agent_history_resume_bypasses_shell_profiles(tmp_path: Pat
             }
         )
     )
-    manager = SimpleNamespace(spawn=spawn, adapters={"codex": object()}, sessions={})
+    manager = SimpleNamespace(spawn=spawn, adapters={"codex": CodexAdapter()}, sessions={})
     projects = SimpleNamespace(
         projects={
             "default": SimpleNamespace(
@@ -221,14 +225,10 @@ async def test_native_agent_history_resume_bypasses_shell_profiles(tmp_path: Pat
     assert captured[0]["backend"] == "codex"
     assert captured[0]["resume_native_id"] == "native-codex"
     assert "shell_profile_id" not in captured[0]
-    assert lineage == [
-        (
-            "history-id",
-            "resumed-run",
-            "resume",
-            {"backend": "codex", "project_id": "default"},
-        )
-    ]
+    # `codex resume` reopens the same rollout, so the pane continues that
+    # conversation's run: the same run, and no fork to record.
+    assert captured[0]["adopt_run_id"] == "history-id"
+    assert lineage == []
 
 
 async def _async_value(value: Any) -> Any:

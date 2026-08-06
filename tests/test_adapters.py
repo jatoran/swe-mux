@@ -1,4 +1,5 @@
 import json
+import os
 import shlex
 import time
 from pathlib import Path
@@ -283,3 +284,70 @@ def test_subagent_transcripts_cannot_be_associated_as_root_sessions(
         encoding="utf-8",
     )
     assert inspect_claude(claude_child) is None
+
+
+def _rollout(root: Path, name: str, payload: dict[str, object]) -> Path:
+    path = root / f"rollout-{name}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"type": "session_meta", "payload": payload}) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def test_a_resumed_codex_conversation_is_found_by_id_not_recency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`codex resume` appends to the rollout its thread id already owns.
+
+    So a resumed pane's transcript is a file older than the pane, which the recency
+    window cannot see — and on Windows a live rollout's mtime can stay frozen at
+    creation while it grows, so waiting for recency to catch up is not a fallback
+    either. That combination left every resumed Codex pane unobserved.
+    """
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    sessions = tmp_path / "codex" / "sessions" / "2026" / "08" / "03"
+    resumed = _rollout(
+        sessions, "2026-08-03T18-54-12-019fca0c", {"id": "019fca0c", "cwd": str(cwd)}
+    )
+    child = _rollout(
+        sessions,
+        "2026-08-03T19-02-40-019fca77",
+        {"id": "019fca77", "cwd": str(cwd), "parent_thread_id": "019fca0c"},
+    )
+    yesterday = time.time() - 86_400
+    for path in (resumed, child):
+        os.utime(path, (yesterday, yesterday))
+    adapter = CodexAdapter()
+
+    assert adapter.recent_transcripts(cwd, time.time()) == []
+    assert adapter.transcript_path("019fca0c", cwd) == resumed
+    # A fresh pane carries the mux id as a placeholder: no rollout answers to it,
+    # and a child thread is not a root conversation.
+    assert adapter.transcript_path("11111111-2222-4333-8444-555555555555", cwd) is None
+    assert adapter.transcript_path("019fca77", cwd) is None
+
+
+def test_resume_continuation_follows_each_clis_own_transcript_rule(tmp_path: Path) -> None:
+    """Whether a resume continues the conversation is the adapter's answer.
+
+    Claude resolves transcripts through the encoded working directory, so a resume
+    under another root writes a different file: a different conversation. Codex
+    resolves by thread id and reopens the same rollout wherever the pane runs.
+    """
+    root = tmp_path / "project"
+    other = tmp_path / "elsewhere"
+    root.mkdir()
+    other.mkdir()
+    claude = ClaudeAdapter("claude.exe")
+
+    assert claude.resume_continues_conversation(str(root), str(root)) is True
+    assert claude.resume_continues_conversation(str(root), str(other)) is False
+    if os.path.normcase("A") == "a":
+        # Where the platform folds case, both spellings name one transcript
+        # directory, so refusing to continue there would fork on a spelling.
+        assert claude.resume_continues_conversation(str(root), str(root).upper()) is True
+    assert CodexAdapter().resume_continues_conversation(str(root), str(other)) is True
+    assert ShellAdapter().resume_continues_conversation(str(root), str(root)) is False

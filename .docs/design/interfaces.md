@@ -865,6 +865,8 @@ GET    /history/backfills[?project_id=]
 POST   /history/backfills              {project_id}
 GET    /history/backfills/{job_id}
 DELETE /history/backfills/{job_id}
+GET    /history/duplicates
+POST   /history/duplicates/repair     {dry_run?}
 POST   /history/{id}/resume           {project_id, ...}
 DELETE /history/{id}
 POST   /history/{id}/second-opinion   preview/confirm with project_id
@@ -873,9 +875,10 @@ GET    /history/{id}/handoff
 
 Resume/review confirmation must target an existing Project and starts at its root.
 Resume returns `409 conversation_live` (with the owning `session_id`) when a live session currently claims the row's native conversation; Branch, not resume, is the flow for forking a live conversation.
-The resumed pane keeps the conversation's effective visible name (manual name, or generated title while auto-named) with no suffix, and for a Claude row resumed at its recorded root it keeps the conversation's `agent_run_id` too: that resume continues one transcript, so it continues one history entry rather than opening a second over the same file.
-A Codex resume inherits that effective name before it mints a new run, so the generated title does not disappear with the old annotation key.
-A Codex resume, or a Claude resume into a different root, is a new conversation and gets its own entry plus a `resume` lineage edge.
+The resumed pane keeps the conversation's effective visible name (manual name, or generated title while auto-named) with no suffix, and it keeps the conversation's `agent_run_id` too: the resume continues one transcript, so it continues one history entry rather than opening a second over the same file.
+A resume inherits that effective name before any new run is minted, so a generated title does not disappear with the old annotation key. A row the user renamed resumes under that name, never under its generated title.
+Whether a resume continues the conversation is the adapter's rule: `codex resume` always does, `claude --resume` only at the conversation's recorded root. A Claude resume into a different root is a new conversation and gets its own entry plus a `resume` lineage edge.
+`GET /history/duplicates` reports conversations still split across several rows. `POST /history/duplicates/repair` folds each back into its earliest row and defaults to `dry_run: true`, reporting the keeper, the rows it would remove, the values it would carry over, and any group skipped because a live pane is still writing to a duplicate. It never edits native transcripts and never touches a quarantined row.
 Backfill jobs are daemon-local, cancellable, idempotent scans of complete shared native CLI history.
 Handoff Markdown exposes the swe-mux history ID, provider-native session ID, and recorded native
 transcript path; transcript bytes remain in the provider-owned file and are never copied into the

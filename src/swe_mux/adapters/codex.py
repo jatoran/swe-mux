@@ -69,7 +69,8 @@ def codex_lifecycle_hook_args(existing_args: list[str] | None = None) -> list[st
 class CodexAdapter:
     name = "codex"
     # Lifecycle hooks are additive but user/admin policy can disable or leave them
-    # untrusted, so `/new` retains the transcript-switch fallback.
+    # untrusted, so `/new` retains the transcript-switch fallback. A resume reports
+    # the id it already had, so it is not a rollover and nothing here fires for it.
     reports_conversation_rollover = False
     # Codex mints its own thread id, so a fresh session carries the mux session id
     # as a placeholder until SessionStart reports the real id. Transcript discovery
@@ -134,8 +135,57 @@ class CodexAdapter:
         )
         return SpawnSpec(resolved, (*prefix, *self._args(["resume", native_id, *opts.args])))
 
-    def transcript_path(self, native_id: str, cwd: Path) -> None:
-        del native_id, cwd
+    def resume_continues_conversation(self, recorded_cwd: str, target_cwd: str) -> bool:
+        """`codex resume` always continues the conversation, wherever the pane runs.
+
+        Codex addresses a conversation by thread id and appends to the rollout that
+        id already owns, so a resumed pane is the same conversation and inherits its
+        history row. Measured 2026-08-06 on codex-cli 0.146.1: one 5.2 MB rollout
+        created 08-03 18:54 holds 2,900 records written across four separate panes,
+        the original plus three later resumes, and no new rollout exists for any of
+        them. The cwd is irrelevant here — unlike Claude, Codex does not resolve
+        transcripts through it.
+
+        This answers for the resume flow, which only ever resumes a conversation no
+        live pane holds (`409 conversation_live` otherwise). Resuming a *live* one is
+        Branch's trick for making the CLI fork a child thread
+        (``parent_thread_id``), and that pane keeps its own row. Either way the
+        inheritance is self-correcting: a pane that reports a conversation id other
+        than the one it resumed goes through the ordinary rollover path, which retires
+        the inherited row and mints a run of its own.
+        """
+        del recorded_cwd, target_cwd
+        return True
+
+    def transcript_path(self, native_id: str, cwd: Path) -> Path | None:
+        """The rollout this thread id owns, located by name rather than by mtime.
+
+        `codex resume` appends to the rollout the conversation already owns, so a
+        resumed pane's transcript is a file that existed before the pane did. The
+        recency window in ``recent_transcripts`` therefore cannot see it, and waiting
+        for the mtime to catch up is not a fallback: Windows leaves an open file's
+        mtime frozen at creation while the file grows, so a live rollout can report a
+        timestamp hours older than its newest record (observed at 5 MB and 71 minutes
+        of divergence). A conversation whose id is *known* needs no window — the
+        rollout file name carries the id, and the file's own first record then proves
+        the identity, which is the evidence binding requires.
+
+        ``None`` when no rollout answers to the id. That covers the placeholder mux
+        id a fresh Codex pane carries until discovery names its real conversation,
+        and a child rollout (``parent_thread_id``), which is never a root
+        conversation — both are cases where "where does this conversation live" has
+        no truthful answer yet.
+        """
+        del cwd  # Rollouts live in a date tree, never under the session's cwd.
+        root = codex_data_home() / "sessions"
+        if not native_id or not root.exists():
+            return None
+        suffix = f"-{native_id}.jsonl".casefold()
+        for _modified, path in self._rollouts(root):
+            if not path.name.casefold().endswith(suffix):
+                continue
+            if self.transcript_native_id(path) == native_id:
+                return path
         return None
 
     def graceful_exit_keys(self) -> str:
@@ -153,8 +203,8 @@ class CodexAdapter:
             pass
         return None
 
-    def _newest_rollouts(self, root: Path) -> list[tuple[float, Path]]:
-        """The 20 newest rollout files, cached briefly and shared across sessions.
+    def _rollouts(self, root: Path) -> list[tuple[float, Path]]:
+        """Every rollout in the tree, newest mtime first, cached briefly and shared.
 
         Codex stores rollouts in a flat date tree that mux never prunes, and this
         runs on a 2-second switch-watch tick *per live Codex session*. Re-globbing
@@ -162,6 +212,11 @@ class CodexAdapter:
         thousands of stat calls a second on an install with real history — pure
         waste whenever no switch is happening. The window is short enough that a
         genuine in-CLI resume is still noticed within one extra tick.
+
+        The whole listing is cached rather than only the newest few, because
+        ``transcript_path`` looks up a *known* conversation by file name and must not
+        pay a second walk for it: a resumed rollout is old by mtime and would never
+        appear in a newest-first slice.
 
         **``os.scandir``, not ``Path.glob`` + ``path.stat()``.** Windows fills a
         ``DirEntry``'s stat fields from the directory enumeration itself, so the mtime
@@ -201,9 +256,12 @@ class CodexAdapter:
             except OSError:
                 continue
         found.sort(key=lambda item: item[0], reverse=True)
-        newest = found[:20]
-        _ROLLOUT_CACHE[key] = (now, newest)
-        return newest
+        _ROLLOUT_CACHE[key] = (now, found)
+        return found
+
+    def _newest_rollouts(self, root: Path) -> list[tuple[float, Path]]:
+        """The 20 newest rollouts: the bound on cwd/time correlation for a new pane."""
+        return self._rollouts(root)[:20]
 
     def recent_transcripts(self, cwd: Path, created_at: float) -> list[tuple[float, Path, str]]:
         root = codex_data_home() / "sessions"
