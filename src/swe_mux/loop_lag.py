@@ -30,6 +30,8 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
+from .timer_resolution import effective_period_seconds
+
 #: Cadence of the probe. Short enough to catch a stall that recurs every couple of
 #: seconds, long enough that the probe is never itself a meaningful load.
 SAMPLE_INTERVAL_SECONDS = 0.5
@@ -57,7 +59,13 @@ STALL_THRESHOLD_SECONDS = 0.1
 #: behind". What survives quantization, and what an investigation should actually read,
 #: is `max_seconds`, `worst_seconds` and `stalls`: the tick bounds the noise, so
 #: anything well past it is real.
-TIMER_QUANTIZATION_SECONDS = 0.015625
+#:
+#: Read from `timer_resolution` rather than hardcoded, because swe-mux raises the period
+#: for its own processes: with it raised the floor is 1 ms and those same percentiles
+#: stop being noise and start being signal. A diagnostic still quoting 15.6 ms after that
+#: would wave away real stalls as scheduling.
+def timer_quantization_seconds() -> float:
+    return effective_period_seconds()
 
 
 class LoopLagMonitor:
@@ -106,12 +114,14 @@ class LoopLagMonitor:
 
     def snapshot(self) -> dict[str, Any]:
         samples = sorted(self._samples)
+        quantization = timer_quantization_seconds()
         if not samples:
             return {
                 "samples": 0,
                 "observed": self._observed,
                 "stalls": self._stalls,
                 "stall_threshold_seconds": self._stall_threshold,
+                "timer_quantization_seconds": timer_quantization_seconds(),
             }
         return {
             "samples": len(samples),
@@ -124,8 +134,8 @@ class LoopLagMonitor:
             # The floor below which the percentiles above are the OS timer tick rather
             # than congestion. Reported so a reader can tell the two apart without
             # having to know this platform's scheduling behaviour.
-            "timer_quantization_seconds": TIMER_QUANTIZATION_SECONDS,
-            "quantization_bound": samples[-1] <= TIMER_QUANTIZATION_SECONDS,
+            "timer_quantization_seconds": quantization,
+            "quantization_bound": samples[-1] <= quantization,
             # Retained across the whole process lifetime, unlike the window above: the
             # single worst stall since boot is the one a report should not lose just
             # because it happened a few minutes ago.

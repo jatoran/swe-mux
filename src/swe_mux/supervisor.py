@@ -37,6 +37,7 @@ from typing import IO, Any
 
 from .pty_host import PtyHost
 from .scrollback import ScrollbackBuffer
+from .timer_resolution import raise_timer_resolution
 from .win_jobobj import ReaperJob, process_in_job
 
 log = logging.getLogger(__name__)
@@ -637,6 +638,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     config_path = args.config
     data_dir = resolve_data_dir(config_path)
     _crash_log = _setup_logging(data_dir)  # noqa: F841 - keeps faulthandler's target open
+    # Before any PTY reader starts. This process exists to move terminal bytes, and its
+    # reader waits on sub-tick intervals that Windows would otherwise round up to
+    # ~15.6 ms — collapsing the poll ladder in `pty_host` into a single value and
+    # rounding its 40 ms idle rung up to 46.6 ms. See `timer_resolution`.
+    raise_timer_resolution()
     if process_in_job():
         log.warning(
             "supervisor is running inside a Windows Job object (launched from "

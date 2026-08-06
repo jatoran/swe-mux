@@ -15,6 +15,7 @@ from .lifecycle import ledger
 from .logsetup import enable_crash_tracebacks, setup_daemon_logging
 from .server import create_app
 from .tailscale import enable_mobile_voice_serve, listener_hosts
+from .timer_resolution import raise_timer_resolution
 from .win_jobobj import process_in_job
 
 
@@ -230,6 +231,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             print("No PTY supervisor is running for this config.")
         return
     enable_crash_tracebacks(config.data_dir)
+    # Before the event loop starts. Every `asyncio.sleep` here, and therefore every
+    # round trip between a keystroke and its echo, is quantized to the Windows timer
+    # tick without this: a 0.5 ms sleep measured 15.6 ms. See `timer_resolution`.
+    raise_timer_resolution()
     _warn_if_inside_job(config)
     if args.relaunch_wait:
         wait_for_port_free(config.host, config.port)

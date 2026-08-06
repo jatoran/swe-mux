@@ -195,6 +195,21 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   pid younger than that refresh and nothing else. Iteration-count health could never have shown
   this — `process-inspector` ticks about every 6.5 s, making it one of the *least* frequent
   loops in the daemon.
+- **Tuning a wait below the OS timer tick is not tuning.** Windows expires waitable
+  timers on a global ~15.625 ms boundary, so `threading.Event.wait(0.0005)` and
+  `asyncio.sleep(0.0005)` both cost ~15.6 ms, and a 40 ms wait rounds *up* to 46.6 ms.
+  That silently defeated the PTY reader's three-rung poll ladder: every rung resolved to
+  the same value, and the rung meant to be cheapest cost exactly as much as the idle one.
+  `timer_resolution.raise_timer_resolution()` is therefore called before the event loop
+  in the daemon and before any reader starts in the supervisor. Since Windows 10 2004
+  `timeBeginPeriod` is per-process, so this asks for a sharper timer for swe-mux and
+  leaves the rest of the system alone. Measured end-to-end keystroke-to-echo across the
+  full websocket/daemon/supervisor/ConPTY path: **p50 16.3 ms to 2.35 ms, min 15.65 ms to
+  2.03 ms, max 17.1 ms to 6.4 ms**. `time.sleep` was never affected (CPython already backs
+  it with a high-resolution timer on Windows); only the primitives this code waits on
+  were. Anything measuring latency must read the *effective* period from
+  `timer_resolution.effective_period_seconds()` rather than assuming either value, or it
+  reports the scheduler as congestion at 15.6 ms and dismisses real stalls as noise at 1 ms.
 - **A monitor must not mutate what it monitors: every read-only Git call passes
   `--no-optional-locks`.** `git status` and `git diff` refresh the index and *write it
   back* whenever a tracked file's mtime has moved, taking `.git/index.lock` to do so. In a

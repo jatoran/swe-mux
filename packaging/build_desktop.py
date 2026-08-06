@@ -21,6 +21,7 @@ SUPERVISOR_SOURCES = (
     ROOT / "src" / "swe_mux" / "supervisor.py",
     ROOT / "src" / "swe_mux" / "pty_host.py",
     ROOT / "src" / "swe_mux" / "scrollback.py",
+    ROOT / "src" / "swe_mux" / "timer_resolution.py",
     ROOT / "src" / "swe_mux" / "win_jobobj.py",
     ROOT / "src" / "swe_mux" / "subprocess_flags.py",
     ROOT / "packaging" / "supervisor_entry.py",

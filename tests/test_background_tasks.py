@@ -311,14 +311,14 @@ def test_loop_lag_flags_a_distribution_that_is_only_the_timer_tick() -> None:
     daemon therefore reads worse here than a busy one, because system activity raises
     the global timer resolution and sharpens everyone's sleeps.
     """
-    from swe_mux.loop_lag import TIMER_QUANTIZATION_SECONDS, LoopLagMonitor
+    from swe_mux.loop_lag import LoopLagMonitor, timer_quantization_seconds
 
     quiet = LoopLagMonitor()
     for lag in (0.0002, 0.0135, 0.0154, 0.0089, 0.0155):
         quiet.observe(lag)
     snapshot = quiet.snapshot()
     assert snapshot["quantization_bound"] is True, "an all-under-tick window is not congestion"
-    assert snapshot["timer_quantization_seconds"] == TIMER_QUANTIZATION_SECONDS
+    assert snapshot["timer_quantization_seconds"] == timer_quantization_seconds()
     assert snapshot["min_seconds"] == 0.0002
     assert snapshot["stalls"] == 0
 

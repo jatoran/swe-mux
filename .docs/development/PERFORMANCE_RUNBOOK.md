@@ -43,8 +43,12 @@ Vary `--idle-gap` to cross the PTY reader's poll rungs
 (`pty_host.read_poll_interval`) - after the reader's wake was made interruptible, all
 three rungs read the same, and a gap-dependent result means that wake has regressed.
 
-Reference, measured 2026-08-05 on a quiet fleet: **p50 ~16 ms, max ~17 ms, independent of
-idle gap**. A p50 that tracks the idle gap is the specific regression to look for.
+Reference, measured 2026-08-05 on a quiet fleet: **p50 ~2.4 ms, p95 ~3.6 ms, max ~6.4 ms,
+independent of idle gap** (40 samples).
+Two regressions to look for: a p50 that tracks `--idle-gap` means the reader's wake has
+broken, and a p50 jumping to ~16 ms means
+`timer_resolution.raise_timer_resolution()` is not taking effect and every wait has fallen
+back to the OS timer tick.
 
 ## Order of investigation
 
@@ -66,10 +70,10 @@ Measured 2026-08-05 after the fixes of that day, on one machine, so treat them a
 rather than as thresholds.
 Capture your own with `--json` and compare against it; that is what the flag is for.
 
-| fleet | daemon | supervisor | WebView | loop-lag max | keystroke p50 |
+| fleet | daemon | supervisor | WebView | loop-lag p50 | keystroke p50 |
 | --- | --- | --- | --- | --- | --- |
-| 0 sessions (idle) | **0.10%** of a core | 0.00% | 0.20% | under the timer tick | n/a |
-| 10 sessions, ~340 MB of transcripts, all idle | **1.50%** of a core | 0.00% | 0.60% | 30 ms, 1 stall in 2049 | 16.3 ms |
+| 0 sessions (idle) | **0.10%** of a core | 0.00% | 0.20% | 1.99 ms | 2.35 ms |
+| 10 sessions, ~340 MB of transcripts, all idle | **1.50%** of a core | 0.00% | 0.60% | 0.70 ms | 3.09 ms |
 
 The loaded fleet was 3 Codex (174 / 35 / 15 MB rollouts), 4 Claude (74 / 57 / 30 / 26 MB
 transcripts) and 3 shells, resumed and never prompted, so the figure is what swe-mux costs to
