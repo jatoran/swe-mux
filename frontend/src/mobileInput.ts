@@ -41,9 +41,71 @@ export function touchWheelDelta(previousY: number, currentY: number, settings: M
   return fingerDelta * direction * settings.scrollSensitivity
 }
 
-export function terminalScrollLines(deltaPixels: number, rowHeight: number): number {
-  if (!deltaPixels || rowHeight <= 0) return 0
-  return Math.trunc(deltaPixels / rowHeight) || (deltaPixels > 0 ? 1 : -1)
+/**
+ * Touch-scroll acceleration.
+ *
+ * A drag tracks the finger 1:1 at reading speed (content staying under the thumb is the whole
+ * point of direct manipulation, and anything faster makes a small correction overshoot) and
+ * gains up to `maxGain` as the flick gets faster, which is how a native scroller crosses a long
+ * document without a dozen swipes. The user's own `scrollSensitivity` multiplies on top and is
+ * deliberately left out of the velocity measurement: the ramp reads the finger, not the setting,
+ * so raising sensitivity scales the whole curve rather than shifting where acceleration starts.
+ *
+ * The ramp is on velocity rather than on per-event distance because velocity is what the user
+ * controls. A 120 Hz phone reports half the movement per event at twice the rate; measuring
+ * distance would read that as a slow drag, while velocity reads both as the same gesture.
+ */
+export const TOUCH_SCROLL_ACCELERATION = {
+  /** px/ms at or below which the drag is 1:1. A deliberate reading drag sits under this. */
+  slowVelocity: 0.4,
+  /** px/ms at which the gain saturates. A flick clears it easily; a drag never reaches it. */
+  fastVelocity: 2.4,
+  maxGain: 3,
+  /**
+   * Weight of the newest sample in the running velocity. Enough smoothing that the gain does
+   * not flicker between two events of one gesture, little enough that a flick is at full gain
+   * within a few of them: an acceleration that arrives late reads as the scroll ignoring you.
+   */
+  smoothing: 0.4,
+}
+
+/** The running finger speed in px/ms, smoothed against per-event jitter. */
+export function smoothTouchVelocity(previous: number, deltaPixels: number, elapsedMs: number): number {
+  // Two events at the same timestamp (coalesced, or a clock with no resolution left) carry no
+  // velocity information at all. Keeping the previous value is the honest reading; dividing by
+  // zero would report an infinitely fast flick for a finger that had barely moved.
+  if (!(elapsedMs > 0)) return previous
+  const sample = Math.abs(deltaPixels) / elapsedMs
+  const { smoothing } = TOUCH_SCROLL_ACCELERATION
+  return previous * (1 - smoothing) + sample * smoothing
+}
+
+/** The multiplier a drag at `velocity` px/ms earns: 1 at reading speed, `maxGain` at a flick. */
+export function touchScrollGain(velocity: number): number {
+  const { slowVelocity, fastVelocity, maxGain } = TOUCH_SCROLL_ACCELERATION
+  const ramp = (velocity - slowVelocity) / (fastVelocity - slowVelocity)
+  return 1 + (maxGain - 1) * Math.max(0, Math.min(1, ramp))
+}
+
+export type TerminalScrollSteps = {
+  /** Whole rows to scroll now. */
+  steps: number
+  /** Sub-row travel to carry into the next move event. */
+  remainder: number
+}
+
+/**
+ * Split a pixel budget into whole rows and the remainder to carry.
+ *
+ * Carrying it is what makes a drag track the finger. Truncating each event on its own throws
+ * away up to a row of travel *per event*, which on a 120 Hz phone reporting 10px at a time is
+ * most of the gesture; the old fallback of "any movement is at least one row" corrected for
+ * that by over-scrolling every slow drag instead. A running remainder needs neither.
+ */
+export function terminalScrollSteps(pixels: number, rowHeight: number): TerminalScrollSteps {
+  if (rowHeight <= 0) return { steps: 0, remainder: 0 }
+  const steps = Math.trunc(pixels / rowHeight)
+  return { steps, remainder: pixels - steps * rowHeight }
 }
 
 export function mobileDragTarget(mode: MobileVerticalDrag, mouseTracking: boolean): MobileDragTarget {

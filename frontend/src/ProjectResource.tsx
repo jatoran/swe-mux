@@ -13,6 +13,7 @@ import { composeAgentMessage, selectionText } from './noteSelection'
 import type { EditorSnapshot } from './noteSelection'
 import { findMatches, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
 import { headingIndexAt, headingTrail, outlineDepths, outlineHeadings, type OutlineHeading } from './noteOutline'
+import { scrollLineIntoView, type ViewportScroller } from './noteScroll'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
 import { projectResourceCreationParent } from './projectResourceCreate'
@@ -680,8 +681,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   // keep in step with an edit: the list is re-derived whenever the panel opens.
   const [outlineOpen,setOutlineOpen]=useState(false)
   const [outline,setOutline]=useState<readonly OutlineHeading[]>([])
-  const [outlineAt,setOutlineAt]=useState(-1)
   const outlinePanel=useRef<HTMLDivElement>(null)
+  const outlineTrigger=useRef<HTMLButtonElement>(null)
   const outlineDepthList=useMemo(()=>outlineDepths(outline),[outline])
   /** First visible source line, from Continuity 0.2.20's viewport window. */
   const [viewportLine,setViewportLine]=useState(0)
@@ -691,9 +692,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     const element=editorElement.current
     let snapshot:EditorSnapshot|null=null
     try{snapshot=element?element.snapshot():null}catch{snapshot=null}
-    const headings=snapshot?outlineHeadings(snapshot.text):[]
-    setOutline(headings)
-    setOutlineAt(headingIndexAt(headings,snapshot?.selections[0]?.head??null))
+    setOutline(snapshot?outlineHeadings(snapshot.text):[])
   }
   const openOutline=()=>{
     readOutline()
@@ -732,6 +731,19 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   },[autosaved,project.id,resource.kind,resource.id,loadGeneration])
 
   /**
+   * Which heading the reader is under, from the viewport rather than the caret.
+   *
+   * The caret used to answer this, back when opening the outline and jumping both moved it.
+   * Now that a jump only scrolls, the caret is wherever the last edit left it, which on a note
+   * being read is nowhere in particular - and on a phone, where the caret is never placed at
+   * all, it was the top of the document forever. The first visible line is what "where am I"
+   * means for a reader, and it is what the trail below already reads.
+   */
+  const outlineAt=useMemo(
+    ()=>headingIndexAt(outline,{line:viewportLine,byteInLine:0}),
+    [outline,viewportLine],
+  )
+  /**
    * The heading chain over the reading position, outermost first.
    *
    * Only crumbs that have actually scrolled off are kept. A heading still on screen needs no
@@ -740,29 +752,53 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
    * coincide.
    */
   const trail=useMemo(()=>{
-    const index=headingIndexAt(outline,{line:viewportLine,byteInLine:0})
-    if(index<0)return []
-    return headingTrail(outline,index).filter(heading=>heading.line<viewportLine)
-  },[outline,viewportLine])
+    if(outlineAt<0)return []
+    return headingTrail(outline,outlineAt).filter(heading=>heading.line<viewportLine)
+  },[outline,outlineAt,viewportLine])
+  /** The four editor calls `scrollLineIntoView` drives, over the live element. */
+  const editorScroller=(element:ContinuityEditorElement):ViewportScroller=>({
+    window:()=>element.visibleLineRange(),
+    top:()=>element.getScrollState().top,
+    scrollTo:top=>element.restoreScrollState({top,left:element.getScrollState().left}),
+    viewportHeight:()=>element.getBoundingClientRect().height,
+  })
   /**
-   * Centre the heading rather than revealing it minimally: `align:'nearest'` scrolls as little
-   * as it can, which for a deliberate jump leaves the target wherever it happened to land.
-   * The caret is collapsed to the line start so the next keystroke edits the heading, and
-   * focus goes back to the editor because the panel button took it on click.
+   * Scroll to a heading, and touch nothing else.
+   *
+   * Deliberately viewport-only: no caret move, no editor focus. Jumping is a reading gesture,
+   * and both of the things it used to do were edits in disguise. Moving the caret silently
+   * relocates where the next keystroke lands and where an unrelated Escape or find-next
+   * resumes from, on a note the reader may not have meant to touch. Focusing the editor is
+   * worse on touch, where it raises the Android keyboard over the very passage the tap was
+   * asking to see - the caret is not an interaction surface on a phone at all, so a jump that
+   * needs one is a jump that costs half the screen.
+   *
+   * `revealRange` is not the way there, for the same reason and for a second one. It sets the
+   * primary selection as part of revealing, which is the caret move again, and it computes the
+   * scroll in the hidden textarea's coordinates while the reader is looking at the projection,
+   * so it lands short of the target by whatever extra height the projection carries above it
+   * (`noteScroll.ts`). The loop below asks the editor which lines it actually put on screen and
+   * corrects until the answer is the heading.
    */
-  const jumpToHeading=(heading:OutlineHeading,options:{focus?:boolean}={})=>{
+  const jumpToHeading=(heading:OutlineHeading)=>{
+    // The panel unmounts on click, taking the focused row with it, so a keyboard user needs
+    // somewhere to land. The control that opened it is that place: it is a button, so focusing
+    // it raises no soft keyboard, which is the whole reason this no longer focuses the note.
+    if(outlinePanel.current?.contains(document.activeElement))outlineTrigger.current?.focus()
     setOutlineOpen(false)
     const element=editorElement.current
     if(!element)return
-    // A heading can go stale if the note changed under an open panel; landing the caret is a
+    // A heading can go stale if the note changed under an open panel; scrolling to it is a
     // convenience, never worth an error.
-    try{
-      element.revealRange({start:heading.start,end:heading.end},{align:'center'})
-      element.setSelections([{anchor:heading.start,head:heading.start,kind:'caret'}])
-    }catch{/* ignored */}
-    // The trail is tapped while reading, so it opts out of taking focus: on touch that would
-    // raise the keyboard over the note the tap was meant to navigate.
-    if(options.focus!==false)element.focus()
+    try{scrollLineIntoView(editorScroller(element),heading.line)}catch{/* ignored */}
+    // Lines realize at their true height as they enter the viewport, which can move the target
+    // after the loop has already measured it. One frame later it runs again, and costs a single
+    // measurement when nothing moved.
+    requestAnimationFrame(()=>{
+      const live=editorElement.current
+      if(!live)return
+      try{scrollLineIntoView(editorScroller(live),heading.line)}catch{/* ignored */}
+    })
   }
   const outlineRef=useRef(openOutline)
   outlineRef.current=openOutline
@@ -772,9 +808,10 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     if(!outlineOpen)return
     const element=editorElement.current
     // Deliberately no focus restore on close, unlike the tree menu: every way out of this
-    // panel already decides where focus belongs (a jump and Escape both put it back in the
-    // editor, an outside click leaves it where the user clicked), and restoring it here would
-    // pull focus back to the header button after the jump had already placed the caret.
+    // panel already decides where focus belongs (a jump hands it back to the trigger, Escape
+    // puts it in the editor because that is a keyboard user asking to resume editing, an
+    // outside click leaves it where the user clicked), and a blanket restore here would pull
+    // focus to the header button behind whichever of those had already placed it.
     const frame=requestAnimationFrame(()=>{
       const buttons=[...outlinePanel.current?.querySelectorAll<HTMLButtonElement>('button')||[]]
       ;(buttons[Math.max(outlineAt,0)]||buttons[0])?.focus()
@@ -834,7 +871,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     setFindIndex(0)
     setOutlineOpen(false)
     setOutline([])
-    setOutlineAt(-1)
+    setViewportLine(0)
   },[project.id,resource.kind,resource.id])
 
   /**
@@ -1188,7 +1225,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
           editor owns no selection engine, so its send is always the whole document. */}
       {canSendText&&<button class="resource-send" title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}
       {autosaved&&<button class="resource-find" disabled={!editable} title="Find in this note" aria-label="Find in this note" onClick={openFind}>⌕</button>}
-      {autosaved&&<button class="resource-outline" disabled={!editable} title="Jump to a heading" aria-label="Jump to a heading" aria-haspopup="menu" aria-expanded={outlineOpen}
+      {autosaved&&<button ref={outlineTrigger} class="resource-outline" disabled={!editable} title="Jump to a heading" aria-label="Jump to a heading" aria-haspopup="menu" aria-expanded={outlineOpen}
         onMouseDown={event=>event.stopPropagation()}
         onClick={()=>outlineOpen?setOutlineOpen(false):openOutline()}>☰</button>}
       {isDelimitedFile&&<><button class={fileViewMode==='preview'?'active':''} onClick={()=>setFileViewMode('preview')}>Table</button><button class={fileViewMode==='raw'?'active':''} onClick={()=>setFileViewMode('raw')}>Raw</button></>}
@@ -1214,7 +1251,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     {autosaved&&trail.length>0&&<div class="note-trail" role="navigation" aria-label="Heading trail">
       {trail.map(heading=><button key={heading.line} type="button"
         title={`Jump to ${heading.text||'this heading'}`}
-        onClick={()=>jumpToHeading(heading,{focus:false})}>{heading.text||'(untitled)'}</button>)}
+        onClick={()=>jumpToHeading(heading)}>{heading.text||'(untitled)'}</button>)}
     </div>}
     {outlineOpen&&<div class="note-outline" ref={outlinePanel} role="menu" aria-label="Note headings"
       onMouseDown={event=>event.stopPropagation()}>

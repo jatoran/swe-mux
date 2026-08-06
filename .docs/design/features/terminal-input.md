@@ -64,13 +64,25 @@ The hidden mobile textarea is not used as a document mirror: it remains an end-p
 
 ### Wheel scroll to an application-owned viewport
 
-When the application holds the mouse, every wheel notch becomes SGR scroll reports (one per line, ~7 per 120px notch) and each report is a full repaint by the CLI (~2-20 KB of output).
+When the application holds the mouse, a scroll gesture becomes a run of SGR scroll reports, one per row of travel, and each report is a full repaint by the CLI (~2-20 KB of output).
+xterm emits exactly one report per wheel event whatever magnitude that event carries, so the pane dispatches one line-mode wheel event per row it means to scroll (`forwardApplicationScroll`), bounded at `APPLICATION_SCROLL_MAX_ROWS` per gesture event against a degenerate row-height measurement.
+Line mode also steps around xterm's pixel branch, which divides by the measured row height and then damps any delta under 50 pixels to 30% of itself: a touch drag reports 10-40 pixels per move, so every one of them was cut to a third.
 A full-width Claude pane was measured consuming ~230 reports per second; a free-spinning wheel or trackpad flick emits thousands, and nothing else in the pipeline sheds load, so the excess was banked scrolling the terminal kept performing for 4-12 seconds after the gesture ended.
 The pane therefore paces wheel reports through `terminalWheelPacing.ts`: batches of at most `WHEEL_BATCH_MAX` per animation frame, each released only after the previous batch's repaint arrived (`noteOutput`, the PTY output ack) or after `WHEEL_ACK_TIMEOUT_MS` of silence (an application at its buffer edge repaints nothing), with the queue capped at `WHEEL_QUEUE_MAX` reports.
 The wheel is treated as a velocity control, not a distance ledger: past the cap, notches shorten the gesture instead of banking runaway scroll, and a direction reversal drops the stale queue outright.
 Ordering is preserved by construction: any non-wheel input flushes the queue first, and a view command (jump-to-latest) discards it, since queued scrolls landing after `^End` would drag the viewport straight back off the tail.
 At human scroll rates the ack returns faster than the wheel turns and the pacer is transparent; measured round-trip stays ~5 ms while a 400-notch flick's tail dropped from 4-12 s to under ~300 ms.
 Only plain vertical wheel reports (`CSI < 64/65 … M`) are paced: clicks, drags, and modified wheels keep their exact ordering.
+
+### Touch drag scrolling
+
+A one-finger vertical drag scrolls whichever viewport owns the session: xterm's scrollback, or the application's own when it holds the mouse.
+`mobile_vertical_drag` picks the target through `mobileDragTarget`, whose `smart` default follows mouse tracking.
+Both targets convert one pixel budget with `terminalScrollSteps`, which carries the sub-row remainder into the next move event.
+Truncating each event on its own discards up to a row of travel per event, which at a 120 Hz pointer rate is most of the gesture; the fallback it replaces ("any movement scrolls at least one row") corrected for that by over-scrolling every slow drag instead.
+Travel is scaled by the user's `mobile_scroll_sensitivity`, then by `touchScrollGain`: 1:1 at or below `slowVelocity`, rising linearly to `maxGain` at `fastVelocity` (`TOUCH_SCROLL_ACCELERATION`).
+Velocity is measured on the raw finger by `smoothTouchVelocity`, an exponential average in pixels per millisecond taken before direction and sensitivity are applied.
+Reading velocity rather than per-event distance makes the ramp independent of the device's pointer-event rate, and reading the finger rather than the scaled result means sensitivity scales the whole curve instead of moving where acceleration begins.
 
 ### Geometry
 

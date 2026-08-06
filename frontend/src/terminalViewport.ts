@@ -120,11 +120,11 @@ export function trackAppTailDistance(distancePx: number, deltaPixels: number): n
 /**
  * Whether that estimate is far enough to mean the application actually scrolled.
  *
- * A row, because a row is the granularity it is scrolled at: xterm turns wheel pixels into
- * whole wheel-button reports and carries the remainder, so a drag worth less than a row moves
- * nothing behind it. A finger resting on the glass delivers exactly that - a pixel or two of
- * jitter per touch event, in whichever direction the hand settles - and counting it as a
- * scroll raises a chip over a session nobody scrolled.
+ * A row, because a row is the granularity it is scrolled at: the pane converts drag pixels into
+ * whole wheel-button reports and carries the remainder (`terminalScrollSteps`), so a drag worth
+ * less than a row moves nothing behind it. A finger resting on the glass delivers exactly that -
+ * a pixel or two of jitter per touch event, in whichever direction the hand settles - and
+ * counting it as a scroll raises a chip over a session nobody scrolled.
  */
 export function appOffTailByDistance(distancePx: number, rowHeightPx: number): boolean {
   return distancePx >= Math.max(1, rowHeightPx)

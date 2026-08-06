@@ -23,6 +23,11 @@ GIT_DIFF_MAX_BYTES = 1024 * 1024
 GIT_DIFF_MAX_LINES = 10_000
 GIT_COMPARE_REF_MAX_CHARS = 200
 GIT_COMPARE_CANDIDATE_LIMIT = 200
+# A commit message is prose written to be read, so the whole of it is served rather than a
+# subject line - the expanded commit row is the one surface with room for it. The cap is a
+# guard against a pathological commit (a generated changelog, a squashed import), not a
+# display budget: no message a human wrote comes near it.
+GIT_COMMIT_MESSAGE_MAX_CHARS = 16_384
 _OID = re.compile(r"[0-9a-fA-F]{40,64}\Z")
 _UNMERGED = frozenset({"DD", "AU", "UD", "UA", "DU", "AA", "UU"})
 
@@ -881,14 +886,16 @@ async def commit_changes(
         parent_label = (
             "vs first parent" if len(parents) > 1 and parent == parents[0] else f"vs {parent[:8]}"
         )
-    name_result, stat_result, raw_result = await asyncio.gather(
+    name_result, stat_result, raw_result, message_result = await asyncio.gather(
         _run_git_bytes(repository, *name_args),
         _run_git_bytes(repository, *stat_args),
         _run_git_bytes(repository, *raw_args),
+        _run_git_bytes(repository, "log", "-1", "--format=%B", commit),
     )
     _require_success(name_result, "measuring commit files", not_found=True)
     _require_success(stat_result, "measuring commit statistics", not_found=True)
     _require_success(raw_result, "measuring commit entry modes", not_found=True)
+    _require_success(message_result, "reading the commit message", not_found=True)
     summary = change_summary(
         _apply_submodules(
             _apply_numstat(
@@ -911,11 +918,13 @@ async def commit_changes(
         count=summary["total"],
         truncated=summary["truncated"],
     )
+    message = message_result.stdout.decode("utf-8", "replace").strip("\n")
     return {
         "commit": commit,
         "parent": parent,
         "parents": parents,
         "parent_label": parent_label,
+        "message": message[:GIT_COMMIT_MESSAGE_MAX_CHARS],
         "summary": summary,
     }
 

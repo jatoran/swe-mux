@@ -935,7 +935,8 @@ Each summary reports totals, additions, deletions, binary and submodule counts, 
 Lines are either `{kind:"connector", graph}` or typed commit rows carrying `graph`, `oid`, `parents`, `refs`, `author`, `committed_at`, and `subject`.
 Git supplies the graph prefixes and the browser renders them without reconstructing topology.
 
-`GET /git/commits/{full_oid}/changes?project_id=ID[&parent=FULL_OID]` validates the commit and selected direct parent, then returns the complete parent list and a bounded file summary.
+`GET /git/commits/{full_oid}/changes?project_id=ID[&parent=FULL_OID]` validates the commit and selected direct parent, then returns the complete parent list, the commit `message`, and a bounded file summary.
+`message` is the whole message, subject and body, capped at 16,384 characters; it is independent of the selected parent.
 Root commits use Git's initial-commit comparison, and merge commits default to their first parent while allowing another direct parent.
 
 `GET /git/diff` requires `project_id`, `scope`, and `path` plus the locator fields for `unstaged`, `staged`, `conflicted`, `branch`, or `commit` scope.

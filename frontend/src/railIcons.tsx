@@ -43,6 +43,16 @@ export const AttachIcon = () => <svg {...stroke}>
   <path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />
 </svg>
 
+/** A plain right arrow: the submit mark, on the pinned mobile Send end-cap.
+ *
+ * Not a paper plane and not a chevron. The plane says "message" on a control that submits
+ * whatever is composed (a slash command, an approval, a bare Enter), and a lone chevron is the
+ * mark the rail's own key buttons wear. An arrow into the terminal is what the button does. */
+export const SendIcon = () => <svg {...stroke}>
+  <line x1="3" y1="12" x2="19" y2="12" />
+  <polyline points="13 6 19 12 13 18" />
+</svg>
+
 /** The git branch mark: a trunk, a fork, and the commit each ends at. */
 export const BranchIcon = () => <svg {...stroke}>
   <line x1="6" y1="3" x2="6" y2="15" />

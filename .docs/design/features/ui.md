@@ -31,12 +31,10 @@ responsive controls.
   A Project row is followed directly by its layout/session rows; notes do not appear in the tree.
 - **Project rows carry no `Note` / `Files` chips.**
   Both surfaces live in the utility drawer and the Project context menu exposes `Notes…` and `Browse files…` for another Project.
-- Projects sit in sections: one per Group, plus the ungrouped remainder headed `PROJECTS`, which
-  behaves as a section in every respect rather than as a pinned leftover. A section header does
-  two jobs, and they compose rather than competing: press-and-move reorders it, press-and-release
-  folds it. Drag-versus-click is settled by the drag swallowing the click it ends with — the same
-  resolution a Project row already uses for drag-versus-select, so there is one rule to learn
-  rather than two. The header's only button is `✎`, which renames the Group.
+- Projects sit in sections: one per Group, plus the ungrouped remainder headed `PROJECTS`, which behaves as a section in every respect rather than as a pinned leftover.
+  On desktop, a section header reorders on press-and-move and folds on press-and-release; the drag swallows its ending click.
+  On mobile, a section header only folds because Project rows are the sidebar's sole reorder target.
+  The header's only button is `✎`, which renames the Group.
 - **A sidebar toolbar above the tree owns sort and fold-everything**, because both act on the
   whole tree rather than on one section, and because a control inside a scrolling list is a
   control you have to scroll back to. It holds two buttons:
@@ -79,9 +77,9 @@ responsive controls.
   On the left they shared a gutter with the tree's connector lines, so a row marker read as a
   branch, and consecutive marked rows merged into one long rule that looked like a stray spine.
   The left gutter belongs to the tree alone.
-- The active-Project header and each Project row expose **Run**. Its compact menu contains new
-  Claude/Codex/shell/custom-terminal launchers followed by trusted Project Actions; it is a
-  launch surface, not persistent sidebar grouping.
+- The active-Project header and each Project row expose **Run**.
+  Its compact menu contains new Claude/Codex/shell/custom-terminal launchers followed by trusted Project Actions; it is a launch surface, not persistent sidebar grouping.
+  Mobile Project rows also expose `⋮` immediately left of Run, giving Project actions a direct tap target.
 - Run is the only always-present launcher, since tab strips carry no new-tab button
   (`workspace-layout.md`). The header Run is styled as an accent chip rather than a faint label,
   and because it has no room in the 40 px collapsed header column, the collapsed rail carries an
@@ -173,6 +171,11 @@ responsive controls.
   Desktop right-click and mobile long-press target the named tab or session without changing the active Project, pane-active tab, focused view, or active terminal.
   The click synthesized after a sidebar long-press is consumed; normal click/tap remains the activation gesture.
   Menu actions operate on the captured target without selecting it unless the action explicitly opens or focuses that target.
+- Mobile Project long-press is not a context-menu gesture.
+  A 325 ms hold with no movement beyond 8 px picks up the Project; earlier vertical movement remains native sidebar scrolling and shows no reorder feedback.
+  Pickup closes open menus, claims the pointer, gives short haptic feedback, lifts the row, and enables insertion preview plus edge auto-scroll inside its current section.
+  `⋮` opens the Project context menu on tap, while desktop right-click retains the same menu.
+  Mobile sessions and every other sidebar row never start a sidebar drag; session long-press remains context-menu-only.
 - **No context menu reorders or reshapes anything, on any platform.** Open-in-split,
   new-terminal-in-split, new-custom-terminal-in-split, stack-with-focused, dissolve-stack, and
   move-tab are absent from the session menu on every source (sidebar row, tab, pane bar / `⋯`),
@@ -585,16 +588,18 @@ responsive controls.
   Claude session at all.
 - The pane therefore keeps a running estimate of where that second viewport is, since nothing
   reports it.
-  `trackAppTailDistance` totals the scroll the pane forwards, in the pixels those wheel events
-  carry, and the chip is `appOffTailByDistance` reading the total as at least one rendered row.
+  `trackAppTailDistance` totals the scroll the pane forwards, in the rows it actually handed the
+  application, and the chip is `appOffTailByDistance` reading the total as at least one rendered
+  row.
   Both directions count.
   A drag back through the history raises the chip, and a drag toward the newest output spends
   the same total back down to zero and takes it away, so a reader who scrolls their own way
   back is not left with a chip that only its own tap can dismiss, sitting over a viewport
   already exactly where the tap would send it.
-  One row is the threshold because xterm converts wheel pixels into whole wheel-button reports
-  and carries the remainder, so a drag worth less than a row moves nothing behind it - and a
-  finger resting on the glass delivers a pixel or two of jitter per touch event.
+  One row is the threshold because the pane converts drag pixels into whole wheel-button reports
+  and carries the remainder (`terminalScrollSteps`), so a drag worth less than a row moves
+  nothing behind it - and a finger resting on the glass delivers a pixel or two of jitter per
+  touch event.
   The total is clamped at zero because the application clamps at its own tail: banking credit
   for scrolls that moved nothing would delay the next chip by exactly that credit.
 - The estimate is reset outright, rather than spent down, by the four events that make it
@@ -736,7 +741,9 @@ responsive controls.
   A status readout follows the configured items.
   On narrow/coarse Claude and Codex panes, the configurable Enter item is
   removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate
-  grid column. The four arrows are non-focusing pointer controls: press sends once, then a 350 ms
+  grid column. The end-cap draws a right-arrow icon rather than the word: it is the one control on
+  the rail with a fixed place, so it is recognised by shape, and the width the word cost goes back
+  to the scrolling keys. It keeps its 44px tap height and its accessible name; only the width fell. The four arrows are non-focusing pointer controls: press sends once, then a 350 ms
   hold repeats every 75 ms until release or cancellation. Preventing pointer focus keeps an open
   mobile keyboard open; keyboard and assistive activation remain one-shot. A touch beginning on
   an arrow steers the terminal rather than horizontally scrolling the rail.
@@ -1125,16 +1132,19 @@ responsive controls.
   `drawer.moveLeft`, `drawer.moveRight`, `drawer.moveUp`, and `drawer.moveDown` provide keyboard geometry changes, while `drawer.next` and `drawer.previous` cycle within the focused utility pane.
   `drawer.resetLayout` restores one canonical stack and reconciles every Project presentation.
   Existing bindings for `drawer.resetTabs` migrate through a hidden alias.
-- Settings > Appearance exposes `drawer_tab_display` as **Icons** or **Titles**, defaulting to Icons.
-  Right-clicking a tab in either the open drawer rail or the desktop launcher rail exposes the same persisted Text labels toggle.
-  The setting applies to every pane rail, the mobile projection, and the desktop launcher.
+- Settings > Appearance exposes independent **Icons** or **Titles** preferences for drawer tabs (`drawer_tab_display`) and the desktop right rail (`utility_rail_display`), both defaulting to Icons.
+  Right-clicking a tab changes only the surface that owns that tab, so an internal tab-mode change cannot resize the outer workspace grid.
+  Mobile long-press opens the drawer-tab menu after 550 ms with 8 px movement tolerance; the following synthetic click is consumed.
+  The root-rendered menu stays above the mobile drawer overlay so every action remains tappable.
   Icon mode uses `DRAWER_TAB_ICONS`, while title mode uses the short `DrawerTab.label`; neither mode renders both marks.
-  Title rails remain one-line scrollers with the same endpoint-aware overflow controls, and title mode widens the outer launcher through `--utility-rail-width`.
+  Title rails remain one-line scrollers with the same endpoint-aware overflow controls, and only right-rail title mode widens the outer launcher through `--utility-rail-width`.
   Queue and Alerts badges, scope dots, accessible names, tooltips, selection, focus, and drag state remain intact in both modes.
 - Mobile renders one flattened depth-first rail and one body from the same desktop tree without rewriting tree membership, stack IDs, directions, ratios, or ordering.
   Selecting a mobile tab updates only its owning stack's Project selection and the Project's focused tab.
   Returning to desktop restores the exact recursive tree.
-  The close control stays in stable drawer chrome outside the scrolling rail.
+  The drawer has no redundant global title or close header.
+  Clicking or tapping the selected tab collapses the drawer; clicking the active desktop right-rail launcher retains the same toggle behavior.
+  Every tab context menu also exposes **Collapse utility drawer**, disabled while the drawer is already collapsed.
 - The focused utility tab is remembered per Project and device, so
   `drawer.toggle` (default two-finger swipe **left**, the swipe that drags a right-edge panel in;
   the rightward swipe keeps the left-edge sidebar) reopens where you left off, while `drawer.<tab>`

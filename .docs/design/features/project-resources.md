@@ -214,9 +214,39 @@ The file tree and notes collection are utility-drawer tabs.
 - Depth counts distinct heading levels rather than hash marks, so a note whose shallowest
   heading is `##` does not render every row indented and a jump from `#` to `###` costs one
   step. Notes are written loosely enough that the raw hash count is a poor guide.
-- The list opens focused on the heading the caret already sits under, so it answers "where am
-  I" as well as "where can I go". A pick centers the target rather than revealing it minimally,
-  since a deliberate jump should not leave the heading wherever it happened to land.
+- A pick scrolls and does nothing else: no caret move, no editor focus. Both were edits in
+  disguise. Moving the caret silently relocates where the next keystroke lands and where an
+  unrelated find-next resumes from, in a note the reader may only have been reading. Focusing
+  the editor is worse on touch, where it raises the Android keyboard over the very passage the
+  tap asked to see, and where the caret is not an interaction surface at all.
+- A pick puts the heading at the top of the viewport, one source row down so the sticky heading
+  trail does not cover it, and the section's own content fills the screen below it.
+- The editor's `revealRange` is not how it gets there, for the reason it moves the caret and for
+  a second one: it computes the scroll in the hidden textarea's coordinates while the reader is
+  looking at the projection.
+  The two are different functions of the same source - a projected heading renders at up to
+  1.45em, wrapped rows carry a measured pixel hanging indent, and surplus projection height is
+  applied as a proportional ramp - so the reveal lands short by whatever extra height the
+  projection carries above the target, a screenful deep into a heading-dense note.
+  On a coarse pointer it lands nowhere at all: the touch shield is the scroller there, and
+  `revealRange` scrolls the textarea.
+- No exported geometry converts pixels to lines outside the editor, so the jump is a feedback
+  loop rather than a calculation (`noteScroll.ts`): scroll, ask `visibleLineRange()` which source
+  lines that actually put on screen, correct, repeat.
+  Each round takes its step size from what the previous one bought, so it needs no pixel model of
+  the document and is indifferent to which surface scrolls; ordinary notes land in two or three
+  rounds, and it stops early when the target lands, when the scroller clamps (the last screenful
+  of a note cannot be brought to the top), or when there is nothing measurable (a `display:none`
+  tab), rather than scrolling blind.
+  It runs once more on the next animation frame, because lines realize at their true height as
+  they enter the viewport and can move the target after it was measured.
+- The list opens focused on the heading the **viewport** sits under, so it answers "where am I"
+  as well as "where can I go". The reading position, not the caret: with jumps no longer moving
+  the caret, the caret is wherever the last edit left it, and on a phone it never moves at all.
+  This is the same visible-line window the heading trail reads.
+- A pick hands keyboard focus back to the control that opened the panel, because the panel
+  unmounts on click and a keyboard user needs somewhere to stand. A button raises no soft
+  keyboard, which is the point of not focusing the note.
 - Three ways in, the same claim protocol as find: the resource-header button, a `mux:outline`
   button on the touch rail (long notes are mostly read on the phone, where the header has no
   room to spare), and a `note.outline` command for the palette, a gesture, or a chord.
@@ -244,8 +274,9 @@ The file tree and notes collection are utility-drawer tabs.
 - The strip passes pointer events through to the text underneath, so hovering over the first
   row costs the note no height and blocks neither scrolling nor selection; only the crumbs
   themselves take a tap.
-- A crumb jump deliberately does not take focus, unlike an outline pick. The trail is tapped
-  while reading, and on touch taking focus would raise the keyboard over the note.
+- A crumb jump is the same viewport-only jump an outline pick performs: it scrolls, and moves
+  neither the caret nor focus. The trail is tapped while reading, and on touch taking focus
+  would raise the keyboard over the note.
 
 ### Sending a selection to an agent
 

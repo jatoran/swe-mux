@@ -67,6 +67,8 @@
 - Log preserves Git's `--graph` topology and loads 80 commits initially, bounded at 200.
 - Connector-only rows are inert.
 - Expanding a commit lazily loads its typed file summary and reuses the shared file rows.
+- Expanding a commit also shows its whole message, subject and body, wrapped and unclamped; the collapsed row keeps the one elided subject line it has room for.
+- Commit messages are served capped at 16,384 characters against a pathological commit, and a response without one still parses.
 - An ordinary or merge commit defaults to its first parent.
 - A merge commit permits selecting another actual parent and caches immutable summaries by full commit and parent OID.
 - A root commit uses Git's initial-commit comparison support and has no hardcoded empty-tree object ID.

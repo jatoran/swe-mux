@@ -186,6 +186,19 @@ async def test_root_ordinary_merge_commit_changes_and_parent_validation(
 
 
 @pytest.mark.asyncio
+async def test_commit_changes_carries_the_whole_message(repository: Path) -> None:
+    (repository / "tracked.txt").write_text("first\nsecond\n", encoding="utf-8")
+    git(repository, "add", "tracked.txt")
+    git(repository, "commit", "-m", "subject line", "-m", "First paragraph.\n\nSecond paragraph.")
+    oid = git(repository, "rev-parse", "HEAD")
+
+    changes = await git_review.commit_changes("project", str(repository), oid, None)
+    # Subject, blank line, and the body verbatim - the expanded row shows what was written,
+    # not the one elided line the summary row has room for.
+    assert changes["message"] == "subject line\n\nFirst paragraph.\n\nSecond paragraph."
+
+
+@pytest.mark.asyncio
 async def test_patch_snapshots_are_scoped_bounded_and_stale_checked(
     repository: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

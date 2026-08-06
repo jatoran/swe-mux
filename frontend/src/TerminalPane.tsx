@@ -17,10 +17,12 @@ import { isTerminalProtocolResponse, shouldSuppressTerminalProtocolResponse } fr
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import {
   mobileDragTarget,
+  smoothTouchVelocity,
   terminalCellAtPoint,
-  terminalScrollLines,
+  terminalScrollSteps,
   terminalSelectionSpan,
   terminalWordRange,
+  touchScrollGain,
   touchWheelDelta,
   type MobileInputSettings,
   type TerminalCell,
@@ -33,7 +35,7 @@ import { resumeCommand } from './resumeCommand'
 import { railPayload, resolveRail, type RailBackend, type RailItem } from './commandRail'
 import { createRailKeyRepeater, isRepeatableRailKey } from './railKeyRepeat'
 import { activatePromptRailItem } from './promptRail'
-import { AttachIcon, BranchIcon, CopyIcon, PasteIcon } from './railIcons'
+import { AttachIcon, BranchIcon, CopyIcon, PasteIcon, SendIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
 import { currentProfile, loadRailItems } from './deviceSettings'
 import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, refitVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, trackAppTailDistance, type TerminalSurface } from './terminalViewport'
@@ -109,6 +111,16 @@ const BASE_FONT_SIZE = 11
  * resolve, which is the bug this notice exists for.
  */
 const LETTERBOX_NOTICE_DELAY_MS = 1500
+
+/**
+ * Rows one gesture event may forward to an application that holds the mouse.
+ *
+ * A sanity bound, not a scroll budget: a full-screen flick asks for a dozen rows at most,
+ * while a pane measured mid-relayout can report a row height near zero and turn the same
+ * finger travel into thousands. The wheel pacer bounds the *rate* those reports leave at;
+ * this bounds what a single arithmetic accident can put into it.
+ */
+const APPLICATION_SCROLL_MAX_ROWS = 64
 
 interface Props {
   session: Session
@@ -1744,6 +1756,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       px:number
       py:number
       moved:boolean
+      /** Event timestamp of the last move, for the velocity the acceleration curve reads. */
+      lastMoveAt:number
+      /** Running finger speed in px/ms. */
+      velocity:number
+      /** Sub-row scroll travel carried between move events. */
+      pixels:number
       selecting:{start:TerminalCell;length:number}|null
     }|null=null
     // Focus (and the soft keyboard) is deferred to release: only a still tap sets this,
@@ -1768,6 +1786,28 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // xterm's own viewport takes, and the scroll an application receives as whole wheel
     // reports. Falls back to xterm's default cell height for a pane with no element yet.
     const paneRowHeight = () => (term.element?.getBoundingClientRect().height??term.rows*13)/Math.max(term.rows,1)
+    /**
+     * Hand an application holding the mouse `rows` worth of scroll, one wheel event per row.
+     *
+     * The event count is the scroll: xterm turns each wheel event into exactly one scroll
+     * report whatever magnitude it carries, so a single event asking for eight rows delivers
+     * one. Line mode also steps around the pixel branch's own arithmetic, which divides by the
+     * row height and then damps any delta under 50px to 30% of itself. A touch drag reports
+     * 10-40px per move, so every one of them was being cut to a third before this.
+     *
+     * Bounded because the loop is driven by a measured row height: a pane mid-relayout can
+     * report a hairline row, and no gesture means thousands of events.
+     */
+    const forwardApplicationScroll = (rows:number,clientX:number,clientY:number) => {
+      const step = rows < 0 ? -1 : 1
+      const count = Math.min(Math.abs(rows), APPLICATION_SCROLL_MAX_ROWS)
+      for (let sent = 0; sent < count; sent++) {
+        term.element?.dispatchEvent(new WheelEvent('wheel',{
+          bubbles:true,cancelable:true,clientX,clientY,
+          deltaY:step,deltaMode:WheelEvent.DOM_DELTA_LINE,
+        }))
+      }
+    }
     const cellAt = (clientX:number,clientY:number) => {
       const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
       if (!screen) return null
@@ -1829,7 +1869,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         lastTouchAt = Date.now()
         softKeyboardBeforeGesture=softKeyboardHolder()
         softKeyboardDismissalsBeforeGesture=softKeyboardDismissals()
-        touch={pointerId:event.pointerId,lastY:event.clientY,startX:event.clientX,startY:event.clientY,px:event.clientX,py:event.clientY,moved:false,selecting:null}
+        touch={pointerId:event.pointerId,lastY:event.clientY,startX:event.clientX,startY:event.clientY,px:event.clientX,py:event.clientY,moved:false,lastMoveAt:event.timeStamp,velocity:0,pixels:0,selecting:null}
         cancelLongPress()
         if(mobileInput.longPress==='context_menu')longPress = window.setTimeout(() => {
           const cell = cellAt(event.clientX,event.clientY)
@@ -1870,15 +1910,25 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       if(Math.abs(event.clientY-touch.startY)>8)cancelLongPress()
-      const delta=touchWheelDelta(touch.lastY,event.clientY,mobileInput)
+      // Velocity is measured on the raw finger, before direction and sensitivity, so the
+      // acceleration curve reads the gesture rather than the settings (see mobileInput).
+      touch.velocity=smoothTouchVelocity(touch.velocity,event.clientY-touch.lastY,event.timeStamp-touch.lastMoveAt)
+      touch.lastMoveAt=event.timeStamp
+      const delta=touchWheelDelta(touch.lastY,event.clientY,mobileInput)*touchScrollGain(touch.velocity)
       touch.lastY=event.clientY
-      if(Math.abs(delta)<1)return
+      if(!delta)return
       const mouseActive=term.modes.mouseTrackingMode!=='none'
       const dragTarget=mobileDragTarget(mobileInput.verticalDrag,mouseActive)
       if(dragTarget==='disabled')return
+      // Claimed before the row check: a sub-row move is still part of this drag, and letting it
+      // through would hand the browser a page scroll partway through a gesture.
       event.preventDefault()
+      const rowHeight=paneRowHeight()
+      const budget=terminalScrollSteps(touch.pixels+delta,rowHeight)
+      touch.pixels=budget.remainder
+      if(!budget.steps)return
       if(dragTarget==='terminal'){
-        term.scrollLines(terminalScrollLines(delta,paneRowHeight()))
+        term.scrollLines(budget.steps)
         return
       }
       // This scroll belongs to the application, so nothing in xterm's buffer will ever record
@@ -1887,18 +1937,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // the newest output spends the same total back down to zero and takes it away again.
       // Both halves matter - a reader who scrolls their own way back to the newest output is
       // otherwise left with a chip that only a tap can dismiss, on a viewport already sitting
-      // exactly where the tap would send it.
-      const rowHeight=paneRowHeight()
-      appTailDistanceRef.current=trackAppTailDistance(appTailDistanceRef.current,delta)
+      // exactly where the tap would send it. Totalled in the rows actually forwarded rather
+      // than the finger's pixels, which is what the application moved by.
+      appTailDistanceRef.current=trackAppTailDistance(appTailDistanceRef.current,budget.steps*rowHeight)
       const off=appOffTailByDistance(appTailDistanceRef.current,rowHeight)
       if(off!==appOffTailRef.current){
         appOffTailRef.current=off;setAppOffTail(off)
         recordTerminalRenderDiagnostic(session.id,'app_tail_estimate',{off,distance:appTailDistanceRef.current,rowHeight})
       }
-      term.element?.dispatchEvent(new WheelEvent('wheel',{
-        bubbles:true,cancelable:true,clientX:event.clientX,clientY:event.clientY,
-        deltaY:delta,deltaMode:WheelEvent.DOM_DELTA_PIXEL,
-      }))
+      forwardApplicationScroll(budget.steps,event.clientX,event.clientY)
     }
     const forwardTerminalMouseTap=(clientX:number,clientY:number)=>{
       const screen=term.element?.querySelector<HTMLElement>('.xterm-screen')
@@ -2344,7 +2391,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   }
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
-  return <div class={`terminal-surface${peekTop?' keyboard-peek':''}`}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><RailScroller>{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}>Send</button>}</div>{keyboardInset>0&&<button class={`terminal-peek-top${peekTop?' active':''}`} aria-pressed={peekTop} title={peekTop?"Back to the composer":"Look at the top of the screen — the keyboard is covering it"} aria-label={peekTop?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekTop?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  return <div class={`terminal-surface${peekTop?' keyboard-peek':''}`}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><RailScroller>{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>{keyboardInset>0&&<button class={`terminal-peek-top${peekTop?' active':''}`} aria-pressed={peekTop} title={peekTop?"Back to the composer":"Look at the top of the screen — the keyboard is covering it"} aria-label={peekTop?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekTop?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }

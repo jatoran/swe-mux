@@ -391,6 +391,8 @@ export type GitCommitChanges = {
   parent: string | null
   parents: string[]
   parentLabel: string
+  /** The whole commit message, subject and body, exactly as it was written. */
+  message: string
   summary: ReviewChangeSummary
 }
 
@@ -473,7 +475,9 @@ export function parseCommitChanges(value:unknown):GitCommitChanges|null {
   const parents=raw.parents.filter((item):item is string=>typeof item==='string')
   const parent=textOrNull(raw.parent)
   if(parent&&!parents.includes(parent))return null
-  return {commit:raw.commit,parent,parents,parentLabel:raw.parent_label,summary}
+  // The message is not required: an older daemon serving a newer UI omits it, and a commit
+  // body is an annotation on the changes rather than the reason this response exists.
+  return {commit:raw.commit,parent,parents,parentLabel:raw.parent_label,message:typeof raw.message==='string'?raw.message:'',summary}
 }
 
 export function parsePatchSnapshot(value:unknown):GitPatchSnapshot|null {

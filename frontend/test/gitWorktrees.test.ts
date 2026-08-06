@@ -272,9 +272,12 @@ test('the project-scoped overview parser keeps null measurements distinct from c
 
 test('commit and patch responses are defensively parsed',()=>{
   const summary={total:1,additions:1,deletions:0,binary_files:0,truncated:false,files:[{path:'new.ts',status:'A',additions:1,deletions:0,binary:false,submodule:false,current_exists:false}]}
-  const commit=parseCommitChanges({commit:'a'.repeat(40),parent:'b'.repeat(40),parents:['b'.repeat(40)],parent_label:'vs bbbbbbbb',summary})
+  const commit=parseCommitChanges({commit:'a'.repeat(40),parent:'b'.repeat(40),parents:['b'.repeat(40)],parent_label:'vs bbbbbbbb',message:'subject\n\nbody line',summary})
   assert.equal(commit?.summary.files[0].path,'new.ts')
   assert.equal(commit?.summary.files[0].currentExists,false)
+  assert.equal(commit?.message,'subject\n\nbody line')
+  // An older daemon serves no message; the response still parses and the row still opens.
+  assert.equal(parseCommitChanges({commit:'a'.repeat(40),parent:null,parents:[],parent_label:'initial commit',summary})?.message,'')
   assert.equal(parseCommitChanges({...commit,parent:'c'.repeat(40),summary}),null)
   const patch=parsePatchSnapshot({scope:'commit',path:'new.ts',patch_sha256:'hash',patch:'diff',binary:false,too_large:false,commit:'a'.repeat(40),parent:'b'.repeat(40),additions:1,deletions:0})
   assert.equal(patch?.patch,'diff')
