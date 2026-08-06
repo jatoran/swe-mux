@@ -92,7 +92,7 @@ import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from '
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
-import { dismissSoftKeyboard, softKeyboardHolder } from './mobileKeyboard'
+import { dismissSoftKeyboard, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
 import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import { reorderForHover, reorderTargetFromContainer, type DropSide, type ReorderAxis } from './dragReorder'
@@ -1131,9 +1131,21 @@ export function App() {
 
   useEffect(() => {
     const viewport = window.visualViewport
+    // The shell is the *layout* viewport, which `interactive-widget=resizes-visual` keeps at
+    // full height while the keyboard is up. Sizing it from `visualViewport` instead is what
+    // used to shrink every terminal when the keyboard opened — and shrinking an
+    // alternate-screen PTY discards the rows that no longer fit, permanently. The keyboard
+    // is now an inset the layout is slid up by, never a smaller layout.
     const updateAppHeight = () => {
-      const height = Math.round(viewport?.height ?? window.innerHeight)
-      document.documentElement.style.setProperty('--app-height', `${height}px`)
+      const layout = Math.round(window.innerHeight)
+      const inset = softKeyboardInset(layout, Math.round(viewport?.height ?? layout))
+      const root = document.documentElement
+      root.style.setProperty('--app-height', `${layout}px`)
+      root.style.setProperty('--keyboard-inset', `${inset}px`)
+      // A class as well as the length, so the slide can be scoped to the keyboard being up.
+      // A `translateY(0)` still makes an element a containing block for its `position:fixed`
+      // descendants, which would silently re-anchor the drawer and sidebar overlays.
+      root.classList.toggle('soft-keyboard-open', inset > 0)
       setViewportWidth(window.innerWidth)
     }
     updateAppHeight()
@@ -1145,6 +1157,8 @@ export function App() {
       viewport?.removeEventListener('resize', updateAppHeight)
       viewport?.removeEventListener('scroll', updateAppHeight)
       document.documentElement.style.removeProperty('--app-height')
+      document.documentElement.style.removeProperty('--keyboard-inset')
+      document.documentElement.classList.remove('soft-keyboard-open')
     }
   }, [])
 

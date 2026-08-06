@@ -2,7 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+    <!-- The soft keyboard must overlay the page, never resize it. `resizes-content` shrank the
+         layout viewport, which refitted every terminal and resized the real PTY: shrinking an
+         alternate-screen PTY destroys the rows that no longer fit, because the alternate screen
+         has no scrollback, so every keyboard open permanently ate part of the conversation.
+         `resizes-visual` and not `overlays-content`, deliberately: both leave the layout viewport
+         (and so `innerHeight`, `100dvh`, and every terminal grid) alone, but `overlays-content`
+         leaves the keyboard's height unmeasurable outside the VirtualKeyboard API, and without
+         that height the composer cannot be kept above the keyboard at all. Under `resizes-visual`
+         the shrunken `visualViewport` *is* the measurement (`softKeyboardInset`). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-visual" />
     <meta name="theme-color" content="#0b0d10" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="mobile-web-app-capable" content="yes" />

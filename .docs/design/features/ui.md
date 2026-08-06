@@ -373,6 +373,19 @@ responsive controls.
   lost paint needs. xterm's `RenderService` fires `onRender` whether or not the renderer drew
   anything, so a dropped paint is invisible to the app and is never retried by the library;
   assuming a single redraw landed is what left panes half-drawn.
+- The confirmation is owed by any pass that reshaped the surface — a changed grid *or* a changed
+  host box — not only by the passes that invalidate the texture atlas. Gating it on the atlas
+  left the one resize path most exposed to a lost paint as the only path with no confirmation
+  at all: a soft keyboard animates for ~250-400 ms and refits the pane throughout, so the pass
+  that runs when the burst settles reliably paints into a layout still in motion, and nothing
+  asks the pane to draw again afterwards. The visible result was the strip of terminal the
+  keyboard had just vacated staying blank until some unrelated event repainted it. `confirmedSurface`
+  records the shape the last confirmation actually drew, and is written only by that confirmation:
+  a pass that painted into a moving layout is precisely the one whose result must not be believed.
+- The confirmation forces the renderer-dimension repair before it repaints, for the same reason
+  pane restoration does: a box that changed while the grid did not leaves the renderer sized for
+  the old box, and refreshing rows into a stale surface repaints only the region that was already
+  correct.
 - The daemon reports the host PTY to the browser as `pty_windows` in `/api/config`, and every
   terminal is constructed with it as xterm's `windowsPty`. A browser cannot detect ConPTY, and
   xterm needs it to know that lines are hard-wrapped without a wrap flag: below ConPTY build
@@ -555,17 +568,49 @@ responsive controls.
   grid cell, above the action rail. It is checked per render, not only on scroll, because
   output arriving while scrolled up moves the buffer base without moving the viewport.
 - Jump-to-latest changes only the terminal and application viewports.
-  It does not focus the terminal input or raise the mobile soft keyboard.
+  It does not focus the terminal input, so it raises no mobile soft keyboard — and it lowers
+  none either.
+  The chip is a sibling of the terminal host rather than a child, so the host's own
+  focus-preserving `mousedown` guard never covered it: pressing it moved focus to the button,
+  Android lowered the keyboard because focus had left the field holding it up, and the
+  resulting `visualViewport` resize refit the pane away from the line the jump had just
+  reached.
+  The chip carries `holdSoftKeyboard`, which cancels the press's default focus move while a
+  field is holding the keyboard up, and is inert otherwise.
 - That check reads xterm's buffer, which is silent about a whole class of sessions. An
   application holding the mouse (Claude does; Codex enables no mouse mode at all) is handed
   every scroll gesture — the wheel on a desktop, and the drag a phone forwards as one via
   `mobileDragTarget` — and scrolls its own viewport, leaving xterm's pinned to its tail. So
-  `offTail` never fires there, and for as long as the chip depended on it alone the chip
-  simply never existed in a Claude session: the only jump-to-bottom on offer was Claude's own.
-  The pane therefore also remembers forwarding a
-  scroll *back* through the history, and raises the chip on that. Only on a drag back:
-  arriving at the newest line again is something only the application knows, so the chip
-  stays up until the jump is taken rather than guessing and vanishing early.
+  `offTail` never fires there, and a chip that depended on it alone would never exist in a
+  Claude session at all.
+- The pane therefore keeps a running estimate of where that second viewport is, since nothing
+  reports it.
+  `trackAppTailDistance` totals the scroll the pane forwards, in the pixels those wheel events
+  carry, and the chip is `appOffTailByDistance` reading the total as at least one rendered row.
+  Both directions count.
+  A drag back through the history raises the chip, and a drag toward the newest output spends
+  the same total back down to zero and takes it away, so a reader who scrolls their own way
+  back is not left with a chip that only its own tap can dismiss, sitting over a viewport
+  already exactly where the tap would send it.
+  One row is the threshold because xterm converts wheel pixels into whole wheel-button reports
+  and carries the remainder, so a drag worth less than a row moves nothing behind it - and a
+  finger resting on the glass delivers a pixel or two of jitter per touch event.
+  The total is clamped at zero because the application clamps at its own tail: banking credit
+  for scrolls that moved nothing would delay the next chip by exactly that credit.
+- The estimate is reset outright, rather than spent down, by the four events that make it
+  meaningless: taking the jump, the command rail's `^End`, a session switch in a reused pane,
+  and an alternate-screen switch (the application that owned the tracked viewport starting or
+  exiting, after which `offTail` answers for whatever replaced it).
+- Two things pull the estimate off the truth, in opposite directions, and the pane can observe
+  neither.
+  Dragging past the top of the application's own history totals distance nothing travelled, so
+  a drag that did reach the newest output can leave the chip up, and its tap is the answer.
+  Output arriving while the reader is scrolled up moves the tail with no gesture to total, so
+  the chip can leave early, and the drag already in progress is the answer - any drag back
+  through the history puts it straight back.
+  Every flip and every reset (with its reason) goes to the render-diagnostics ring as
+  `app_tail_estimate` / `app_tail_cleared`, because the estimate is the one part of the chip
+  that nothing on screen can be checked against.
 - Reaching the tail — from the chip or from a command-rail key — goes through
   `scrollTerminalToTail`, which re-issues xterm's scroll while it still makes progress. One
   call is not always enough: xterm applies scrolls through the DOM scroller in its `Viewport`
@@ -576,6 +621,22 @@ responsive controls.
   constantly — the soft keyboard fires `visualViewport` resizes throughout its open animation,
   and every one refits the pane. The retry needs no timer and no frame wait: the first call's
   `onScroll` is what makes `_sync()` republish the real range, so the next one lands.
+- A viewport pass preserves the reader's position, not only the tail. `scrollTerminalToTail`
+  covers a viewport that was on the newest line; one that was deliberately scrolled up is
+  restored by `restoreTerminalScrollAnchor` to the same **distance from the tail** it had before
+  the fit. Distance rather than an absolute `viewportY`, because the resize is what moves
+  `baseY`: a ConPTY buffer grows with blank rows instead of pulling scrollback down
+  (`windows_pty_compatibility`), and shrinking pushes rows the other way, so only the offset
+  from the newest line keeps the same text under the reader.
+- Without that anchor the clamping described for `scrollTerminalToTail` had nothing to correct
+  it. The scroller advertises a stale maximum for the rest of the pass, so each refit landed the
+  viewport a little short, and a soft keyboard refits throughout its ~250-400 ms animation. The
+  visible result was a session walking toward the top of its transcript when the keyboard opened
+  or closed — only ever in a session whose history lives in scrollback, since an alternate-screen
+  application has no scrollback for a viewport to walk through.
+- Returning from `display:none` restores the tail only for a viewport that was on it. A reader
+  who had scrolled up keeps their place across a tab switch; the pass that runs on reveal has
+  already restored their anchor.
 - Reaching the tail likewise means the *application's* viewport, not only xterm's: scrolling
   the terminal alone lands on a view nobody was looking at, which is what the rail's `^End`
   has always avoided by sending the key on its way past the local scroll. `appOwnsTail` is the
@@ -598,6 +659,33 @@ responsive controls.
   selection. Touch-originated synthetic context-menu events never open the desktop terminal
   menu. Selection release automatically attempts to copy by default; the preference is
   hot-reloadable from Settings.
+- A terminal touch that is not a typing tap leaves the soft keyboard exactly as open or closed
+  as it found it. Not raising it is only half of that, and was the only half the pane
+  implemented: every touch here lands on non-editable content, because the mobile IME bridge is
+  a 1px `pointer-events:none` field, and Android lowers the keyboard whenever a touch resolves
+  against something other than the field holding it up. A long-press-and-drag to select and copy
+  therefore closed the keyboard with nothing in the pane asking for it. The pane records the
+  keyboard's holder at `pointerdown` and hands it back at `pointerup`/`pointercancel` unless the
+  gesture resolved as a typing tap, which owns the focus decision itself. Restoration is deferred
+  one frame and ordered after the selection copy, because the platform makes its own focus
+  decision as the tap resolves and would otherwise undo a restore issued inside the handler.
+- Restoration is scoped to a keyboard actually lost: focus that moved to another text field kept
+  the keyboard up, so it stands rather than being pulled back to the terminal (`softKeyboardLost`
+  in `mobileKeyboard.ts`). A gesture that began with the keyboard already down restores nothing,
+  since raising one the user never asked for is the failure the whole path exists to avoid.
+- A deliberate dismissal outranks the restore. `dismissSoftKeyboard` counts every request, the
+  pane records that count when a touch lands, and a restore is abandoned if the count moved while
+  the gesture ran. Without that precedence the edge swipe that opens the left sidebar fought
+  itself: the swipe crosses the terminal, so the pane saw a gesture whose focus had gone missing
+  and handed the keyboard straight back into the panel that had just dismissed it. The same swipe
+  begun on the top bar never reaches the pane's pointer handlers, which is why only the one
+  crossing the session misbehaved. Counted on intent rather than on whether a field happened to
+  be focused at that instant, which during a gesture is a race rather than a decision.
+- One gap remains, and it is not reachable through focus. Dismissing the keyboard with the
+  Android back gesture hides it without blurring the field, so the pane sees an unchanged holder
+  and Chrome may re-raise the keyboard on the next touch that resolves against that same focused
+  field. Closing it needs an `inputmode` gate rather than focus bookkeeping. The keyboard toggle
+  (`terminal.keyboardToggle`) is unaffected: it blurs, so the pane and the platform agree.
 - A still primary tap or click inside the currently editable agent composer moves its caret.
   Claude's desktop path remains xterm's native mouse handling; on touch the pane synthesizes the mouse pair xterm expects, and xterm encodes the coordinates using Claude's negotiated mode.
   Codex has no mouse mode, so the pane recognizes its live `›`/`!` composer and converges on the tapped terminal cell with redraw-verified, unicast Left/Right input.
@@ -1064,6 +1152,34 @@ responsive controls.
   enforced in the state setters themselves (`App.tsx` wraps both `useState` setters), not at each
   call site, so every entry point — gesture, command, nav toggle, tutorial — inherits it. Desktop
   is unaffected: there the sidebar is an in-flow column the drawer's own column never covers.
+- The soft keyboard overlays the mobile layout, and never resizes it. The viewport meta carries
+  `interactive-widget=resizes-visual`, so the layout viewport — and with it `innerHeight`,
+  `100dvh`, `--app-height`, and every terminal grid — keeps its full height while the keyboard is
+  up. Only the visual viewport shrinks, and the difference is published as `--keyboard-inset`
+  plus a `soft-keyboard-open` class on the root element.
+- This replaced `interactive-widget=resizes-content`, under which the keyboard shrank the layout
+  viewport and refitted every terminal, resizing the real PTY. Shrinking an **alternate-screen**
+  PTY is lossy in a way no repaint can undo: the alternate screen has no scrollback, so the rows
+  that no longer fit are discarded, and growing back appends blank ones. Measured on a Claude
+  session at 412x915: 45 rows with 19 painted and nothing blank at the bottom, down to 19 rows
+  while the keyboard was up, back to 45 rows with only 14 painted and a 26-row blank tail that
+  never recovered. The daemon's arbitrated geometry was correct at every step
+  (`[61,45]`/`[61,19]`/`[61,45]`) — the conversation had simply been destroyed by the shrink.
+  Under the current model the same sequence leaves the grid at 48 rows, the PTY at `[61,48]`, and
+  the painted rows unchanged.
+- `softKeyboardInset` is thresholded at `SOFT_KEYBOARD_MIN_INSET_PX`, because a shrinking visual
+  viewport is not always a keyboard: collapsing browser chrome moves it ~50-60 px and pinch-zoom
+  and rounding move it by a few, and sliding the workspace for those would read as the UI
+  twitching. A visual viewport *larger* than the layout one (pinch-zoom out) clamps to zero
+  rather than sliding the workspace off the bottom of the screen.
+- The composer stays reachable by sliding, not by resizing: `.workspace` is translated up by
+  `--keyboard-inset` so its bottom edge — the agent composer and the command rail — sits exactly
+  on top of the keyboard, while its height, and therefore the terminal grid inside it, is
+  untouched. The top scrolls out of view under the mobile toolbar, which is the half nobody is
+  looking at while typing. The translate is scoped to `.soft-keyboard-open` rather than applied
+  as an always-present zero, because a transform makes an element the containing block for its
+  `position:fixed` descendants even at zero, which would re-anchor the sidebar and drawer
+  overlays.
 - Opening either mobile panel also lowers the soft keyboard, in the same setters and for the same
   reason: the keyboard is held up by a field that is now behind the scrim, and it covers up to
   half of the panel that just opened. There is no API for "hide the keyboard", so the focused
@@ -1082,8 +1198,16 @@ responsive controls.
   finger lands**, rather than waiting for the resolved command at touchend. Two fingers are never
   text entry, so the early blur is safe. Continuity 0.2.20 separately owns note-touch
   arbitration: pointerdown does not focus, a resolved tap places the caret and focuses, and
-  scroll/cancel/long-press paths leave the keyboard closed. swe-mux adds no shadow-DOM or caret
+  scroll/cancel/long-press paths call no `focus()`. swe-mux adds no shadow-DOM or caret
   hit-testing workaround; single-finger touches pass to the editor unchanged.
+- That arbitration is about focus, and focus is not the whole of what raises an Android
+  keyboard. A note whose keyboard was dismissed with the back gesture keeps its editor
+  `<textarea>` focused, so a long-press-and-drag selection over it can re-raise the keyboard
+  without any `focus()` being called and with nothing for the host to intercept — the surface
+  is inside Continuity's shadow root, and `readOnly` is the only keyboard-adjacent property the
+  host can reach. Closing this needs an `inputmode` gate in the editor, not a host workaround;
+  the ask is `development/CONTINUITY_TOUCH_KEYBOARD_ASK.md`. The same platform behavior on the
+  terminal side is covered by that pane's own gesture rules.
 - Spawning a terminal closes the mobile sidebar. Every launch focuses the new tab, so every
   launch has to clear what is covering it — launching from a sidebar Project row otherwise
   focused a tab the drawer was still hiding, which reads as "the Run button did nothing". This

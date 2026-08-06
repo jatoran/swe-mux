@@ -93,6 +93,44 @@ export function appOwnsTail(backend: string, appReceivesScroll: boolean): boolea
 }
 
 /**
+ * How far an application's own viewport sits above its newest output, as a running estimate.
+ *
+ * There is nothing to read here, only something to remember. An application holding the mouse
+ * scrolls a viewport it never reports, and the one buffer this pane can inspect - xterm's -
+ * stays pinned to its tail throughout, which is why the buffer check answers "on the tail" for
+ * every Claude session. So the pane totals the scroll it forwards, in the pixels those wheel
+ * events carry, and reads the total back as the distance. Signs follow `WheelEvent.deltaY`:
+ * negative is a drag back through the history, positive is a drag toward the newest output.
+ *
+ * Clamped at zero because the application clamps at its tail too. Scrolling down while already
+ * there moves nothing, and banking it would leave a later drag back through the history paying
+ * off phantom credit before the pane noticed it had happened.
+ *
+ * An estimate, not a fact, and its two drifts point in opposite directions. Dragging past the
+ * top of the application's own history totals distance nothing travelled, so a drag back that
+ * really did reach the newest output can leave the estimate short of zero - the chip stays up,
+ * and a tap is what takes it down. Output arriving while the reader is scrolled up moves the
+ * tail away from them with no gesture to total, so the chip can go early; the drag they are
+ * already making is the recovery, and any drag back through the history restores it.
+ */
+export function trackAppTailDistance(distancePx: number, deltaPixels: number): number {
+  return Math.max(0, distancePx - deltaPixels)
+}
+
+/**
+ * Whether that estimate is far enough to mean the application actually scrolled.
+ *
+ * A row, because a row is the granularity it is scrolled at: xterm turns wheel pixels into
+ * whole wheel-button reports and carries the remainder, so a drag worth less than a row moves
+ * nothing behind it. A finger resting on the glass delivers exactly that - a pixel or two of
+ * jitter per touch event, in whichever direction the hand settles - and counting it as a
+ * scroll raises a chip over a session nobody scrolled.
+ */
+export function appOffTailByDistance(distancePx: number, rowHeightPx: number): boolean {
+  return distancePx >= Math.max(1, rowHeightPx)
+}
+
+/**
  * Put a terminal back on its newest line, and keep at it until it actually lands.
  *
  * One `scrollToBottom()` is not reliably enough. xterm applies every scroll through the DOM
@@ -118,6 +156,88 @@ export function scrollTerminalToTail(term: TerminalTail | null | undefined): boo
     if (term.buffer.active.viewportY <= viewportY) return false
   }
   return term.buffer.active.viewportY >= term.buffer.active.baseY
+}
+
+type TerminalScroll = TerminalTail & { scrollLines: (amount: number) => void }
+
+/**
+ * How far above the newest line the viewport is sitting.
+ *
+ * The anchor a resize has to preserve, and deliberately measured from the tail rather
+ * than as an absolute `viewportY`. Growing the grid moves `baseY` — on a ConPTY buffer
+ * the daemon tells xterm to add blank rows rather than pull scrollback down, and
+ * shrinking pushes rows the other way — so absolute position is exactly the thing that
+ * does not survive. Distance from the tail is what keeps the same text under the reader.
+ */
+export function terminalRowsAboveTail(term: TerminalTail | null | undefined): number {
+  if (!term) return 0
+  const { viewportY, baseY } = term.buffer.active
+  return Math.max(0, baseY - viewportY)
+}
+
+/**
+ * Put a viewport back the same distance from the tail a resize found it at.
+ *
+ * The off-tail half of `scrollTerminalToTail`, and needed for the same reason: xterm
+ * republishes its DOM scroller's range from a *queued* render callback, so during a
+ * resize burst the scroller's maximum is stale and every scroll against it is clamped.
+ * A soft keyboard animating open or closed fires those resizes ~20 times, and a reader
+ * who had scrolled up got clamped a little further each pass — walking the viewport to
+ * the top of the transcript, which is only reachable at all in a session whose history
+ * lives in scrollback rather than on the alternate screen.
+ *
+ * Re-issuing converges inside the same event, because moving the viewport fires
+ * `onScroll` and the scroller learns its real range as a side effect. Bounded so a
+ * buffer that never settles costs a few calls instead of spinning.
+ */
+export function restoreTerminalScrollAnchor(
+  term: TerminalScroll | null | undefined,
+  rowsAboveTail: number,
+): boolean {
+  if (!term || rowsAboveTail <= 0) return false
+  const target = () => Math.max(0, term.buffer.active.baseY - rowsAboveTail)
+  for (let attempt = 0; attempt < TAIL_SCROLL_ATTEMPTS; attempt += 1) {
+    const { viewportY } = term.buffer.active
+    const wanted = target()
+    if (viewportY === wanted) return true
+    term.scrollLines(wanted - viewportY)
+    // No progress means the buffer cannot reach it (the anchor is older than the
+    // scrollback now holds), and re-issuing would spin.
+    if (term.buffer.active.viewportY === viewportY) return false
+  }
+  return term.buffer.active.viewportY === target()
+}
+
+/** What a pane is currently showing, in both the grid and the box drawn into. */
+export type TerminalSurface = { cols: number; rows: number; width: number; height: number }
+
+export function terminalSurface(
+  term: { cols: number; rows: number },
+  host: TerminalHost | null,
+): TerminalSurface | null {
+  if (!terminalHostIsVisible(host)) return null
+  return { cols: term.cols, rows: term.rows, width: host.clientWidth, height: host.clientHeight }
+}
+
+/**
+ * Whether a pass reshaped what is on screen, and so owes a confirmation repaint.
+ *
+ * The grid alone is not the question. A pane whose box changed while its grid did not
+ * has a renderer holding pixel dimensions for the old box (FitAddon skips `term.resize`
+ * when the grid is unchanged), and a pane whose grid changed has rows that were painted
+ * — or missed — during a layout that was still moving. Both are the same bug to a reader:
+ * a strip of the terminal that draws nothing.
+ */
+export function terminalSurfaceChanged(
+  previous: TerminalSurface | null,
+  current: TerminalSurface | null,
+): boolean {
+  if (!current) return false
+  if (!previous) return true
+  return previous.cols !== current.cols
+    || previous.rows !== current.rows
+    || previous.width !== current.width
+    || previous.height !== current.height
 }
 
 /**

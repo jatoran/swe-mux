@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { deepActiveElement, raisesSoftKeyboard } from '../src/mobileKeyboard.ts'
+import {
+  SOFT_KEYBOARD_MIN_INSET_PX,
+  deepActiveElement,
+  raisesSoftKeyboard,
+  softKeyboardInset,
+  softKeyboardLost,
+} from '../src/mobileKeyboard.ts'
 import type { FocusedField, FocusScope } from '../src/mobileKeyboard.ts'
 
 test('text entry fields are what hold the soft keyboard up', () => {
@@ -76,6 +82,63 @@ test('a host with nothing focused inside it is the answer', () => {
   assert.equal(deepActiveElement({ activeElement: closed }), closed)
   const empty = { tagName: 'OPEN-WIDGET', shadowRoot: { activeElement: null } }
   assert.equal(deepActiveElement({ activeElement: empty }), empty)
+})
+
+test('a gesture that dropped focus onto nothing has to hand the keyboard back', () => {
+  const bridge = { tagName: 'TEXTAREA' }
+  // The terminal's live input lost focus to the platform's own handling of a drag or
+  // long-press over the (non-editable) terminal body. Nothing typed, so put it back.
+  assert.equal(softKeyboardLost(bridge, null), true)
+  assert.equal(softKeyboardLost(bridge, { tagName: 'BODY' }), true)
+  // The jump-to-latest chip, when its press was allowed to take focus.
+  assert.equal(softKeyboardLost(bridge, { tagName: 'BUTTON' }), true)
+})
+
+test('nothing is restored when the gesture left focus alone', () => {
+  const bridge = { tagName: 'TEXTAREA' }
+  assert.equal(softKeyboardLost(bridge, bridge), false)
+  // The keyboard was already down before the gesture: there is nothing to hand back, and
+  // raising one the user never asked for is the failure this whole path exists to avoid.
+  assert.equal(softKeyboardLost(null, null), false)
+  assert.equal(softKeyboardLost(null, bridge), false)
+  assert.equal(softKeyboardLost(undefined, bridge), false)
+})
+
+test('focus that moved to another text field kept the keyboard, so it stands', () => {
+  // Android holds the keyboard up across this move, so nothing was lost — and restoring
+  // would yank the user back out of the field the gesture just reached.
+  const bridge = { tagName: 'TEXTAREA' }
+  assert.equal(softKeyboardLost(bridge, { tagName: 'INPUT', type: 'search' }), false)
+  assert.equal(softKeyboardLost(bridge, { tagName: 'DIV', isContentEditable: true }), false)
+  // A readonly or `inputMode="none"` field raises nothing, so landing there is a loss.
+  assert.equal(softKeyboardLost(bridge, { tagName: 'TEXTAREA', readOnly: true }), true)
+})
+
+test('the keyboard inset is what the visual viewport lost, not a new layout height', () => {
+  // A 915px layout viewport with 415px of keyboard over it. The layout viewport itself is
+  // untouched under `interactive-widget=resizes-visual`, which is what keeps every terminal
+  // grid — and so every PTY — the size it already was.
+  assert.equal(softKeyboardInset(915, 500), 415)
+  assert.equal(softKeyboardInset(915, 915), 0)
+})
+
+test('browser chrome and pinch-zoom are not keyboards', () => {
+  // An address bar collapsing moves the visual viewport ~50-60px. Sliding the workspace up
+  // by that would look like the UI twitching every time the page scrolled.
+  assert.equal(softKeyboardInset(915, 860), 0)
+  assert.equal(softKeyboardInset(915, 914), 0)
+  // The threshold is inclusive: no soft keyboard is smaller than this, so anything at or
+  // above it is one.
+  assert.equal(softKeyboardInset(915, 915 - SOFT_KEYBOARD_MIN_INSET_PX), SOFT_KEYBOARD_MIN_INSET_PX)
+  assert.equal(softKeyboardInset(915, 915 - SOFT_KEYBOARD_MIN_INSET_PX + 1), 0)
+})
+
+test('a visual viewport larger than the layout never slides the workspace down', () => {
+  // Pinch-zoom out and rounding can invert the two. A negative inset would translate the
+  // workspace *down*, off the bottom of the screen.
+  assert.equal(softKeyboardInset(915, 1000), 0)
+  assert.equal(softKeyboardInset(Number.NaN, 500), 0)
+  assert.equal(softKeyboardInset(915, Number.NaN), 0)
 })
 
 test('a cyclic shadow tree terminates', () => {

@@ -1330,7 +1330,18 @@ body {
 .manual-terminal-paste{position:absolute;z-index:17;right:6px;bottom:40px;left:6px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:7px;border:1px solid var(--amber);background:var(--panel);box-shadow:4px 5px #0008}.manual-terminal-paste span{grid-column:1/-1;color:var(--amber)}.manual-terminal-paste textarea{min-height:68px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:16px/1.4 inherit;resize:vertical;user-select:text;-webkit-user-select:text}.manual-terminal-paste button{min-width:34px;border:1px solid var(--line);background:var(--panel2);color:var(--text)}
 
 @media(max-width:760px){
-  .app-shell{height:var(--app-height,100dvh);min-height:0}
+  .app-shell{height:var(--app-height,100dvh);min-height:0;overflow:hidden}
+  /* The soft keyboard overlays the layout viewport instead of resizing it, so nothing here
+     reflows and every terminal keeps its grid and its PTY size. What is left is that the
+     bottom of the workspace — the agent composer and the command rail — sits behind the
+     keyboard, so the workspace slides up by exactly what the keyboard covers. Its height is
+     untouched by the slide: the top scrolls out of view under the toolbar, which is the half
+     nobody is looking at while typing.
+     Scoped to `.soft-keyboard-open` rather than always translating by a variable that is
+     usually zero, because a transform makes an element the containing block for its
+     `position:fixed` descendants even at zero, which would re-anchor the sidebar and drawer
+     overlays. Both of those dismiss the keyboard when they open, so the two never coincide. */
+  :root.soft-keyboard-open .workspace{transform:translateY(calc(-1*var(--keyboard-inset,0px)))}
   /* [nav] [quota] [project name] [Run] [drawer]. Flex, not grid: only the title flexes and
      the rest are content-sized, which grid expressed poorly here — an `auto` track next to
      the title's `1fr` absorbed the slack and left the quota chips floating mid-bar. `nowrap`
