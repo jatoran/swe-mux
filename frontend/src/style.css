@@ -1355,6 +1355,19 @@ body {
      returns the terminal. A stacking layer of their own is what actually keeps them on top. */
   :root.soft-keyboard-open .terminal-pane>.pane-bar,
   :root.soft-keyboard-open .terminal-pane>.voice-strip{position:relative;z-index:2}
+  /* Every other mobile surface shortens instead of sliding, and the difference is not a
+     stylistic one. The terminal must not resize because shrinking an alternate-screen PTY
+     destroys the rows that no longer fit. A note editor, a file view, or the drawer reflows
+     losslessly, and shortening is strictly better there: the whole surface stays reachable
+     and scrollable rather than having its top pushed off screen.
+     This is what the note editor's own command rail needs. Continuity pins that rail to the
+     bottom of the element the host gives it, so a box that still runs to the bottom of the
+     layout viewport puts the rail behind the keyboard however the editor is scrolled — the
+     host owns the box, so the host owns the fix. */
+  :root.soft-keyboard-open .mobile-unified-active>.project-resource,
+  :root.soft-keyboard-open .mobile-unified-active>.preview-pane{height:calc(100% - var(--keyboard-inset,0px))}
+  :root.soft-keyboard-open .utility-drawer.overlay,
+  :root.soft-keyboard-open .sidebar.open{bottom:var(--keyboard-inset,0px)}
   /* [nav] [quota] [project name] [Run] [drawer]. Flex, not grid: only the title flexes and
      the rest are content-sized, which grid expressed poorly here — an `auto` track next to
      the title's `1fr` absorbed the slack and left the quota chips floating mid-bar. `nowrap`

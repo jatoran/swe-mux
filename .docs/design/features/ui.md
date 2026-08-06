@@ -1183,6 +1183,18 @@ responsive controls.
   the pane header off the top of the screen and drew the terminal where they had been; those are
   navigation rather than content, and they stay put. `.terminal-pane` clips while the keyboard is
   up, which covers everything outside the pane box (the tab rail, the mobile toolbar).
+- Every other mobile surface shortens rather than sliding, and the asymmetry is the whole point:
+  a terminal must not resize because shrinking an alternate-screen PTY destroys rows, while a note
+  editor, file view, or drawer reflows losslessly. Shortening is strictly better where it is safe,
+  because the entire surface stays reachable instead of having its top pushed off screen. The
+  mobile resource pane loses `--keyboard-inset` from its height; the drawer and mobile sidebar
+  overlays take it as a `bottom` offset.
+- This is what the note editor's command rail needs. Continuity pins that rail to the bottom of
+  the element the host gives it, so a box still running to the bottom of the layout viewport puts
+  the rail behind the keyboard however the editor is scrolled — the host owns the box, so the host
+  owns the fix, and no editor change can reach it. Measured on a Project note with a 415px
+  keyboard: the rail moves from `858..914` to `443..499` as the drawer's bottom lifts from 915 to
+  500.
 - Clipping is not enough for the pane's *own* header and read-aloud strip: they are inside the
   clip and the surface is a later sibling, so a translated surface paints over them while they
   remain laid out and hit-testable underneath. That is the worst version of hidden —
