@@ -593,9 +593,14 @@ refused; only that log says which device asked and why it lost.
 
 `GET /api/sessions/{id}/state-log` also reports the conversation identity behind the state:
 `agent_run_id`, `agent_run_seq`, `native_session_id`, `agent_lifecycle_id`, and
-`observation_stale_since` beside the transcript path and its mtime. This is the endpoint for
-"which conversation am I actually looking at", and staleness is the one fault that otherwise
-presents as a perfectly healthy session (`features/backends.md`). It also carries
+`observation_stale_since` beside the transcript path, its `transcript_mtime`, and
+`transcript_growth_ts` (when the daemon's own tailer last saw that file grow). This is the
+endpoint for "which conversation am I actually looking at", and staleness is the one fault
+that otherwise presents as a perfectly healthy session (`features/backends.md`). The two
+timestamps are reported together because the pair is the diagnosis: staleness is decided on
+growth, and a frozen `transcript_mtime` beside a recent `transcript_growth_ts` is a
+filesystem that stopped dating a live file — routine for Codex rollouts on Windows — rather
+than a replaced conversation. It also carries
 `cli_state` — the CLI's own published per-process state for this conversation
 (`~/.claude/sessions/<pid>.json`; corroboration only, never a transition source) — beside
 the `standing_activity` list and `layer_readings`, the last observed reading per

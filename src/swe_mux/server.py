@@ -3803,6 +3803,12 @@ def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any
         # any more. Paired with the run counter, because "which conversation
         # am I looking at" is the question this endpoint exists to answer.
         "observation_stale_since": session.record.observation_stale_since,
+        # When the tailer last saw that file grow, which is what staleness is
+        # actually decided on. Reported beside `transcript_mtime` because the pair
+        # is the diagnosis: a frozen `transcript_mtime` next to a recent
+        # `transcript_growth_ts` is a filesystem that stopped dating a live file
+        # (routine for Codex rollouts on Windows), not a replaced conversation.
+        "transcript_growth_ts": session.transcript_growth_ts or None,
         "agent_run_id": session.record.agent_run_id,
         "agent_run_seq": session.record.agent_run_seq,
         "native_session_id": session.record.native_session_id,

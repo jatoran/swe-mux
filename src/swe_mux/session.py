@@ -408,6 +408,17 @@ def file_created_at(path: Path) -> float | None:
     return float(stat.st_ctime)
 
 
+def _safe_mtime(path: Path) -> float | None:
+    """The filesystem's last-write time, for diagnostics only.
+
+    Never a liveness signal on its own — see `_transcript_last_write_ts`.
+    """
+    try:
+        return float(path.stat().st_mtime)
+    except OSError:
+        return None
+
+
 def _consuming_spool_path(spool: Path) -> Path:
     """Sibling name used while a spool file is being replayed.
 
@@ -1356,6 +1367,22 @@ class Session:
         # hook made every healthy idle agent look like a replaced conversation
         # 90 s after its last turn.
         self.last_turn_hook_ts = 0.0
+        # Wall clock when the tailer last saw the *followed* transcript grow past
+        # the bytes that existed when it attached. This, not `stat().st_mtime`, is
+        # what "the file is still being written" has to be measured with.
+        #
+        # Windows does not keep a live file's last-write time current. Measured
+        # 2026-08-06 on five Codex rollouts: every one reported an mtime frozen at
+        # the file's *creation*, 290 s to 3.5 h behind content that had grown to
+        # 5 MB, and `os.stat`, `GetFileAttributesExW`, `FindFirstFileW`, and
+        # `GetFileInformationByHandle` all agreed — so there is no better call to
+        # reach for. `st_size` stays accurate throughout, which is why the tailer's
+        # own growth reading is trustworthy where the timestamp is not. Claude
+        # transcripts were unaffected in the same survey, but the fix is not
+        # backend-specific: nothing here may assume a CLI keeps timestamps live.
+        #
+        # Reset whenever the followed path changes, because it describes one file.
+        self.transcript_growth_ts = 0.0
         # The transition ledger is a LedgerRing rather than a plain deque: each
         # append is stamped with a monotonic seq and the run id current at that
         # moment, and nudges the durable status-timeline sink when the manager
@@ -3307,6 +3334,8 @@ class SessionManager:
         if confirmed or backend != "claude":
             session.agent_lifecycle_id = native_id
         session.transcript_path = transcript
+        # Growth evidence belongs to the file it was observed on.
+        session.transcript_growth_ts = 0.0
         # The retired conversation's prompts must not title the new one.
         session.first_user_prompt = None
         session.last_user_prompt = None
@@ -3405,7 +3434,7 @@ class SessionManager:
             path, provisional = found if found else (None, False)
         backoff = OBSERVER_RESTART_BACKOFF_MIN_SECONDS
         while path and not stop_event.is_set():
-            session.transcript_path = path
+            self._aim_observer(session, path)
             session.transcript_provisional = provisional
             native_id = adapter.transcript_native_id(path)
             if native_id and native_id != session.record.native_session_id and not provisional:
@@ -3552,6 +3581,81 @@ class SessionManager:
             await self._note_transcript_staleness(session, current)
         return None
 
+    @staticmethod
+    def _aim_observer(session: Session, path: Path) -> None:
+        """Point the session at `path`, discarding growth evidence if it moved.
+
+        `transcript_growth_ts` describes one file, so re-aiming has to invalidate
+        it. Re-tailing the *same* file after an observer fault must not: the
+        observer loop runs this on every restart, and clearing there would drop the
+        session back onto the filesystem timestamp this evidence exists to replace
+        — silently, and for as long as the agent then stayed quiet.
+        """
+        if session.transcript_path != path:
+            session.transcript_growth_ts = 0.0
+        session.transcript_path = path
+
+    @staticmethod
+    def _transcript_last_write_ts(session: Session, current: Path) -> float | None:
+        """When the followed transcript was last written, as well as we can know it.
+
+        `stat().st_mtime` alone is **not** that answer. Windows does not keep a
+        live file's last-write time current: measured 2026-08-06, every long Codex
+        rollout on this machine reported an mtime frozen at the file's creation
+        while its content ran hours ahead, and every Win32 timestamp API agreed, so
+        there is no better call to substitute. Trusting it made
+        `_note_transcript_staleness` fire on healthy Codex sessions roughly 90 s
+        into their life and then keep flapping — which hard-blocks delivery on
+        `transcript_stale`, so an armed queue message sat unsent at the exact moment
+        the agent finished and was ready for it.
+
+        The tailer's own reading is the fix: it polls `st_size` (which stays
+        accurate) every 250 ms and stamps `transcript_growth_ts` when bytes appear
+        past its attach snapshot. That is a first-hand observation of a write rather
+        than the filesystem's opinion about one.
+
+        Both are lower bounds on "this file was alive at T" and neither can run
+        ahead of reality, so the later one is the better answer. mtime is kept as
+        the floor because it covers the window before the tailer has attached, and
+        because a session adopted across a daemon restart has no growth of its own
+        to point at yet.
+        """
+        try:
+            mtime = current.stat().st_mtime
+        except OSError:
+            return None
+        return max(mtime, float(getattr(session, "transcript_growth_ts", 0.0)))
+
+    async def _clear_transcript_staleness(self, session: Session, evidence: str) -> None:
+        """Retract the staleness claim once the followed file proves itself alive.
+
+        Without this the flag is a one-way door for anything the observer cannot
+        parse: `_record_parser_observation` clears it on a *record*, so a file that
+        resumes growing without yielding a complete record — or one marked stale by
+        a transient — stays blocked for delivery until the session ends.
+        """
+        record = session.record
+        marked = record.observation_stale_since
+        if marked is None:
+            return
+        record.observation_stale_since = None
+        record.parser_diagnostic = None
+        log.info(
+            "session %s observation no longer stale after %.1fs (%s)",
+            record.id,
+            max(0.0, time.time() - marked),
+            evidence,
+        )
+        session.publish_update()
+        await self.events.emit(
+            "observation_stale_cleared",
+            session_id=record.id,
+            source="daemon",
+            backend=record.backend,
+            evidence=evidence,
+            stale_for_s=round(max(0.0, time.time() - marked), 3),
+        )
+
     async def _note_transcript_staleness(self, session: Session, current: Path) -> None:
         """Fail closed when the conversation moved somewhere we cannot prove.
 
@@ -3568,29 +3672,59 @@ class SessionManager:
         say the agent is waiting — it accompanies no transcript activity by design,
         so counting it flagged every healthy idle agent in the fleet.
 
+        "Last written" is `_transcript_last_write_ts`, never `stat().st_mtime` on
+        its own — the filesystem's timestamp for a file a CLI holds open is not
+        reliable, and believing it turned this fail-closed guard into a false alarm
+        on every healthy long-lived Codex session.
+
         Marking it stale is what stops the session from reporting a retired
         conversation's status as live: hooks resume driving state
         (`_transcript_authoritative` goes false) and delivery hard-blocks. It is
-        cleared by the next record read on any followed transcript, or by a
-        rollover.
+        cleared by the next record read on any followed transcript, by the followed
+        file growing again (below), or by a rollover.
         """
         record = session.record
-        try:
-            current_mtime = current.stat().st_mtime
-        except OSError:
+        last_write = self._transcript_last_write_ts(session, current)
+        if last_write is None:
             return
         now = time.time()
+        if record.observation_stale_since is not None:
+            # Already blocked. The only thing worth checking is whether the file we
+            # gave up on has been written since we did, which retracts the claim.
+            # Deliberately *not* the negation of the predicate below: the other two
+            # callers that set this flag (a rollover refused because a live sibling
+            # owns the conversation, a CLI-reported rollover that could not be
+            # adopted) know the CLI is elsewhere, and quiet on the abandoned file is
+            # not permission to forget that.
+            if last_write > record.observation_stale_since:
+                await self._clear_transcript_staleness(session, "transcript_written_again")
+            return
         stale = (
-            now - current_mtime >= TRANSCRIPT_STALE_SECONDS
-            and session.last_turn_hook_ts > current_mtime + TRANSCRIPT_SWITCH_QUIET_SECONDS
+            now - last_write >= TRANSCRIPT_STALE_SECONDS
+            and session.last_turn_hook_ts > last_write + TRANSCRIPT_SWITCH_QUIET_SECONDS
         )
-        if not stale or record.observation_stale_since is not None:
+        if not stale:
             return
         record.observation_stale_since = now
         record.parser_diagnostic = (
             f"transcript {current.name} last written "
-            f"{int(now - current_mtime)}s ago while the CLI kept reporting activity; "
+            f"{int(now - last_write)}s ago while the CLI kept reporting activity; "
             "the conversation may have been replaced"
+        )
+        # Warned, not just emitted: this blocks delivery and revokes the
+        # transcript's authority, and the 2026-08-06 false-positive incident left
+        # nothing in `daemon.log` at all — it took a query against the `events`
+        # table to find. Both readings are on the line so the log alone
+        # distinguishes a dead file from a filesystem that stopped dating a live one.
+        log.warning(
+            "session %s observation stale: transcript %s last written %.0fs ago "
+            "(mtime %.0fs ago, growth %.0fs ago) with a turn hook %.0fs ago",
+            record.id,
+            current.name,
+            now - last_write,
+            now - (_safe_mtime(current) or now),
+            now - (getattr(session, "transcript_growth_ts", 0.0) or now),
+            now - (session.last_turn_hook_ts or now),
         )
         session.publish_update()
         await self.events.emit(
@@ -3599,7 +3733,11 @@ class SessionManager:
             source="daemon",
             backend=record.backend,
             transcript_path=str(current),
-            transcript_mtime=current_mtime,
+            transcript_last_write=last_write,
+            # Both inputs, so a post-mortem can tell a genuinely dead file from a
+            # filesystem that stopped dating a live one.
+            transcript_mtime=_safe_mtime(current),
+            transcript_growth_ts=float(getattr(session, "transcript_growth_ts", 0.0)),
             last_turn_hook_ts=session.last_turn_hook_ts,
         )
 
@@ -3666,11 +3804,12 @@ class SessionManager:
                 continue
             sibling_path = getattr(other, "transcript_path", None)
             if sibling_path is not None:
-                try:
-                    if sibling_path.stat().st_mtime > created:
-                        continue
-                except OSError:
-                    pass
+                # The sibling's own growth reading counts here for the same reason
+                # it does for ours: a frozen mtime would hide the very evidence
+                # that clears this sibling of having written the candidate.
+                sibling_write = self._transcript_last_write_ts(other, sibling_path)
+                if sibling_write is not None and sibling_write > created:
+                    continue
             last_output = other.record.last_activity_ts
             if last_output and last_output < created - TRANSCRIPT_SWITCH_QUIET_SECONDS:
                 continue
@@ -3680,11 +3819,16 @@ class SessionManager:
     def _transcript_switch_candidate(self, session: Session, current: Path) -> Path | None:
         record = session.record
         now = time.time()
-        try:
-            current_mtime = current.stat().st_mtime
-        except OSError:
-            current_mtime = 0.0
-        if now - current_mtime < TRANSCRIPT_SWITCH_QUIET_SECONDS:
+        # "The file we follow has gone quiet" is the precondition for retargeting at
+        # all. Read from `stat().st_mtime` alone it was not enforced on Windows,
+        # where a live transcript's timestamp can sit frozen at its creation — so
+        # this ran its candidate search against an actively-written file, and the
+        # only thing standing between that and adopting a sibling's conversation
+        # was the ownership evidence below.
+        last_write = self._transcript_last_write_ts(session, current)
+        if last_write is None:
+            last_write = 0.0
+        if now - last_write < TRANSCRIPT_SWITCH_QUIET_SECONDS:
             return None
         started = record.agent_run_started_at or record.created_at
         cwd = Path(record.run_cwd or record.cwd)

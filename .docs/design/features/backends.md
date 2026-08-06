@@ -179,7 +179,12 @@
   transcript plus a freshly written, unclaimed, PTY-corroborated replacement in the same run cwd.
 - For Codex, if the observed transcript goes quiet while another transcript for the same run
   cwd is being actively written and is not owned by another live session, observation
-  retargets to it and re-enters historical catch-up as part of that rollover.
+  retargets to it and re-enters historical catch-up as part of that rollover. "Quiet" is
+  `_transcript_last_write_ts` here too, on both the followed file and on each same-backend
+  sibling being cleared of having written the candidate. Read from the timestamp alone the
+  precondition was not enforced at all on Windows, so the candidate search ran against an
+  actively-written file and only the ownership evidence stood between that and adopting a
+  sibling's conversation.
 - When the conversation cannot be followed, observation **fails closed** rather than reporting a
   retired conversation as live. The evidence is a hook whose event *necessarily wrote root
   transcript records* — a prompt submitted, a tool run, a turn stopped
@@ -188,7 +193,33 @@
   `observation_stale_since` is set, the transcript loses its authority over hooks (state keeps
   moving), delivery hard-blocks on `transcript_stale`, observers refuse to read it, and the
   session is marked in the UI and the state log. Cleared by the next record read on any followed
-  transcript, or by a rollover.
+  transcript, by the followed file growing again, or by a rollover.
+- **"Dead" is measured by observed growth, never by the file's timestamp**
+  (`_transcript_last_write_ts`). Windows does not keep a live file's last-write time current:
+  measured 2026-08-06, every long-running Codex rollout on the machine reported an mtime frozen
+  at the file's *creation* — 290 s to 3.5 h behind content that had grown to 5 MB — with
+  `os.stat`, `GetFileAttributesExW`, `FindFirstFileW`, and `GetFileInformationByHandle` all
+  returning that same frozen value, so no alternative call exists. `st_size` stayed accurate,
+  and Claude transcripts were unaffected in the same survey. The daemon therefore dates writes
+  from its own tailer, which already polls the size every 250 ms and stamps
+  `Session.transcript_growth_ts` when bytes appear past its attach snapshot; the timestamp
+  survives only as a floor for the window before the tailer attached. Trusting the timestamp
+  made this guard fire on healthy Codex sessions roughly 90 s into their life and flap from
+  then on, which is a **false-safe inversion**: the operator sees `idle · turn complete`
+  everywhere while the prompt queue refuses to deliver, and learns to click through the one
+  confirmation meant to stop them.
+- Growth is tracked separately from record reads because it covers what reads cannot: a partial
+  line, or one the parser rejects, is still proof the file is alive, and
+  `_record_parser_observation` never fires for it. Bytes already present when the tailer
+  attached are replay and are deliberately *not* growth — counting them would suppress
+  staleness detection after every daemon restart, on exactly the sessions this guard exists
+  for. The stamp describes one file and is discarded when the observer is re-aimed at another
+  (`_aim_observer`), but **not** when it re-tails the same file after a fault.
+- Retraction is evidence-based, not the negation of the staleness predicate: the claim is
+  dropped only when the followed transcript is written *after* the moment it was marked. The
+  other two paths that set `observation_stale_since` — a rollover refused because a live sibling
+  owns the conversation, and a CLI-reported rollover that could not be adopted — already know
+  the CLI is elsewhere, so quiet on the file they abandoned must not clear them.
 - The set is matched against the **raw** hook event type, so it must retain Codex's turn notify
   (`agent-turn-complete`) and not only Claude's `Stop` or the normalized `turn_ended`, because it
   is the compatibility path when lifecycle hooks are absent. Claude reports its own rollovers,

@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -585,11 +586,18 @@ def _recall_tool_call(
 
 
 class JsonlTailer:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, on_growth: Callable[[], None] | None = None) -> None:
         self.path = path
         self.offset = 0
         self.decoder = IncrementalJsonlDecoder()
         self.prefix: bytes | None = None
+        # Called when bytes appear that were not in the file at attach. This is the
+        # daemon's only first-hand evidence that the transcript it follows is still
+        # being written: `stat().st_mtime` cannot be used for that on Windows, where
+        # a live file's last-write time can stay frozen at its creation for hours
+        # (see `Session.transcript_growth_ts`). `st_size` remains accurate, and this
+        # loop is already polling it.
+        self.on_growth = on_growth
         # Content already present at attach is history (resume, promotion after
         # activity), not live agent behavior; events() labels it historical.
         try:
@@ -597,6 +605,10 @@ class JsonlTailer:
         except OSError:
             self.initial_size = 0
         self._caught_up = self.initial_size == 0
+
+    def _note_growth(self) -> None:
+        if self.on_growth is not None:
+            self.on_growth()
 
     async def events(self, stop: asyncio.Event):  # type: ignore[no-untyped-def]
         """Yield records plus explicit replay-boundary markers.
@@ -630,6 +642,9 @@ class JsonlTailer:
                     # grows past its former length.
                     self.initial_size = size
                     self._caught_up = False
+                    # Truncated or rewritten under us: whoever owns this file is
+                    # demonstrably still writing it.
+                    self._note_growth()
                     yield None, True
                 if size > self.offset:
                     with self.path.open("rb") as handle:
@@ -638,6 +653,10 @@ class JsonlTailer:
                         handle.seek(self.offset)
                         chunk = handle.read(size - self.offset)
                     self.offset = size
+                    # Only bytes past the attach snapshot are evidence of a *live*
+                    # writer; replaying what was already there proves nothing.
+                    if size > self.initial_size:
+                        self._note_growth()
                     for position, item in self.decoder.feed_with_positions(chunk):
                         yield item, position <= self.initial_size
                 if not self._caught_up and self.offset >= self.initial_size:
@@ -690,7 +709,14 @@ async def observe_transcript(
     session.record.parser_schema_version = OBSERVATION_SCHEMA_VERSION
     session.record.parser_diagnostic = f"tailing {path.name}"
     _publish_update(session)
-    tailer = JsonlTailer(path)
+
+    def note_growth() -> None:
+        # Dated here rather than from the file's own timestamp; see
+        # `Session.transcript_growth_ts`. Bound to `path` by the caller resetting
+        # the stamp whenever it re-aims the observer at a different file.
+        session.transcript_growth_ts = time.time()
+
+    tailer = JsonlTailer(path, on_growth=note_growth)
     attach_ts = time.time()
     replay_pending = tailer.initial_size > 0
     if replay_pending:

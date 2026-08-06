@@ -1010,6 +1010,123 @@ async def test_jsonl_tailer_labels_preexisting_content_historical(tmp_path: Path
     assert seen == [({"n": 1}, True), ({"n": 2}, True), (None, False), ({"n": 3}, False)]
 
 
+async def drain_tailer(
+    path: Path, growth: list[float], *, settle: float = 0.5, then: Any = None
+) -> None:
+    """Tail `path`, recording every growth report, running `then` partway through."""
+    stop = asyncio.Event()
+
+    async def collect() -> None:
+        async for _item, _historical in JsonlTailer(
+            path, on_growth=lambda: growth.append(time.time())
+        ).events(stop):
+            pass
+
+    task = asyncio.create_task(collect())
+    try:
+        await asyncio.sleep(settle)
+        if then is not None:
+            then()
+            await asyncio.sleep(settle)
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+
+
+async def test_the_tailer_reports_bytes_written_after_it_attached(tmp_path: Path) -> None:
+    # The daemon's only first-hand evidence that the transcript it follows is still
+    # being written. It cannot come from `stat().st_mtime`: on Windows a live file's
+    # last-write time can stay frozen at its creation for hours (measured 2026-08-06
+    # across five Codex rollouts, every Win32 timestamp API agreeing), while
+    # `st_size` — which this loop already polls — stays accurate.
+    path = tmp_path / "transcript.jsonl"
+    path.write_bytes(b'{"n":1}\n')
+    growth: list[float] = []
+
+    def append() -> None:
+        with path.open("ab") as handle:
+            handle.write(b'{"n":2}\n')
+
+    await drain_tailer(path, growth, then=append)
+
+    assert len(growth) == 1
+
+
+async def test_replaying_the_attach_snapshot_is_not_growth(tmp_path: Path) -> None:
+    # Catching up on bytes that were already there proves nothing about a live
+    # writer, and counting it would suppress staleness detection for the whole
+    # window after every daemon restart — exactly the sessions the fail-closed
+    # guard exists for.
+    path = tmp_path / "transcript.jsonl"
+    path.write_bytes(b'{"n":1}\n{"n":2}\n{"n":3}\n')
+    growth: list[float] = []
+
+    await drain_tailer(path, growth)
+
+    assert growth == []
+
+
+async def test_appended_bytes_count_as_growth_even_when_unparseable(
+    tmp_path: Path,
+) -> None:
+    # The reason growth is tracked separately from record reads at all. A partial
+    # line, or one the parser rejects, is still proof the file is alive — and
+    # `_record_parser_observation`, the other thing that retracts a staleness claim,
+    # never fires for it.
+    path = tmp_path / "transcript.jsonl"
+    path.write_bytes(b'{"n":1}\n')
+    growth: list[float] = []
+
+    def append_garbage() -> None:
+        with path.open("ab") as handle:
+            handle.write(b"not json at all, and no newline either")
+
+    await drain_tailer(path, growth, then=append_garbage)
+
+    assert len(growth) == 1
+
+
+async def test_a_rewritten_transcript_counts_as_growth(tmp_path: Path) -> None:
+    # Claude's cancel/revert truncates and rewrites the file. Whoever did that is
+    # demonstrably still writing it.
+    path = tmp_path / "transcript.jsonl"
+    path.write_bytes(b'{"n":1}\n{"n":2}\n')
+    growth: list[float] = []
+
+    def rewrite() -> None:
+        path.write_bytes(b'{"n":1}\n')
+
+    await drain_tailer(path, growth, then=rewrite)
+
+    assert growth != []
+
+
+async def test_the_observer_stamps_growth_onto_the_session(tmp_path: Path) -> None:
+    path = tmp_path / "transcript.jsonl"
+    path.write_bytes(b'{"n":1}\n')
+    session = cast(
+        Any,
+        SimpleNamespace(
+            record=record("codex"),
+            publish_update=lambda: None,
+            transcript_growth_ts=0.0,
+        ),
+    )
+    stop = asyncio.Event()
+
+    task = asyncio.create_task(observe_transcript(session, path, EventBus(), stop))
+    try:
+        await asyncio.sleep(0.5)
+        assert session.transcript_growth_ts == 0.0
+        with path.open("ab") as handle:
+            handle.write(b'{"n":2}\n')
+        await asyncio.sleep(0.5)
+        assert session.transcript_growth_ts > 0.0
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+
+
 async def test_transcript_rewrite_reconciles_an_active_turn(tmp_path: Path) -> None:
     path = tmp_path / "transcript.jsonl"
     path.write_text("", encoding="utf-8")

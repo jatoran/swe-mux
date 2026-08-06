@@ -91,6 +91,10 @@ is not this conversation — an in-CLI `/clear` or `/new` the daemon could not f
 the transcript can no longer report a turn boundary and the only source that can is being
 dropped. Staleness therefore returns state to the hook/PTY fallback tiers and hard-blocks
 delivery, rather than leaving a healthy-looking session reporting a retired conversation.
+Whether the followed transcript is dead is decided by growth the daemon's own tailer observed
+(`Session.transcript_growth_ts`), never by the file's timestamp — a live Codex rollout on
+Windows reports an mtime frozen at its creation, which made this fire on healthy sessions and
+hard-block their queued messages (`backends.md`, `delivery-readiness.md`).
 A conversation rollover itself is a `daemon`-sourced forced transition to `starting`, the same
 lifecycle class as promotion.
 

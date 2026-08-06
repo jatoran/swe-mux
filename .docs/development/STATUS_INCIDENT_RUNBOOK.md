@@ -6,6 +6,10 @@ form: *"at 12:39 session S showed `working` but was actually idle — what happe
 session, and what did swe-mux's detection hierarchy say?"* — including for sessions and
 daemons that no longer exist.
 
+It also covers the delivery half of the same question — *"the session says it is ready and
+the prompt queue refuses to send to it"* — which reads facts the display does not; start at
+§3a for that.
+
 Background reading: `.docs/design/features/status-detection.md` (the detection ladder,
 the transition contract, the durable timeline). This runbook is the operational half:
 which endpoints, in which order, and how to adjudicate.
@@ -106,6 +110,24 @@ For the moment in question, from the timeline alone:
    timestamp. This is the ground truth the layers were trying to track: a tool call
    spanning the moment explains a long `working`; a final assistant message minutes
    before it confirms "actually idle".
+
+## 3a. When the complaint is delivery, not display
+
+"The session is ready and my queued message will not send" is the same investigation with a
+different first question, because delivery reads facts the status ladder does not.
+`GET /api/automation/injection-safety` gives the per-session checks and the blocking reason;
+map it before touching the timeline:
+
+| Reason | What it means | Where to look |
+| --- | --- | --- |
+| `transcript_stale` | The daemon believes the followed transcript is no longer this PTY's conversation. | The `observation_stale` events for the session, and whether an `observation_stale_cleared` followed. Compare their `transcript_mtime` against `transcript_growth_ts`: **an unmoving `transcript_mtime` beside a recent `transcript_growth_ts` is a filesystem that stopped dating a live file, not a stale conversation** (`design/features/backends.md`). Confirm against the file itself — its newest record's timestamp versus `stat().st_mtime`. |
+| `terminal_input_after_completion` | Something advanced `input_revision` since the turn closed — usually real typing, historically also mouse reports. | `evidence.input_revision` vs `evidence.completion_input_revision`, and the `terminal_input` events in the window. |
+| `root_agent_working` / `awaiting_*` | Delivery agrees with the display. | Treat it as an ordinary §3 status incident. |
+| `no_root_lifecycle_evidence` | No turn has ever completed here that the daemon saw. | Expected on a brand-new session inside its settle window; otherwise a hook/transcript wiring problem. |
+
+A refusal that repeats on a session the operator can see is idle is the dangerous shape, not
+the harmless one: the only way to work is to override every time, which is how the
+confirmation that exists to stop a genuinely unsafe send stops being read.
 
 ## 4. Corroborating surfaces (when §3 is not conclusive)
 

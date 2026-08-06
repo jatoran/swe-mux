@@ -411,6 +411,7 @@ async def test_state_log_range_query_serves_the_durable_timeline(tmp_path: Path)
     # not carry; decorate the stub with inert values.
     stub = cast(Any, session)
     stub.transcript_provisional = False
+    stub.transcript_growth_ts = 0.0
     stub.observer_restart_count = 0
     stub.observer_last_fault = None
     stub.agent_lifecycle_id = None

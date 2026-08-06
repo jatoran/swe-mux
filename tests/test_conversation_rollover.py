@@ -541,7 +541,9 @@ def test_an_unpromoted_shell_launching_an_agent_still_blocks_everything(
 # ------------------------------------------------------------- failing closed
 
 
-def stale_manager(tmp_path: Path, *, last_turn_hook_ts: float) -> tuple[Any, Any, Path]:
+def stale_manager(
+    tmp_path: Path, *, last_turn_hook_ts: float, transcript_growth_ts: float = 0.0
+) -> tuple[Any, Any, Path]:
     transcript = tmp_path / "dead.jsonl"
     transcript.write_text("{}\n", encoding="utf-8")
     dead = time.time() - 600
@@ -558,6 +560,9 @@ def stale_manager(tmp_path: Path, *, last_turn_hook_ts: float) -> tuple[Any, Any
             # after every turn, so this being fresh must not by itself mean anything.
             last_hook_ts=time.time(),
             last_turn_hook_ts=last_turn_hook_ts,
+            # The tailer's own reading of the followed file. Zero means "no growth
+            # observed", which is what an actually-dead transcript looks like.
+            transcript_growth_ts=transcript_growth_ts,
             publish_update=lambda: None,
         ),
     )
@@ -625,6 +630,257 @@ async def test_staleness_is_announced_once(tmp_path: Path) -> None:
 
     assert session.record.observation_stale_since == first
     assert manager.events.emit.await_count == 1
+
+
+# ------------------------------------ a filesystem that stops dating a live file
+#
+# Windows does not keep a live file's last-write time current. Measured 2026-08-06:
+# every long Codex rollout on the machine reported an mtime frozen at the file's
+# *creation* — 290 s to 3.5 h behind content that had grown to 5 MB — and `os.stat`,
+# `GetFileAttributesExW`, `FindFirstFileW`, and `GetFileInformationByHandle` all
+# returned the same frozen value, so there was no better call to reach for. `st_size`
+# stayed accurate throughout.
+#
+# Everything below is one bug: staleness was measured with that timestamp, so a
+# healthy Codex session started failing closed ~90 s into its life and kept flapping.
+# Delivery hard-blocks on `transcript_stale`, so an armed queue message would not send
+# at the exact moment the agent finished and was ready for it, and the operator had to
+# override the one prompt that is meant to stop them (live report 2026-08-06; the
+# session's own ledger showed 30+ `observation_stale` events on one idle Codex pane
+# whose transcript_mtime never moved).
+
+
+async def test_a_live_transcript_whose_mtime_is_frozen_is_never_stale(
+    tmp_path: Path,
+) -> None:
+    # The exact shape of the live incident: ancient mtime, turn hook just now, and a
+    # tailer that watched the file grow a moment ago.
+    manager, session, transcript = stale_manager(
+        tmp_path, last_turn_hook_ts=time.time(), transcript_growth_ts=time.time()
+    )
+
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    assert session.record.observation_stale_since is None
+    manager.events.emit.assert_not_awaited()
+
+
+async def test_growth_older_than_the_turn_hook_still_marks_a_session_stale(
+    tmp_path: Path,
+) -> None:
+    # The safety property this guard exists for, restated against the new evidence:
+    # the file did grow once, then stopped, and the CLI has run a turn since. That is
+    # still a conversation we are no longer following.
+    manager, session, transcript = stale_manager(
+        tmp_path,
+        last_turn_hook_ts=time.time(),
+        transcript_growth_ts=time.time() - 600,
+    )
+
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    assert session.record.observation_stale_since is not None
+    assert manager.events.emit.await_args.args[0] == "observation_stale"
+
+
+async def test_the_stale_event_carries_both_readings(tmp_path: Path) -> None:
+    # A post-mortem has to be able to tell a genuinely dead file from a filesystem
+    # that stopped dating a live one, which the mtime alone cannot say.
+    manager, session, transcript = stale_manager(
+        tmp_path, last_turn_hook_ts=time.time(), transcript_growth_ts=time.time() - 600
+    )
+
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    payload = manager.events.emit.await_args.kwargs
+    assert payload["transcript_mtime"] == pytest.approx(transcript.stat().st_mtime)
+    assert payload["transcript_growth_ts"] == pytest.approx(session.transcript_growth_ts)
+    assert payload["transcript_last_write"] == pytest.approx(session.transcript_growth_ts)
+
+
+async def test_growth_after_the_claim_retracts_it(tmp_path: Path) -> None:
+    # Without this the flag is a one-way door for anything the observer cannot parse:
+    # `_record_parser_observation` only clears it on a complete *record*, so a file
+    # that resumes growing without yielding one stayed undeliverable until the
+    # session ended.
+    manager, session, transcript = stale_manager(
+        tmp_path, last_turn_hook_ts=time.time(), transcript_growth_ts=time.time() - 600
+    )
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+    marked = session.record.observation_stale_since
+    assert marked is not None
+
+    session.transcript_growth_ts = marked + 1
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    assert session.record.observation_stale_since is None
+    assert manager.events.emit.await_args.args[0] == "observation_stale_cleared"
+
+
+async def test_a_quiet_abandoned_transcript_keeps_its_claim(tmp_path: Path) -> None:
+    # The retraction above is deliberately *not* the negation of the staleness
+    # predicate. The other two callers that set this flag — a rollover refused
+    # because a live sibling owns the conversation, and a CLI-reported rollover that
+    # could not be adopted — already know the CLI is elsewhere. Quiet on the file
+    # they abandoned is not permission to forget that.
+    manager, session, transcript = stale_manager(tmp_path, last_turn_hook_ts=0.0)
+    session.record.observation_stale_since = time.time()
+
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    assert session.record.observation_stale_since is not None
+    manager.events.emit.assert_not_awaited()
+
+
+def test_the_switch_watcher_will_not_retarget_a_growing_transcript(
+    tmp_path: Path,
+) -> None:
+    # "The file we follow has gone quiet" is the precondition for retargeting at all.
+    # Read from the frozen timestamp it was not enforced, so the daemon ran its
+    # candidate search against an actively-written file and only the ownership
+    # evidence stood between that and adopting a sibling's conversation.
+    manager, session, current, fresh = switch_fixture(tmp_path)
+    frozen = time.time() - 4000
+    os.utime(current, (frozen, frozen))
+    assert SessionManager._transcript_switch_candidate(manager, session, current) == fresh
+
+    session.transcript_growth_ts = time.time()
+    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+
+
+def test_a_sibling_growing_a_frozen_transcript_still_blocks(tmp_path: Path) -> None:
+    # The mirror of the rule above, on a sibling: its own growth reading is what
+    # clears it of having written the candidate, and a frozen mtime hides exactly
+    # that.
+    manager, session, current, _fresh = switch_fixture(tmp_path)
+    sibling_path = tmp_path / "sibling.jsonl"
+    sibling_path.write_text("{}\n", encoding="utf-8")
+    frozen = time.time() - 4000
+    os.utime(sibling_path, (frozen, frozen))
+    other = sibling(tmp_path, transcript=sibling_path, last_activity_ts=time.time())
+    manager.sessions["sibling"] = other
+
+    assert SessionManager._transcript_switch_candidate(manager, session, current) is None
+
+    other.transcript_growth_ts = time.time() + 2
+    assert SessionManager._transcript_switch_candidate(manager, session, current) is not None
+
+
+def test_re_tailing_the_same_transcript_keeps_its_growth_evidence(
+    tmp_path: Path,
+) -> None:
+    # The observer loop re-aims on every restart, including the ones that follow a
+    # crash on the same file. Clearing the stamp there would drop the session back
+    # onto the filesystem timestamp after each fault — silently, and for as long as
+    # the agent then stayed quiet.
+    session = cast(
+        Any, SimpleNamespace(transcript_path=None, transcript_growth_ts=0.0)
+    )
+    first = tmp_path / "one.jsonl"
+    second = tmp_path / "two.jsonl"
+
+    SessionManager._aim_observer(session, first)
+    session.transcript_growth_ts = time.time()
+    SessionManager._aim_observer(session, first)
+    assert session.transcript_growth_ts > 0.0
+
+    SessionManager._aim_observer(session, second)
+    assert session.transcript_growth_ts == 0.0
+    assert session.transcript_path == second
+
+
+async def test_a_rollover_discards_the_retired_transcripts_growth(
+    tmp_path: Path,
+) -> None:
+    record = agent_record(cwd=str(tmp_path))
+    manager, session = rollover_manager(record)
+    session.transcript_growth_ts = time.time()
+
+    rolled = await manager._apply_conversation_rollover(
+        session,
+        native_id=CLEARED,
+        transcript=tmp_path / f"{CLEARED}.jsonl",
+        reason="conversation_rolled",
+        source="clear",
+    )
+
+    assert rolled is True
+    assert session.transcript_growth_ts == 0.0
+
+
+def test_no_liveness_rule_reads_the_filesystem_timestamp_on_its_own() -> None:
+    """Both callers must go through `_transcript_last_write_ts`.
+
+    A structural pin, because the defect was invisible in review: `stat().st_mtime`
+    is the obvious way to ask "when was this last written", it is correct on every
+    other platform the developer is likely to check, and it fails silently.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    for rule in (
+        SessionManager._note_transcript_staleness,
+        SessionManager._transcript_switch_candidate,
+        SessionManager._unresolved_transcript_sibling,
+    ):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(rule)))
+        # Attribute access, so the prose above each of these may keep explaining
+        # why the timestamp is not to be trusted.
+        reads_mtime = any(
+            isinstance(node, ast.Attribute) and node.attr in {"st_mtime", "st_atime"}
+            for node in ast.walk(tree)
+        )
+        calls = {
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        assert not reads_mtime, rule.__name__
+        assert "_transcript_last_write_ts" in calls, rule.__name__
+
+
+async def test_a_frozen_mtime_leaves_a_finished_agent_deliverable(
+    tmp_path: Path,
+) -> None:
+    """The user-visible half: the armed message sends.
+
+    Staleness and delivery are separate modules, and the bug only bites where they
+    meet — a session that reads `idle · turn complete` everywhere in the UI while the
+    queue refuses it. This pins the join, not either half.
+    """
+    manager, session, transcript = stale_manager(
+        tmp_path, last_turn_hook_ts=time.time(), transcript_growth_ts=time.time()
+    )
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    clock = VirtualClock()
+    delivery = ReplaySession("codex", clock)
+    delivery.record.parser_status = "ready"
+    delivery.record.observation_stale_since = session.record.observation_stale_since
+    # mux launches Codex with `tui.alternate_screen="never"` (`delivery-readiness.md`).
+    delivery.terminal_mode = "normal"
+    delivery.terminal_mode_updated_at = clock.monotonic()
+    tracker = DeliveryReadinessTracker(clock=clock.monotonic)
+    tracker.observe(
+        MuxEvent(time.time(), "replay-session", "transcript", "turn_started", {}), delivery
+    )
+    tracker.observe(
+        MuxEvent(
+            time.time(),
+            "replay-session",
+            "transcript",
+            "turn_ended",
+            {"outcome": "completed"},
+        ),
+        delivery,
+    )
+    clock.advance(5.0)
+    delivery.terminal_mode_updated_at = clock.monotonic()
+
+    evaluation = tracker.evaluate(delivery)
+    assert "transcript_stale" not in evaluation["reasons"]
+    assert evaluation["delivery_state"] == "safe"
 
 
 def test_a_stale_transcript_loses_its_authority_over_hooks() -> None:

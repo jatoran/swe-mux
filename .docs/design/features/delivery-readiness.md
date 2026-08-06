@@ -18,6 +18,8 @@ a PTY or authorize automation.
   every positive signal here is being read off a retired conversation, so the evidence is not
   *missing*, it is *wrong about a different session*. Writing into a session whose state we
   are provably misreading is precisely the false-safe case this contract exists to prevent.
+  Because it is a hard block with no softer degradation, the cost of raising it wrongly is
+  paid entirely by the operator — see the 2026-08-06 correction.
 - `unknown` means evidence is missing, stale, replaced, or degraded. Unknown is never safe.
 
 Standing-activity annotations (`status-detection.md` § Standing-activity annotations) are
@@ -148,6 +150,24 @@ PTY offers nothing better to key on: output goes quiet from spawn+1.0s to spawn+
 *then* paints the composer, so "the terminal settled" fires inside the swallow window — which
 is also why the status layer's own one-second startup fallback calls this idle, and why only
 the CLI's hook counts here.
+
+**Corrected 2026-08-06 — `transcript_stale` fired on healthy Codex sessions.** A finished,
+idle Codex agent refused its armed queue message, and the operator's forced send reported
+`Not safe right now: transcript_stale`. Nothing was stale: staleness was being measured with
+`stat().st_mtime`, and Windows does not keep a live file's last-write time current. Measured
+across five Codex rollouts, every one reported an mtime frozen at the file's *creation* while
+its content ran 290 s to 3.5 h ahead, and every Win32 timestamp API agreed. The affected
+session's ledger held 30+ `observation_stale` events, all citing one unmoving
+`transcript_mtime`. The fix is in `backends.md`: the daemon dates writes from its own tailer's
+size polling rather than from the filesystem, and a stale claim is retracted when the followed
+file is written again.
+
+This is the failure mode the four corrections above share, in its most damaging form. A hard
+block with no softer degradation, raised by evidence that is silently wrong, presents to the
+operator as a session reading `idle · turn complete` in every surface while the queue refuses
+it — so the only way to work is to override, every time, which is precisely how the
+confirmation that exists to stop a genuinely unsafe send stops being read. A false `blocked`
+is not the safe direction of a mistake; it is how the safety mechanism gets trained away.
 
 What carries the safety argument after those four is the composer-collision guard:
 `partial_input_absent` compares the input revision against its value when the root turn
