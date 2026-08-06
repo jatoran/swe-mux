@@ -40,6 +40,43 @@ _VERSION_CACHE: dict[tuple[str, str], tuple[float, str | None]] = {}
 _CACHE_LOCK = threading.Lock()
 _SAFE_KEY = re.compile(r"[A-Za-z0-9_.-]{1,160}\Z")
 
+# Hook display. Both CLIs key hooks by lifecycle event, so the event is the group
+# heading and the row identifies the handler by the script or module it runs.
+_HOOK_EVENTS = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PermissionRequest",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "Notification",
+    "PreCompact",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+    "StopFailure",
+    "TeammateIdle",
+    "SessionEnd",
+)
+_HOOK_EVENT_RANK = {event: index for index, event in enumerate(_HOOK_EVENTS)}
+# Every swe-mux lifecycle hook runs this module, in a source checkout and inside
+# the frozen desktop bundle alike (`desktop.py` re-dispatches `-m` itself).
+_MUX_HOOK_MARKER = "swe_mux.hook_client"
+_SCRIPT_SUFFIXES = frozenset(
+    {
+        ".bash", ".bat", ".cjs", ".cmd", ".com", ".exe", ".fish", ".jar", ".js", ".lua",
+        ".mjs", ".pl", ".php", ".ps1", ".psm1", ".py", ".pyw", ".rb", ".sh", ".ts", ".zsh",
+    }
+)
+_CREDENTIAL_WORD = re.compile(r"(?i)\b(secret|token|password|passwd|bearer|api[_-]?key)\b")
+_MODULE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
+# A command starting with one of these is a shell snippet, not a program: reporting
+# `if` as the hook's program is worse than saying nothing.
+_SHELL_KEYWORDS = frozenset(
+    {".", "[", "[[", "case", "do", "done", "eval", "exec", "fi", "for", "if",
+     "source", "test", "then", "until", "while"}
+)
+
 
 @dataclass(slots=True)
 class ConfigSource:
@@ -239,7 +276,16 @@ def _item(
     source: ConfigSource | None = None,
     meta: list[tuple[str, str]] | None = None,
     unique: str = "",
+    group: str = "",
+    owner: str = "",
 ) -> dict[str, Any]:
+    """One normalized inventory row.
+
+    `group` is an optional in-section heading the UI renders above a run of
+    consecutive items (hooks use the lifecycle event), and `owner` names who
+    installed the entry when that is knowable — `swe_mux` for the rows swe-mux
+    provisions itself, so they are distinguishable from the user's own.
+    """
     identity = f"{kind}:{name}:{origin}:{source.source_id if source else ''}:{unique}"
     return {
         "id": _opaque("item", identity),
@@ -249,6 +295,8 @@ def _item(
         "scope": scope,
         "origin": origin[:160],
         "state": state,
+        "group": group[:80],
+        "owner": owner[:40],
         "source_id": source.source_id if source else None,
         "source_label": source.label if source else None,
         "changed_after_start": source.changed_after_start if source else False,
@@ -583,6 +631,79 @@ def _plugin_inventory(
     return items, roots
 
 
+def _command_tokens(raw: str) -> list[str]:
+    try:
+        tokens = shlex.split(raw, posix=os.name != "nt")
+    except ValueError:
+        tokens = raw.split()
+    # Non-POSIX splitting keeps the quote characters on each token.
+    return [stripped for token in tokens if (stripped := token.strip("\"'"))]
+
+
+def _is_script_token(token: str) -> bool:
+    """True when a token is structurally a script path rather than an argument.
+
+    Deliberately narrow: a flag, a `key=value` assignment, a URL, and anything
+    naming a credential are all refused, so the only thing a hook command can
+    contribute to the inventory is a filesystem path or a bare script name.
+    """
+    if not token or token.startswith("-") or "=" in token or "://" in token or "@" in token:
+        return False
+    if _CREDENTIAL_WORD.search(token):
+        return False
+    if Path(token).suffix.lower() in _SCRIPT_SUFFIXES:
+        return True
+    return "/" in token or "\\" in token
+
+
+@dataclass(frozen=True, slots=True)
+class _HookTarget:
+    """What one hook handler runs, reduced to the parts that are safe to show."""
+
+    program: str = ""
+    target: str = ""
+    inline_shell: bool = False
+    provisioned_by_mux: bool = False
+
+
+def _hook_handler_target(handler: dict[str, Any]) -> _HookTarget:
+    """Reduce one hook handler's command to its program and single script target.
+
+    Only the program and the one script or module it runs are read out; every
+    remaining argument stays withheld, because a hook command line is exactly where
+    a user's own tokens and passwords sit.  A handler whose target cannot be
+    identified structurally reports its program alone rather than guessing, and an
+    inline shell body is reported as such rather than quoted.
+    """
+    raw = ""
+    for key in ("command", "command_windows"):
+        value = handler.get(key)
+        if isinstance(value, str) and value.strip():
+            raw = value
+            break
+    if not raw:
+        return _HookTarget()
+    provisioned = _MUX_HOOK_MARKER in raw
+    tokens = _command_tokens(raw)
+    if not tokens:
+        return _HookTarget(provisioned_by_mux=provisioned)
+    inline = tokens[0] in _SHELL_KEYWORDS
+    program = "" if inline else Path(tokens[0]).name[:120]
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"-m", "--module"} and index + 1 < len(tokens):
+            candidate = tokens[index + 1]
+            if _MODULE_NAME.fullmatch(candidate):
+                return _HookTarget(program, candidate[:240], inline, provisioned)
+            index += 2
+            continue
+        if _is_script_token(token):
+            return _HookTarget(program, token[:240], inline, provisioned)
+        index += 1
+    return _HookTarget(program, "", inline, provisioned)
+
+
 def _hooks_from_data(
     data: dict[str, Any], source: ConfigSource, *, origin: str
 ) -> list[dict[str, Any]]:
@@ -604,20 +725,44 @@ def _hooks_from_data(
                 if not isinstance(handler, dict):
                     continue
                 handler_type = str(handler.get("type") or "command")
-                meta = [("Handler", handler_type)]
+                run = _hook_handler_target(handler)
+                # The event is the group heading, so the row identifies the handler
+                # by what it runs — the question "which of these is swe-mux?" has no
+                # answer when every row is named after its event.
+                name = Path(run.target).name if run.target else run.program
+                meta: list[tuple[str, str]] = []
+                if run.target:
+                    meta.append(("Runs", run.target))
+                elif run.program:
+                    meta.append(("Runs", f"{run.program} (arguments withheld)"))
+                if run.inline_shell:
+                    meta.append(("Program", "inline shell"))
+                elif run.program and run.program != name:
+                    meta.append(("Program", run.program))
                 if isinstance(matcher, str) and matcher:
                     meta.append(("Matcher", matcher[:160]))
+                timeout = handler.get("timeout")
+                if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
+                    meta.append(("Timeout", f"{timeout:g}s"))
+                if handler_type != "command":
+                    meta.append(("Handler", handler_type))
+                fallback = "inline shell command" if run.inline_shell else f"{handler_type} handler"
                 items.append(
                     _item(
                         "hook",
-                        str(event),
+                        name or fallback,
                         scope=source.scope,
                         origin=origin,
                         state="configured",
-                        description=f"{handler_type} lifecycle hook",
+                        # No per-row prose for swe-mux's own: it would repeat on every
+                        # one of its dozen handlers. The `swe_mux` owner chip carries
+                        # the fact and the section note explains it once.
+                        description="",
                         source=source,
                         meta=meta,
-                        unique=f"{group_index}:{handler_index}",
+                        unique=f"{event}:{group_index}:{handler_index}",
+                        group=str(event),
+                        owner="swe_mux" if run.provisioned_by_mux else "",
                     )
                 )
     return items
@@ -640,6 +785,11 @@ def _hook_inventory(
         if source.status == "ready":
             _source_once(sources, source)
             items.extend(_hooks_from_data(source.data, source, origin=f"plugin: {plugin_id}"))
+    # Lifecycle order, not source order: the section is read as "what fires when",
+    # and every handler for one event has to sit under one heading for the UI to
+    # group by a contiguous run. Stable, so discovery order survives inside a group.
+    unknown = len(_HOOK_EVENTS)
+    items.sort(key=lambda item: (_HOOK_EVENT_RANK.get(item["group"], unknown), item["group"]))
     return items
 
 
@@ -1180,8 +1330,12 @@ def discover_agent_environment(
                 "Hooks",
                 "configured_only",
                 hooks,
-                "Definitions only. Commands, prompts, URLs, and credentials are deliberately "
-                "omitted.",
+                "Definitions only, grouped by lifecycle event and never executed. Each row "
+                "names the program and the one script or module its command runs; the "
+                "remaining arguments, inline shell bodies, prompts, URLs, environment, and "
+                "credentials are deliberately omitted. Rows tagged swe-mux are installed by "
+                "swe-mux itself and report the event back to it, which is what session "
+                "status detection reads.",
             ),
             _section(
                 "agents",

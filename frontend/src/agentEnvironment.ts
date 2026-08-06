@@ -13,6 +13,10 @@ export interface AgentEnvironmentItem {
   scope: AgentEnvironmentScope
   origin: string
   state: string
+  /** In-section heading for a contiguous run of items (hooks: the lifecycle event). */
+  group?: string
+  /** Who provisioned the entry, when knowable — `swe_mux` for swe-mux's own. */
+  owner?: string
   source_id: string | null
   source_label: string | null
   changed_after_start: boolean
@@ -76,6 +80,33 @@ export function agentStateLabel(state: string): string {
   return state.replaceAll('_', ' ')
 }
 
+const OWNER_LABELS: Record<string, string> = { swe_mux: 'swe-mux' }
+
+export function agentOwnerLabel(owner: string): string {
+  return OWNER_LABELS[owner] || agentStateLabel(owner)
+}
+
+/**
+ * Split a section's items into the consecutive runs that share a `group`.
+ *
+ * Runs rather than a keyed map: the server already emits each section in the
+ * order it wants read (hooks in lifecycle order), so grouping must preserve that
+ * order rather than impose an alphabetical one of its own. Items with no group
+ * fall into a single unlabelled run, which is every section but Hooks today.
+ */
+export function groupAgentEnvironmentItems(
+  items: AgentEnvironmentItem[],
+): Array<{ key: string; items: AgentEnvironmentItem[] }> {
+  const runs: Array<{ key: string; items: AgentEnvironmentItem[] }> = []
+  for (const item of items) {
+    const key = item.group || ''
+    const last = runs[runs.length - 1]
+    if (last && last.key === key) last.items.push(item)
+    else runs.push({ key, items: [item] })
+  }
+  return runs
+}
+
 export function agentCompletenessLabel(completeness: string): string {
   const labels: Record<string, string> = {
     documented_catalog: 'Documented catalog',
@@ -106,6 +137,8 @@ export function filterAgentEnvironmentSections(
         item.scope,
         agentScopeLabel(item.scope),
         item.state,
+        item.group || '',
+        item.owner ? agentOwnerLabel(item.owner) : '',
         ...item.meta.flatMap(meta => [meta.label, meta.value]),
       ].join(' ').toLowerCase().includes(needle),
     ),

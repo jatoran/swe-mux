@@ -1189,6 +1189,21 @@ responsive controls.
   the pane header off the top of the screen and drew the terminal where they had been; those are
   navigation rather than content, and they stay put. `.terminal-pane` clips while the keyboard is
   up, which covers everything outside the pane box (the tab rail, the mobile toolbar).
+- A terminal slid for the keyboard offers a peek toggle, because the slide shows the bottom of a
+  grid taller than the space left and that is the wrong half on a fresh agent session: the
+  composer is pinned to the bottom of the alternate screen while the conversation fills from the
+  top, so a first message and its reply land in the hidden region. Nothing could reach them — the
+  alternate screen has no scrollback, so a scroll gesture has nothing to move, and the rows are
+  clipped by a transform rather than scrolled away.
+- The toggle pushes the terminal host back down *inside* the already-slid surface, so the command
+  rail and the chips stay where the slide put them. That is what makes it a toggle rather than a
+  trapdoor: the control that reveals the top is still on screen and still takes you back.
+  Measured with a 415px keyboard over a 48-row grid: the first visible row moves 27 → 0 → 27
+  across toggle presses while the rail holds at 447..500 and the chip at 400..438.
+- `nextPeekState` owns when peeking ends. Typing returns to the composer (the caret is there and a
+  reader who types has stopped reading) and losing the keyboard ends it outright (the whole grid
+  fits again). Output deliberately does **not** end it: a streaming reply is exactly when a reader
+  is peeking, so snapping back on writes would make the toggle useless when it is most needed.
 - Every other mobile surface shortens rather than sliding, and the asymmetry is the whole point:
   a terminal must not resize because shrinking an alternate-screen PTY destroys rows, while a note
   editor, file view, or drawer reflows losslessly. Shortening is strictly better where it is safe,
@@ -1251,6 +1266,25 @@ responsive controls.
   fetched per entry on use. Row actions are insert (primary), copy to the system clipboard, pin,
   forget. Copying from the history tab, including its manual fallback, bypasses capture: it changes
   the OS clipboard without promoting the entry or changing its timestamp.
+- Tapping a clipboard row *reads* it rather than acting on it: the row expands to the full text,
+  selectable so part of an entry can be copied by hand, and the four actions move to a per-row bar.
+  A two-line preview cannot separate two similar copies, and while the row body was the insert
+  button the cost of finding that out was inserting the wrong one into a live agent. One entry is
+  open at a time. Its head pins to the top of the list and a Collapse footer to the bottom, so a
+  body many screens tall keeps *that* entry's copy/pin/forget and a way out on screen for the whole
+  scroll. The expanded body is `data-clipboard-capture="ignore"`: a part-selection copied back out
+  of the history surface is transport, like the Copy button, not a new capture, and recording it
+  would reorder the list under the reader. Fetched text is cached per entry — an entry's text never
+  changes, a re-copy promotes the existing row — which also lets Copy on an open entry run inside
+  the click gesture, where the legacy `execCommand` fallback still works.
+- The clipboard filter is autofocused on desktop and never on a soft-keyboard device
+  (`hasSoftKeyboard()`, a *separate* question from the `MOBILE_QUERY` layout breakpoint: a narrowed
+  desktop window has a real keyboard and a landscape tablet does not). Opening the tab to read what
+  was copied should not raise a keyboard over it; there the keyboard arrives by tapping the field.
+  Same rule as everywhere else in `ui.md`: nothing shows the soft keyboard the user did not ask for.
+- Row actions are an icon column beside the preview on desktop and a full-width labelled row under
+  it on mobile, where a four-icon column would take a third of the drawer from the text it exists
+  to show.
 - Clipboard history's safety properties are part of the feature, not an afterthought: the ring is
   **memory-only by default** (`clipboard_history_persist` opts into the SQLite mirror, and turning
   it back off deletes the rows), secret-shaped copies are skipped rather than stored, oversized

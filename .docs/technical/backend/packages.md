@@ -31,7 +31,7 @@ It should call domain packages rather than acquire their storage or process resp
 | `agent_context.py` | read-only Project/global instruction and provider-memory inventory, fixed-path opaque source reads/reveal resolution, complete memory counts; normalized Project-root compare; preview/revision-guarded whole-file `CLAUDE.md` ↔ `AGENTS.md` sync; atomic replace and data-dir restore points | arbitrary browser-supplied paths, global-instruction or learned-memory writes, automatic sync, private Codex store formats, MCP exposure |
 | `project_watcher.py` | leased non-recursive directory watches keyed by Project, exact root, path set, and watch id | recursive Project crawl, deciding whether a requested root is a listed Git worktree |
 | `agent_skills.py` | read-only discovery of the CLIs' own skills: per-vendor roots (user / repo / plugin / bundled), `SKILL.md` frontmatter, Claude command files, Codex `agents/openai.yaml` policy, plugin enable-gating, shadowing, 10 s cache | writing or installing skills, speaking Codex's app-server protocol, enumerating Claude's compiled-in built-ins (impossible from disk) |
-| `agent_environment.py` | bounded passive inventory of one live CLI generation: retained runtime options, documented built-ins, current skills, configured MCP, installed/configured plugins, redacted hooks, custom agents, known policy keys, feature overrides, source drift, diagnostics, ten-second response cache, and one-hour version cache | starting or health-checking MCP, importing plugins, executing hooks, exposing commands/arguments/environment/credentials, writing provider state, or claiming configured items are loaded/connected |
+| `agent_environment.py` | bounded passive inventory of one live CLI generation: retained runtime options, documented built-ins, current skills, configured MCP, installed/configured plugins, hooks grouped by lifecycle event with their handler target and `swe_mux` ownership marked, custom agents, known policy keys, feature overrides, source drift, diagnostics, ten-second response cache, and one-hour version cache | starting or health-checking MCP, importing plugins, executing hooks, exposing hook command lines/arguments/inline shell bodies/environment/credentials, writing provider state, or claiming configured items are loaded/connected |
 | `project_actions.py` | inert task import, normalization, exact fingerprint trust, per-step spawn requests (shell quoting, PATH/shim resolution) | automatic execution, UI placement, session ownership |
 | `project_init.py` | user-authored setup commands from the daemon config: catalog, id selection in configured order, one step per command | trust fingerprints, repository reads (there are none), spawn execution |
 | `spawn_contract.py` | spawn field validation: bounded env, cwd containment, Claude marker scrubbing | project ownership (the caller supplies the root) |
@@ -231,7 +231,9 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   runs **synchronously on the event loop**: measured against 1,314 rollouts in 158 directories,
   35.8 ms to 7.5 ms (4.8x), turning a recurring daemon-wide stall into a much shorter one. That
   tree cannot be pruned by directory name to go faster, because `codex resume` appends to the
-  original rollout and a file under an old date routinely holds the newest mtime.
+  original rollout and a file under an old date routinely holds the newest mtime. The walk is
+  cached whole for that window rather than sliced to the newest few, because locating a *known*
+  conversation (`transcript_path`) matches on the file name and would otherwise pay a second walk.
   Expensive-but-honest metrics (unique set size) are opt-in per request, never on the cadence.
   See `design/features/processes-and-previews.md` §Sampling cost.
 - Voice STT/TTS subprocesses and local models stay off the event loop. Incoming WAV duration,

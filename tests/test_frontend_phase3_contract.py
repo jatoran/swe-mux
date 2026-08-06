@@ -82,7 +82,12 @@ def test_terminal_clipboard_rail_and_selection_autocopy_are_wired() -> None:
     assert "terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}" in pane
     assert "Copy reply" in pane and "manual-terminal-paste" in pane
     assert "/last-reply" in pane
-    assert "autoCopySelection" in pane and "requestAnimationFrame(autoCopySelection)" in pane
+    # Selection auto-copy runs a frame after the gesture ends, never inline: the platform
+    # makes its own focus and selection decision as the tap resolves. The deferral is the
+    # invariant; the call itself moved inside an arrow when soft-keyboard restoration was
+    # deliberately ordered after the copy, so do not assert a bare callback reference.
+    assert "const autoCopySelection=" in pane
+    assert "requestAnimationFrame(()=>{autoCopySelection()" in pane
     assert ".terminal-action-rail" in css
     # The rail also sends terminal keys and toggles the on-screen keyboard for read/select
     # mode; it overflows and scrolls horizontally rather than wrapping. The key/item

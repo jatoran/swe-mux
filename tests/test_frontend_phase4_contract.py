@@ -56,7 +56,18 @@ def test_mobile_workspace_and_recovery_contracts_remain_available() -> None:
     assert "onDragStart=" not in source("App.tsx")
     assert "clipboardImage(Array.from(event.clipboardData.items))" in combined
     assert "host.current.addEventListener('drop', drop)" in combined
-    assert "interactive-widget=resizes-content" in index
+    # The soft keyboard overlays the mobile layout and never resizes it. Under the old
+    # `resizes-content` the keyboard shrank the layout viewport, which refitted every
+    # terminal and resized the real PTY — and shrinking an alternate-screen PTY discards
+    # the rows that no longer fit, so every keyboard open permanently ate part of the
+    # conversation. Asserted in both directions: the replacement has to be there, and the
+    # value that destroyed conversations must not come back. Read off the meta tag rather
+    # than the file, which names the abandoned value in the comment that explains it.
+    # (`ui.md` §soft keyboard.)
+    viewport = re.search(r'<meta name="viewport" content="([^"]*)"', index)
+    assert viewport is not None
+    assert "interactive-widget=resizes-visual" in viewport.group(1)
+    assert "resizes-content" not in viewport.group(1)
     assert "height:var(--app-height,100dvh)" in css
     assert "@media(max-width:760px)" in css
     assert "mux.focus.v1" in combined
