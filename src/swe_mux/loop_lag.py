@@ -37,10 +37,27 @@ SAMPLE_INTERVAL_SECONDS = 0.5
 #: is the window in which "is it slow *right now*" is answerable.
 SAMPLE_WINDOW = 512
 #: Lag beyond which a sample is counted as a stall rather than as scheduling noise.
-#: An ordinary loop wakeup lands within a millisecond or two; a tenth of a second is
-#: unambiguously something blocking, and is also roughly where a human starts to feel
-#: a keystroke arrive late.
+#: A tenth of a second is unambiguously something blocking, is far above the timer
+#: quantization documented below, and is roughly where a human starts to feel a
+#: keystroke arrive late.
 STALL_THRESHOLD_SECONDS = 0.1
+
+#: Windows wakes a timer on a ~15.625 ms tick unless a process has raised the global
+#: resolution, so a sleep that asked for 0.5 s routinely returns up to that late with
+#: nothing whatsoever wrong.
+#:
+#: This is not a small caveat, it is most of the distribution. Measured 2026-08-05 on an
+#: **empty** event loop, which by construction has nothing to be late for: p50 13.5 ms,
+#: p95 15.4 ms, max 15.5 ms. An idle daemon read *worse* here than a busy one, purely
+#: because system activity raises the global timer resolution and sharpens everyone's
+#: sleeps.
+#:
+#: So `p50_seconds` and `p95_seconds` are only meaningful *above* this floor, and a
+#: reading near it means "nothing is blocking the loop" rather than "the loop is 13 ms
+#: behind". What survives quantization, and what an investigation should actually read,
+#: is `max_seconds`, `worst_seconds` and `stalls`: the tick bounds the noise, so
+#: anything well past it is real.
+TIMER_QUANTIZATION_SECONDS = 0.015625
 
 
 class LoopLagMonitor:
@@ -99,10 +116,16 @@ class LoopLagMonitor:
         return {
             "samples": len(samples),
             "observed": self._observed,
+            "min_seconds": round(samples[0], 5),
             "p50_seconds": round(_at(samples, 0.50), 5),
             "p95_seconds": round(_at(samples, 0.95), 5),
             "p99_seconds": round(_at(samples, 0.99), 5),
             "max_seconds": round(samples[-1], 5),
+            # The floor below which the percentiles above are the OS timer tick rather
+            # than congestion. Reported so a reader can tell the two apart without
+            # having to know this platform's scheduling behaviour.
+            "timer_quantization_seconds": TIMER_QUANTIZATION_SECONDS,
+            "quantization_bound": samples[-1] <= TIMER_QUANTIZATION_SECONDS,
             # Retained across the whole process lifetime, unlike the window above: the
             # single worst stall since boot is the one a report should not lose just
             # because it happened a few minutes ago.

@@ -572,7 +572,33 @@ class ProcessInspector:
                 continue
         return result
 
+    def _has_live_sessions(self) -> bool:
+        """Whether any session could own a process this pass.
+
+        `getattr`-guarded like the rest of the inspector, which tests drive with
+        lightweight record stand-ins rather than real sessions.
+        """
+        for session in self.sessions.sessions.values():
+            if getattr(session.record, "state", None) not in {"exited", "crashed"}:
+                return True
+        return False
+
     def _collect_all(self, startup: bool = False) -> list[OwnedProcess]:
+        # An empty fleet is not a cheap pass, it is a pass with nothing to answer. The
+        # two most expensive things here run before any session is consulted: the whole
+        # OS socket table (`_connections_by_pid`) and the system-wide parent map
+        # (`_refresh_tree`). With no live sessions to attribute a process to and no
+        # retained rows to retire, every one of those bytes is spent deciding nothing.
+        # Measured on an idle daemon: 166 passes, ~20ms each, and `_refresh_tree` was
+        # 40.8% of the profile of a daemon holding 0.7% of a core, which is to say most
+        # of what it was doing at all.
+        #
+        # `startup` still runs: the first pass establishes the daemon's own
+        # infrastructure fingerprints, which later passes exclude from session
+        # attribution. Retained rows still run, because a process outliving its session
+        # has to be seen exiting.
+        if not startup and not self.owned and not self._has_live_sessions():
+            return []
         result: list[OwnedProcess] = []
         session_seen: set[tuple[int, float]] = set()
         daemon_seen: set[tuple[int, float]] = set()

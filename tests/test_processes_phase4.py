@@ -1580,3 +1580,46 @@ def test_revalidation_reads_the_parent_map_instead_of_snapshotting_per_process(
     inspector._revalidate_unseen(set(), {}, time.time(), False)
     assert item.parent_pid == 7
     assert snapshots == 1
+
+
+def test_an_empty_fleet_skips_the_sampling_pass_entirely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With nothing to attribute, the two most expensive calls must not run.
+
+    `_connections_by_pid` enumerates the whole OS socket table and `_refresh_tree`
+    rebuilds the system-wide parent map, and both run before any session is consulted.
+    Measured on an idle daemon before this guard: 166 passes at ~20ms each, with
+    `_refresh_tree` at 40.8% of the profile of a daemon holding 0.7% of a core, which
+    is to say most of what it was doing at all.
+    """
+    from swe_mux import processes
+
+    calls: list[str] = []
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+    monkeypatch.setattr(
+        inspector, "_connections_by_pid", lambda: calls.append("sockets") or {}
+    )
+    monkeypatch.setattr(inspector, "_refresh_tree", lambda: calls.append("tree"))
+
+    assert inspector._collect_all() == []
+    assert calls == [], "an empty fleet must not enumerate sockets or rebuild the tree"
+
+    # Startup still runs: the first pass establishes the daemon's own infrastructure
+    # fingerprints, which every later pass excludes from session attribution.
+    monkeypatch.setattr(processes, "psutil", None)
+    inspector._collect_all(startup=True)
+    assert "sockets" in calls and "tree" in calls
+
+    # A retained row still runs, because a process outliving its session has to be
+    # seen exiting rather than lingering forever.
+    calls.clear()
+    inspector.owned = {
+        (55, 100.0): OwnedProcess(
+            pid=55, parent_pid=None, session_id="gone", executable="", command="",
+            started_at=100.0, exited_at=None, cpu_pct=0.0, memory_bytes=0,
+            listeners=[], conditions=[],
+        )
+    }
+    inspector._collect_all()
+    assert "sockets" in calls and "tree" in calls

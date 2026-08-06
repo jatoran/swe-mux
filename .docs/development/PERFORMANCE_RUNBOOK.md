@@ -60,10 +60,25 @@ Get-Process swe-mux, swe-mux-supervisor -ErrorAction SilentlyContinue |
 Cumulative `CPU_s` answers "since boot"; it does not answer "right now".
 For a rate, sample `psutil`'s `cpu_percent` over a window of 20 seconds or more.
 
-Reference points measured 2026-08-05 on a 12-session fleet with three agents working: daemon
-22.6% of one core before the `ppid` fix, 7.7% after; PTY supervisor 0.7%; WebView 15.8% across
-seven processes.
-A daemon materially above that with an idle fleet is worth investigating.
+### Reference baselines
+
+Measured 2026-08-05 after the fixes of that day, on one machine, so treat them as shape
+rather than as thresholds.
+Capture your own with `--json` and compare against it; that is what the flag is for.
+
+| fleet | daemon | supervisor | WebView | loop-lag max | keystroke p50 |
+| --- | --- | --- | --- | --- | --- |
+| 0 sessions (idle) | **0.10%** of a core | 0.00% | 0.20% | under the timer tick | n/a |
+| 10 sessions, ~340 MB of transcripts, all idle | **1.50%** of a core | 0.00% | 0.60% | 30 ms, 1 stall in 2049 | 16.3 ms |
+
+The loaded fleet was 3 Codex (174 / 35 / 15 MB rollouts), 4 Claude (74 / 57 / 30 / 26 MB
+transcripts) and 3 shells, resumed and never prompted, so the figure is what swe-mux costs to
+*carry* a fleet rather than what an agent costs to run.
+Keystroke latency was unchanged from idle, which is the property that matters most: fleet size
+does not reach the interactive path.
+
+For scale, the same daemon held 22.6% of a core before that day's fixes.
+A daemon materially above these with an idle fleet is worth investigating.
 
 ### 2. Ask which loop is expensive, not which is frequent
 
@@ -160,6 +175,16 @@ Frames expected in a healthy profile, so they are not mistaken for defects:
 | `_fanout (session.py)` | delivering output to attached clients; scales with panes |
 | `_refresh_tree (processes.py)` | the one permitted system-wide psutil snapshot per pass |
 | `_read (pty_host.py)`, supervisor only | the nonblocking reader poll; high sample share, near-zero CPU |
+| `_newest_rollouts (adapters/codex.py)` | Codex switch-watch tree walk; ~9% of a loaded profile with 3 Codex sessions |
+| `_normalize_tail_text (session.py)` | PTY screen classification for status detection |
+
+`_newest_rollouts` is the largest remaining avoidable-looking cost and has been left alone
+deliberately.
+Its cache TTL is pinned below `TRANSCRIPT_SWITCH_FRESH_SECONDS`, its tree cannot be pruned by
+directory date because `codex resume` appends to old rollouts, and the watcher it feeds is the
+only path by which Codex `/new` is detected at all.
+At a daemon cost of 1.5% of a core the win is a fraction of a percent, against the subsystem
+with the longest history of subtle identity bugs in this repository.
 
 ## Traps
 

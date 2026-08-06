@@ -300,3 +300,30 @@ def test_a_wait_inside_the_guard_is_reported_as_the_loop_s_own_cost() -> None:
         ticks[0] += 1.0  # stands in for `await asyncio.sleep(...)` inside the guard
 
     assert supervisor.health()["loops"][0]["busy_seconds"] == 1.0
+
+
+def test_loop_lag_flags_a_distribution_that_is_only_the_timer_tick() -> None:
+    """Sub-tick percentiles are quantization, and reading them as congestion misleads.
+
+    Windows wakes a timer on a ~15.625ms tick, so a sleep that asked for 0.5s routinely
+    returns that late with nothing wrong. Measured on an *empty* event loop, which by
+    construction has nothing to be late for: p50 13.5ms, p95 15.4ms, max 15.5ms. An idle
+    daemon therefore reads worse here than a busy one, because system activity raises
+    the global timer resolution and sharpens everyone's sleeps.
+    """
+    from swe_mux.loop_lag import TIMER_QUANTIZATION_SECONDS, LoopLagMonitor
+
+    quiet = LoopLagMonitor()
+    for lag in (0.0002, 0.0135, 0.0154, 0.0089, 0.0155):
+        quiet.observe(lag)
+    snapshot = quiet.snapshot()
+    assert snapshot["quantization_bound"] is True, "an all-under-tick window is not congestion"
+    assert snapshot["timer_quantization_seconds"] == TIMER_QUANTIZATION_SECONDS
+    assert snapshot["min_seconds"] == 0.0002
+    assert snapshot["stalls"] == 0
+
+    # One sample past the tick is the whole difference: the tick bounds the noise, so
+    # anything well beyond it is real and the flag must drop.
+    quiet.observe(0.4)
+    assert quiet.snapshot()["quantization_bound"] is False
+    assert quiet.snapshot()["stalls"] == 1

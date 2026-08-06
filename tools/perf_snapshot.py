@@ -189,8 +189,20 @@ def render(report: dict[str, Any]) -> None:
             print(
                 f"                 worst since boot {lag['worst_seconds'] * 1000:.1f}ms   "
                 f"stalls {lag['stalls']}/{lag['observed']} "
-                f"(>= {lag['stall_threshold_seconds'] * 1000:.0f}ms)\n"
+                f"(>= {lag['stall_threshold_seconds'] * 1000:.0f}ms)"
             )
+            quantization = lag.get("timer_quantization_seconds")
+            if quantization and lag.get("quantization_bound"):
+                print(
+                    f"                 every sample is under the {quantization * 1000:.1f}ms OS "
+                    "timer tick: nothing is blocking the loop"
+                )
+            elif quantization:
+                print(
+                    f"                 percentiles below {quantization * 1000:.1f}ms are the OS "
+                    "timer tick, not congestion; read max/worst/stalls"
+                )
+            print()
 
     if loops := report.get("costliest"):
         print("costliest loops (busy_share = wall time in iteration bodies, awaits included)")
