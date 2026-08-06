@@ -79,9 +79,20 @@ test('the drawer newline uses the sequence accepted by Claude and Codex', () => 
   assert.equal(BUILTIN_RAIL.find(item => item.id === 'newline')?.bytes, AGENT_NEWLINE)
 })
 
-test('editing helpers inject their exact text and control bytes', () => {
-  assert.equal(BUILTIN_RAIL.find(item => item.id === 'markdownDivider')?.text, '\n\n---\n\n')
-  assert.equal(BUILTIN_RAIL.find(item => item.id === 'markdownCodeFence')?.text, '\n\n```\n')
+test('multiline editing helpers use non-submitting agent newline keys', () => {
+  const divider = BUILTIN_RAIL.find(item => item.id === 'markdownDivider')
+  const codeFence = BUILTIN_RAIL.find(item => item.id === 'markdownCodeFence')
+  assert.equal(divider?.type, 'key')
+  assert.equal(divider?.bytes, `${AGENT_NEWLINE}${AGENT_NEWLINE}---${AGENT_NEWLINE}${AGENT_NEWLINE}`)
+  assert.equal(codeFence?.type, 'key')
+  assert.equal(codeFence?.bytes, `${AGENT_NEWLINE}${AGENT_NEWLINE}\`\`\`${AGENT_NEWLINE}`)
+  assert.deepEqual(divider?.backends, ['claude', 'codex'])
+  assert.deepEqual(codeFence?.backends, ['claude', 'codex'])
+  assert.equal(resolveRail(BUILTIN_RAIL, { platform: 'desktop', backend: 'shell' }).includes(divider!), false)
+  assert.equal(resolveRail(BUILTIN_RAIL, { platform: 'desktop', backend: 'shell' }).includes(codeFence!), false)
+})
+
+test('single-byte editing helpers retain their control keys', () => {
   assert.equal(BUILTIN_RAIL.find(item => item.id === 'clearInput')?.bytes, '\x15')
   assert.equal(BUILTIN_RAIL.find(item => item.id === 'restoreInput')?.bytes, '\x19')
 })

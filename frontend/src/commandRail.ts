@@ -69,6 +69,13 @@ export interface RailItem {
 export const ALL_BACKENDS: readonly RailBackend[] = ['claude', 'codex', 'shell']
 export const ALL_PLATFORMS: readonly RailPlatform[] = ['desktop', 'mobile']
 
+/** Encode line breaks as the composer-newline key understood by both agent TUIs.
+ *  Raw LF/CR is submission input in these composers, so multiline editing helpers
+ *  must travel through the key path rather than the terminal paste path. */
+function agentComposerSequence(text: string): string {
+  return text.replace(/\r\n?/g, '\n').replace(/\n/g, AGENT_NEWLINE)
+}
+
 // Built-in rail items in default order (the region after the leading voice chips).
 // The Task/Project-Action Relaunch button and the agent-only Copy reply / Copy resume
 // are mutually exclusive at render time (see TerminalPane). Editing helpers follow
@@ -89,8 +96,8 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'ctrlC', type: 'key', bytes: '\x03', label: '^C', className: 'term-key', title: 'Interrupt (Ctrl-C)' },
   { id: 'up', type: 'key', bytes: '\x1b[A', label: '↑', className: 'term-key', title: 'Up / previous command' },
   { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', title: 'Down / next command' },
-  { id: 'markdownDivider', type: 'text', text: '\n\n---\n\n', label: '---', title: 'Insert a Markdown divider with blank lines around it' },
-  { id: 'markdownCodeFence', type: 'text', text: '\n\n```\n', label: '```', title: 'Start a Markdown code fence after two newlines' },
+  { id: 'markdownDivider', type: 'key', bytes: agentComposerSequence('\n\n---\n\n'), label: '---', backends: ['claude', 'codex'], title: 'Insert a Markdown divider with blank lines around it' },
+  { id: 'markdownCodeFence', type: 'key', bytes: agentComposerSequence('\n\n```\n'), label: '```', backends: ['claude', 'codex'], title: 'Start a Markdown code fence after two newlines' },
   { id: 'clearInput', type: 'key', bytes: '\x15', label: '^U', className: 'term-key', title: 'Clear the current input (Ctrl+U)' },
   { id: 'restoreInput', type: 'key', bytes: '\x19', label: '^Y', className: 'term-key', title: 'Restore or yank input (Ctrl+Y)' },
   { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', title: 'Left' },

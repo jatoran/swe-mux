@@ -640,7 +640,8 @@ responsive controls.
 - Every terminal has an in-flow action rail at the bottom of its pane on desktop and mobile,
   below the terminal rather than over it. It carries a keyboard toggle plus terminal-key
   buttons (Esc, Enter, Tab, Ctrl-C, and the four arrows), Copy reply, Paste, and the clipboard-history picker (`Clip`).
-  Immediately after Up/Down, four editing helpers insert `\n\n---\n\n`, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
+  Immediately after Up/Down, four editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
+  The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
   A status readout follows the configured items.
   On narrow/coarse Claude and Codex panes, the configurable Enter item is
