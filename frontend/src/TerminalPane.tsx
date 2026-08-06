@@ -71,7 +71,7 @@ import {
   recordTerminalRenderDiagnostic,
   terminalRenderDiagnosticsEnabled,
 } from './terminalRenderDiagnostics'
-import { holdSoftKeyboard, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
+import { SOFT_KEYBOARD_EVENT, holdSoftKeyboard, nextPeekState, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
 import {
   caretSteerCommand,
   dispatchTerminalMouseTap,
@@ -370,6 +370,28 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // and focus closures created in the mount effect read at call time.
   const keyboardOffRef=useRef(false)
   const [keyboardOff,setKeyboardOff]=useState(false)
+  // How much of this pane the soft keyboard is covering, and whether the reader has asked
+  // to look at the top of the grid instead of the composer. Only meaningful while the
+  // keyboard is up: with it down the whole grid fits and there is no slice to move.
+  const [keyboardInset,setKeyboardInset]=useState(0)
+  const [peekTop,setPeekTop]=useState(false)
+  const peekTopRef=useRef(false)
+  peekTopRef.current=peekTop
+  const applyPeek=(trigger:Parameters<typeof nextPeekState>[1])=>{
+    const next=nextPeekState(peekTopRef.current,trigger)
+    if(next!==peekTopRef.current){peekTopRef.current=next;setPeekTop(next)}
+  }
+  const applyPeekRef=useRef(applyPeek)
+  applyPeekRef.current=applyPeek
+  useEffect(()=>{
+    const onKeyboard=(event:Event)=>{
+      const inset=(event as CustomEvent<number>).detail
+      setKeyboardInset(inset)
+      if(inset<=0)applyPeekRef.current('keyboardClosed')
+    }
+    window.addEventListener(SOFT_KEYBOARD_EVENT,onKeyboard)
+    return()=>window.removeEventListener(SOFT_KEYBOARD_EVENT,onKeyboard)
+  },[])
   // Set inside the mount effect; lets a layout change outside the ResizeObserver's reach
   // (the voice strip appearing/vanishing under the terminal) force an xterm re-fit.
   const scheduleFitRef=useRef<()=>void>(()=>{})
@@ -1446,6 +1468,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       if(caretPlacementInputDepth===0)cancelCaretPlacement()
+      // Typing is the reader saying they have stopped reading, so a pane peeking at the top
+      // of its grid returns to the composer. Deliberately on input rather than on writes:
+      // snapping back on output would fight the reader for the whole of a streaming reply.
+      applyPeekRef.current('input')
       const shouldBroadcast=attachmentSafeBroadcast(
         broadcastRef.current,
         attachmentPasteDepth+caretPlacementInputDepth+syntheticMouseInputDepth,
@@ -2318,7 +2344,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   }
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
-  return <div class="terminal-surface"><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><RailScroller>{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}>Send</button>}</div>{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  return <div class={`terminal-surface${peekTop?' keyboard-peek':''}`}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><RailScroller>{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}>Send</button>}</div>{keyboardInset>0&&<button class={`terminal-peek-top${peekTop?' active':''}`} aria-pressed={peekTop} title={peekTop?"Back to the composer":"Look at the top of the screen — the keyboard is covering it"} aria-label={peekTop?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekTop?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }

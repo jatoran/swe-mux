@@ -1063,10 +1063,22 @@ class HistoryIndex:
         return await self._run(op)
 
     async def native_history_ids(self) -> dict[tuple[str, str], str]:
+        """The row that owns each conversation's transcript, one per (backend, id).
+
+        Ordered all the way down to the id, because this decides *which* row a
+        reconcile indexes a file into. Ordered only by `external`, the winner among
+        several internal rows for one conversation was whatever SQLite returned
+        first, so a conversation with duplicate rows (the resume bug this ordering
+        outlived) had its messages and timestamps land on an arbitrary one and hop
+        between them across restarts — one entry showing the conversation and its
+        twin showing nothing, with no rule about which. Earliest row wins: it is the
+        conversation's own, the one a resume now inherits.
+        """
+
         def op() -> dict[tuple[str, str], str]:
             rows = self._db.execute(
                 "SELECT id,backend,native_id,external FROM history WHERE agent_visible=1 "
-                "ORDER BY external ASC"
+                "ORDER BY external ASC, spawned_at ASC, id ASC"
             ).fetchall()
             result: dict[tuple[str, str], str] = {}
             for row in rows:
@@ -1595,6 +1607,256 @@ class HistoryIndex:
             return dict(row) if row else None
 
         return await self._run(op)
+
+    def _duplicate_conversation_groups(self) -> list[list[sqlite3.Row]]:
+        """Visible mux-owned rows of every conversation that has more than one.
+
+        Oldest row first within a group: that is the conversation's own row, the one
+        `native_history_ids` hands the transcript to and the one a resume inherits.
+        External (discovered) rows are excluded — one is *expected* alongside a mux
+        row until reconciliation replaces it, and an external row owns no run.
+        """
+        groups = self._db.execute(
+            "SELECT backend,native_id FROM history WHERE agent_visible=1 AND external=0 "
+            "GROUP BY backend,native_id HAVING count(*)>1 ORDER BY backend,native_id"
+        ).fetchall()
+        return [
+            self._db.execute(
+                "SELECT * FROM history WHERE agent_visible=1 AND external=0 AND backend=? "
+                "AND native_id=? ORDER BY spawned_at ASC, id ASC",
+                (str(group["backend"]), str(group["native_id"])),
+            ).fetchall()
+            for group in groups
+        ]
+
+    def _message_counts(self, row_ids: list[str]) -> dict[str, int]:
+        if not row_ids:
+            return {}
+        placeholders = ",".join("?" * len(row_ids))
+        rows = self._db.execute(
+            "SELECT history_id,count(*) AS total FROM history_messages "
+            f"WHERE history_id IN ({placeholders}) GROUP BY history_id",
+            tuple(row_ids),
+        ).fetchall()
+        return {str(row["history_id"]): int(row["total"]) for row in rows}
+
+    async def duplicate_conversation_rows(self) -> list[dict[str, Any]]:
+        """Report conversations whose history is split across several rows.
+
+        One conversation is meant to be one entry. Several rows for one
+        ``(backend, native_id)`` means something opened a second row over one
+        transcript file, which shows the conversation twice in the list, indexes its
+        messages twice in the search index, and leaves the reconciler free to move
+        the content between them.
+        """
+
+        def op() -> list[dict[str, Any]]:
+            report: list[dict[str, Any]] = []
+            for rows in self._duplicate_conversation_groups():
+                counts = self._message_counts([str(row["id"]) for row in rows])
+                report.append(
+                    {
+                        "backend": str(rows[0]["backend"]),
+                        "native_id": str(rows[0]["native_id"]),
+                        "keeper": str(rows[0]["id"]),
+                        "rows": [
+                            {
+                                "id": str(row["id"]),
+                                "name": str(row["name"]),
+                                "spawned_at": row["spawned_at"],
+                                "exit_reason": row["exit_reason"],
+                                "transcript_path": row["transcript_path"] or "",
+                                "indexed_messages": counts.get(str(row["id"]), 0),
+                            }
+                            for row in rows
+                        ],
+                    }
+                )
+            return report
+
+        return await self._run(op)
+
+    async def merge_duplicate_conversation_rows(
+        self, *, live_run_ids: frozenset[str] = frozenset(), dry_run: bool = True
+    ) -> dict[str, Any]:
+        """Fold each conversation's duplicate rows back into its own single entry.
+
+        Repair, not deletion: what the duplicates measured belongs to the
+        conversation, so the keeper takes the latest observation (a resumed pane's
+        totals *are* the conversation's current totals), the user's rename if a later
+        pane carried one, the widest native timestamp span, and the last pane's
+        terminal markers. Only then are the duplicates and their rebuildable message
+        copies removed. Native transcripts are never touched, and a quarantined row
+        is never a candidate: it is an audit record of proven misattribution.
+
+        A group with a *live* duplicate is skipped rather than merged. That pane is
+        still writing to its row, and stranding its writes to tidy the list is the
+        wrong trade; it merges once the pane exits.
+
+        ``dry_run`` reports exactly what would change and writes nothing.
+        """
+
+        def op() -> dict[str, Any]:
+            merged: list[dict[str, Any]] = []
+            skipped: list[dict[str, Any]] = []
+            for rows in self._duplicate_conversation_groups():
+                keeper, *surplus = rows
+                keeper_id = str(keeper["id"])
+                live = [str(row["id"]) for row in surplus if str(row["id"]) in live_run_ids]
+                if live:
+                    skipped.append(
+                        {
+                            "backend": str(keeper["backend"]),
+                            "native_id": str(keeper["native_id"]),
+                            "keeper": keeper_id,
+                            "reason": "live_run",
+                            "live_rows": live,
+                        }
+                    )
+                    continue
+                updates = self._merged_conversation_values(
+                    rows, keeper_live=keeper_id in live_run_ids
+                )
+                counts = self._message_counts([str(row["id"]) for row in rows])
+                donor = self._message_donor(keeper_id, surplus, counts)
+                record = {
+                    "backend": str(keeper["backend"]),
+                    "native_id": str(keeper["native_id"]),
+                    "keeper": keeper_id,
+                    "removed": [str(row["id"]) for row in surplus],
+                    "messages_moved_from": donor,
+                    "updated": dict(updates),
+                }
+                if not dry_run:
+                    with self._db:
+                        if updates:
+                            assignments = ",".join(f"{column}=?" for column in updates)
+                            self._db.execute(
+                                f"UPDATE history SET {assignments} WHERE id=?",
+                                (*updates.values(), keeper_id),
+                            )
+                        if donor is not None:
+                            # Moved rather than reparsed: the copy is already correct,
+                            # and the watermark moves with it so nothing re-reads a
+                            # multi-megabyte transcript to learn what it already knew.
+                            self._db.execute(
+                                "UPDATE history_messages SET history_id=? WHERE history_id=?",
+                                (keeper_id, donor),
+                            )
+                            self._db.execute(
+                                "UPDATE history_transcript_index SET history_id=? "
+                                "WHERE history_id=?",
+                                (keeper_id, donor),
+                            )
+                        for row in surplus:
+                            row_id = str(row["id"])
+                            self._db.execute(
+                                "DELETE FROM history_messages WHERE history_id=?", (row_id,)
+                            )
+                            self._db.execute(
+                                "DELETE FROM history_transcript_index WHERE history_id=?",
+                                (row_id,),
+                            )
+                            self._db.execute("DELETE FROM history WHERE id=?", (row_id,))
+                merged.append(record)
+            return {"dry_run": dry_run, "merged": merged, "skipped": skipped}
+
+        return await self._run(op)
+
+    @staticmethod
+    def _merged_conversation_values(
+        rows: list[sqlite3.Row], *, keeper_live: bool
+    ) -> dict[str, Any]:
+        """What the keeper row has to learn from the duplicates it absorbs."""
+        keeper, *surplus = rows
+        updates: dict[str, Any] = {}
+        # A rename made in a later pane is the name the user chose for this
+        # conversation; an auto title on the keeper is only a placeholder.
+        if keeper["auto_named"]:
+            renamed = next((row for row in surplus if not row["auto_named"]), None)
+            if renamed is not None:
+                updates["name"] = str(renamed["name"])
+                updates["auto_named"] = 0
+        if not keeper["transcript_path"]:
+            found = next((row["transcript_path"] for row in surplus if row["transcript_path"]), "")
+            if found:
+                updates["transcript_path"] = found
+        starts = [row["native_started_at"] for row in rows if row["native_started_at"] is not None]
+        if starts and min(starts) != keeper["native_started_at"]:
+            updates["native_started_at"] = min(starts)
+        latest = max(
+            (row for row in rows if row["last_message_at"] is not None),
+            key=lambda row: float(row["last_message_at"]),
+            default=None,
+        )
+        if latest is not None and latest["last_message_at"] != keeper["last_message_at"]:
+            updates["last_message_at"] = latest["last_message_at"]
+            updates["last_message_role"] = latest["last_message_role"]
+        # Token and context figures are cumulative in the transcript, so the last
+        # pane to observe the conversation holds its current numbers.
+        observed = next(
+            (row for row in reversed(rows) if row["context_window"] or row["tokens_in"]), None
+        )
+        if observed is not None and str(observed["id"]) != str(keeper["id"]):
+            for column in (
+                "tokens_in",
+                "tokens_out",
+                "context_window",
+                "final_context_pct",
+                "peak_context_pct",
+                "model",
+                "measurement_source",
+            ):
+                updates[column] = observed[column]
+        # Compactions are counted per row as each pane observes them. `max`, not a
+        # sum: a resumed pane reads the conversation's existing records as historical,
+        # and adding its count to theirs would report the same compaction twice.
+        compactions = max(int(row["compaction_count"] or 0) for row in rows)
+        if compactions != int(keeper["compaction_count"] or 0):
+            updates["compaction_count"] = compactions
+            evidence = max(
+                (row for row in rows if row["last_compaction_at"] is not None),
+                key=lambda row: float(row["last_compaction_at"]),
+                default=None,
+            )
+            if evidence is not None:
+                updates["last_compaction_at"] = evidence["last_compaction_at"]
+                updates["compaction_capability"] = evidence["compaction_capability"]
+                updates["compaction_confidence"] = evidence["compaction_confidence"]
+        if not keeper_live:
+            # The conversation ended when its last pane did, which is what the live
+            # path also records: a resumed pane's exit rewrites the row it inherited.
+            # The keeper's own markers describe only its first pane, so they are
+            # replaced rather than merely filled in. A live keeper keeps its open
+            # markers — writing an exit onto a row a pane is still using would report
+            # a running conversation as finished.
+            closed = max(
+                (row for row in rows if row["exited_at"] is not None),
+                key=lambda row: float(row["exited_at"]),
+                default=None,
+            )
+            if closed is not None and closed["exited_at"] != keeper["exited_at"]:
+                updates["exited_at"] = closed["exited_at"]
+                updates["exit_reason"] = closed["exit_reason"]
+                updates["final_state"] = closed["final_state"]
+        return updates
+
+    @staticmethod
+    def _message_donor(
+        keeper_id: str, surplus: list[sqlite3.Row], counts: dict[str, int]
+    ) -> str | None:
+        """The duplicate whose indexed messages the keeper should take over.
+
+        Only when the keeper has none of its own: the reconciler indexed one file
+        into whichever row it picked, so the conversation's searchable text can sit
+        entirely on a duplicate that is about to be deleted.
+        """
+        if counts.get(keeper_id):
+            return None
+        best = max(surplus, key=lambda row: counts.get(str(row["id"]), 0), default=None)
+        if best is None or not counts.get(str(best["id"])):
+            return None
+        return str(best["id"])
 
     async def record_context_compaction(
         self,

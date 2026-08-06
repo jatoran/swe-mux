@@ -48,6 +48,22 @@ class BackendAdapter(Protocol):
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec: ...
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec: ...
+    def resume_continues_conversation(self, recorded_cwd: str, target_cwd: str) -> bool:
+        """Whether resuming at ``target_cwd`` continues the recorded conversation.
+
+        True means the CLI reopens the same conversation, under the same id, in the
+        same transcript file: the resumed pane continues an agent run that already
+        has a history row and must inherit it rather than open a second entry over
+        one file. False means the resume lands on a genuinely new conversation, which
+        earns its own row and a ``resume`` lineage edge.
+
+        Only the adapter can answer this, because the answer is the CLI's own
+        transcript-resolution rule: Claude resolves by working directory, so the
+        answer depends on where the resume runs, while Codex resolves by thread id
+        and reopens the original rollout wherever the pane runs.
+        """
+        ...
+
     def transcript_path(self, native_id: str, cwd: Path) -> Path | None: ...
     def graceful_exit_keys(self) -> str: ...
     def recent_transcripts(self, cwd: Path, created_at: float) -> list[tuple[float, Path, str]]: ...

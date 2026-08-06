@@ -133,6 +133,34 @@ export function softKeyboardInset(layoutHeight:number, visualHeight:number):numb
   return inset >= SOFT_KEYBOARD_MIN_INSET_PX ? inset : 0
 }
 
+/** Published whenever the keyboard's inset changes, carrying the new inset in pixels. */
+export const SOFT_KEYBOARD_EVENT = 'mux:soft-keyboard'
+
+/**
+ * What can move a terminal between showing the composer and showing the top of its grid.
+ *
+ * `output` is in this list precisely so it can do nothing. While the keyboard is up the
+ * pane shows a slice of a grid taller than the space available, and peeking at the top is
+ * how the rest is reached — so the one moment a reader most wants to stay put is while a
+ * response is streaming into it. Snapping back on writes would make the toggle useless
+ * exactly when it is needed, and it is the easy thing to get backwards, so it is named
+ * rather than left implicit.
+ */
+export type PeekTrigger = 'toggle'|'input'|'keyboardClosed'|'output'
+
+/**
+ * Whether a terminal is showing the top of its grid after `trigger`.
+ *
+ * Typing returns to the composer because that is where the caret is and a reader who types
+ * has stopped reading. Losing the keyboard ends peeking outright: the whole grid fits again,
+ * so there is no slice left to move.
+ */
+export function nextPeekState(peeking:boolean, trigger:PeekTrigger):boolean {
+  if(trigger==='toggle')return !peeking
+  if(trigger==='output')return peeking
+  return false
+}
+
 /**
  * Whether a gesture cost the keyboard that was up when it started.
  *

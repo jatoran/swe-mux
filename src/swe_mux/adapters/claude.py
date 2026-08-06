@@ -163,6 +163,26 @@ class ClaudeAdapter:
             tuple(self._args("--resume", native_id, opts)),
         )
 
+    def resume_continues_conversation(self, recorded_cwd: str, target_cwd: str) -> bool:
+        """`--resume` continues the conversation only in the directory that owns it.
+
+        Claude keeps transcripts in a per-project directory derived from the encoded
+        working directory, so resuming the same id under a different root writes a
+        different file: a different conversation, and its own history entry.
+
+        Compared through the CLI's own encoding rather than a generic path test,
+        because the encoding is the rule the CLI actually applies — two roots that
+        encode identically resolve to one transcript directory. Case-folded on top of
+        it, since that directory lives on this platform's filesystem and Windows
+        would hand both spellings the same folder.
+        """
+        try:
+            return os.path.normcase(encode_cwd(recorded_cwd)) == os.path.normcase(
+                encode_cwd(target_cwd)
+            )
+        except OSError:
+            return False
+
     def transcript_path(self, native_id: str, cwd: Path) -> Path:
         return claude_data_home() / "projects" / encode_cwd(cwd) / f"{native_id}.jsonl"
 
