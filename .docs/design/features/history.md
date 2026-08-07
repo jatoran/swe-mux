@@ -83,6 +83,9 @@
   set, because the client learns the new leaf's id from the response but learns where it sits
   only on the next layout refresh — see `ui.md` for why a plain focus in that gap is undone,
   and which other flows share the mechanism.
+- Transcript controls occupy a dedicated non-shrinking action bar before verbose run metadata.
+  The controls wrap at narrow widths, while metadata wraps inside a bounded scroll region, so
+  provider, token, context, and compaction details cannot displace Resume or the transcript.
 - **A resumed pane carries the conversation's name, unsuffixed.** The old `"<name> resumed"`
   compounded over repeated resumes (`… resumed resumed`) and, for an inherited run, renamed an
   entry the pane shares rather than replaces. The row's `auto_named` flag carries over too, so
