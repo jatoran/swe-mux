@@ -82,6 +82,7 @@ import {
   terminalRenderDiagnosticsEnabled,
 } from './terminalRenderDiagnostics'
 import { remountDecision, surfaceDrifted, terminalFitDrifted, TERMINAL_HEALTH_SWEEP_MS, writePipelineStalled } from './terminalHealth'
+import { reportPromptSubmitted } from './projectRecency'
 import { SOFT_KEYBOARD_EVENT, holdSoftKeyboard, nextPeekState, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
 import {
   caretResolverForBackend,
@@ -1454,6 +1455,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // displaced by another device stays silently muted until the user happens
       // to click inside it. A retry has already claimed, so it must not claim twice.
       if (!protocolResponse) lastInteractionAt = Date.now()
+      if (!protocolResponse && !retry && data === '\r' && isAgentBackend(backendRef.current)) {
+        reportPromptSubmitted(session.id)
+      }
       if (!ownsInput && !protocolResponse && !retry) claimInput('gesture')
       socket.send(JSON.stringify({
         type: 'input',

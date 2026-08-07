@@ -155,7 +155,7 @@ def test_the_projects_header_owns_sort_and_fold_for_the_whole_tree() -> None:
     sort = (root / "projectSort.ts").read_text(encoding="utf-8")
 
     # One mode for every bucket, read straight off the prefs.
-    assert "sortProjects(items,sidebarOrder.projectSort,activityStamps)" in app
+    assert "sortProjects(items,sidebarOrder.projectSort,recentProjectRanks)" in app
     assert "setSidebarOrder(setProjectSortMode(sidebarOrder,option.id))" in app
     assert "bucketSortMode" not in app and "setBucketSortMode" not in app
     assert "bucketSortMode" not in sort
@@ -214,7 +214,7 @@ def test_groups_sort_from_the_projects_header_and_collapse_from_their_header() -
 
     # Group ordering rides the PROJECTS header's ⇅, one level up, behind a MenuGroup.
     assert 'MenuGroup id="sections"' in app or "MenuGroup id='sections'" in app
-    assert "sortBuckets(allBuckets,sidebarOrder.sectionSort,activityStamps)" in app
+    assert "sortBuckets(allBuckets,sidebarOrder.sectionSort,recentProjectRanks)" in app
     assert "setSidebarOrder({...sidebarOrder,sectionSort:option.id})" in app
     # Dragging a Group header is what returns Groups to Manual order.
     assert "sectionSort:'custom'" in app

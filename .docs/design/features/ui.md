@@ -40,9 +40,9 @@ responsive controls.
   It holds two buttons:
   - `⊟`/`⊞` folds or unfolds **every Project row and every Group** in one click.
     It offers Expand only once nothing on screen is left to collapse, so the next click finishes a half-folded tree instead of undoing it.
-  - `⇅` sorts, covering both levels: flat items sort the Projects (Manual, Recently active, Name
+  - `⇅` sorts, covering both levels: flat items sort the Projects (Manual, Recently used, Name
     A→Z / Z→A, Newest / Oldest first), and a `Sort Groups` group sorts only explicit Groups
-    (Manual, Recently active, Name A→Z / Z→A).
+    (Manual, Recently used, Name A→Z / Z→A).
     A `MenuGroup` keeps the common case from paying for the rarer one.
     The button highlights while either level is sorted, and its tooltip carries both
     modes, which otherwise have no always-visible cue.

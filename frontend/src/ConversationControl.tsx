@@ -4,6 +4,7 @@ import { buildVoiceMatcher, conversationCapability, DEFAULT_COMMANDS, DEFAULT_WA
 import { enableMobileVoice, mobileVoiceDestination } from './mobileVoice'
 import type { Session, VoiceClip, VoiceStatus } from './types'
 import { bargeInPlayback, getPlayback, playClip, unlockPlayback } from './voice'
+import { reportPromptSubmitted } from './projectRecency'
 
 type Phase='off'|'starting'|'listening'|'hearing'|'transcribing'|'sending'|'standby'|'error'
 
@@ -52,6 +53,7 @@ export function ConversationControl({session,status,onSession,onActiveChange}:{s
     setPhase('sending');setDetail('Submitting voice message…')
     const utteranceId=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`
     await api('POST',`/api/sessions/${session.id}/voice/submit`,{utterance_id:utteranceId,text})
+    reportPromptSubmitted(session.id)
     setSegments([]);setPhase('listening');setDetail('Sent. Still listening for your next message.')
   }
 

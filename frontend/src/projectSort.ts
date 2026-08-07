@@ -1,6 +1,6 @@
 // Sidebar ordering: how Projects are sorted at the root and inside Groups, and how
 // the Groups themselves sit. Pure so the guard logic can be unit tested under the
-// node type-stripping runner; the caller supplies the records and the activity map.
+// node type-stripping runner; the caller supplies the records and the user-action recency map.
 //
 // Project sort is **one global mode** applied to the ungrouped root and every Group.
 // It used to be per section, on the theory that a hand-arranged
@@ -9,7 +9,7 @@
 // single PROJECTS header and the modes collapsed with it. Group order is a
 // separate mode because it sorts different things (see SectionSortMode), but it is
 // set from the same control.
-import type { Project, Session } from './types'
+import type { Project } from './types'
 
 export type ProjectSortMode =
   | 'custom'
@@ -31,7 +31,7 @@ export interface ProjectSortOption {
 
 export const PROJECT_SORT_OPTIONS: ProjectSortOption[] = [
   { id: 'custom', label: 'Manual order', hint: 'The order you dragged them into' },
-  { id: 'activity', label: 'Recently active', hint: 'Latest session activity first' },
+  { id: 'activity', label: 'Recently used', hint: 'Latest prompt submit or session start first' },
   { id: 'name', label: 'Name (A→Z)', hint: 'Alphabetical, numbers in numeric order' },
   { id: 'name-desc', label: 'Name (Z→A)', hint: 'Reverse alphabetical' },
   { id: 'created-desc', label: 'Newest first', hint: 'Most recently added Project first' },
@@ -54,7 +54,7 @@ export type SectionSortMode = 'custom' | 'activity' | 'name' | 'name-desc'
 
 export const SECTION_SORT_OPTIONS: { id: SectionSortMode; label: string; hint: string }[] = [
   { id: 'custom', label: 'Manual order', hint: 'The order you dragged the Groups into' },
-  { id: 'activity', label: 'Recently active', hint: 'Group holding the latest activity first' },
+  { id: 'activity', label: 'Recently used', hint: 'Group holding the latest user action first' },
   { id: 'name', label: 'Name (A→Z)', hint: 'Alphabetical Group names' },
   { id: 'name-desc', label: 'Name (Z→A)', hint: 'Reverse alphabetical' },
 ]
@@ -74,6 +74,9 @@ export interface SidebarOrderPrefs {
   projectSort: ProjectSortMode
   /** How Groups are ordered. */
   sectionSort: SectionSortMode
+  /** Project ids in most-recent-first order. Only explicit prompt submissions and
+   *  session starts update this device-local navigation preference. */
+  recentProjects: string[]
   /** Group ids folded shut. Presentation only: a collapsed Group's Projects
    *  keep their slot in the rail, the numbered shortcuts, and every order. */
   collapsed: string[]
@@ -82,6 +85,7 @@ export interface SidebarOrderPrefs {
 export const EMPTY_SIDEBAR_ORDER: SidebarOrderPrefs = {
   projectSort: 'custom',
   sectionSort: 'custom',
+  recentProjects: [],
   collapsed: [],
 }
 
@@ -104,13 +108,17 @@ export function loadSidebarOrder(raw: string | null): SidebarOrderPrefs {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return EMPTY_SIDEBAR_ORDER
     const record = parsed as {
       projectSort?: unknown; sort?: unknown
-      sectionSort?: unknown; collapsed?: unknown
+      sectionSort?: unknown; recentProjects?: unknown; collapsed?: unknown
     }
+    const recentProjects = Array.isArray(record.recentProjects)
+      ? [...new Set(record.recentProjects.filter((id): id is string => typeof id === 'string' && !!id))]
+      : []
     return {
       projectSort: isProjectSortMode(record.projectSort)
         ? record.projectSort
         : migrateBucketSort(record.sort) || 'custom',
       sectionSort: isSectionSortMode(record.sectionSort) ? record.sectionSort : 'custom',
+      recentProjects,
       collapsed: Array.isArray(record.collapsed)
         ? record.collapsed.filter((id): id is string =>
           typeof id === 'string' && id !== LEGACY_UNGROUPED_BUCKET_ID)
@@ -127,15 +135,27 @@ export function serializeSidebarOrder(prefs: SidebarOrderPrefs): string {
   return JSON.stringify({
     projectSort: prefs.projectSort,
     sectionSort: prefs.sectionSort,
+    recentProjects: prefs.recentProjects,
     collapsed: prefs.collapsed,
   })
 }
 
-/** Drop per-Group state for Groups that no longer exist. */
-export function pruneSidebarOrder(prefs: SidebarOrderPrefs, bucketIds: string[]): SidebarOrderPrefs {
-  const live = new Set(bucketIds)
-  const collapsed = prefs.collapsed.filter(bucketId => live.has(bucketId))
-  return collapsed.length === prefs.collapsed.length ? prefs : { ...prefs, collapsed }
+/** Drop state for Groups and Projects that no longer exist. */
+export function pruneSidebarOrder(
+  prefs: SidebarOrderPrefs,
+  bucketIds: string[],
+  projectIds?: string[],
+): SidebarOrderPrefs {
+  const liveBuckets = new Set(bucketIds)
+  const collapsed = prefs.collapsed.filter(bucketId => liveBuckets.has(bucketId))
+  const liveProjects = projectIds ? new Set(projectIds) : null
+  const recentProjects = liveProjects
+    ? prefs.recentProjects.filter(projectId => liveProjects.has(projectId))
+    : prefs.recentProjects
+  return collapsed.length === prefs.collapsed.length
+    && recentProjects.length === prefs.recentProjects.length
+    ? prefs
+    : { ...prefs, collapsed, recentProjects }
 }
 
 export function isBucketCollapsed(prefs: SidebarOrderPrefs, bucketId: string): boolean {
@@ -173,26 +193,20 @@ export function setProjectSortMode(
   return prefs.projectSort === mode ? prefs : { ...prefs, projectSort: mode }
 }
 
-/** Live sessions only refresh `last_activity_ts` on the WebSocket, so a project
- *  under load would otherwise re-sort on every output chunk and pull rows out from
- *  under the pointer. Minute granularity keeps "recently active" honest while
- *  bounding how often the list can move. */
-const ACTIVITY_GRANULARITY_S = 60
-
-/** Merge the daemon's per-Project history stamp with what live sessions are doing
- *  now. History alone lags a running session; live sessions alone cannot rank the
- *  Projects whose work has already ended, which is most of them. */
-export function projectActivity(projects: Project[], sessions: Session[]): Map<string, number> {
-  const activity = new Map<string, number>()
-  for (const project of projects) activity.set(project.id, project.last_activity || 0)
-  for (const session of sessions) {
-    if (session.pending || !activity.has(session.project_id)) continue
-    const stamp = session.last_activity_ts || session.created_at || 0
-    if (!stamp) continue
-    const coarse = Math.floor(stamp / ACTIVITY_GRANULARITY_S) * ACTIVITY_GRANULARITY_S
-    activity.set(session.project_id, Math.max(activity.get(session.project_id) || 0, coarse))
+/** Move one Project to the head of the explicit-action MRU without churning state
+ *  when it is already first. Opening or focusing anything never calls this helper. */
+export function touchProjectRecency(prefs: SidebarOrderPrefs, projectId: string): SidebarOrderPrefs {
+  if (!projectId || prefs.recentProjects[0] === projectId) return prefs
+  return {
+    ...prefs,
+    recentProjects: [projectId, ...prefs.recentProjects.filter(id => id !== projectId)],
   }
-  return activity
+}
+
+/** Convert most-recent-first ids into descending ranks consumed by the stable sort. */
+export function projectRecency(recentProjects: string[]): Map<string, number> {
+  const size = recentProjects.length
+  return new Map(recentProjects.map((id, index) => [id, size - index]))
 }
 
 const byName = (a: Project, b: Project) =>
@@ -212,7 +226,7 @@ const byStamp = (first: number, second: number, descending: boolean) => {
 export function sortProjects(
   items: Project[],
   mode: ProjectSortMode,
-  activity: Map<string, number>,
+  recency: Map<string, number>,
 ): Project[] {
   if (mode === 'custom') return items
   const sorted = [...items]
@@ -220,7 +234,7 @@ export function sortProjects(
   if (mode === 'name-desc') return sorted.sort((a, b) => byName(b, a))
   if (mode === 'activity')
     return sorted.sort((a, b) =>
-      byStamp(activity.get(a.id) || 0, activity.get(b.id) || 0, true))
+      byStamp(recency.get(a.id) || 0, recency.get(b.id) || 0, true))
   return sorted.sort((a, b) =>
     byStamp(a.created_at || 0, b.created_at || 0, mode === 'created-desc'))
 }
@@ -231,11 +245,10 @@ export interface SidebarBucket {
   items: Project[]
 }
 
-/** A Group is as active as the most recent thing in it, so it ranks on the
- *  work inside it rather than on when it was made. An empty one reads as 0 and
- *  lands last, which is also where a Group nobody has used belongs. */
-export function bucketActivity(bucket: SidebarBucket, activity: Map<string, number>): number {
-  return bucket.items.reduce((latest, item) => Math.max(latest, activity.get(item.id) || 0), 0)
+/** A Group is as recent as its most recently used Project. An empty or untouched
+ *  Group reads as 0 and lands last. */
+export function bucketRecency(bucket: SidebarBucket, recency: Map<string, number>): number {
+  return bucket.items.reduce((latest, item) => Math.max(latest, recency.get(item.id) || 0), 0)
 }
 
 /** Sort the Groups. `buckets` must already be in manual Group position order,
@@ -244,7 +257,7 @@ export function bucketActivity(bucket: SidebarBucket, activity: Map<string, numb
 export function sortBuckets(
   buckets: SidebarBucket[],
   mode: SectionSortMode,
-  activity: Map<string, number>,
+  recency: Map<string, number>,
 ): SidebarBucket[] {
   if (mode === 'custom') return buckets
   const sorted = [...buckets]
@@ -254,7 +267,7 @@ export function sortBuckets(
   if (mode === 'name') return sorted.sort(byBucketName)
   if (mode === 'name-desc') return sorted.sort((a, b) => byBucketName(b, a))
   return sorted.sort((a, b) =>
-    byStamp(bucketActivity(a, activity), bucketActivity(b, activity), true))
+    byStamp(bucketRecency(a, recency), bucketRecency(b, recency), true))
 }
 
 /** Fold a permutation of the *rendered* subset back into the full list, leaving

@@ -11,6 +11,7 @@ import {
 } from './queueApi'
 import type { Session } from './types'
 import { deliversHarnessPrompts } from './harnessRegistry'
+import { reportPromptSubmitted } from './projectRecency'
 
 // The prompt queue's session-scoped surface, in two renderings.
 //
@@ -227,6 +228,7 @@ export function QueuePane({
     })
     setBusyId('')
     if (outcome.status === 'sent') {
+      reportPromptSubmitted(sessionId)
       setConfirmId('')
       if (onSelectSession) onSelectSession(sessionId)
     } else if (outcome.status === 'blocked' && !outcome.protected) {

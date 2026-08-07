@@ -41,8 +41,8 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   Ungrouped Projects are root rows immediately under the global `PROJECTS` header; explicit Groups render afterward as named sections.
   `PROJECTS` is navigation chrome, not a synthetic Group, and cannot fold or move among Groups.
 - The `PROJECTS` header carries a sort control (`⇅`) covering **two levels**.
-  Flat options act on root Projects and Projects inside every Group: Manual order, Recently active, Name A→Z / Z→A, Newest / Oldest first.
-  A `Sort Groups` submenu acts only on explicit Groups: Manual order, Recently active, Name A→Z / Z→A.
+  Flat options act on root Projects and Projects inside every Group: Manual order, Recently used, Name A→Z / Z→A, Newest / Oldest first.
+  A `Sort Groups` submenu acts only on explicit Groups: Manual order, Recently used, Name A→Z / Z→A.
   Both live on one control because `⇅` already means "how is this list ordered"; the submenu keeps the common case one click deep and carries its current mode in its label, since Group order has no always-visible indicator of its own.
 - Project sorting is **one global mode**, applied to root Projects and inside every Group.
   It was per section originally, on the argument that a hand-arranged shortlist and a long alphabetical pile are both legitimate; that put a `⇅` on every Group header for a preference set the same everywhere, so the modes collapsed into one and the control moved off the headers.
@@ -56,8 +56,8 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   folded cannot survive and re-fold it later. Only what is on screen is folded — a Project hidden
   from the sidebar has no row to collapse.
 - Groups have no date modes: a Group record is not dated, and "newest Group first" does not earn
-  a column. A Group's "Recently active" is the latest
-  activity of any Project in it, so a Group ranks on the work inside it rather than its age; an
+  a column. A Group's "Recently used" rank is the most recent explicit user action for
+  any Project in it, so a Group ranks on the work the user initiated rather than its age; an
   empty Group reads as unmeasured and sorts last.
 - Manual order is the default and the tie-break at both levels, so a sort never discards the
   arrangement underneath it.
@@ -83,11 +83,10 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   disappear behind the fold, which is the one thing collapsing must not hide.
 - A drag only ever permutes the rows on screen; hidden Projects and empty Groups keep the slots
   they already held rather than being reshuffled by a reorder the user could not see.
-- "Recently active" ranks on the latest session activity a Project has ever had, derived from
-  history (so Projects with nothing live still rank) and merged with live sessions at minute
-  granularity (so a busy PTY cannot re-sort the sidebar out from under the pointer). A Project
-  that has never run a session, or one registered before registrations were dated, reads as
-  unknown and sorts last in either direction rather than posing as the oldest.
+- "Recently used" is a device-local most-recently-used list updated only after an explicit prompt submission or a successful user-initiated session start.
+  Opening or focusing a Project, session, note, file, preview, Queue, or other resource never changes it.
+  Agent output, state transitions, session completion, session removal, history timestamps, and background automation never change it.
+  A Project without a recorded action is unmeasured and retains manual-order tie-breaking.
 - Creating a Project validates the root and initializes `.swe-mux/config.toml` plus
   `.swe-mux/notes/project.md`. The registration is not inferred from Git or current cwd.
 - Add project has two modes of one form: register a folder that exists, or create a new folder

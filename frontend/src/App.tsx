@@ -114,9 +114,11 @@ import {
 import {
   PROJECT_SORT_OPTIONS, SECTION_SORT_OPTIONS, SIDEBAR_ORDER_KEY,
   isBucketCollapsed, loadSidebarOrder, mergeVisibleOrder,
-  projectActivity, projectSortLabel, pruneSidebarOrder, sectionSortLabel, serializeSidebarOrder,
-  setAllBucketsCollapsed, setProjectSortMode, sortBuckets, sortProjects, toggleBucketCollapsed,
+  projectRecency, projectSortLabel, pruneSidebarOrder, sectionSortLabel, serializeSidebarOrder,
+  setAllBucketsCollapsed, setProjectSortMode, sortBuckets, sortProjects, touchProjectRecency,
+  toggleBucketCollapsed,
 } from './projectSort'
+import { PROJECT_RECENCY_EVENT, type ProjectRecencyEventDetail } from './projectRecency'
 import { reconcileSeen, isUnread, projectRailStatus, projectSetRailStatus, type ProjectRailActivity, type SeenMap } from './sessionAttention'
 import { activityBadges, sessionDotClass, sessionStatus } from './sessionStatus'
 import {
@@ -433,6 +435,13 @@ export function App() {
   const setSidebarOrder=(next:ReturnType<typeof loadSidebarOrder>)=>{
     setSidebarOrderState(next)
     localStorage.setItem(SIDEBAR_ORDER_KEY,serializeSidebarOrder(next))
+  }
+  const markProjectRecent=(targetProject:string)=>{
+    setSidebarOrderState(current=>{
+      const next=touchProjectRecency(current,targetProject)
+      if(next!==current)localStorage.setItem(SIDEBAR_ORDER_KEY,serializeSidebarOrder(next))
+      return next
+    })
   }
   const [sortMenu,setSortMenu]=useState<{x:number;y:number}|null>(null)
   const [dragStackTab,setDragStackTabState]=useState<StackTabDrag|null>(null)
@@ -894,6 +903,15 @@ export function App() {
   const [focusHydrated,setFocusHydrated]=useState(false)
   sessionsRef.current=sessions
   projectsRef.current=projects
+  useEffect(()=>{
+    const onProjectRecency=(event:Event)=>{
+      const detail=(event as CustomEvent<ProjectRecencyEventDetail>).detail
+      const session=sessionsRef.current.find(item=>item.id===detail?.sessionId)
+      if(session)markProjectRecent(session.project_id)
+    }
+    window.addEventListener(PROJECT_RECENCY_EVENT,onProjectRecency)
+    return()=>window.removeEventListener(PROJECT_RECENCY_EVENT,onProjectRecency)
+  },[])
   // Clipboard capture runs from module-level hooks installed at boot, so it reads
   // the focused session / device / on-off state through refs rather than props.
   const clipboardContextRef=useRef({activeId:null as string|null,projectId:'',enabled:true})
@@ -1444,11 +1462,11 @@ export function App() {
   const orderedProjects = [...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)||a.id.localeCompare(b.id))
   const visibleProjects = orderedProjects.filter(project => project.sidebar_visible !== false)
   const orderedGroups=[...projectGroups].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)||a.id.localeCompare(b.id))
-  const activityStamps=projectActivity(projects,sessions)
+  const recentProjectRanks=projectRecency(sidebarOrder.recentProjects)
   const ungroupedProjects=sortProjects(
     visibleProjects.filter(project=>!project.group_id||!projectGroups.some(item=>item.id===project.group_id)),
     sidebarOrder.projectSort,
-    activityStamps,
+    recentProjectRanks,
   )
   const ungroupedProjectIds=ungroupedProjects.map(project=>project.id)
   // Every Group in manual order, including empty Groups. A drag only permutes the
@@ -1458,11 +1476,11 @@ export function App() {
     const items=visibleProjects.filter(project=>project.group_id===group.id)
     // `visibleProjects` is already in manual order, which sortProjects treats as the
     // tie-break, so every mode falls back to what the user arranged by hand.
-    return {id:group.id,name:group.name,items:sortProjects(items,sidebarOrder.projectSort,activityStamps)}
+    return {id:group.id,name:group.name,items:sortProjects(items,sidebarOrder.projectSort,recentProjectRanks)}
   })
   // Groups sort by the same contract their contents do: manual order in, stable
   // sort out, so the arrangement underneath a sort is never lost.
-  const displayBuckets=sortBuckets(allBuckets,sidebarOrder.sectionSort,activityStamps)
+  const displayBuckets=sortBuckets(allBuckets,sidebarOrder.sectionSort,recentProjectRanks)
   const displayBucketIds=displayBuckets.map(bucket=>bucket.id)
   const projectBuckets=displayBuckets.filter(bucket=>bucket.items.length>0)
   // Sidebar reading order starts with root Projects, then proceeds through Groups.
@@ -1483,9 +1501,13 @@ export function App() {
   // A deleted Group would otherwise leave its folded flag behind forever, and the
   // stored blob is what a recreated bucket id would silently inherit.
   useEffect(()=>{
-    const pruned=pruneSidebarOrder(sidebarOrder,orderedGroups.map(group=>group.id))
+    const pruned=pruneSidebarOrder(
+      sidebarOrder,
+      orderedGroups.map(group=>group.id),
+      projects.map(project=>project.id),
+    )
     if(pruned!==sidebarOrder)setSidebarOrder(pruned)
-  },[projectGroups])
+  },[projectGroups,projects])
   const activeLayout = layoutMap[projectId] || emptyLayout()
   const paneIds = terminalIds(activeLayout).filter(id => sessions.some(session => session.id === id && !['exited', 'crashed'].includes(session.state)))
   const workspacePanes=paneStacks(activeLayout)
@@ -1924,6 +1946,7 @@ export function App() {
         // ones into the workspace with a reader prompt, so there is no client-side ceiling.
         ...(options?.seedText ? { seed_text: options.seedText } : {}),
       })
+      markProjectRecent(targetProject)
       startupOrigins.current[next.id]=startupOrigin
       const browserTiming={api_response:performance.now()-startupOrigin}
       clientStartupTimingValues.current[next.id]=browserTiming
@@ -2010,6 +2033,7 @@ export function App() {
     ])
     setLayoutMap(current=>({...current,[targetProject]:nextLayout}))
     setProjectId(targetProject);setActiveId(nextSessions.at(-1)!.id);setFocusedViewId(nextSessions.at(-1)!.id);setSidebarOpen(false)
+    markProjectRecent(targetProject)
     await updateLayout(targetProject,nextLayout)
   }
 
@@ -2080,6 +2104,7 @@ export function App() {
     try{
       const result=await api<{errors:{script:string;error:string}[]}>(
         'POST',`/api/projects/${next.id}/init-scripts/run`,{script_ids:scripts})
+      if(result.errors.length<scripts.length)markProjectRecent(next.id)
       if(result.errors.length)setError(result.errors.map(item=>`${item.script}: ${item.error}`).join(' · '))
       await refresh()
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
@@ -2267,6 +2292,7 @@ export function App() {
     relaunching.current = true
     try {
       const { session: next } = await api<{ session: Session; replaced: string }>('POST', `/api/sessions/${session.id}/relaunch`, {})
+      markProjectRecent(session.project_id)
       startupOrigins.current[next.id] = performance.now()
       const currentLayout = resolveLayout(
         layoutMap[session.project_id],
@@ -2538,6 +2564,7 @@ export function App() {
       })
       switch (outcome.status) {
         case 'sent':
+          markProjectRecent(target.session.project_id)
           await selectSession(target.session)
           return { status: 'done' }
         case 'queued_behind':
@@ -2620,6 +2647,7 @@ export function App() {
     setReviewState(current=>current?{...current,loading:true,error:''}:current)
     try{
       const result=await api<{session:Session}>('POST',`/api/history/${reviewState.entry.id}/second-opinion`,{confirm:true,preview_token:reviewState.preview.preview_token,instructions:reviewState.instructions,backend:reviewState.preview.backend,project_id:reviewState.project,target_session_id:activeId})
+      markProjectRecent(result.session.project_id)
       setReviewState(null);await refresh();setProjectId(result.session.project_id);setActiveId(result.session.id);requestFocusView(result.session.id)
     }catch(cause){setReviewState(current=>current?{...current,loading:false,error:cause instanceof Error?cause.message:String(cause)}:current)}
   }
@@ -2628,6 +2656,7 @@ export function App() {
     try {
       const targetProject = entry.project_id || projectId
       const resumed = await api<Session>('POST', `/api/history/${entry.id}/resume`, { project_id: targetProject, target_session_id: targetProject === projectId ? activeId : undefined })
+      markProjectRecent(resumed.project_id)
       // `requestFocusView`, not `setFocusedViewId`: the daemon attached the pane and set
       // it active in its own layout, but this client sees that layout only after the
       // refresh below. Plain focus would be reconciled away in the gap and the resumed
@@ -2648,6 +2677,7 @@ export function App() {
   const branchSession = async (session: Session) => {
     try {
       const result = await api<{ session: Session; source: string }>('POST', `/api/sessions/${session.id}/branch`, { target_session_id: session.id, direction: 'after' })
+      markProjectRecent(result.session.project_id)
       setSessions(items => [...items, result.session]); setActiveId(result.session.id); requestFocusView(result.session.id)
       await refresh()
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
@@ -2660,6 +2690,7 @@ export function App() {
   const resumeSession = async (session: Session) => {
     try {
       const resumed = await api<Session>('POST', `/api/history/${session.agent_run_id || session.id}/resume`, { project_id: session.project_id })
+      markProjectRecent(resumed.project_id)
       setSessions(items => [...items, resumed])
       setActiveId(resumed.id)
       // The replacement takes the original's place in the layout, so focus has to move

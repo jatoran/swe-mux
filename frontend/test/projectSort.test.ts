@@ -1,18 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Project, Session } from '../src/types.ts'
+import type { Project } from '../src/types.ts'
 import {
-  EMPTY_SIDEBAR_ORDER, bucketActivity, isBucketCollapsed,
-  loadSidebarOrder, mergeVisibleOrder, projectActivity, projectSortLabel,
+  EMPTY_SIDEBAR_ORDER, bucketRecency, isBucketCollapsed,
+  loadSidebarOrder, mergeVisibleOrder, projectRecency, projectSortLabel,
   pruneSidebarOrder, sectionSortLabel, serializeSidebarOrder, setAllBucketsCollapsed,
-  setProjectSortMode, sortBuckets, sortProjects, toggleBucketCollapsed,
+  setProjectSortMode, sortBuckets, sortProjects, toggleBucketCollapsed, touchProjectRecency,
 } from '../src/projectSort.ts'
 
 const project = (id: string, name: string, extra: Partial<Project> = {}) =>
   ({ id, name, root: `D:/${id}`, position: 0, layout: null, layout_revision: 0, ...extra }) as Project
-
-const session = (id: string, project_id: string, extra: Partial<Session> = {}) =>
-  ({ id, name: id, project_id, state: 'running', created_at: 0, last_activity_ts: 0, ...extra }) as unknown as Session
 
 const prefs = (extra: Partial<typeof EMPTY_SIDEBAR_ORDER> = {}) => ({ ...EMPTY_SIDEBAR_ORDER, ...extra })
 
@@ -23,6 +20,7 @@ test('sidebar order load tolerates missing, malformed, and unknown modes', () =>
   assert.deepEqual(loadSidebarOrder('{"projectSort":"name","ungroupedIndex":1}'), {
     projectSort: 'name',
     sectionSort: 'custom',
+    recentProjects: [],
     collapsed: [],
   })
   assert.equal(loadSidebarOrder('{"projectSort":"nonsense"}').projectSort, 'custom')
@@ -51,7 +49,7 @@ test('a legacy per-bucket sort map migrates to the single mode that replaced it'
 
 test('sidebar order round-trips', () => {
   const stored = prefs({
-    projectSort: 'name', sectionSort: 'activity', collapsed: ['g2'],
+    projectSort: 'name', sectionSort: 'activity', recentProjects: ['p2', 'p1'], collapsed: ['g2'],
   })
   assert.deepEqual(loadSidebarOrder(serializeSidebarOrder(stored)), stored)
 })
@@ -82,12 +80,13 @@ test('project sort mode set/read, keeping identity when unchanged', () => {
   assert.equal(setProjectSortMode(named, 'activity'), named)
 })
 
-test('pruneSidebarOrder drops buckets that no longer exist and keeps identity otherwise', () => {
-  const stored = prefs({ collapsed: ['g1', 'gone'] })
-  const pruned = pruneSidebarOrder(stored, ['g1'])
-  // A deleted Group's fold would otherwise be inherited by whatever bucket id came back.
+test('pruneSidebarOrder drops Groups and Projects that no longer exist and keeps identity otherwise', () => {
+  const stored = prefs({ collapsed: ['g1', 'gone'], recentProjects: ['p1', 'deleted'] })
+  const pruned = pruneSidebarOrder(stored, ['g1'], ['p1'])
+  // Deleted ids must not be inherited or accumulate in the device-local preference.
   assert.deepEqual(pruned.collapsed, ['g1'])
-  assert.equal(pruneSidebarOrder(stored, ['g1', 'gone']), stored)
+  assert.deepEqual(pruned.recentProjects, ['p1'])
+  assert.equal(pruneSidebarOrder(stored, ['g1', 'gone'], ['p1', 'deleted']), stored)
 })
 
 test('custom order is a pass-through of the manual order', () => {
@@ -111,29 +110,26 @@ test('date ordering keeps undated projects last in both directions', () => {
   assert.deepEqual(sortProjects(items, 'created-desc', new Map()).map(item => item.id), ['new', 'old', 'unknown'])
 })
 
-test('activity ordering is newest first and falls back to manual order on a tie', () => {
+test('recent-use ordering is newest first and falls back to manual order on a tie', () => {
   const items = [project('a', 'A'), project('b', 'B'), project('c', 'C')]
-  const activity = new Map([['a', 10], ['b', 0], ['c', 10]])
-  assert.deepEqual(sortProjects(items, 'activity', activity).map(item => item.id), ['a', 'c', 'b'])
+  const recency = new Map([['a', 10], ['b', 0], ['c', 10]])
+  assert.deepEqual(sortProjects(items, 'activity', recency).map(item => item.id), ['a', 'c', 'b'])
 })
 
-test('projectActivity takes the later of the history stamp and live sessions', () => {
-  const projects = [project('p1', 'One', { last_activity: 1_000 }), project('p2', 'Two')]
-  const sessions = [
-    session('s1', 'p1', { last_activity_ts: 1_799 }),
-    session('s2', 'p1', { last_activity_ts: 5 }),
-    session('s3', 'p2', { pending: true, last_activity_ts: 9_999 }),
-    session('s4', 'ghost', { last_activity_ts: 9_999 }),
-  ]
-  const activity = projectActivity(projects, sessions)
-  assert.equal(activity.get('p1'), 1_740)
-  assert.equal(activity.get('p2'), 0)
-  assert.equal(activity.has('ghost'), false)
+test('explicit Project recency is persisted as a deduplicated MRU', () => {
+  const first = touchProjectRecency(EMPTY_SIDEBAR_ORDER, 'p1')
+  const second = touchProjectRecency(first, 'p2')
+  assert.deepEqual(second.recentProjects, ['p2', 'p1'])
+  assert.equal(touchProjectRecency(second, 'p2'), second)
+  assert.deepEqual(touchProjectRecency(second, 'p1').recentProjects, ['p1', 'p2'])
+  assert.deepEqual(loadSidebarOrder('{"recentProjects":["p2","p2",7,"p1",""]}').recentProjects, ['p2', 'p1'])
 })
 
-test('projectActivity falls back to spawn time when a session has no activity stamp', () => {
-  const activity = projectActivity([project('p1', 'One')], [session('s1', 'p1', { created_at: 600 })])
-  assert.equal(activity.get('p1'), 600)
+test('projectRecency ranks only ids recorded by explicit user actions', () => {
+  const recency = projectRecency(['p2', 'p1'])
+  assert.equal(recency.get('p2'), 2)
+  assert.equal(recency.get('p1'), 1)
+  assert.equal(recency.has('p3'), false)
 })
 
 const bucket = (id: string, name: string, items: string[]) =>
@@ -148,15 +144,15 @@ test('Groups sort by name without a synthetic ungrouped section', () => {
 })
 
 test('a Group is as recent as the most recent Project in it; empty ones sort last', () => {
-  const activity = new Map([['a', 10], ['b', 900], ['c', 40]])
+  const recency = new Map([['a', 10], ['b', 900], ['c', 40]])
   const buckets = [
     bucket('quiet', 'Quiet', ['a']),
     bucket('empty', 'Empty', []),
     bucket('busy', 'Busy', ['b', 'c']),
   ]
-  assert.equal(bucketActivity(buckets[2], activity), 900)
-  assert.equal(bucketActivity(buckets[1], activity), 0)
-  assert.deepEqual(sortBuckets(buckets, 'activity', activity).map(item => item.id), ['busy', 'quiet', 'empty'])
+  assert.equal(bucketRecency(buckets[2], recency), 900)
+  assert.equal(bucketRecency(buckets[1], recency), 0)
+  assert.deepEqual(sortBuckets(buckets, 'activity', recency).map(item => item.id), ['busy', 'quiet', 'empty'])
 })
 
 test('Groups tie-break on the manual order they came in with', () => {
@@ -166,7 +162,7 @@ test('Groups tie-break on the manual order they came in with', () => {
 })
 
 test('every Group sort mode has a label; an unknown one reads as manual', () => {
-  assert.equal(sectionSortLabel('activity'), 'Recently active')
+  assert.equal(sectionSortLabel('activity'), 'Recently used')
   assert.equal(sectionSortLabel('custom'), 'Manual order')
 })
 
@@ -180,6 +176,6 @@ test('mergeVisibleOrder permutes only the rendered subset, leaving hidden rows p
 })
 
 test('every sort mode has a label; an unknown one reads as manual', () => {
-  assert.equal(projectSortLabel('activity'), 'Recently active')
+  assert.equal(projectSortLabel('activity'), 'Recently used')
   assert.equal(projectSortLabel('custom'), 'Manual order')
 })
