@@ -57,6 +57,11 @@ def test_sidebar_account_status_uses_separate_terminal_icon_rows_at_the_bottom()
     assert "provider==='claude'?'✳':provider==='codex'?openaiMark" in accounts
     assert "harnessDisplayName(provider).slice(0,1).toUpperCase()" in accounts
     assert 'class="provider-mark"' in accounts
+    assert "accountAbbreviation(currentLabel(current,account))" in accounts
+    assert 'class="quota-grid-column quota-grid-identity"' in accounts
+    assert 'class="quota-grid-column quota-grid-metric"' in accounts
+    assert "segment.heading" in accounts
+    assert "segment.text" in accounts
     assert "{state!=='ready'&&<em>{state}</em>}" in accounts
     assert app.rfind("<AccountSwitcher onManage") > app.rfind('class="project-tree"')
     assert ".account-summary{grid-template-columns:1fr}" in css

@@ -144,11 +144,26 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 /* Provider account switching + live quota snapshots. */
 .account-switcher{position:relative;flex:none;border-bottom:1px solid var(--line);background:var(--panel)}
 .account-summary{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line)}
-.account-summary>button{min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 5px;padding:7px 8px;border:0;background:var(--panel);color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;text-align:left;cursor:pointer}
-.account-summary>button:hover{background:var(--panel2)}.account-summary>button span{color:var(--green);text-transform:uppercase}.account-summary>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-weight:400}.account-summary>button small{grid-column:1/-1;color:var(--muted)}
-.account-summary>button.untracked strong{color:var(--muted)}
-.account-summary>button.external strong{color:var(--amber)}
+.account-summary>button{min-width:0;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:5px;padding:7px 8px;border:0;background:var(--panel);color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;text-align:left;cursor:pointer}
+.account-summary>button:hover{background:var(--panel2)}
+.account-summary>button.untracked .quota-account{color:var(--muted)}
+.account-summary>button.external .quota-account{color:var(--amber)}
 .account-summary>button.quota-reset-indicator{grid-column:1/-1;border-left:3px solid #a855f7;background:#6b21a822}.account-summary>button.quota-reset-indicator span,.account-summary>button.quota-reset-indicator strong{color:#d8b4fe}
+.quota-grid{min-width:0;display:grid;align-items:stretch;column-gap:7px;color:var(--muted);white-space:nowrap;text-transform:none}
+.quota-grid-2{grid-template-columns:minmax(28px,.7fr) repeat(2,minmax(34px,1fr))}
+.quota-grid-3{grid-template-columns:minmax(28px,.7fr) repeat(3,minmax(34px,1fr))}
+.quota-grid-column{min-width:0;display:grid;grid-template-rows:1fr 1fr;align-items:center;justify-items:center;line-height:1.15}
+.quota-grid-column>*{min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:inherit}
+.quota-grid-identity .provider-glyph{display:grid;place-items:center;color:var(--accent);font-style:normal}
+.quota-grid-identity .provider-glyph.claude{color:#d49a78}
+.quota-grid-identity .provider-glyph.codex{color:#77c9a7}
+.quota-grid-identity .provider-mark{width:1em;height:1em;display:block}
+.quota-account{color:var(--text);font-weight:400}
+.quota-grid-metric small{color:var(--muted)}
+.quota-window{color:var(--text);font-style:normal}
+.quota-window.usage-unknown{color:var(--muted)}
+.quota-window.usage-warn{color:var(--amber,#e5c07b)}
+.quota-window.usage-critical{color:var(--red)}
 .account-popover{position:fixed;z-index:96;width:340px;max-width:calc(100vw - 16px);overflow:auto;border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px 0 #0009;color:var(--text)}
 .account-popover>header,.account-popover>footer{display:flex;align-items:center;justify-content:space-between;padding:7px;border-bottom:1px solid var(--line)}.account-popover>header div{display:grid;gap:2px}.account-popover>header span{color:var(--muted);font-size:8px}.account-popover button{border:0;background:transparent;color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.account-popover>section{padding:6px;border-bottom:1px solid var(--line)}.account-popover h4{margin:0 0 4px;color:var(--green);font-size:9px;text-transform:uppercase}.account-popover section>button{width:100%;display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 6px;padding:7px;text-align:left}.account-popover section>button:hover,.account-popover section>button.active{background:var(--panel2)}.account-popover section>button span{color:var(--green)}.account-popover section>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.account-popover section>button small{grid-column:1/-1;color:var(--muted);white-space:normal;line-height:1.5}.account-popover section>button small .account-refresh-age{color:var(--muted);opacity:.65;font-style:normal}.account-popover section>p,.account-error{margin:5px;color:var(--muted);font-size:8px}.account-error{color:var(--red)}.account-popover>footer{justify-content:flex-end;gap:5px;border:0}.account-popover>footer button{min-height:27px;padding:0 7px;border:1px solid var(--line)}
 .account-popover .account-current-notice{margin:4px 2px 7px;padding:6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted)}.account-popover .account-current-notice.external{border-color:#735f37;color:var(--amber)}.account-popover .account-current-notice.unreadable{border-color:#73373c;color:var(--red)}
@@ -162,26 +177,17 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .account-identity.unverified{color:var(--amber)}
 .account-relink{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 0;color:var(--amber);font-size:8px}
 .account-current{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 9px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}.account-current span{grid-row:1/3;color:var(--green);font-size:8px;align-self:center}.account-current strong{font-size:9px;font-weight:500}.account-current small{color:var(--muted)}.account-current.external span,.account-current.external strong{color:var(--amber)}.account-current.unreadable span,.account-current.unreadable strong{color:var(--red)}.account-current.signed_out span,.account-current.signed_out strong{color:var(--muted)}
-/* Mobile toolbar quota box: provider mark + every window the provider reports on one line
-   (`5h/weekly[/fable]`, no percent signs — see `quotaChipSegments`), the weekly reset
-   countdown under it. Two of these have to fit beside nav, the Project title, Run, and the
-   drawer toggle, so the box is sized to its content and the digits carry the contrast rather
-   than a border. No font sizes here: chrome type is one number set by `--ui-font-size`, and
-   a px size written in this block is simply overridden by that `!important` normalizer.
-   Colour, weight-by-colour, and the grid are what this box can actually vary. */
-.toolbar-quota{min-width:0;height:calc(36px*var(--ui-scale));padding:1px 5px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);cursor:pointer;display:grid;grid-template-columns:auto auto;grid-template-rows:auto auto;align-items:center;justify-items:center;column-gap:3px}
-.toolbar-quota .provider-glyph{grid-row:1;color:var(--text)}
-.toolbar-quota .provider-mark{width:1em;height:1em;display:block}
-.toolbar-quota>strong{grid-row:1;color:var(--text);white-space:nowrap}
-.toolbar-quota>small{grid-row:2;grid-column:1/-1;color:var(--muted);white-space:nowrap}
+/* Mobile quota uses the same two-row reading as the sidebar. No font sizes here: chrome
+   type follows `--ui-font-size`, so the grid condenses through structure and spacing. */
+.toolbar-quota{min-width:0;height:calc(36px*var(--ui-scale));padding:2px 4px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);cursor:pointer}
+.toolbar-quota .quota-grid{height:100%;column-gap:4px}
+.toolbar-quota .quota-grid-2{grid-template-columns:auto repeat(2,max-content)}
+.toolbar-quota .quota-grid-3{grid-template-columns:auto repeat(3,max-content)}
+.toolbar-quota .quota-grid-identity{min-width:4ch}
+.toolbar-quota .quota-grid-metric{min-width:5ch}
 .toolbar-quota:hover,.toolbar-quota:focus-visible{border-color:var(--green)}
 /* Each window is banded individually, so the chip says which one is hot rather than only
    that something is. The button's own band is the worst of them and drives the border. */
-.toolbar-quota .quota-window{font-style:normal;color:var(--text)}
-.toolbar-quota .quota-sep{font-style:normal;color:var(--muted)}
-.toolbar-quota .quota-window.usage-unknown{color:var(--muted)}
-.toolbar-quota .quota-window.usage-warn{color:var(--amber,#e5c07b)}
-.toolbar-quota .quota-window.usage-critical{color:var(--red)}
 .toolbar-quota.usage-critical{border-color:var(--red)}
 .toolbar-quota.quota-reset-unread{border-color:#a855f7;background:#6b21a833}
 /* After the per-window bands on purpose: an unreviewed reset makes the whole reading
@@ -191,7 +197,7 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 /* The sidebar's status block stays on mobile too. The toolbar chips answer "how much is
    left"; this answers "on which account, and what is the machine doing" — and both open the
    same popover, so the drawer is a second way in rather than a different feature. */
-@media(max-width:760px){.account-switcher.compact{position:static;justify-self:end;border:0}.account-add{grid-template-columns:1fr}.account-list article{grid-template-columns:72px minmax(0,1fr);gap:6px}.account-list article>small,.account-quota,.account-actions{grid-column:2}.account-actions{flex-wrap:wrap}}
+@media(max-width:760px){.account-switcher.compact{position:static;justify-self:end;border:0}.mobile-toolbar>.account-switcher.compact{flex:0 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain}.mobile-toolbar>.account-switcher.compact::-webkit-scrollbar{display:none}.account-add{grid-template-columns:1fr}.account-list article{grid-template-columns:72px minmax(0,1fr);gap:6px}.account-list article>small,.account-quota,.account-actions{grid-column:2}.account-actions{flex-wrap:wrap}}
 
 /* Semantic themes and the Phase 1 terminal-style Settings surface. */
 :root[data-theme="dark"] { color-scheme:dark;--bg:#090a0c;--panel:#0d0f12;--panel2:#13161a;--line:#2a2e34;--muted:#848b94;--text:#d9dde2;--green:#8bd450;--green2:#72b94c;--amber:#e7c768;--red:#f07178;--blue:#72a7ff }
@@ -1148,7 +1154,7 @@ body {
 
 /* Provider and owned-process status share the sidebar footer while their overlays
    render at viewport level, independent of the current sidebar width. */
-.sidebar-status{min-width:0;flex:none;margin-top:auto;border-top:1px solid var(--line);background:var(--panel)}.sidebar-status>.account-switcher{border-bottom:1px solid var(--line)}.account-summary{grid-template-columns:1fr}.account-summary>button{min-height:39px;grid-template-columns:22px minmax(0,1fr) auto;grid-template-rows:auto auto;column-gap:7px;padding:5px 8px}.account-summary>button .provider-glyph{grid-row:1/3;display:grid;place-items:center;color:var(--accent);font-size:15px!important}.account-summary>button .provider-glyph.claude{color:#d49a78}.account-summary>button .provider-glyph.codex{color:#77c9a7}.account-summary>button strong{grid-column:2;grid-row:1}.account-summary>button small{grid-column:2;grid-row:2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.account-summary>button em{grid-column:3;grid-row:1/3;align-self:center;color:var(--muted);font-style:normal;text-transform:lowercase}.account-summary>button.quota-reset-indicator{grid-column:auto;grid-template-columns:auto minmax(0,1fr)}.account-summary>button.quota-reset-indicator span{grid-column:1;grid-row:1/3;align-self:center}
+.sidebar-status{min-width:0;flex:none;margin-top:auto;border-top:1px solid var(--line);background:var(--panel)}.sidebar-status>.account-switcher{border-bottom:1px solid var(--line)}.account-summary{grid-template-columns:1fr}.account-summary>button{min-height:39px;padding:5px 8px}.account-summary>button>.quota-grid{grid-column:1}.account-summary .quota-grid-identity .provider-glyph{font-size:15px!important}.account-summary>button>em{grid-column:2;align-self:center;color:var(--muted);font-style:normal;text-transform:lowercase}.account-summary>button.quota-reset-indicator{grid-column:auto;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto}.account-summary>button.quota-reset-indicator span{grid-column:1;grid-row:1/3;align-self:center}.account-summary>button.quota-reset-indicator strong{grid-column:2;grid-row:1}.account-summary>button.quota-reset-indicator small{grid-column:2;grid-row:2;color:var(--muted)}
 .resource-usage-control{position:relative;min-width:0}.resource-usage-summary{width:100%;min-width:0;min-height:43px;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto;gap:2px 7px;padding:6px 8px;border:0;background:var(--panel);color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;text-align:left;cursor:pointer}.resource-usage-summary:hover{background:var(--panel2)}.resource-usage-head{display:flex;align-items:baseline;gap:5px;min-width:0}.resource-usage-summary span{color:var(--green);text-transform:uppercase}.resource-usage-head small{white-space:nowrap;color:var(--muted)}.resource-usage-summary strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-weight:400}
 .resource-usage-popover>section{padding:0}.resource-usage-total{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border-bottom:1px solid var(--line)}.resource-usage-total article{display:grid;gap:3px;padding:9px;background:var(--bg)}.resource-usage-total span,.resource-project-list small,.resource-daemon-usage small{color:var(--muted);font-size:8px}.resource-usage-total strong{font-size:12px;font-weight:500}.resource-project-list>h4,.resource-daemon-usage>h4{margin:0;padding:6px 8px;border-bottom:1px solid var(--line);color:var(--green);font:inherit;text-transform:uppercase}.resource-project-list>article,.resource-daemon-usage>article{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 10px;padding:8px;border-bottom:1px solid var(--line)}.resource-project-list>article>div,.resource-daemon-usage>article>div{min-width:0;display:grid;grid-row:1/3;gap:3px}.resource-project-list>article strong,.resource-daemon-usage>article strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}.resource-project-list>article>span,.resource-daemon-usage>article>span{white-space:nowrap;color:var(--muted);font-size:8px}.resource-project-list b,.resource-daemon-usage b{color:var(--text);font-weight:500}.resource-usage-empty{margin:0;padding:12px;color:var(--muted)}
 .resource-tooling-list>h4{margin:0;padding:6px 8px;border-bottom:1px solid var(--line);color:var(--green);font:inherit;text-transform:uppercase}.resource-tooling-list>article{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 10px;padding:8px;border-bottom:1px solid var(--line)}.resource-tooling-list>article>div{min-width:0;display:grid;gap:3px}.resource-tooling-list>article strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}.resource-tooling-list small{color:var(--muted);font-size:8px}.resource-tooling-list>article>span{white-space:nowrap;color:var(--muted);font-size:8px}.resource-tooling-list b{color:var(--text);font-weight:500}

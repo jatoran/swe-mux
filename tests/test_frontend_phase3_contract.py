@@ -294,7 +294,7 @@ def test_collapsed_sidebar_rail_keeps_sidebar_controls_reachable() -> None:
     # the mobile toolbar shows every window the provider reports.
     assert "providerQuotaWindows" in accounts
     assert "const weekly=windows?.weekly||null" in accounts
-    assert "quotaChipSegments(windows)" in accounts
+    assert "quotaGridSegments(quotas[provider])" in accounts
     # One chip builder shared by the collapsed rail and the mobile toolbar, so the
     # two surfaces cannot drift apart.
     assert "const quotaChip=(provider:ProviderName,form:'rail'|'toolbar')=>" in accounts

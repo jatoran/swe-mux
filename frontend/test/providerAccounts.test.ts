@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { accountPopoverStyle, chipUsageBand, formatResetRemaining, providerQuotaWindows, quotaChipSegments, quotaSummary, shownUsageBand, usageBand } from '../src/providerAccountDisplay.ts'
+import { accountAbbreviation, accountPopoverStyle, chipUsageBand, formatResetRemaining, providerQuotaWindows, quotaGridSegments, quotaSummary, shownUsageBand, usageBand } from '../src/providerAccountDisplay.ts'
 
 test('quota windows come from the selected account of each provider, never another slot',()=>{
   const accounts=[
@@ -32,27 +32,35 @@ test('quota chips blank out unreadable or unselected accounts',()=>{
   assert.deepEqual(providerQuotaWindows(accounts,{claude:null,codex:null}),{})
 })
 
-test('the toolbar chip reads 5h/weekly/fable, keeping the slot of a window the provider omits',()=>{
+test('the quota grid reads reset/percentage columns, keeping the slot of a window the provider omits',()=>{
+  const now=2_000_000
   const accounts=[
-    {provider:'claude',id:'a',quota:{status:'ready',session:{used_percent:89.6},weekly:{used_percent:80},fable:{used_percent:74}}},
+    {provider:'claude',id:'a',quota:{status:'ready',session:{used_percent:89.6,resets_at:now+75*60},weekly:{used_percent:80,resets_at:now+5*86400+13*3600},fable:{used_percent:74}}},
     // Codex reports no 5-hour window today, so that slot has to survive as a dash.
     {provider:'codex',id:'b',quota:{status:'ready',weekly:{used_percent:73.5}}},
   ]
   const quotas=providerQuotaWindows(accounts,{claude:'a',codex:'b'})
-  assert.deepEqual(quotaChipSegments(quotas.claude).map(segment=>segment.text),['90','80','74'])
-  assert.deepEqual(quotaChipSegments(quotas.codex).map(segment=>segment.text),['—','74'])
+  assert.deepEqual(quotaGridSegments(quotas.claude,now).map(segment=>segment.heading),['1h15m','5d13h','Fable'])
+  assert.deepEqual(quotaGridSegments(quotas.claude,now).map(segment=>segment.text),['90%','80%','74%'])
+  assert.deepEqual(quotaGridSegments(quotas.codex,now).map(segment=>segment.text),['—','74%'])
   // No fable slot at all for a plan without one, rather than a third dash.
-  assert.deepEqual(quotaChipSegments(quotas.codex).map(segment=>segment.key),['session','weekly'])
-  assert.deepEqual(quotaChipSegments(quotas.claude).map(segment=>segment.band),['critical','warn','ok'])
+  assert.deepEqual(quotaGridSegments(quotas.codex,now).map(segment=>segment.key),['session','weekly'])
+  assert.deepEqual(quotaGridSegments(quotas.claude,now).map(segment=>segment.band),['critical','warn','ok'])
 })
 
 test('the toolbar chip blanks every window when the account poll errored',()=>{
   const accounts=[{provider:'claude',id:'a',quota:{status:'error',session:{used_percent:12},weekly:{used_percent:99}}}]
   const quotas=providerQuotaWindows(accounts,{claude:'a'})
-  assert.deepEqual(quotaChipSegments(quotas.claude).map(segment=>segment.text),['—','—'])
+  assert.deepEqual(quotaGridSegments(quotas.claude).map(segment=>segment.text),['—','—'])
   assert.equal(chipUsageBand(quotas.claude),'unknown')
   // An unselected or missing provider has no entry, and the chip degrades to the same reading.
-  assert.deepEqual(quotaChipSegments(quotas.codex).map(segment=>segment.text),['—','—'])
+  assert.deepEqual(quotaGridSegments(quotas.codex).map(segment=>segment.text),['—','—'])
+})
+
+test('account abbreviations are trimmed, capped at four characters, and visible without a label',()=>{
+  assert.equal(accountAbbreviation(' Personal '),'PERS')
+  assert.equal(accountAbbreviation('work'),'WORK')
+  assert.equal(accountAbbreviation(''),'—')
 })
 
 test('a chip bands on its hottest window, not on weekly alone',()=>{
@@ -85,10 +93,10 @@ test('usage bands escalate at the thresholds every condensed indicator shares',(
 
 test('quota summaries include compact 5-hour and weekly reset countdowns',()=>{
   const now=2_000_000
-  const account={quota:{status:'ready',session:{used_percent:5,resets_at:now+4*3600+3*60},weekly:{used_percent:63,resets_at:now+3*86400+3600}}}
+  const account={quota:{status:'ready',session:{used_percent:5,resets_at:now+4*3600+3*60},weekly:{used_percent:63,resets_at:now+3*86400+3600},fable:{used_percent:30}}}
   assert.equal(formatResetRemaining(now+4*3600+3*60,now),'4h3m')
   assert.equal(formatResetRemaining(now+3*86400+3600,now),'3d1h')
-  assert.equal(quotaSummary(account,now),'5% 4h3m - 63% 3d1h')
+  assert.equal(quotaSummary(account,now),'5% 4h3m - 63% 3d1h · 30% Fable')
 })
 
 test('account popovers escape a narrow sidebar and remain inside the viewport',()=>{

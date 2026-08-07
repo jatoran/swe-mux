@@ -3,6 +3,8 @@ export type QuotaAccountDisplay={quota?:{status:string;error?:string|null;sessio
 
 export const percent=(window?:QuotaWindowDisplay|null)=>window?`${Math.round(window.used_percent)}%`:'—'
 
+export const accountAbbreviation=(label:string)=>[...label.trim()].slice(0,4).join('').toUpperCase()||'—'
+
 export const formatResetRemaining=(resetsAt?:number|null,nowSeconds=Date.now()/1000)=>{
   if(!resetsAt)return ''
   const seconds=Math.max(0,Math.ceil(resetsAt-nowSeconds))
@@ -14,7 +16,7 @@ export const formatResetRemaining=(resetsAt?:number|null,nowSeconds=Date.now()/1
 }
 
 export const quotaWindowSummary=(window?:QuotaWindowDisplay|null,nowSeconds=Date.now()/1000)=>window?`${percent(window)}${window.resets_at?` ${formatResetRemaining(window.resets_at,nowSeconds)}`:''}`:'—'
-export const quotaSummary=(account?:QuotaAccountDisplay,nowSeconds=Date.now()/1000)=>account?.quota?.status==='error'?'unavailable':`${quotaWindowSummary(account?.quota?.session,nowSeconds)} - ${quotaWindowSummary(account?.quota?.weekly,nowSeconds)}${account?.quota?.fable?` · fable ${percent(account.quota.fable)}`:''}`
+export const quotaSummary=(account?:QuotaAccountDisplay,nowSeconds=Date.now()/1000)=>account?.quota?.status==='error'?'unavailable':`${quotaWindowSummary(account?.quota?.session,nowSeconds)} - ${quotaWindowSummary(account?.quota?.weekly,nowSeconds)}${account?.quota?.fable?` · ${percent(account.quota.fable)} Fable`:''}`
 
 export type ProviderQuotaWindows={session:QuotaWindowDisplay|null;weekly:QuotaWindowDisplay|null;fable:QuotaWindowDisplay|null}
 
@@ -58,27 +60,25 @@ export const usageBand=(percent?:number|null):UsageBand=>
 export const shownUsageBand=(percent?:number|null):UsageBand=>
   usageBand(typeof percent==='number'?Math.round(percent):percent)
 
-export type QuotaSegment={key:'session'|'weekly'|'fable';label:string;text:string;band:UsageBand}
+export type QuotaGridSegment={key:'session'|'weekly'|'fable';heading:string;text:string;band:UsageBand}
 
-/** The mobile toolbar chip's reading: 5h, then weekly, then fable when the plan has one.
+/** The shared desktop/mobile grid: reset or Fable heading, then usage percentage.
  *
- * No percent signs. Every value here is a percentage, so the sign distinguishes
- * nothing while costing a third of the chip's width — and the chip has to carry two
- * or three numbers on a phone toolbar that also holds nav, the Project title, Run,
- * and the drawer toggle. A window the provider does not report keeps its slot and
- * reads `—` (Codex has no 5-hour window today, so it shows `—/74`), because with the
- * signs gone it is a number's *position* that says which window it is.
+ * Session and weekly keep stable columns even when the provider omits one. Fable is
+ * optional because only plans that report it should spend the extra column. The
+ * visible percentage signs make every number self-describing instead of relying on
+ * position alone.
  */
-export function quotaChipSegments(windows?:ProviderQuotaWindows|null):QuotaSegment[]{
-  const slots:Array<{key:QuotaSegment['key'];label:string;window:QuotaWindowDisplay|null}>=[
-    {key:'session',label:'5h',window:windows?.session||null},
-    {key:'weekly',label:'weekly',window:windows?.weekly||null},
+export function quotaGridSegments(windows?:ProviderQuotaWindows|null,nowSeconds=Date.now()/1000):QuotaGridSegment[]{
+  const slots:Array<{key:QuotaGridSegment['key'];window:QuotaWindowDisplay|null}>=[
+    {key:'session',window:windows?.session||null},
+    {key:'weekly',window:windows?.weekly||null},
   ]
-  if(windows?.fable)slots.push({key:'fable',label:'fable',window:windows.fable})
+  if(windows?.fable)slots.push({key:'fable',window:windows.fable})
   return slots.map(slot=>({
     key:slot.key,
-    label:slot.label,
-    text:slot.window?String(Math.round(slot.window.used_percent)):'—',
+    heading:slot.key==='fable'?'Fable':formatResetRemaining(slot.window?.resets_at,nowSeconds)||'—',
+    text:percent(slot.window),
     band:shownUsageBand(slot.window?.used_percent),
   }))
 }
